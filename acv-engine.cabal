@@ -1,0 +1,62 @@
+cabal-version:       >=1.10
+name:                acv-engine
+version:             0.1.0.0
+build-type:          Simple
+
+license:             MIT
+license-file:        LICENSE
+author:              Toi
+maintainer:          toi@example.com
+category:            Life Cycle Assessment
+synopsis:            Moteur ACV en mémoire vive avec export PEF, CSV et ILCD
+description:         Ce projet est un moteur d'évaluation du cycle de vie (ACV) basé sur des fichiers Ecoinvent et PEF, écrit en Haskell.
+
+extra-source-files:  README.md CHANGELOG.md
+
+executable acv-cli
+  main-is:             Main.hs
+  hs-source-dirs:      src
+  build-depends:       base >=4.14 && <5
+                     , optparse-applicative
+                     , text
+                     , containers
+                     , xml-conduit
+                     , filepath
+                     , directory
+                     , mtl
+                     , bytestring
+                     , deepseq
+
+  other-modules:     ACV.Types
+                     , ACV.Tree
+                     , ACV.Inventory
+                     , ACV.PEF
+                     , ACV.Export.CSV
+                     , ACV.Export.ILCD
+                     , EcoSpold.Parser
+                     , EcoSpold.Loader
+                     , ILCD.Parser
+  hs-source-dirs:      src
+  build-depends:       base >=4.14 && <5
+                     , text
+                     , containers
+                     , xml-conduit
+                     , bytestring
+                     , filepath
+                     , directory
+  default-language:    Haskell2010
+
+test-suite acv-tests
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base >=4.14 && <5
+                     , hspec
+                     , text
+                     , containers
+                     , acv-engine
+                     , xml-conduit
+                     , directory
+                     , filepath
+  default-language:    Haskell2010
+
