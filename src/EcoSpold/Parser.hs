@@ -8,12 +8,21 @@ import qualified Data.Text as T
 import Text.XML
 import Text.XML.Cursor
 
+-- EcoSpold namespace
+ecoSpoldNS :: Text
+ecoSpoldNS = "http://www.EcoInvent.org/EcoSpold02"
+
+-- Helper to create namespaced element name
+nsElement :: Text -> Name
+nsElement name = Name name (Just ecoSpoldNS) Nothing
+
 parseProcessFromFile :: FilePath -> IO Process
 parseProcessFromFile path = do
     print path
     doc <- Text.XML.readFile def path
     let cursor = fromDocument doc
     let proc = parseProcess cursor
+    -- Force deep evaluation to avoid memory leaks
     proc `seq` return proc
 
 parseProcess :: Cursor -> Process
@@ -21,16 +30,18 @@ parseProcess cursor =
     let name =
             T.unpack $
                 headOrFail "Missing <activityName>" $
-                    cursor $// element "activityName" &/ content
+                    cursor $// element (nsElement "activityName") &/ content
         location =
-            T.unpack $
-                headOrFail "Missing geography@location" $
-                    cursor $// element "geography" >=> attribute "location"
+            case cursor $// element (nsElement "geography") >=> attribute "location" of
+                [] -> T.unpack $ headOrFail "Missing geography shortname" $
+                        cursor $// element (nsElement "shortname") &/ content
+                (x:_) -> T.unpack x
         uuid =
             T.unpack $
-                headOrFail "Missing activity@activityId" $
-                    cursor $// element "activity" >=> attribute "activityId"
-        exNodes = cursor $// element "exchange"
+                headOrFail "Missing activity@id or activity@activityId" $
+                    (cursor $// element (nsElement "activity") >=> attribute "id") <>
+                    (cursor $// element (nsElement "activity") >=> attribute "activityId")
+        exNodes = cursor $// element (nsElement "exchange")
         exchs = map parseExchange exNodes
      in Process uuid name location exchs
 

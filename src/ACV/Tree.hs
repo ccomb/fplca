@@ -7,7 +7,7 @@ import qualified Data.Set as S
 type ProcessDB = M.Map UUID Process
 type VisitedSet = S.Set UUID
 
--- | Public entry point
+-- | Public entry point - Memory optimized version
 buildProcessTree :: ProcessDB -> UUID -> ProcessTree
 buildProcessTree db = go S.empty
   where
@@ -25,9 +25,11 @@ buildProcessTree db = go S.empty
                             , isTechnosphereInput ex
                             , M.member (flowId $ exchangeFlow ex) db
                             ]
-                     in if null children
+                        -- Force evaluation of children to avoid thunk buildup
+                        children' = map (\(amt, tree) -> amt `seq` tree `seq` (amt, tree)) children
+                     in if null children'
                             then Leaf proc
-                            else Node proc children
+                            else Node proc children'
 
 -- | Helper for technosphere input check
 isTechnosphereInput :: Exchange -> Bool

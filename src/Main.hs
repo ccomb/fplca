@@ -9,7 +9,7 @@ import ACV.Inventory (computeInventory)
 import ACV.PEF (applyCharacterization)
 import ACV.Tree (buildProcessTree)
 import ACV.Types
-import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex)
+import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds)
 import ILCD.Parser (parseMethodFromFile)
 
 -- | Arguments de ligne de commande
@@ -40,13 +40,13 @@ main = do
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Charger tous les procédés
-    -- print "loading processses"
-    -- db <- loadAllSpolds dir
+    -- Charger tous les procédés (full memory approach)
+    print "loading processes"
+    db <- loadAllSpolds dir
 
     -- Construire l'arbre du procédé racine
-    index <- buildSpoldIndex dir
-    tree <- buildProcessTreeIO index root
+    print "building process tree"
+    let tree = buildProcessTree db root
     -- Calculer l'inventaire global
     print "computing inventory tree"
     let inventory = computeInventory tree

@@ -1,4 +1,4 @@
-module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex) where
+module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds) where
 
 import ACV.Types
 import Control.Monad
@@ -60,8 +60,8 @@ placeholder = Process "loop" "Loop detected" "N/A" []
 missing :: Process
 missing = Process "missing" "Process not found" "N/A" []
 
-{- | Charge tous les fichiers .spold d’un répertoire donné
-  et retourne une base de procédés indexée par UUID
+{- | Charge tous les fichiers .spold d'un répertoire donné
+  et retourne une base de procédés indexée par UUID - Version optimisée mémoire
 -}
 loadAllSpolds :: FilePath -> IO ProcessDB
 loadAllSpolds dir = do
@@ -69,6 +69,23 @@ loadAllSpolds dir = do
     files <- listDirectory dir
     print "getting spold files"
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
-    print "parsing spold files"
-    processes <- mapM parseProcessFromFile spoldFiles
-    return $ M.fromList [(processId p, p) | p <- processes]
+    print $ "Found " ++ show (length spoldFiles) ++ " spold files"
+    
+    -- Load files in chunks to avoid memory explosion
+    loadSpoldsInChunks spoldFiles M.empty
+  where
+    chunkSize = 1000  -- Process 1000 files at a time
+    
+    loadSpoldsInChunks :: [FilePath] -> ProcessDB -> IO ProcessDB
+    loadSpoldsInChunks [] acc = return acc
+    loadSpoldsInChunks files acc = do
+        let (chunk, rest) = splitAt chunkSize files
+        print $ "Processing chunk of " ++ show (length chunk) ++ " files"
+        
+        -- Force evaluation of chunk to avoid building up thunks
+        chunk' <- mapM parseProcessFromFile chunk
+        let chunkMap = M.fromList [(processId p, p) | p <- chunk']
+        
+        -- Force evaluation and merge
+        let newAcc = M.union acc chunkMap
+        newAcc `seq` loadSpoldsInChunks rest newAcc
