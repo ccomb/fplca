@@ -2,6 +2,7 @@ module ACV.Export.CSV (exportInventoryAsCSV) where
 
 import System.IO (withFile, IOMode(WriteMode), hPutStrLn)
 import qualified Data.Map as M
+import qualified Data.Text as T
 import ACV.Types
 import ACV.Inventory (Inventory)
 
@@ -9,5 +10,5 @@ import ACV.Inventory (Inventory)
 exportInventoryAsCSV :: FilePath -> Inventory -> IO ()
 exportInventoryAsCSV path inv = withFile path WriteMode $ \h -> do
   hPutStrLn h "flow_id,amount"
-  mapM_ (\(fid, amt) -> hPutStrLn h (fid ++ "," ++ show amt)) (M.toList inv)
+  mapM_ (\(fid, amt) -> hPutStrLn h (T.unpack fid ++ "," ++ show amt)) (M.toList inv)
 

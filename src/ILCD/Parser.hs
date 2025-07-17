@@ -22,14 +22,14 @@ parseMethod c = concatMap parseCategory (c $// element "impactCategory")
 -- | Parse une catégorie d'impact et ses CF
 parseCategory :: Cursor -> [CF]
 parseCategory catCursor =
-  let catName  = T.unpack . head $ catCursor $/ element "name" &/ content
+  let catName  = head $ catCursor $/ element "name" &/ content
       category = ImpactCategory catName catName
   in map (parseCF category) (catCursor $/ element "CF")
 
 -- | Parse un facteur de caractérisation
 parseCF :: ImpactCategory -> Cursor -> CF
 parseCF category cfCursor =
-  let fid    = T.unpack . head $ cfCursor $/ element "flowId" &/ content
+  let fid    = head $ cfCursor $/ element "flowId" &/ content
       factor = read . T.unpack . head $ cfCursor $/ element "meanValue" &/ content
   in CF fid category factor
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds) where
 
 import ACV.Types
@@ -5,6 +7,7 @@ import Control.Monad
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
+import qualified Data.Text as T
 import EcoSpold.Parser (parseProcessFromFile)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
@@ -18,7 +21,7 @@ buildSpoldIndex :: FilePath -> IO (M.Map UUID FilePath)
 buildSpoldIndex dir = do
     files <- listDirectory dir
     let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let pairs = [(takeWhile (/= '_') f, dir </> f) | f <- spoldFiles]
+    let pairs = [(T.pack (takeWhile (/= '_') f), dir </> f) | f <- spoldFiles]
     return $ M.fromList pairs
 
 buildProcessTreeIO :: SpoldIndex -> UUID -> IO ProcessTree

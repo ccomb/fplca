@@ -36,6 +36,6 @@ toExchange (fid, amt) =
         Element
             "exchange"
             M.empty
-            [ NodeElement $ Element "flow" (M.fromList [("id", T.pack fid)]) []
+            [ NodeElement $ Element "flow" (M.fromList [("id", fid)]) []
             , NodeElement $ Element "amount" M.empty [NodeContent (T.pack (show amt))]
             ]

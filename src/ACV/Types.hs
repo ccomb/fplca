@@ -4,11 +4,12 @@
 module ACV.Types where
 
 import Control.DeepSeq (NFData)
+import Data.Text (Text)
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
-type UUID = String
+type UUID = Text
 
 -- | Type de flux : Technosphère (échange entre processus) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
@@ -17,9 +18,9 @@ data FlowType = Technosphere | Biosphere
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
     { flowId :: UUID -- Identifiant du flux
-    , flowName :: String -- Nom lisible
-    , flowCategory :: String -- Catégorie (e.g. air, eau, ressource)
-    , flowUnit :: String -- Unité (e.g. kg, MJ)
+    , flowName :: Text -- Nom lisible
+    , flowCategory :: Text -- Catégorie (e.g. air, eau, ressource)
+    , flowUnit :: Text -- Unité (e.g. kg, MJ)
     , flowType :: FlowType -- Type de flux
     }
     deriving (Eq, Show, Generic, NFData)
@@ -36,8 +37,8 @@ data Exchange = Exchange
 -- | Procédé ACV de base (activité)
 data Process = Process
     { processId :: UUID -- Identifiant unique du procédé
-    , processName :: String -- Nom
-    , processLocation :: String -- Code de localisation (ex: FR, RER)
+    , processName :: Text -- Nom
+    , processLocation :: Text -- Code de localisation (ex: FR, RER)
     , exchanges :: [Exchange] -- Liste des échanges
     }
     deriving (Eq, Show, Generic, NFData)
@@ -50,8 +51,8 @@ data ProcessTree
 
 -- | Catégorie d'impact (e.g. Changement climatique)
 data ImpactCategory = ImpactCategory
-    { categoryId :: String
-    , categoryName :: String
+    { categoryId :: Text
+    , categoryName :: Text
     }
     deriving (Eq, Ord, Show)
 

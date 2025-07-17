@@ -1,8 +1,11 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module ACV.Tree (buildProcessTree) where
 
 import ACV.Types
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Text (Text)
 
 type ProcessDB = M.Map UUID Process
 type VisitedSet = S.Set UUID

@@ -1,6 +1,7 @@
 module Main where
 
 import qualified Data.Map as M
+import qualified Data.Text as T
 import Options.Applicative
 
 import ACV.Export.CSV (exportInventoryAsCSV)
@@ -46,7 +47,7 @@ main = do
 
     -- Construire l'arbre du procédé racine
     print "building process tree"
-    let tree = buildProcessTree db root
+    let tree = buildProcessTree db (T.pack root)
     -- Calculer l'inventaire global
     print "computing inventory tree"
     let inventory = computeInventory tree
