@@ -17,10 +17,8 @@ type Visited = S.Set UUID
 buildSpoldIndex :: FilePath -> IO (M.Map UUID FilePath)
 buildSpoldIndex dir = do
     files <- listDirectory dir
-    let paths = [dir </> f | f <- files, takeExtension f == ".spold"]
-    pairs <- forM paths $ \fp -> do
-        proc <- parseProcessFromFile fp
-        return (processId proc, fp)
+    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
+    let pairs = [(takeWhile (/= '_') f, dir </> f) | f <- spoldFiles]
     return $ M.fromList pairs
 
 buildProcessTreeIO :: SpoldIndex -> UUID -> IO ProcessTree
