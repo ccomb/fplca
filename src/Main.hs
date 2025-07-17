@@ -45,8 +45,8 @@ main = do
     -- db <- loadAllSpolds dir
 
     -- Construire l'arbre du procédé racine
-    index <- buildSpoldIndex "."
-    tree <- buildProcessTreeIO index "uuid-de-départ"
+    index <- buildSpoldIndex dir
+    tree <- buildProcessTreeIO index root
     -- Calculer l'inventaire global
     print "computing inventory tree"
     let inventory = computeInventory tree
