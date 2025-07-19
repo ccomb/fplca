@@ -116,15 +116,27 @@ loadAllSpoldsWithFlows dir = do
         
         loadSpoldsWithOptimizedChunks rest newProcAcc newFlowAcc
     
-    -- Process chunk in smaller batches for better memory control
+    -- Process chunk with controlled parallel batches 
     processChunkInBatches :: [FilePath] -> IO (ProcessDB, FlowDB)
     processChunkInBatches files = do
         let batches = chunksOf 100 files  -- 100 files per batch
-        results <- mapM processBatch batches
+        -- Process 2-3 batches in parallel to balance memory vs parallelism
+        results <- processInParallelBatches 3 batches  -- Process 3 batches at a time
         let (procMaps, flowMaps) = unzip results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
         return (finalProcMap, finalFlowMap)
+    
+    -- Process batches in parallel groups
+    processInParallelBatches :: Int -> [[FilePath]] -> IO [(ProcessDB, FlowDB)]
+    processInParallelBatches _ [] = return []
+    processInParallelBatches maxParallel batches = do
+        let (currentGroup, remaining) = splitAt maxParallel batches
+        -- Process current group in parallel
+        groupResults <- mapConcurrently processBatch currentGroup
+        -- Process remaining groups
+        remainingResults <- processInParallelBatches maxParallel remaining
+        return $ groupResults ++ remainingResults
     
     -- Process a small batch of files in parallel using streaming parser
     processBatch :: [FilePath] -> IO (ProcessDB, FlowDB)
