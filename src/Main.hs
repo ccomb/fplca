@@ -6,11 +6,11 @@ import Options.Applicative
 
 import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
-import ACV.Inventory (computeInventory)
+import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Tree (buildProcessTree)
+import ACV.Tree (buildProcessTreeWithFlows)
 import ACV.Types
-import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds)
+import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows)
 import ILCD.Parser (parseMethodFromFile)
 
 -- | Arguments de ligne de commande
@@ -41,16 +41,16 @@ main = do
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Charger tous les procédés (full memory approach)
-    print "loading processes"
-    db <- loadAllSpolds dir
+    -- Charger tous les procédés avec déduplication des flux (optimized memory approach)
+    print "loading processes with flow deduplication"
+    database <- loadAllSpoldsWithFlows dir
 
     -- Construire l'arbre du procédé racine
     print "building process tree"
-    let tree = buildProcessTree db (T.pack root)
+    let tree = buildProcessTreeWithFlows database (T.pack root)
     -- Calculer l'inventaire global
     print "computing inventory tree"
-    let inventory = computeInventory tree
+    let inventory = computeInventoryWithFlows (dbFlows database) tree
 
     -- Charger la méthode PEF
     print "loading PEF method"

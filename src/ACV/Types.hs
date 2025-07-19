@@ -5,6 +5,7 @@ module ACV.Types where
 
 import Control.DeepSeq (NFData)
 import Data.Text (Text)
+import qualified Data.Map as M
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
 
@@ -25,9 +26,9 @@ data Flow = Flow
     }
     deriving (Eq, Show, Generic, NFData)
 
--- | Échange dans un procédé (entrée ou sortie)
+-- | Échange dans un procédé (entrée ou sortie) - Version optimisée avec référence au flux
 data Exchange = Exchange
-    { exchangeFlow :: !Flow -- Flux concerné
+    { exchangeFlowId :: !UUID -- Référence vers le flux (dans FlowDB)
     , exchangeAmount :: !Double -- Quantité échangée
     , exchangeIsInput :: !Bool -- Vrai si c'est une entrée
     , exchangeIsReference :: !Bool -- Vrai si c'est le flux de référence (output principal)
@@ -47,6 +48,19 @@ data Process = Process
 data ProcessTree
     = Leaf !Process
     | Node !Process ![(Double, ProcessTree)] -- Processus et sous-processus pondérés
+    deriving (Eq, Show)
+
+-- | Base de données des flux (dédupliquée)
+type FlowDB = M.Map UUID Flow
+
+-- | Base de données des procédés
+type ProcessDB = M.Map UUID Process
+
+-- | Base de données complète (procédés + flux)
+data Database = Database
+    { dbProcesses :: !ProcessDB
+    , dbFlows :: !FlowDB
+    }
     deriving (Eq, Show)
 
 -- | Catégorie d'impact (e.g. Changement climatique)

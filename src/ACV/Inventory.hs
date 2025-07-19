@@ -2,31 +2,55 @@ module ACV.Inventory where
 
 import qualified Data.Map as M
 import ACV.Types
+import Data.Maybe (mapMaybe)
 
 -- | Un inventaire est une agrégation de flux biosphère : UUID -> quantité
 type Inventory = M.Map UUID Double
 
--- | Calcule l'inventaire global à partir de l'arbre de procédés
-computeInventory :: ProcessTree -> Inventory
-computeInventory = computeInventoryWithWeight 1.0
+-- | Calcule l'inventaire global à partir de l'arbre de procédés - Version optimisée avec FlowDB
+computeInventoryWithFlows :: FlowDB -> ProcessTree -> Inventory
+computeInventoryWithFlows flowDB tree = computeInventoryWithWeightAndFlows flowDB 1.0 tree
 
--- | Calcule l'inventaire en tenant compte d'un facteur de pondération
-computeInventoryWithWeight :: Double -> ProcessTree -> Inventory
-computeInventoryWithWeight weight (Leaf proc) =
-  biosphereInventory weight proc
-computeInventoryWithWeight weight (Node proc children) =
-  let localInv = biosphereInventory weight proc
-      childrenInvs = [ computeInventoryWithWeight (weight * qty) subtree
+-- | Calcule l'inventaire en tenant compte d'un facteur de pondération - Version optimisée avec FlowDB
+computeInventoryWithWeightAndFlows :: FlowDB -> Double -> ProcessTree -> Inventory
+computeInventoryWithWeightAndFlows flowDB weight (Leaf proc) =
+  biosphereInventoryWithFlows flowDB weight proc
+computeInventoryWithWeightAndFlows flowDB weight (Node proc children) =
+  let localInv = biosphereInventoryWithFlows flowDB weight proc
+      childrenInvs = [ computeInventoryWithWeightAndFlows flowDB (weight * qty) subtree
                      | (qty, subtree) <- children
                      ]
   in foldl (M.unionWith (+)) localInv childrenInvs
 
--- | Extrait les flux biosphère d’un procédé et les pondère
+-- | Calcule l'inventaire global à partir de l'arbre de procédés (version originale)
+computeInventory :: ProcessTree -> Inventory
+computeInventory = error "computeInventory: Use computeInventoryWithFlows instead"
+
+-- | Calcule l'inventaire en tenant compte d'un facteur de pondération (version originale)
+computeInventoryWithWeight :: Double -> ProcessTree -> Inventory
+computeInventoryWithWeight weight (Leaf proc) =
+  error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
+computeInventoryWithWeight weight (Node proc children) =
+  error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
+
+-- | Extrait les flux biosphère d'un procédé et les pondère - Version optimisée avec FlowDB
+biosphereInventoryWithFlows :: FlowDB -> Double -> Process -> Inventory
+biosphereInventoryWithFlows flowDB w proc =
+  M.fromListWith (+)
+    [ (exchangeFlowId ex, w * exchangeAmount ex)
+    | ex <- exchanges proc
+    , isBiosphereFlow flowDB ex
+    ]
+
+-- | Vérifie si un échange est un flux biosphère
+isBiosphereFlow :: FlowDB -> Exchange -> Bool
+isBiosphereFlow flowDB ex =
+    case M.lookup (exchangeFlowId ex) flowDB of
+        Nothing -> False
+        Just flow -> flowType flow == Biosphere
+
+-- | Extrait les flux biosphère d'un procédé et les pondère (version originale)
 biosphereInventory :: Double -> Process -> Inventory
 biosphereInventory w proc =
-  M.fromListWith (+)
-    [ (flowId (exchangeFlow ex), w * exchangeAmount ex)
-    | ex <- exchanges proc
-    , flowType (exchangeFlow ex) == Biosphere
-    ]
+  error "biosphereInventory: Use biosphereInventoryWithFlows instead"
 

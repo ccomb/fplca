@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 
-module EcoSpold.Parser (parseProcessFromFile) where
+module EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile) where
 
 import ACV.Types
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map as M
 import Text.XML
 import Text.XML.Cursor
 
@@ -44,8 +45,47 @@ parseProcess cursor =
         !exchs = map parseExchange exNodes  -- Keep this strict to avoid retaining large lists
      in Process uuid name location exchs
 
+-- | Parse un procédé et extrait les flux pour la déduplication
+parseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow])
+parseProcessAndFlowsFromFile path = do
+    print path
+    doc <- Text.XML.readFile def path
+    let cursor = fromDocument doc
+    let (proc, flows) = parseProcessWithFlows cursor
+    return (proc, flows)
+
+parseProcessWithFlows :: Cursor -> (Process, [Flow])
+parseProcessWithFlows cursor =
+    let name =
+                headOrFail "Missing <activityName>" $
+                    cursor $// element (nsElement "activityName") &/ content
+        location =
+            case cursor $// element (nsElement "geography") >=> attribute "location" of
+                [] -> headOrFail "Missing geography shortname" $
+                        cursor $// element (nsElement "shortname") &/ content
+                (x:_) -> x
+        uuid =
+                headOrFail "Missing activity@id or activity@activityId" $
+                    (cursor $// element (nsElement "activity") >=> attribute "id") <>
+                    (cursor $// element (nsElement "activity") >=> attribute "activityId")
+        exNodes = cursor $// element (nsElement "exchange")
+        !exchsWithFlows = map parseExchangeWithFlow exNodes
+        (!exchs, flows) = unzip exchsWithFlows
+     in (Process uuid name location exchs, flows)
+
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
+    let get = getAttr cur
+        fid = get "flowId"
+        group = get "inputGroup"
+        amount = read $ T.unpack $ get "meanAmount"
+        isInput = group == "1"
+        isRef = group == "0"
+     in Exchange fid amount isInput isRef
+
+-- | Parse un échange et extrait aussi le flux pour la déduplication
+parseExchangeWithFlow :: Cursor -> (Exchange, Flow)
+parseExchangeWithFlow cur =
     let get = getAttr cur
         fid = get "flowId"
         fname = get "name"
@@ -57,7 +97,8 @@ parseExchange cur =
         isInput = group == "1"
         isRef = group == "0"
         flow = Flow fid fname cat unit ftype
-     in Exchange flow amount isInput isRef
+        exchange = Exchange fid amount isInput isRef
+     in (exchange, flow)
 
 getAttr :: Cursor -> Text -> Text
 getAttr cur attr =
