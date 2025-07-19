@@ -32,12 +32,19 @@ executable acv-cli
                      , async
                      , conduit
                      , xml-types
+                     , servant-server
+                     , servant
+                     , warp
+                     , aeson
+                     , wai
+                     , wai-cors
 
   other-modules:     ACV.Types
                      , ACV.Tree
                      , ACV.Inventory
                      , ACV.PEF
                      , ACV.Query
+                     , ACV.API
                      , ACV.Export.CSV
                      , ACV.Export.ILCD
                      , EcoSpold.Parser
