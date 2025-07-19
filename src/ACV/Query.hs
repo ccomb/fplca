@@ -3,6 +3,7 @@
 module ACV.Query where
 
 import ACV.Types
+import Control.Parallel.Strategies
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map as M
@@ -14,22 +15,34 @@ import Data.List (sortOn)
 emptyIndexes :: Indexes
 emptyIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty
 
--- | Construction des index à partir d'une base de données simple
+-- | Construction des index à partir d'une base de données simple (parallélisée)
 buildIndexes :: ProcessDB -> FlowDB -> Indexes
-buildIndexes procDB flowDB = Indexes
+buildIndexes procDB flowDB = 
+    let -- Build indexes with parallel evaluation
+        nameIdx = buildNameIndex procDB `using` rdeepseq
+        locationIdx = buildLocationIndex procDB `using` rdeepseq
+        flowIdx = buildFlowIndex procDB `using` rdeepseq
+        flowCatIdx = buildFlowCategoryIndex flowDB `using` rdeepseq
+        flowTypeIdx = buildFlowTypeIndex flowDB `using` rdeepseq
+        exchangeIdx = buildExchangeIndex procDB `using` rdeepseq
+        procExchangeIdx = buildProcessExchangeIndex procDB `using` rdeepseq
+        refProdIdx = buildReferenceProductIndex procDB `using` rdeepseq
+        inputIdx = buildProcessInputIndex procDB `using` rdeepseq
+        outputIdx = buildProcessOutputIndex procDB `using` rdeepseq
+    in Indexes
     { -- Index au niveau procédé
-      idxByName = buildNameIndex procDB
-    , idxByLocation = buildLocationIndex procDB
-    , idxByFlow = buildFlowIndex procDB
+      idxByName = nameIdx
+    , idxByLocation = locationIdx
+    , idxByFlow = flowIdx
       -- Index au niveau flux
-    , idxFlowByCategory = buildFlowCategoryIndex flowDB
-    , idxFlowByType = buildFlowTypeIndex flowDB
+    , idxFlowByCategory = flowCatIdx
+    , idxFlowByType = flowTypeIdx
       -- Index au niveau échange
-    , idxExchangeByFlow = buildExchangeIndex procDB
-    , idxExchangeByProcess = buildProcessExchangeIndex procDB
-    , idxReferenceProducts = buildReferenceProductIndex procDB
-    , idxInputsByProcess = buildProcessInputIndex procDB
-    , idxOutputsByProcess = buildProcessOutputIndex procDB
+    , idxExchangeByFlow = exchangeIdx
+    , idxExchangeByProcess = procExchangeIdx
+    , idxReferenceProducts = refProdIdx
+    , idxInputsByProcess = inputIdx
+    , idxOutputsByProcess = outputIdx
     }
 
 -- | Construction de l'index par nom (insensible à la casse)

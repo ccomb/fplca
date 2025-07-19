@@ -26,6 +26,9 @@ executable acv-cli
                      , mtl
                      , bytestring
                      , deepseq
+                     , parallel
+                     , stm
+                     , async
 
   other-modules:     ACV.Types
                      , ACV.Tree

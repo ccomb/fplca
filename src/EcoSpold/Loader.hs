@@ -6,6 +6,9 @@ module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, load
 import ACV.Types
 import ACV.Query (buildIndexes)
 import Control.Monad
+import Control.Parallel.Strategies
+import Control.Concurrent.Async
+import GHC.Conc (getNumCapabilities)
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
@@ -87,46 +90,78 @@ loadAllSpoldsWithFlows dir = do
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
     print $ "Found " ++ show (length spoldFiles) ++ " spold files"
     
-    -- Load files in chunks to avoid memory explosion
-    loadSpoldsWithFlowsInChunks spoldFiles M.empty M.empty
+    -- Load files with parallel chunk processing (3 chunks simultaneously)
+    loadSpoldsWithParallelChunks spoldFiles
   where
     chunkSize = 1000  -- Process 1000 files at a time
+    maxParallelChunks = 3  -- Process up to 3 chunks simultaneously
     
-    loadSpoldsWithFlowsInChunks :: [FilePath] -> ProcessDB -> FlowDB -> IO SimpleDatabase
-    loadSpoldsWithFlowsInChunks [] procAcc flowAcc = do
-        print $ "Final: " ++ show (M.size procAcc) ++ " processes, " ++ show (M.size flowAcc) ++ " flows"
-        return $ SimpleDatabase procAcc flowAcc
-    loadSpoldsWithFlowsInChunks files procAcc flowAcc = do
-        let (chunk, rest) = splitAt chunkSize files
+    -- New function for parallel chunk processing
+    loadSpoldsWithParallelChunks :: [FilePath] -> IO SimpleDatabase
+    loadSpoldsWithParallelChunks files = do
+        let chunks = chunksOf chunkSize files
+        print $ "Processing " ++ show (length chunks) ++ " chunks with up to " ++ show maxParallelChunks ++ " parallel"
+        
+        -- Process chunks in batches of maxParallelChunks
+        results <- processChunkBatches chunks
+        
+        -- Merge all results
+        let (allProcs, allFlows) = unzip results
+        let !finalProcMap = M.unions allProcs
+        let !finalFlowMap = M.unions allFlows
+        
+        print $ "Final: " ++ show (M.size finalProcMap) ++ " processes, " ++ show (M.size finalFlowMap) ++ " flows"
+        return $ SimpleDatabase finalProcMap finalFlowMap
+    
+    -- Process chunks in parallel batches
+    processChunkBatches :: [[FilePath]] -> IO [(ProcessDB, FlowDB)]
+    processChunkBatches [] = return []
+    processChunkBatches chunks = do
+        let (currentBatch, remainingChunks) = splitAt maxParallelChunks chunks
+        print $ "Processing batch of " ++ show (length currentBatch) ++ " chunks in parallel"
+        
+        -- Process current batch in parallel
+        batchResults <- mapConcurrently processChunk currentBatch
+        
+        -- Process remaining chunks
+        remainingResults <- processChunkBatches remainingChunks
+        
+        return $ batchResults ++ remainingResults
+    
+    -- Process a single chunk (same logic as before)
+    processChunk :: [FilePath] -> IO (ProcessDB, FlowDB)
+    processChunk chunk = do
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
         
-        -- Parse processes and flows with strict evaluation
-        chunk' <- mapM parseProcessAndFlowsFromFile chunk
-        let (!procs, flowLists) = unzip chunk'
+        -- Parse processes and flows in parallel within chunk
+        parsedChunk <- mapConcurrently parseProcessAndFlowsFromFile chunk
+        let (!procs, flowLists) = unzip parsedChunk
         let !allFlows = concat flowLists
         
         print $ "Parsed " ++ show (length procs) ++ " processes and " ++ show (length allFlows) ++ " flows from chunk"
         
-        -- Build process map
-        let !chunkProcMap = M.fromList [(processId p, p) | p <- procs]
-        
-        -- Build flow map (deduplicated)
-        let !chunkFlowMap = M.fromList [(flowId f, f) | f <- allFlows]
+        -- Build process and flow maps in parallel
+        let procPairs = [(processId p, p) | p <- procs] `using` parList rdeepseq
+        let flowPairs = [(flowId f, f) | f <- allFlows] `using` parList rdeepseq
+        let !chunkProcMap = M.fromList procPairs
+        let !chunkFlowMap = M.fromList flowPairs
         
         print $ "Built maps: " ++ show (M.size chunkProcMap) ++ " processes, " ++ show (M.size chunkFlowMap) ++ " unique flows"
         
-        -- Merge with accumulators
-        let !newProcAcc = M.union procAcc chunkProcMap
-        let !newFlowAcc = M.union flowAcc chunkFlowMap
-        
-        loadSpoldsWithFlowsInChunks rest newProcAcc newFlowAcc
+        return (chunkProcMap, chunkFlowMap)
+    
+    -- Utility function to split list into chunks
+    chunksOf :: Int -> [a] -> [[a]]
+    chunksOf _ [] = []
+    chunksOf n xs = take n xs : chunksOf n (drop n xs)
 
 {- | Version complète avec déduplication des flux ET construction d'index
   Charge tous les fichiers .spold, déduplique les flux, et construit les index pour recherches efficaces
 -}
 loadAllSpoldsWithIndexes :: FilePath -> IO Database
 loadAllSpoldsWithIndexes dir = do
-    print "loading processes with flow deduplication and indexes"
+    numCaps <- getNumCapabilities
+    print $ "loading processes with flow deduplication and indexes using " ++ show numCaps ++ " cores"
     simpleDb <- loadAllSpoldsWithFlows dir
     
     print "building indexes for efficient queries"
