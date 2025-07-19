@@ -8,9 +8,10 @@ import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Tree (buildProcessTreeWithFlows)
+import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType)
+import ACV.Tree (buildProcessTreeWithDatabase)
 import ACV.Types
-import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows)
+import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes)
 import ILCD.Parser (parseMethodFromFile)
 
 -- | Arguments de ligne de commande
@@ -41,13 +42,17 @@ main = do
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Charger tous les procédés avec déduplication des flux (optimized memory approach)
-    print "loading processes with flow deduplication"
-    database <- loadAllSpoldsWithFlows dir
+    -- Charger tous les procédés avec déduplication des flux ET index (optimized memory + query approach)
+    print "loading processes with flow deduplication and indexes"
+    database <- loadAllSpoldsWithIndexes dir
+
+    -- Afficher les statistiques de la base de données
+    let stats = getDatabaseStats database
+    print stats
 
     -- Construire l'arbre du procédé racine
     print "building process tree"
-    let tree = buildProcessTreeWithFlows database (T.pack root)
+    let tree = buildProcessTreeWithDatabase database (T.pack root)
     -- Calculer l'inventaire global
     print "computing inventory tree"
     let inventory = computeInventoryWithFlows (dbFlows database) tree

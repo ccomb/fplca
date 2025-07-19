@@ -6,6 +6,7 @@ module ACV.Types where
 import Control.DeepSeq (NFData)
 import Data.Text (Text)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
 
@@ -14,7 +15,7 @@ type UUID = Text
 
 -- | Type de flux : Technosphère (échange entre processus) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
-    deriving (Eq, Show, Generic, NFData)
+    deriving (Eq, Ord, Show, Generic, NFData)
 
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
@@ -56,10 +57,43 @@ type FlowDB = M.Map UUID Flow
 -- | Base de données des procédés
 type ProcessDB = M.Map UUID Process
 
--- | Base de données complète (procédés + flux)
+-- | Index par nom de procédé - permet la recherche par nom (insensible à la casse)
+type NameIndex = M.Map Text [UUID]  -- Nom -> Liste des UUIDs des procédés
+
+-- | Index par localisation - permet la recherche par zone géographique
+type LocationIndex = M.Map Text [UUID]  -- Location -> Liste des UUIDs des procédés
+
+-- | Index par flux - permet de trouver quels procédés utilisent un flux donné
+type FlowIndex = M.Map UUID [UUID]  -- FlowID -> Liste des UUIDs des procédés qui l'utilisent
+
+-- | Index par catégorie de flux - permet la recherche par type de flux
+type FlowCategoryIndex = M.Map Text [UUID]  -- Category -> Liste des UUIDs des flux
+
+-- | Index par type de flux - sépare Technosphere/Biosphere
+type FlowTypeIndex = M.Map FlowType [UUID]  -- FlowType -> Liste des UUIDs des flux
+
+-- | Structure d'index complète pour recherches efficaces
+data Indexes = Indexes
+    { idxByName :: !NameIndex           -- Recherche procédés par nom
+    , idxByLocation :: !LocationIndex   -- Recherche procédés par localisation
+    , idxByFlow :: !FlowIndex           -- Recherche procédés utilisant un flux
+    , idxFlowByCategory :: !FlowCategoryIndex  -- Recherche flux par catégorie
+    , idxFlowByType :: !FlowTypeIndex   -- Recherche flux par type
+    }
+    deriving (Eq, Show)
+
+-- | Base de données complète avec index pour recherches efficaces
 data Database = Database
     { dbProcesses :: !ProcessDB
     , dbFlows :: !FlowDB
+    , dbIndexes :: !Indexes
+    }
+    deriving (Eq, Show)
+
+-- | Version simplifiée sans index (pour compatibilité)
+data SimpleDatabase = SimpleDatabase
+    { sdbProcesses :: !ProcessDB
+    , sdbFlows :: !FlowDB
     }
     deriving (Eq, Show)
 

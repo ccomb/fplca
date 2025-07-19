@@ -31,6 +31,7 @@ executable acv-cli
                      , ACV.Tree
                      , ACV.Inventory
                      , ACV.PEF
+                     , ACV.Query
                      , ACV.Export.CSV
                      , ACV.Export.ILCD
                      , EcoSpold.Parser

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 
-module ACV.Tree (buildProcessTree, buildProcessTreeWithFlows) where
+module ACV.Tree (buildProcessTree, buildProcessTreeWithFlows, buildProcessTreeWithDatabase) where
 
 import ACV.Types
 import qualified Data.Map as M
@@ -54,9 +54,17 @@ isTechnosphereInput flowDB ex =
 placeholder :: Process
 placeholder = Process "loop-detected" "Loop detected" "N/A" []
 
--- | Version optimisée avec FlowDB
-buildProcessTreeWithFlows :: Database -> UUID -> ProcessTree
-buildProcessTreeWithFlows (Database procDB flowDB) = go S.empty
+-- | Version optimisée avec FlowDB - Compatible avec SimpleDatabase et Database
+buildProcessTreeWithFlows :: SimpleDatabase -> UUID -> ProcessTree
+buildProcessTreeWithFlows (SimpleDatabase procDB flowDB) = buildProcessTreeWithFlowDBs procDB flowDB
+
+-- | Version optimisée avec Database complet (avec index)
+buildProcessTreeWithDatabase :: Database -> UUID -> ProcessTree
+buildProcessTreeWithDatabase db = buildProcessTreeWithFlowDBs (dbProcesses db) (dbFlows db)
+
+-- | Version optimisée avec FlowDB - Implémentation interne
+buildProcessTreeWithFlowDBs :: ProcessDB -> FlowDB -> UUID -> ProcessTree
+buildProcessTreeWithFlowDBs procDB flowDB = go S.empty
   where
     go :: VisitedSet -> UUID -> ProcessTree
     go seen pid

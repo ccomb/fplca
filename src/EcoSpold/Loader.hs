@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 
-module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows) where
+module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes) where
 
 import ACV.Types
+import ACV.Query (buildIndexes)
 import Control.Monad
 import qualified Data.Map as M
 import Data.Maybe
@@ -75,10 +76,10 @@ loadAllSpolds dir = do
         let !newAcc = M.union acc chunkMap  -- Keep strict for accumulator
         loadSpoldsInChunks rest newAcc
 
-{- | Version optimisée avec déduplication des flux
+{- | Version optimisée avec déduplication des flux (sans index)
   Charge tous les fichiers .spold et déduplique les flux
 -}
-loadAllSpoldsWithFlows :: FilePath -> IO Database
+loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
 loadAllSpoldsWithFlows dir = do
     print "listing directory"
     files <- listDirectory dir
@@ -91,8 +92,8 @@ loadAllSpoldsWithFlows dir = do
   where
     chunkSize = 1000  -- Process 1000 files at a time
     
-    loadSpoldsWithFlowsInChunks :: [FilePath] -> ProcessDB -> FlowDB -> IO Database
-    loadSpoldsWithFlowsInChunks [] procAcc flowAcc = return $ Database procAcc flowAcc
+    loadSpoldsWithFlowsInChunks :: [FilePath] -> ProcessDB -> FlowDB -> IO SimpleDatabase
+    loadSpoldsWithFlowsInChunks [] procAcc flowAcc = return $ SimpleDatabase procAcc flowAcc
     loadSpoldsWithFlowsInChunks files procAcc flowAcc = do
         let (chunk, rest) = splitAt chunkSize files
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
@@ -113,3 +114,16 @@ loadAllSpoldsWithFlows dir = do
         let !newFlowAcc = M.union flowAcc chunkFlowMap
         
         loadSpoldsWithFlowsInChunks rest newProcAcc newFlowAcc
+
+{- | Version complète avec déduplication des flux ET construction d'index
+  Charge tous les fichiers .spold, déduplique les flux, et construit les index pour recherches efficaces
+-}
+loadAllSpoldsWithIndexes :: FilePath -> IO Database
+loadAllSpoldsWithIndexes dir = do
+    print "loading processes with flow deduplication and indexes"
+    simpleDb <- loadAllSpoldsWithFlows dir
+    
+    print "building indexes for efficient queries"
+    let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
+    
+    return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) indexes
