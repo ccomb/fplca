@@ -29,6 +29,8 @@ executable acv-cli
                      , parallel
                      , stm
                      , async
+                     , conduit
+                     , xml-types
 
   other-modules:     ACV.Types
                      , ACV.Tree

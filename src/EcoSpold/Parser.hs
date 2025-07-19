@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 
-module EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile) where
+module EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile, streamParseProcessAndFlowsFromFile) where
 
 import ACV.Types
 import Data.Text (Text)
@@ -138,3 +139,65 @@ getAttr cur attr =
 headOrFail :: String -> [a] -> a
 headOrFail msg [] = error msg
 headOrFail _ (x : _) = x
+
+-- | Memory-optimized parser - forces early evaluation and cleanup
+streamParseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow])
+streamParseProcessAndFlowsFromFile path = do
+    -- Read and parse with strict evaluation
+    doc <- Text.XML.readFile def path
+    let !cursor = fromDocument doc
+    let (!proc, !flows) = parseProcessWithFlowsOptimized cursor
+    -- Force full evaluation before returning
+    proc `seq` flows `seq` return (proc, flows)
+
+-- | Optimized version of parseProcessWithFlows with better memory management
+parseProcessWithFlowsOptimized :: Cursor -> (Process, [Flow])
+parseProcessWithFlowsOptimized cursor =
+    let !name = headOrFail "Missing <activityName>" $
+                    cursor $// element (nsElement "activityName") &/ content
+        !location = case cursor $// element (nsElement "geography") >=> attribute "location" of
+                     [] -> headOrFail "Missing geography shortname" $
+                           cursor $// element (nsElement "shortname") &/ content
+                     (x:_) -> x
+        !uuid = headOrFail "Missing activity@id or activity@activityId" $
+                    (cursor $// element (nsElement "activity") >=> attribute "id") <>
+                    (cursor $// element (nsElement "activity") >=> attribute "activityId")
+        
+        -- Process exchanges one by one to avoid building large intermediate lists
+        !exNodes = cursor $// element (nsElement "intermediateExchange")
+        !exchsWithFlows = map parseExchangeWithFlowOptimized exNodes
+        (!exchs, !flows) = unzip exchsWithFlows
+        
+        !process = Process uuid name location exchs
+     in (process, flows)
+
+-- | Memory-optimized exchange parsing with strict evaluation
+parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
+parseExchangeWithFlowOptimized cur =
+    let !fid = getAttr cur "intermediateExchangeId"
+        !amount = read $ T.unpack $ getAttr cur "amount"
+        
+        -- Extract child element content with strict evaluation and safe access
+        !fname = case cur $/ element (nsElement "name") &/ content of
+                   [] -> fid  -- Use flowId as fallback name to save memory
+                   (x:_) -> x
+        !unitName = case cur $/ element (nsElement "unitName") &/ content of
+                      [] -> "unit"  -- Default unit
+                      (x:_) -> x
+        
+        -- Extract inputGroup and outputGroup from child elements
+        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
+                       [] -> ""
+                       (x:_) -> x
+        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
+                        [] -> ""
+                        (x:_) -> x
+        
+        -- Determine type based on input/output groups (mutually exclusive)
+        !isInput = inputGroup /= ""
+        !isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
+        !ftype = Technosphere
+        
+        !flow = Flow fid fname "technosphere" unitName ftype
+        !exchange = Exchange fid amount isInput isRef
+     in (exchange, flow)

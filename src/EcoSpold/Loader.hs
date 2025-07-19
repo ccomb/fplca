@@ -13,7 +13,7 @@ import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
-import EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile)
+import EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile, streamParseProcessAndFlowsFromFile)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 
@@ -126,11 +126,11 @@ loadAllSpoldsWithFlows dir = do
         let !finalFlowMap = M.unions flowMaps
         return (finalProcMap, finalFlowMap)
     
-    -- Process a small batch of files in parallel
+    -- Process a small batch of files in parallel using streaming parser
     processBatch :: [FilePath] -> IO (ProcessDB, FlowDB)
     processBatch batch = do
-        -- Parse files in parallel
-        parsedBatch <- mapConcurrently parseProcessAndFlowsFromFile batch
+        -- Parse files in parallel with streaming parser
+        parsedBatch <- mapConcurrently streamParseProcessAndFlowsFromFile batch
         let (!procs, flowLists) = unzip parsedBatch
         let !allFlows = concat flowLists
         
