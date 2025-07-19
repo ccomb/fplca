@@ -51,6 +51,17 @@ main = do
     putStrLn "\n=== DATABASE STATISTICS ==="
     print stats
     
+    -- Debug: Check a few exchanges to see their classification
+    putStrLn "\n=== DEBUG: Sample Exchange Classifications ==="
+    let sampleProcesses = take 3 $ M.elems (dbProcesses database)
+    mapM_ (\proc -> do
+        putStrLn $ "Process: " ++ show (processName proc)
+        let procExchanges = take 3 (exchanges proc)
+        mapM_ (\ex -> putStrLn $ "  Exchange: isInput=" ++ show (exchangeIsInput ex) ++ 
+                                 ", isRef=" ++ show (exchangeIsReference ex) ++ 
+                                 ", flowId=" ++ show (exchangeFlowId ex)) procExchanges
+        ) sampleProcesses
+    
     -- Exemples de requêtes exchange-level
     putStrLn "\n=== EXCHANGE-LEVEL QUERIES EXAMPLES ==="
     let refProducts = take 5 $ findAllReferenceProducts database

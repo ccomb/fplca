@@ -100,10 +100,10 @@ loadAllSpoldsWithFlows dir = do
         let (chunk, rest) = splitAt chunkSize files
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
         
-        -- Parse processes and flows
+        -- Parse processes and flows with strict evaluation
         chunk' <- mapM parseProcessAndFlowsFromFile chunk
-        let (procs, flowLists) = unzip chunk'
-        let allFlows = concat flowLists
+        let (!procs, flowLists) = unzip chunk'
+        let !allFlows = concat flowLists
         
         print $ "Parsed " ++ show (length procs) ++ " processes and " ++ show (length allFlows) ++ " flows from chunk"
         
