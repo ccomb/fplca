@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
 
 module ACV.Tree (buildProcessTree) where
 
@@ -21,7 +22,7 @@ buildProcessTree db = go S.empty
             case M.lookup pid db of
                 Nothing -> Leaf placeholder
                 Just proc ->
-                    let newSeen = S.insert pid seen
+                    let !newSeen = S.insert pid seen
                         children =
                             [ (exchangeAmount ex, go newSeen (flowId $ exchangeFlow ex))
                             | ex <- exchanges proc
@@ -29,7 +30,7 @@ buildProcessTree db = go S.empty
                             , M.member (flowId $ exchangeFlow ex) db
                             ]
                         -- Force evaluation of children to avoid thunk buildup
-                        children' = map (\(amt, tree) -> amt `seq` tree `seq` (amt, tree)) children
+                        !children' = map (\(amt, tree) -> let !amt' = amt; !tree' = tree in (amt', tree')) children
                      in if null children'
                             then Leaf proc
                             else Node proc children'
@@ -48,8 +49,8 @@ placeholder = Process "loop-detected" "Loop detected" "N/A" []
 -- | Fonction récursive : construit un nœud de l'arbre
 buildNode :: ProcessDB -> Process -> ProcessTree
 buildNode db proc =
-    let subExchanges = filter isTechnosphereInput (exchanges proc)
-        subTrees =
+    let !subExchanges = filter isTechnosphereInput (exchanges proc)
+        !subTrees =
             [ (exchangeAmount ex, buildProcessTree db (flowId $ exchangeFlow ex))
             | ex <- subExchanges
             , M.member (flowId $ exchangeFlow ex) db
