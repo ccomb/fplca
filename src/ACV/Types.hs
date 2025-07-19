@@ -72,13 +72,36 @@ type FlowCategoryIndex = M.Map Text [UUID]  -- Category -> Liste des UUIDs des f
 -- | Index par type de flux - sépare Technosphere/Biosphere
 type FlowTypeIndex = M.Map FlowType [UUID]  -- FlowType -> Liste des UUIDs des flux
 
+-- | Index des échanges par flux - permet de trouver tous les échanges utilisant un flux
+type ExchangeIndex = M.Map UUID [(UUID, Exchange)]  -- FlowID -> [(ProcessID, Exchange)]
+
+-- | Index des échanges par procédé - accès rapide aux échanges d'un procédé
+type ProcessExchangeIndex = M.Map UUID [Exchange]  -- ProcessID -> [Exchange]
+
+-- | Index des produits de référence - tous les outputs principaux
+type ReferenceProductIndex = M.Map UUID (UUID, Exchange)  -- FlowID -> (ProcessID, Exchange)
+
+-- | Index des entrées par procédé - sépare inputs/outputs pour recherches efficaces
+type ProcessInputIndex = M.Map UUID [Exchange]  -- ProcessID -> [Input Exchanges]
+
+-- | Index des sorties par procédé - sépare inputs/outputs pour recherches efficaces
+type ProcessOutputIndex = M.Map UUID [Exchange]  -- ProcessID -> [Output Exchanges]
+
 -- | Structure d'index complète pour recherches efficaces
 data Indexes = Indexes
-    { idxByName :: !NameIndex           -- Recherche procédés par nom
+    { -- Index au niveau procédé
+      idxByName :: !NameIndex           -- Recherche procédés par nom
     , idxByLocation :: !LocationIndex   -- Recherche procédés par localisation
     , idxByFlow :: !FlowIndex           -- Recherche procédés utilisant un flux
+      -- Index au niveau flux
     , idxFlowByCategory :: !FlowCategoryIndex  -- Recherche flux par catégorie
     , idxFlowByType :: !FlowTypeIndex   -- Recherche flux par type
+      -- Index au niveau échange
+    , idxExchangeByFlow :: !ExchangeIndex       -- Tous les échanges par flux
+    , idxExchangeByProcess :: !ProcessExchangeIndex  -- Tous les échanges par procédé
+    , idxReferenceProducts :: !ReferenceProductIndex -- Produits de référence
+    , idxInputsByProcess :: !ProcessInputIndex       -- Entrées par procédé
+    , idxOutputsByProcess :: !ProcessOutputIndex     -- Sorties par procédé
     }
     deriving (Eq, Show)
 

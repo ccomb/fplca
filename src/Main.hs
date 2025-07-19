@@ -8,7 +8,7 @@ import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType)
+import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType, findAllReferenceProducts, findExchangesByFlow)
 import ACV.Tree (buildProcessTreeWithDatabase)
 import ACV.Types
 import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes)
@@ -48,7 +48,14 @@ main = do
 
     -- Afficher les statistiques de la base de données
     let stats = getDatabaseStats database
+    putStrLn "\n=== DATABASE STATISTICS ==="
     print stats
+    
+    -- Exemples de requêtes exchange-level
+    putStrLn "\n=== EXCHANGE-LEVEL QUERIES EXAMPLES ==="
+    let refProducts = take 5 $ findAllReferenceProducts database
+    putStrLn $ "First 5 reference products: " ++ show (length refProducts)
+    mapM_ (\(proc, flow, ex) -> putStrLn $ "  " ++ show (processName proc) ++ " -> " ++ show (flowName flow)) refProducts
 
     -- Construire l'arbre du procédé racine
     print "building process tree"
