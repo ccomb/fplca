@@ -41,7 +41,7 @@ parseProcess cursor =
                 headOrFail "Missing activity@id or activity@activityId" $
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        exNodes = cursor $// element (nsElement "exchange")
+        exNodes = cursor $// element (nsElement "intermediateExchange")
         !exchs = map parseExchange exNodes  -- Keep this strict to avoid retaining large lists
      in Process uuid name location exchs
 
@@ -68,7 +68,7 @@ parseProcessWithFlows cursor =
                 headOrFail "Missing activity@id or activity@activityId" $
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        exNodes = cursor $// element (nsElement "exchange")
+        exNodes = cursor $// element (nsElement "intermediateExchange")
         !exchsWithFlows = map parseExchangeWithFlow exNodes
         (!exchs, flows) = unzip exchsWithFlows
      in (Process uuid name location exchs, flows)
@@ -76,34 +76,48 @@ parseProcessWithFlows cursor =
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
     let get = getAttr cur
-        fid = get "flowId"
-        group = get "inputGroup"
-        amount = read $ T.unpack $ get "meanAmount"
-        isInput = group == "1"
-        isRef = group == "0"
+        fid = get "intermediateExchangeId"
+        inputGroup = get "inputGroup"
+        outputGroup = get "outputGroup"
+        amount = read $ T.unpack $ get "amount"
+        -- Determine if it's input or output based on which group attribute exists
+        isInput = inputGroup /= ""
+        isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
      in Exchange fid amount isInput isRef
 
 -- | Parse un échange et extrait aussi le flux pour la déduplication
 parseExchangeWithFlow :: Cursor -> (Exchange, Flow)
 parseExchangeWithFlow cur =
     let get = getAttr cur
-        fid = get "flowId"
-        fname = get "name"
-        cat = get "category"
-        unit = get "unit"
-        group = get "inputGroup"
-        amount = read $ T.unpack $ get "meanAmount"
-        ftype = if cat `elem` ["air", "water", "soil", "resource"] then Biosphere else Technosphere
-        isInput = group == "1"
-        isRef = group == "0"
-        flow = Flow fid fname cat unit ftype
+        -- Extract attributes
+        fid = get "intermediateExchangeId"
+        unitId = get "unitId"
+        amount = read $ T.unpack $ get "amount"
+        inputGroup = get "inputGroup"
+        outputGroup = get "outputGroup"
+        
+        -- Extract child element content
+        fname = headOrFail "Missing <name>" $ cur $/ element (nsElement "name") &/ content
+        unitName = headOrFail "Missing <unitName>" $ cur $/ element (nsElement "unitName") &/ content
+        
+        -- Determine type based on input/output groups
+        isInput = inputGroup /= ""
+        isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
+        
+        -- For now, assume all flows are Technosphere since we don't have biosphere emissions in this data
+        -- In a more complete implementation, we'd need to distinguish based on flow classification
+        ftype = Technosphere
+        
+        flow = Flow fid fname "technosphere" unitName ftype
         exchange = Exchange fid amount isInput isRef
      in (exchange, flow)
 
 getAttr :: Cursor -> Text -> Text
 getAttr cur attr =
     let name = Name attr Nothing Nothing
-     in headOrFail ("Missing attribute: " ++ T.unpack attr) (cur $| attribute name)
+     in case cur $| attribute name of
+         [] -> ""  -- Return empty string for missing attributes
+         (x:_) -> x
 
 -- | Safer alternative to head
 headOrFail :: String -> [a] -> a

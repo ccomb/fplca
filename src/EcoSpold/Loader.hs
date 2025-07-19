@@ -93,7 +93,9 @@ loadAllSpoldsWithFlows dir = do
     chunkSize = 1000  -- Process 1000 files at a time
     
     loadSpoldsWithFlowsInChunks :: [FilePath] -> ProcessDB -> FlowDB -> IO SimpleDatabase
-    loadSpoldsWithFlowsInChunks [] procAcc flowAcc = return $ SimpleDatabase procAcc flowAcc
+    loadSpoldsWithFlowsInChunks [] procAcc flowAcc = do
+        print $ "Final: " ++ show (M.size procAcc) ++ " processes, " ++ show (M.size flowAcc) ++ " flows"
+        return $ SimpleDatabase procAcc flowAcc
     loadSpoldsWithFlowsInChunks files procAcc flowAcc = do
         let (chunk, rest) = splitAt chunkSize files
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
@@ -103,11 +105,15 @@ loadAllSpoldsWithFlows dir = do
         let (procs, flowLists) = unzip chunk'
         let allFlows = concat flowLists
         
+        print $ "Parsed " ++ show (length procs) ++ " processes and " ++ show (length allFlows) ++ " flows from chunk"
+        
         -- Build process map
         let !chunkProcMap = M.fromList [(processId p, p) | p <- procs]
         
         -- Build flow map (deduplicated)
         let !chunkFlowMap = M.fromList [(flowId f, f) | f <- allFlows]
+        
+        print $ "Built maps: " ++ show (M.size chunkProcMap) ++ " processes, " ++ show (M.size chunkFlowMap) ++ " unique flows"
         
         -- Merge with accumulators
         let !newProcAcc = M.union procAcc chunkProcMap
