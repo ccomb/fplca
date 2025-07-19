@@ -21,9 +21,9 @@ type Visited = S.Set UUID
 buildSpoldIndex :: FilePath -> IO (M.Map UUID FilePath)
 buildSpoldIndex dir = do
     files <- listDirectory dir
-    let !spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let !pairs = [(T.pack (takeWhile (/= '_') f), dir </> f) | f <- spoldFiles]
-    return $! M.fromList pairs
+    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
+    let pairs = [(T.pack (takeWhile (/= '_') f), dir </> f) | f <- spoldFiles]
+    return $! M.fromList pairs  -- Keep strict return to force Map evaluation
 
 buildProcessTreeIO :: SpoldIndex -> UUID -> IO ProcessTree
 buildProcessTreeIO index = go S.empty
@@ -35,18 +35,18 @@ buildProcessTreeIO index = go S.empty
             case M.lookup uuid index of
                 Nothing -> return $ Leaf missing
                 Just path -> do
-                    !proc <- parseProcessFromFile path
-                    let !visited' = S.insert uuid visited
+                    proc <- parseProcessFromFile path
+                    let visited' = S.insert uuid visited
                     children <- forM (exchanges proc) $ \ex ->
                         if isTechnosphereInput ex
                             then case M.lookup (flowId $ exchangeFlow ex) index of
                                 Nothing -> return Nothing
                                 Just childPath -> do
-                                    let !childId = flowId $ exchangeFlow ex
-                                    !subtree <- go visited' childId
+                                    let childId = flowId $ exchangeFlow ex
+                                    subtree <- go visited' childId
                                     return $ Just (exchangeAmount ex, subtree)
                             else return Nothing
-                    let !validChildren = catMaybes children
+                    let !validChildren = catMaybes children  -- Keep strict for children list
                     return $!
                         if null validChildren
                             then Leaf proc
@@ -83,13 +83,13 @@ loadAllSpolds dir = do
     loadSpoldsInChunks :: [FilePath] -> ProcessDB -> IO ProcessDB
     loadSpoldsInChunks [] acc = return acc
     loadSpoldsInChunks files acc = do
-        let (!chunk, !rest) = splitAt chunkSize files
+        let (chunk, rest) = splitAt chunkSize files
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
         
         -- Force evaluation of chunk to avoid building up thunks
-        !chunk' <- mapM parseProcessFromFile chunk
-        let !chunkMap = M.fromList [(processId p, p) | p <- chunk']
+        chunk' <- mapM parseProcessFromFile chunk
+        let !chunkMap = M.fromList [(processId p, p) | p <- chunk']  -- Keep strict for Map
         
         -- Force evaluation and merge
-        let !newAcc = M.union acc chunkMap
+        let !newAcc = M.union acc chunkMap  -- Keep strict for accumulator
         loadSpoldsInChunks rest newAcc
