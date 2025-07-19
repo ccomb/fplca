@@ -90,65 +90,55 @@ loadAllSpoldsWithFlows dir = do
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
     print $ "Found " ++ show (length spoldFiles) ++ " spold files"
     
-    -- Load files with parallel chunk processing (3 chunks simultaneously)
-    loadSpoldsWithParallelChunks spoldFiles
+    -- Load files in chunks with optimized internal parallelism
+    loadSpoldsWithOptimizedChunks spoldFiles M.empty M.empty
   where
     chunkSize = 1000  -- Process 1000 files at a time
-    maxParallelChunks = 3  -- Process up to 3 chunks simultaneously
     
-    -- New function for parallel chunk processing
-    loadSpoldsWithParallelChunks :: [FilePath] -> IO SimpleDatabase
-    loadSpoldsWithParallelChunks files = do
-        let chunks = chunksOf chunkSize files
-        print $ "Processing " ++ show (length chunks) ++ " chunks with up to " ++ show maxParallelChunks ++ " parallel"
-        
-        -- Process chunks in batches of maxParallelChunks
-        results <- processChunkBatches chunks
-        
-        -- Merge all results
-        let (allProcs, allFlows) = unzip results
-        let !finalProcMap = M.unions allProcs
-        let !finalFlowMap = M.unions allFlows
-        
-        print $ "Final: " ++ show (M.size finalProcMap) ++ " processes, " ++ show (M.size finalFlowMap) ++ " flows"
-        return $ SimpleDatabase finalProcMap finalFlowMap
-    
-    -- Process chunks in parallel batches
-    processChunkBatches :: [[FilePath]] -> IO [(ProcessDB, FlowDB)]
-    processChunkBatches [] = return []
-    processChunkBatches chunks = do
-        let (currentBatch, remainingChunks) = splitAt maxParallelChunks chunks
-        print $ "Processing batch of " ++ show (length currentBatch) ++ " chunks in parallel"
-        
-        -- Process current batch in parallel
-        batchResults <- mapConcurrently processChunk currentBatch
-        
-        -- Process remaining chunks
-        remainingResults <- processChunkBatches remainingChunks
-        
-        return $ batchResults ++ remainingResults
-    
-    -- Process a single chunk (same logic as before)
-    processChunk :: [FilePath] -> IO (ProcessDB, FlowDB)
-    processChunk chunk = do
+    -- Memory-efficient sequential chunk processing with internal parallelism
+    loadSpoldsWithOptimizedChunks :: [FilePath] -> ProcessDB -> FlowDB -> IO SimpleDatabase
+    loadSpoldsWithOptimizedChunks [] procAcc flowAcc = do
+        print $ "Final: " ++ show (M.size procAcc) ++ " processes, " ++ show (M.size flowAcc) ++ " flows"
+        return $ SimpleDatabase procAcc flowAcc
+    loadSpoldsWithOptimizedChunks files procAcc flowAcc = do
+        let (chunk, rest) = splitAt chunkSize files
         print $ "Processing chunk of " ++ show (length chunk) ++ " files"
         
-        -- Parse processes and flows in parallel within chunk
-        parsedChunk <- mapConcurrently parseProcessAndFlowsFromFile chunk
-        let (!procs, flowLists) = unzip parsedChunk
-        let !allFlows = concat flowLists
-        
-        print $ "Parsed " ++ show (length procs) ++ " processes and " ++ show (length allFlows) ++ " flows from chunk"
-        
-        -- Build process and flow maps in parallel
-        let procPairs = [(processId p, p) | p <- procs] `using` parList rdeepseq
-        let flowPairs = [(flowId f, f) | f <- allFlows] `using` parList rdeepseq
-        let !chunkProcMap = M.fromList procPairs
-        let !chunkFlowMap = M.fromList flowPairs
+        -- Parse files in smaller parallel batches to control memory
+        let batchSize = 100  -- Process 100 files at a time within chunk
+        (chunkProcMap, chunkFlowMap) <- processChunkInBatches chunk
         
         print $ "Built maps: " ++ show (M.size chunkProcMap) ++ " processes, " ++ show (M.size chunkFlowMap) ++ " unique flows"
         
-        return (chunkProcMap, chunkFlowMap)
+        -- Merge with accumulators and continue
+        let !newProcAcc = M.union procAcc chunkProcMap
+        let !newFlowAcc = M.union flowAcc chunkFlowMap
+        
+        loadSpoldsWithOptimizedChunks rest newProcAcc newFlowAcc
+    
+    -- Process chunk in smaller batches for better memory control
+    processChunkInBatches :: [FilePath] -> IO (ProcessDB, FlowDB)
+    processChunkInBatches files = do
+        let batches = chunksOf 100 files  -- 100 files per batch
+        results <- mapM processBatch batches
+        let (procMaps, flowMaps) = unzip results
+        let !finalProcMap = M.unions procMaps
+        let !finalFlowMap = M.unions flowMaps
+        return (finalProcMap, finalFlowMap)
+    
+    -- Process a small batch of files in parallel
+    processBatch :: [FilePath] -> IO (ProcessDB, FlowDB)
+    processBatch batch = do
+        -- Parse files in parallel
+        parsedBatch <- mapConcurrently parseProcessAndFlowsFromFile batch
+        let (!procs, flowLists) = unzip parsedBatch
+        let !allFlows = concat flowLists
+        
+        -- Build maps with controlled parallelism
+        let !procMap = M.fromList [(processId p, p) | p <- procs]
+        let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
+        
+        return (procMap, flowMap)
     
     -- Utility function to split list into chunks
     chunksOf :: Int -> [a] -> [[a]]
