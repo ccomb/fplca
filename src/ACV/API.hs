@@ -35,10 +35,18 @@ data FlowDetail = FlowDetail
     , fdUsageCount :: Int  -- How many processes use this flow
     } deriving (Generic, Show)
 
--- | Exchange with flow information
+-- | Exchange with flow and target process information
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
     , edFlow :: Flow
+    , edTargetProcess :: Maybe ProcessSummary  -- Target process for technosphere inputs
+    } deriving (Generic, Show)
+
+-- | Minimal process information for navigation
+data ProcessSummary = ProcessSummary
+    { prsId :: UUID
+    , prsName :: Text
+    , prsLocation :: Text
     } deriving (Generic, Show)
 
 -- | Process statistics
@@ -54,6 +62,7 @@ instance ToJSON ProcessDetail
 instance ToJSON FlowDetail  
 instance ToJSON ExchangeDetail
 instance ToJSON ProcessStats
+instance ToJSON ProcessSummary
 instance ToJSON Process
 instance ToJSON Exchange
 instance ToJSON Flow
@@ -101,7 +110,7 @@ getFlowUsageCount db flowUUID =
 -- | Get detailed input exchanges
 getProcessInputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessInputDetails db process =
-    [ ExchangeDetail exchange flow
+    [ ExchangeDetail exchange flow (getTargetProcess db exchange)
     | exchange <- exchanges process
     , exchangeIsInput exchange
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
@@ -110,7 +119,7 @@ getProcessInputDetails db process =
 -- | Get detailed output exchanges  
 getProcessOutputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessOutputDetails db process =
-    [ ExchangeDetail exchange flow
+    [ ExchangeDetail exchange flow (getTargetProcess db exchange)
     | exchange <- exchanges process
     , not (exchangeIsInput exchange)
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
@@ -128,6 +137,17 @@ getProcessReferenceProduct db process = do
         case filter exchangeIsReference (exchanges proc) of
             [] -> Nothing
             (ex:_) -> Just ex
+
+-- | Get target process for technosphere navigation
+getTargetProcess :: Database -> Exchange -> Maybe ProcessSummary
+getTargetProcess db exchange = do
+    targetId <- exchangeActivityLinkId exchange
+    targetProcess <- M.lookup targetId (dbProcesses db)
+    return $ ProcessSummary
+        { prsId = processId targetProcess
+        , prsName = processName targetProcess
+        , prsLocation = processLocation targetProcess
+        }
 
 -- | Calculate process statistics
 calculateProcessStats :: Process -> ProcessStats

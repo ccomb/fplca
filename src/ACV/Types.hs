@@ -34,6 +34,7 @@ data Exchange = Exchange
     , exchangeAmount :: !Double -- Quantité échangée
     , exchangeIsInput :: !Bool -- Vrai si c'est une entrée
     , exchangeIsReference :: !Bool -- Vrai si c'est le flux de référence (output principal)
+    , exchangeActivityLinkId :: !(Maybe UUID) -- ID du procédé source pour navigation technosphere
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
