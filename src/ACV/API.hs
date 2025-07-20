@@ -25,9 +25,23 @@ type ACVAPI = "api" :> "v1" :> (
   :<|> "flows" :> Capture "flowId" Text :> "processes" :> Get '[JSON] [ProcessSummary]
   )
 
+-- | Enhanced exchange with unit name for API responses
+data ExchangeWithUnit = ExchangeWithUnit
+    { ewuExchange :: Exchange
+    , ewuUnitName :: Text               -- Unit name for the exchange
+    } deriving (Generic, Show)
+
+-- | Process information optimized for API responses
+data ProcessForAPI = ProcessForAPI
+    { pfaId :: UUID
+    , pfaName :: Text
+    , pfaLocation :: Text
+    , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
+    } deriving (Generic, Show)
+
 -- | Streamlined process information - core data only
 data ProcessInfo = ProcessInfo
-    { piProcess :: Process              -- Core process with exchanges
+    { piProcess :: ProcessForAPI        -- Enhanced process with unit names
     , piMetadata :: ProcessMetadata     -- Extended metadata
     , piStatistics :: ProcessStats      -- Usage statistics
     , piLinks :: ProcessLinks           -- Links to sub-resources
@@ -96,6 +110,8 @@ data ProcessStats = ProcessStats
 
 -- JSON instances
 instance ToJSON ProcessInfo
+instance ToJSON ProcessForAPI
+instance ToJSON ExchangeWithUnit
 instance ToJSON ProcessMetadata
 instance ToJSON ProcessLinks
 instance ToJSON FlowSummary
@@ -126,12 +142,13 @@ acvServer db = getProcessInfo
       case M.lookup uuid (dbProcesses db) of
         Nothing -> throwError err404 { errBody = "Process not found" }
         Just process -> do
+          let processForAPI = convertProcessForAPI db process
           let metadata = calculateProcessMetadata db process
           let stats = calculateProcessStats process
           let links = generateProcessLinks uuid
           
           return $ ProcessInfo
-            { piProcess = process
+            { piProcess = processForAPI
             , piMetadata = metadata  
             , piStatistics = stats
             , piLinks = links
@@ -302,6 +319,20 @@ calculateProcessStats process = ProcessStats
     , psTotalExchanges = length (exchanges process)
     , psLocation = processLocation process
     }
+
+-- | Convert Process to ProcessForAPI with unit names
+convertProcessForAPI :: Database -> Process -> ProcessForAPI
+convertProcessForAPI db process = ProcessForAPI
+    { pfaId = processId process
+    , pfaName = processName process
+    , pfaLocation = processLocation process
+    , pfaExchanges = map convertExchangeWithUnit (exchanges process)
+    }
+  where
+    convertExchangeWithUnit exchange = ExchangeWithUnit
+        { ewuExchange = exchange
+        , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
+        }
 
 -- | Proxy for the API
 acvAPI :: Proxy ACVAPI
