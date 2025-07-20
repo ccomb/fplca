@@ -14,20 +14,52 @@ import qualified Data.Map as M
 import GHC.Generics
 import Servant
 
--- | API type definition
+-- | API type definition - RESTful design with focused endpoints
 type ACVAPI = "api" :> "v1" :> (
-    "process" :> Capture "uuid" Text :> Get '[JSON] ProcessDetail
+       "process" :> Capture "uuid" Text :> Get '[JSON] ProcessInfo
+  :<|> "process" :> Capture "uuid" Text :> "flows" :> Get '[JSON] [FlowSummary]
+  :<|> "process" :> Capture "uuid" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
+  :<|> "process" :> Capture "uuid" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
+  :<|> "process" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
+  :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
+  :<|> "flows" :> Capture "flowId" Text :> "processes" :> Get '[JSON] [ProcessSummary]
   )
 
--- | Detailed process information for API response
-data ProcessDetail = ProcessDetail
-    { pdProcess :: Process
-    , pdFlows :: [FlowDetail]
-    , pdInputs :: [ExchangeDetail] 
-    , pdOutputs :: [ExchangeDetail]
-    , pdReferenceProduct :: Maybe FlowDetail
-    , pdStatistics :: ProcessStats
+-- | Streamlined process information - core data only
+data ProcessInfo = ProcessInfo
+    { piProcess :: Process              -- Core process with exchanges
+    , piMetadata :: ProcessMetadata     -- Extended metadata
+    , piStatistics :: ProcessStats      -- Usage statistics
+    , piLinks :: ProcessLinks           -- Links to sub-resources
     } deriving (Generic, Show)
+
+-- | Extended process metadata
+data ProcessMetadata = ProcessMetadata
+    { pmTotalFlows :: Int              -- Number of unique flows used
+    , pmTechnosphereInputs :: Int      -- Count of technosphere inputs
+    , pmBiosphereExchanges :: Int      -- Count of biosphere exchanges  
+    , pmHasReferenceProduct :: Bool    -- Whether process has reference product
+    , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
+    } deriving (Generic, Show)
+
+-- | Links to related resources
+data ProcessLinks = ProcessLinks
+    { plFlowsUrl :: Text              -- URL to flows endpoint
+    , plInputsUrl :: Text             -- URL to inputs endpoint  
+    , plOutputsUrl :: Text            -- URL to outputs endpoint
+    , plReferenceProductUrl :: Maybe Text -- URL to reference product (if exists)
+    } deriving (Generic, Show)
+
+-- | Lightweight flow information for lists
+data FlowSummary = FlowSummary
+    { fsFlow :: Flow                  -- Core flow data
+    , fsUsageCount :: Int             -- How many processes use this flow
+    , fsRole :: FlowRole              -- Role in this specific process
+    } deriving (Generic, Show)
+
+-- | Role of a flow in a specific process context
+data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
+    deriving (Eq, Show, Generic)
 
 -- | Flow with additional metadata
 data FlowDetail = FlowDetail
@@ -58,7 +90,11 @@ data ProcessStats = ProcessStats
     } deriving (Generic, Show)
 
 -- JSON instances
-instance ToJSON ProcessDetail
+instance ToJSON ProcessInfo
+instance ToJSON ProcessMetadata
+instance ToJSON ProcessLinks
+instance ToJSON FlowSummary
+instance ToJSON FlowRole
 instance ToJSON FlowDetail  
 instance ToJSON ExchangeDetail
 instance ToJSON ProcessStats
@@ -68,31 +104,142 @@ instance ToJSON Exchange
 instance ToJSON Flow
 instance ToJSON FlowType
 
--- | API server implementation
+-- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
-acvServer db = getProcessDetail
+acvServer db = getProcessInfo
+         :<|> getProcessFlows  
+         :<|> getProcessInputs
+         :<|> getProcessOutputs
+         :<|> getProcessReferenceProduct
+         :<|> getFlowDetail
+         :<|> getFlowProcesses
   where
-    getProcessDetail :: Text -> Handler ProcessDetail
-    getProcessDetail uuid = do
+    -- Core process endpoint - streamlined data
+    getProcessInfo :: Text -> Handler ProcessInfo
+    getProcessInfo uuid = do
       case M.lookup uuid (dbProcesses db) of
         Nothing -> throwError err404 { errBody = "Process not found" }
         Just process -> do
-          let processFlows = getProcessFlows db process
-          let inputs = getProcessInputDetails db process
-          let outputs = getProcessOutputDetails db process  
-          let refProduct = getProcessReferenceProduct db process
+          let metadata = calculateProcessMetadata db process
           let stats = calculateProcessStats process
+          let links = generateProcessLinks uuid
           
-          return $ ProcessDetail
-            { pdProcess = process
-            , pdFlows = processFlows
-            , pdInputs = inputs
-            , pdOutputs = outputs
-            , pdReferenceProduct = refProduct
-            , pdStatistics = stats
+          return $ ProcessInfo
+            { piProcess = process
+            , piMetadata = metadata  
+            , piStatistics = stats
+            , piLinks = links
             }
+    
+    -- Process flows sub-resource
+    getProcessFlows :: Text -> Handler [FlowSummary]
+    getProcessFlows uuid = do
+      case M.lookup uuid (dbProcesses db) of
+        Nothing -> throwError err404 { errBody = "Process not found" }
+        Just process -> return $ getProcessFlowSummaries db process
+    
+    -- Process inputs sub-resource  
+    getProcessInputs :: Text -> Handler [ExchangeDetail]
+    getProcessInputs uuid = do
+      case M.lookup uuid (dbProcesses db) of
+        Nothing -> throwError err404 { errBody = "Process not found" }
+        Just process -> return $ getProcessInputDetails db process
+    
+    -- Process outputs sub-resource
+    getProcessOutputs :: Text -> Handler [ExchangeDetail] 
+    getProcessOutputs uuid = do
+      case M.lookup uuid (dbProcesses db) of
+        Nothing -> throwError err404 { errBody = "Process not found" }
+        Just process -> return $ getProcessOutputDetails db process
+    
+    -- Process reference product sub-resource
+    getProcessReferenceProduct :: Text -> Handler FlowDetail
+    getProcessReferenceProduct uuid = do
+      case M.lookup uuid (dbProcesses db) of
+        Nothing -> throwError err404 { errBody = "Process not found" }
+        Just process -> do
+          case getProcessReferenceProductDetail db process of
+            Nothing -> throwError err404 { errBody = "No reference product found" }
+            Just refProduct -> return refProduct
+    
+    -- Flow detail endpoint
+    getFlowDetail :: Text -> Handler FlowDetail
+    getFlowDetail flowId = do
+      case M.lookup flowId (dbFlows db) of
+        Nothing -> throwError err404 { errBody = "Flow not found" }
+        Just flow -> do
+          let usageCount = getFlowUsageCount db flowId
+          return $ FlowDetail flow usageCount
+    
+    -- Processes using a specific flow
+    getFlowProcesses :: Text -> Handler [ProcessSummary]
+    getFlowProcesses flowId = do
+      case M.lookup flowId (dbFlows db) of
+        Nothing -> throwError err404 { errBody = "Flow not found" }
+        Just _ -> return $ getProcessesUsingFlow db flowId
 
--- | Get all flows used by a process with usage statistics
+-- | Calculate extended metadata for a process  
+calculateProcessMetadata :: Database -> Process -> ProcessMetadata
+calculateProcessMetadata db process =
+    let allExchanges = exchanges process
+        uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
+        techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
+        bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
+        refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
+                       [] -> Nothing
+                       (ex:_) -> Just (exchangeFlowId ex)
+    in ProcessMetadata
+        { pmTotalFlows = uniqueFlows
+        , pmTechnosphereInputs = techInputs  
+        , pmBiosphereExchanges = bioExchanges
+        , pmHasReferenceProduct = refProduct /= Nothing
+        , pmReferenceProductFlow = refProduct
+        }
+
+-- | Generate links to sub-resources for a process
+generateProcessLinks :: Text -> ProcessLinks
+generateProcessLinks uuid = ProcessLinks
+    { plFlowsUrl = "/api/v1/process/" <> uuid <> "/flows"
+    , plInputsUrl = "/api/v1/process/" <> uuid <> "/inputs"
+    , plOutputsUrl = "/api/v1/process/" <> uuid <> "/outputs"  
+    , plReferenceProductUrl = Just ("/api/v1/process/" <> uuid <> "/reference-product")
+    }
+
+-- | Get flows used by a process as lightweight summaries
+getProcessFlowSummaries :: Database -> Process -> [FlowSummary]
+getProcessFlowSummaries db process =
+    [ FlowSummary flow (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
+    | exchange <- exchanges process
+    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+    ]
+  where
+    determineFlowRole ex
+        | exchangeIsReference ex = ReferenceProductFlow
+        | exchangeIsInput ex = InputFlow  
+        | otherwise = OutputFlow
+
+-- | Get reference product as FlowDetail (if exists)
+getProcessReferenceProductDetail :: Database -> Process -> Maybe FlowDetail
+getProcessReferenceProductDetail db process = do
+    refExchange <- case filter exchangeIsReference (exchanges process) of
+                     [] -> Nothing
+                     (ex:_) -> Just ex
+    flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
+    let usageCount = getFlowUsageCount db (flowId flow)
+    return $ FlowDetail flow usageCount
+
+-- | Get processes that use a specific flow as ProcessSummary list
+getProcessesUsingFlow :: Database -> UUID -> [ProcessSummary]  
+getProcessesUsingFlow db flowUUID =
+    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
+        Nothing -> []
+        Just processUUIDs -> 
+            [ ProcessSummary (processId proc) (processName proc) (processLocation proc)
+            | procUUID <- processUUIDs
+            , Just proc <- [M.lookup procUUID (dbProcesses db)]
+            ]
+
+-- | Get all flows used by a process with usage statistics (legacy function - kept for compatibility)
 getProcessFlows :: Database -> Process -> [FlowDetail]
 getProcessFlows db process = 
     [ FlowDetail flow (getFlowUsageCount db (flowId flow))
@@ -125,18 +272,6 @@ getProcessOutputDetails db process =
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     ]
 
--- | Get reference product details
-getProcessReferenceProduct :: Database -> Process -> Maybe FlowDetail
-getProcessReferenceProduct db process = do
-    refExchange <- findReferenceExchange process
-    flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
-    let usageCount = getFlowUsageCount db (flowId flow)
-    return $ FlowDetail flow usageCount
-  where
-    findReferenceExchange proc = 
-        case filter exchangeIsReference (exchanges proc) of
-            [] -> Nothing
-            (ex:_) -> Just ex
 
 -- | Get target process for technosphere navigation
 getTargetProcess :: Database -> Exchange -> Maybe ProcessSummary
