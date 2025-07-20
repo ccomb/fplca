@@ -1,11 +1,13 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes, loadCachedSpolds, saveCachedSpolds, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
 
 import ACV.Query (buildIndexes)
 import ACV.Types
 import Control.Concurrent.Async
+import Control.Exception (catch, SomeException)
 import Control.Monad
 import Control.Parallel.Strategies
 import qualified Data.Map as M
@@ -15,7 +17,7 @@ import qualified Data.Text as T
 import Data.Binary (encodeFile, decodeFile)
 import EcoSpold.Parser (parseProcessAndFlowsFromFile, parseProcessFromFile, streamParseProcessAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
-import System.Directory (listDirectory, doesFileExist, getModificationTime)
+import System.Directory (listDirectory, doesFileExist, getModificationTime, removeFile)
 import System.FilePath (takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 import Data.Time (getCurrentTime, diffUTCTime)
@@ -155,29 +157,59 @@ loadCachedSpolds dataDir cacheFile = do
         then do
             hPutStrLn stderr "Loading from cache..."
             startTime <- getCurrentTime
-            !db <- decodeFile cacheFile
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
-            return (db, True)
+            result <- tryLoadCache
+            case result of
+                Just db -> do
+                    endTime <- getCurrentTime
+                    let elapsed = diffUTCTime endTime startTime
+                    hPutStrLn stderr $ "Cache loaded in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
+                    return (db, True)
+                Nothing -> do
+                    hPutStrLn stderr "Cache corrupted, rebuilding from XML files..."
+                    fallbackToXML
         else do
             hPutStrLn stderr "No cache found, parsing XML files..."
-            startTime <- getCurrentTime
-            !db <- loadAllSpolds dataDir
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
-            return (db, False)
+            fallbackToXML
+  where
+    tryLoadCache :: IO (Maybe ProcessDB)
+    tryLoadCache = do
+        result <- catch (fmap Just $ decodeFile cacheFile) handleBinaryError
+        return result
+      where
+        handleBinaryError :: SomeException -> IO (Maybe ProcessDB)
+        handleBinaryError ex = do
+            hPutStrLn stderr $ "Cache loading failed: " ++ show ex
+            hPutStrLn stderr "Deleting corrupted cache file..."
+            catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
+            return Nothing
+    
+    fallbackToXML :: IO (ProcessDB, Bool)
+    fallbackToXML = do
+        startTime <- getCurrentTime
+        !db <- loadAllSpolds dataDir
+        endTime <- getCurrentTime
+        let elapsed = diffUTCTime endTime startTime
+        hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
+        return (db, False)
 
-{- | Save ProcessDB to binary cache file -}
+{- | Save ProcessDB to binary cache file with error handling -}
 saveCachedSpolds :: FilePath -> ProcessDB -> IO ()
 saveCachedSpolds cacheFile db = do
     hPutStrLn stderr "Saving to cache..."
     startTime <- getCurrentTime
-    encodeFile cacheFile db
+    result <- catch (encodeFile cacheFile db >> return True) handleSaveError
     endTime <- getCurrentTime
     let elapsed = diffUTCTime endTime startTime
-    hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+    if result
+        then hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+        else hPutStrLn stderr $ "Cache save failed after " ++ show elapsed
+  where
+    handleSaveError :: SomeException -> IO Bool
+    handleSaveError ex = do
+        hPutStrLn stderr $ "Cache save failed: " ++ show ex
+        hPutStrLn stderr "Removing partially written cache file..."
+        catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
+        return False
 
 {- | Load cached SimpleDatabase with flows, or fallback to XML parsing -}
 loadCachedSpoldsWithFlows :: FilePath -> FilePath -> IO (SimpleDatabase, Bool)
@@ -187,30 +219,60 @@ loadCachedSpoldsWithFlows dataDir cacheFile = do
         then do
             hPutStrLn stderr "Loading SimpleDatabase from cache..."
             startTime <- getCurrentTime
-            !db <- decodeFile cacheFile
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed 
-                ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
-                ++ show (M.size $ sdbFlows db) ++ " flows)"
-            return (db, True)
+            result <- tryLoadCacheWithFlows
+            case result of
+                Just db -> do
+                    endTime <- getCurrentTime
+                    let elapsed = diffUTCTime endTime startTime
+                    hPutStrLn stderr $ "Cache loaded in " ++ show elapsed 
+                        ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
+                        ++ show (M.size $ sdbFlows db) ++ " flows)"
+                    return (db, True)
+                Nothing -> do
+                    hPutStrLn stderr "Cache corrupted, rebuilding from XML files..."
+                    fallbackToXMLWithFlows
         else do
             hPutStrLn stderr "No cache found, parsing XML files..."
-            startTime <- getCurrentTime
-            !db <- loadAllSpoldsWithFlows dataDir
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed
-                ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
-                ++ show (M.size $ sdbFlows db) ++ " flows)"
-            return (db, False)
+            fallbackToXMLWithFlows
+  where
+    tryLoadCacheWithFlows :: IO (Maybe SimpleDatabase)
+    tryLoadCacheWithFlows = do
+        result <- catch (fmap Just $ decodeFile cacheFile) handleBinaryError
+        return result
+      where
+        handleBinaryError :: SomeException -> IO (Maybe SimpleDatabase)
+        handleBinaryError ex = do
+            hPutStrLn stderr $ "Cache loading failed: " ++ show ex
+            hPutStrLn stderr "Deleting corrupted cache file..."
+            catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
+            return Nothing
+    
+    fallbackToXMLWithFlows :: IO (SimpleDatabase, Bool)
+    fallbackToXMLWithFlows = do
+        startTime <- getCurrentTime
+        !db <- loadAllSpoldsWithFlows dataDir
+        endTime <- getCurrentTime
+        let elapsed = diffUTCTime endTime startTime
+        hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed
+            ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
+            ++ show (M.size $ sdbFlows db) ++ " flows)"
+        return (db, False)
 
-{- | Save SimpleDatabase to binary cache file -}
+{- | Save SimpleDatabase to binary cache file with error handling -}
 saveCachedSpoldsWithFlows :: FilePath -> SimpleDatabase -> IO ()
 saveCachedSpoldsWithFlows cacheFile db = do
     hPutStrLn stderr "Saving SimpleDatabase to cache..."
     startTime <- getCurrentTime
-    encodeFile cacheFile db
+    result <- catch (encodeFile cacheFile db >> return True) handleSaveError
     endTime <- getCurrentTime
     let elapsed = diffUTCTime endTime startTime
-    hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+    if result
+        then hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+        else hPutStrLn stderr $ "Cache save failed after " ++ show elapsed
+  where
+    handleSaveError :: SomeException -> IO Bool
+    handleSaveError ex = do
+        hPutStrLn stderr $ "Cache save failed: " ++ show ex
+        hPutStrLn stderr "Removing partially written cache file..."
+        catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
+        return False
