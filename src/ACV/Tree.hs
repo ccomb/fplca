@@ -41,14 +41,12 @@ isTechnosphereInputOld ex =
     -- Elle est gardée temporairement pour la compatibilité
     error "isTechnosphereInputOld: Cannot determine flow type without FlowDB access"
 
--- | Nouvelle version qui nécessite accès à FlowDB
+-- | Nouvelle version optimisée avec les variants Exchange
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
-isTechnosphereInput flowDB ex =
-    case M.lookup (exchangeFlowId ex) flowDB of
-        Nothing -> False
-        Just flow -> flowType flow == Technosphere
-                  && exchangeIsInput ex
-                  && not (exchangeIsReference ex)
+isTechnosphereInput _ ex = 
+    case ex of
+        TechnosphereExchange _ _ isInput isRef _ -> isInput && not isRef
+        BiosphereExchange _ _ _ -> False
 
 -- | Dummy process to indicate recursion stop
 placeholder :: Process

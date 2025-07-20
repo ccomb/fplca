@@ -98,15 +98,13 @@ parseExchange cur =
                         [] -> ""
                         (x:_) -> x
         
-        -- Extract activityLinkId for technosphere navigation
-        !activityLinkId = case getAttr cur "activityLinkId" of
-                           "" -> Nothing
-                           aid -> Just aid
+        -- Extract activityLinkId for technosphere navigation (required for technosphere)
+        !activityLinkId = getAttr cur "activityLinkId"
         
         -- Input if inputGroup exists, output if outputGroup exists (mutually exclusive)
         !isInput = inputGroup /= ""
         !isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
-     in Exchange fid amount isInput isRef activityLinkId
+     in TechnosphereExchange fid amount isInput isRef activityLinkId
 
 -- | Parse un échange et extrait aussi le flux pour la déduplication
 parseExchangeWithFlow :: Cursor -> (Exchange, Flow)
@@ -139,13 +137,11 @@ parseExchangeWithFlow cur =
         -- For now, assume all flows are Technosphere since we don't have biosphere emissions in this data
         !ftype = Technosphere
         
-        -- Extract activityLinkId for technosphere navigation
-        !activityLinkId = case getAttr cur "activityLinkId" of
-                           "" -> Nothing
-                           aid -> Just aid
+        -- Extract activityLinkId for technosphere navigation (required for technosphere)
+        !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
-        !exchange = Exchange fid amount isInput isRef activityLinkId
+        !exchange = TechnosphereExchange fid amount isInput isRef activityLinkId
      in (exchange, flow)
 
 getAttr :: Cursor -> Text -> Text
@@ -223,13 +219,11 @@ parseExchangeWithFlowOptimized cur =
         !isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
         !ftype = Technosphere
         
-        -- Extract activityLinkId for technosphere navigation
-        !activityLinkId = case getAttr cur "activityLinkId" of
-                           "" -> Nothing
-                           aid -> Just aid
+        -- Extract activityLinkId for technosphere navigation (required for technosphere)
+        !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
-        !exchange = Exchange fid amount isInput isRef activityLinkId
+        !exchange = TechnosphereExchange fid amount isInput isRef activityLinkId
      in (exchange, flow)
 
 -- | Parse elementary exchange (biosphere flows)
@@ -247,13 +241,9 @@ parseElementaryExchange cur =
                         [] -> ""
                         (x:_) -> x
         
-        -- Elementary exchanges don't have activityLinkId (they link to biosphere)
-        !activityLinkId = Nothing
-        
         -- For elementary exchanges: inputGroup = resource extraction, outputGroup = emission
         !isInput = inputGroup /= ""
-        !isRef = False  -- Elementary exchanges are never reference products
-     in Exchange fid amount isInput isRef activityLinkId
+     in BiosphereExchange fid amount isInput
 
 -- | Parse elementary exchange with flow extraction
 parseElementaryExchangeWithFlow :: Cursor -> (Exchange, Flow)
@@ -279,17 +269,13 @@ parseElementaryExchangeWithFlow cur =
                         (x:_) -> x
         
         !isInput = inputGroup /= ""
-        !isRef = False
         !ftype = Biosphere
         
         -- Determine category based on input/output group
         !category = if isInput then "resource" else "emission"
         
-        -- Elementary exchanges don't have activityLinkId
-        !activityLinkId = Nothing
-        
         !flow = Flow fid fname category unitName ftype
-        !exchange = Exchange fid amount isInput isRef activityLinkId
+        !exchange = BiosphereExchange fid amount isInput
      in (exchange, flow)
 
 -- | Optimized elementary exchange parsing
@@ -313,13 +299,9 @@ parseElementaryExchangeWithFlowOptimized cur =
                         (x:_) -> x
         
         !isInput = inputGroup /= ""
-        !isRef = False
         !ftype = Biosphere
         !category = if isInput then "resource" else "emission"
         
-        -- Elementary exchanges don't have activityLinkId
-        !activityLinkId = Nothing
-        
         !flow = Flow fid fname category unitName ftype
-        !exchange = Exchange fid amount isInput isRef activityLinkId
+        !exchange = BiosphereExchange fid amount isInput
      in (exchange, flow)

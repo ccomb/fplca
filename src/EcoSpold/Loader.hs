@@ -37,15 +37,12 @@ buildProcessTreeIO index rootUuid = do
     -- une fois pour construire l'arbre). Il vaut mieux utiliser loadAllSpoldsWithFlows + buildProcessTreeWithFlows
     error "buildProcessTreeIO: Use loadAllSpoldsWithFlows + buildProcessTreeWithFlows instead for better performance"
 
--- | Fonction auxiliaire qui nécessite maintenant accès à FlowDB
+-- | Fonction auxiliaire optimisée avec variants Exchange
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
-isTechnosphereInput flowDB ex =
-    case M.lookup (exchangeFlowId ex) flowDB of
-        Nothing -> False
-        Just flow ->
-            flowType flow == Technosphere
-                && exchangeIsInput ex
-                && not (exchangeIsReference ex)
+isTechnosphereInput _ ex =
+    case ex of
+        TechnosphereExchange _ _ isInput isRef _ -> isInput && not isRef
+        BiosphereExchange _ _ _ -> False
 
 placeholder :: Process
 placeholder = Process "loop" "Loop detected" "N/A" []

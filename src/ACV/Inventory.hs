@@ -42,12 +42,12 @@ biosphereInventoryWithFlows flowDB w proc =
     , isBiosphereFlow flowDB ex
     ]
 
--- | Vérifie si un échange est un flux biosphère
+-- | Vérifie si un échange est un flux biosphère (optimisé avec variants Exchange)
 isBiosphereFlow :: FlowDB -> Exchange -> Bool
-isBiosphereFlow flowDB ex =
-    case M.lookup (exchangeFlowId ex) flowDB of
-        Nothing -> False
-        Just flow -> flowType flow == Biosphere
+isBiosphereFlow _ ex =
+    case ex of
+        BiosphereExchange _ _ _ -> True
+        TechnosphereExchange _ _ _ _ _ -> False
 
 -- | Extrait les flux biosphère d'un procédé et les pondère (version originale)
 biosphereInventory :: Double -> Process -> Inventory

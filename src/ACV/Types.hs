@@ -28,15 +28,51 @@ data Flow = Flow
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
--- | Échange dans un procédé (entrée ou sortie) - Version optimisée avec référence au flux
-data Exchange = Exchange
-    { exchangeFlowId :: !UUID -- Référence vers le flux (dans FlowDB)
-    , exchangeAmount :: !Double -- Quantité échangée
-    , exchangeIsInput :: !Bool -- Vrai si c'est une entrée
-    , exchangeIsReference :: !Bool -- Vrai si c'est le flux de référence (output principal)
-    , exchangeActivityLinkId :: !(Maybe UUID) -- ID du procédé source pour navigation technosphere
-    }
+-- | Échange dans un procédé - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
+data Exchange 
+    = TechnosphereExchange
+        { techFlowId :: !UUID           -- Flow being exchanged
+        , techAmount :: !Double         -- Quantity exchanged
+        , techIsInput :: !Bool          -- True if input
+        , techIsReference :: !Bool      -- True if reference product (main output)
+        , techActivityLinkId :: !UUID   -- Target process ID (always present for technosphere)
+        }
+    | BiosphereExchange
+        { bioFlowId :: !UUID            -- Flow being exchanged
+        , bioAmount :: !Double          -- Quantity exchanged  
+        , bioIsInput :: !Bool           -- True for resource extraction, False for emissions
+        }
     deriving (Eq, Show, Generic, NFData, Binary)
+
+-- | Helper functions for Exchange variants
+exchangeFlowId :: Exchange -> UUID
+exchangeFlowId (TechnosphereExchange fid _ _ _ _) = fid
+exchangeFlowId (BiosphereExchange fid _ _) = fid
+
+exchangeAmount :: Exchange -> Double
+exchangeAmount (TechnosphereExchange _ amt _ _ _) = amt
+exchangeAmount (BiosphereExchange _ amt _) = amt
+
+exchangeIsInput :: Exchange -> Bool
+exchangeIsInput (TechnosphereExchange _ _ isInput _ _) = isInput
+exchangeIsInput (BiosphereExchange _ _ isInput) = isInput
+
+exchangeIsReference :: Exchange -> Bool
+exchangeIsReference (TechnosphereExchange _ _ _ isRef _) = isRef
+exchangeIsReference (BiosphereExchange _ _ _) = False  -- Biosphere exchanges are never reference products
+
+exchangeActivityLinkId :: Exchange -> Maybe UUID
+exchangeActivityLinkId (TechnosphereExchange _ _ _ _ linkId) = Just linkId
+exchangeActivityLinkId (BiosphereExchange _ _ _) = Nothing
+
+-- | Check if exchange is technosphere
+isTechnosphereExchange :: Exchange -> Bool
+isTechnosphereExchange (TechnosphereExchange _ _ _ _ _) = True
+isTechnosphereExchange (BiosphereExchange _ _ _) = False
+
+-- | Check if exchange is biosphere  
+isBiosphereExchange :: Exchange -> Bool
+isBiosphereExchange = not . isTechnosphereExchange
 
 -- | Procédé ACV de base (activité)
 data Process = Process
