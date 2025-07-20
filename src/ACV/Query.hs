@@ -233,7 +233,7 @@ findExchangesByUnit db unit =
     | (procUUID, exchanges) <- M.toList (idxExchangeByProcess $ dbIndexes db)
     , exchange <- exchanges
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , flowUnit flow == unit
+    , getUnitNameForFlow (dbUnits db) flow == unit
     , Just proc <- [M.lookup procUUID (dbProcesses db)]
     ]
 
@@ -277,7 +277,7 @@ getDatabaseStats db = DatabaseStats
     , statsOutputCount = sum [length outputs | outputs <- M.elems (idxOutputsByProcess $ dbIndexes db)]
     , statsLocations = M.keys (idxByLocation $ dbIndexes db)
     , statsCategories = M.keys (idxFlowByCategory $ dbIndexes db)
-    , statsUnits = S.toList $ S.fromList [flowUnit flow | flow <- M.elems (dbFlows db)]
+    , statsUnits = S.toList $ S.fromList [getUnitNameForFlow (dbUnits db) flow | flow <- M.elems (dbFlows db)]
     }
 
 -- | Fonctions utilitaires pour les requêtes complexes

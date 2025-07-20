@@ -143,7 +143,7 @@ parseExchangeWithFlow cur =
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
         !activityLinkId = getAttr cur "activityLinkId"
         
-        !flow = Flow fid fname "technosphere" unitName ftype
+        !flow = Flow fid fname "technosphere" unitId ftype
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow, unit)
@@ -228,7 +228,7 @@ parseExchangeWithFlowOptimized cur =
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
         !activityLinkId = getAttr cur "activityLinkId"
         
-        !flow = Flow fid fname "technosphere" unitName ftype
+        !flow = Flow fid fname "technosphere" unitId ftype
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow, unit)
@@ -283,7 +283,7 @@ parseElementaryExchangeWithFlow cur =
         -- Determine category based on input/output group
         !category = if isInput then "resource" else "emission"
         
-        !flow = Flow fid fname category unitName ftype
+        !flow = Flow fid fname category unitId ftype
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow, unit)
@@ -313,7 +313,7 @@ parseElementaryExchangeWithFlowOptimized cur =
         !ftype = Biosphere
         !category = if isInput then "resource" else "emission"
         
-        !flow = Flow fid fname category unitName ftype
+        !flow = Flow fid fname category unitId ftype
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow, unit)

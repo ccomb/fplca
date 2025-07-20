@@ -33,7 +33,7 @@ data Flow = Flow
     { flowId :: !UUID -- Identifiant du flux
     , flowName :: !Text -- Nom lisible
     , flowCategory :: !Text -- Catégorie (e.g. air, eau, ressource)
-    , flowUnit :: !Text -- Unité (e.g. kg, MJ) - DEPRECATED: use unitId in exchanges
+    , flowUnitId :: !UUID -- Référence vers l'unité par défaut dans UnitDB
     , flowType :: !FlowType -- Type de flux
     }
     deriving (Eq, Show, Generic, NFData, Binary)
@@ -105,6 +105,24 @@ getUnitNameForExchange unitDB exchange =
 getUnitSymbolForExchange :: UnitDB -> Exchange -> Text
 getUnitSymbolForExchange unitDB exchange =
     case getUnitForExchange unitDB exchange of
+        Just unit -> unitSymbol unit
+        Nothing -> "?"
+
+-- | Get unit information for a flow
+getUnitForFlow :: UnitDB -> Flow -> Maybe Unit
+getUnitForFlow unitDB flow = M.lookup (flowUnitId flow) unitDB
+
+-- | Get unit name for a flow (fallback to "unknown" if not found)
+getUnitNameForFlow :: UnitDB -> Flow -> Text
+getUnitNameForFlow unitDB flow = 
+    case getUnitForFlow unitDB flow of
+        Just unit -> unitName unit
+        Nothing -> "unknown"
+
+-- | Get unit symbol for a flow (fallback to "?" if not found)
+getUnitSymbolForFlow :: UnitDB -> Flow -> Text
+getUnitSymbolForFlow unitDB flow =
+    case getUnitForFlow unitDB flow of
         Just unit -> unitSymbol unit
         Nothing -> "?"
 
