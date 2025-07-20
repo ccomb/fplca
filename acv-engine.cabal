@@ -38,6 +38,8 @@ executable acv-cli
                      , aeson
                      , wai
                      , wai-cors
+                     , binary
+                     , time
 
   other-modules:     ACV.Types
                      , ACV.Tree

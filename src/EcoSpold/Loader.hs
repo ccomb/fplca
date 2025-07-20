@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes) where
+module EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes, loadCachedSpolds, saveCachedSpolds, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
 
 import ACV.Query (buildIndexes)
 import ACV.Types
@@ -12,10 +12,13 @@ import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Data.Binary (encodeFile, decodeFile)
 import EcoSpold.Parser (parseProcessAndFlowsFromFile, parseProcessFromFile, streamParseProcessAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
-import System.Directory (listDirectory)
+import System.Directory (listDirectory, doesFileExist, getModificationTime)
 import System.FilePath (takeExtension, (</>))
+import System.IO (hPutStrLn, stderr)
+import Data.Time (getCurrentTime, diffUTCTime)
 
 type SpoldIndex = M.Map UUID FilePath
 type Visited = S.Set UUID
@@ -144,3 +147,73 @@ loadAllSpoldsWithIndexes dir = do
     let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
 
     return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) indexes
+
+{- | Load cached ProcessDB from binary file, or fallback to XML parsing
+   Returns (database, wasFromCache)
+-}
+loadCachedSpolds :: FilePath -> FilePath -> IO (ProcessDB, Bool)
+loadCachedSpolds dataDir cacheFile = do
+    cacheExists <- doesFileExist cacheFile
+    if cacheExists
+        then do
+            hPutStrLn stderr "Loading from cache..."
+            startTime <- getCurrentTime
+            !db <- decodeFile cacheFile
+            endTime <- getCurrentTime
+            let elapsed = diffUTCTime endTime startTime
+            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
+            return (db, True)
+        else do
+            hPutStrLn stderr "No cache found, parsing XML files..."
+            startTime <- getCurrentTime
+            !db <- loadAllSpolds dataDir
+            endTime <- getCurrentTime
+            let elapsed = diffUTCTime endTime startTime
+            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " processes)"
+            return (db, False)
+
+{- | Save ProcessDB to binary cache file -}
+saveCachedSpolds :: FilePath -> ProcessDB -> IO ()
+saveCachedSpolds cacheFile db = do
+    hPutStrLn stderr "Saving to cache..."
+    startTime <- getCurrentTime
+    encodeFile cacheFile db
+    endTime <- getCurrentTime
+    let elapsed = diffUTCTime endTime startTime
+    hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+
+{- | Load cached SimpleDatabase with flows, or fallback to XML parsing -}
+loadCachedSpoldsWithFlows :: FilePath -> FilePath -> IO (SimpleDatabase, Bool)
+loadCachedSpoldsWithFlows dataDir cacheFile = do
+    cacheExists <- doesFileExist cacheFile
+    if cacheExists
+        then do
+            hPutStrLn stderr "Loading SimpleDatabase from cache..."
+            startTime <- getCurrentTime
+            !db <- decodeFile cacheFile
+            endTime <- getCurrentTime
+            let elapsed = diffUTCTime endTime startTime
+            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed 
+                ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
+                ++ show (M.size $ sdbFlows db) ++ " flows)"
+            return (db, True)
+        else do
+            hPutStrLn stderr "No cache found, parsing XML files..."
+            startTime <- getCurrentTime
+            !db <- loadAllSpoldsWithFlows dataDir
+            endTime <- getCurrentTime
+            let elapsed = diffUTCTime endTime startTime
+            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed
+                ++ " (" ++ show (M.size $ sdbProcesses db) ++ " processes, " 
+                ++ show (M.size $ sdbFlows db) ++ " flows)"
+            return (db, False)
+
+{- | Save SimpleDatabase to binary cache file -}
+saveCachedSpoldsWithFlows :: FilePath -> SimpleDatabase -> IO ()
+saveCachedSpoldsWithFlows cacheFile db = do
+    hPutStrLn stderr "Saving SimpleDatabase to cache..."
+    startTime <- getCurrentTime
+    encodeFile cacheFile db
+    endTime <- getCurrentTime
+    let elapsed = diffUTCTime endTime startTime
+    hPutStrLn stderr $ "Cache saved in " ++ show elapsed

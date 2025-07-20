@@ -4,6 +4,7 @@
 module ACV.Types where
 
 import Control.DeepSeq (NFData)
+import Data.Binary (Binary)
 import Data.Text (Text)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -15,7 +16,7 @@ type UUID = Text
 
 -- | Type de flux : Technosphère (échange entre processus) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
-    deriving (Eq, Ord, Show, Generic, NFData)
+    deriving (Eq, Ord, Show, Generic, NFData, Binary)
 
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
@@ -25,7 +26,7 @@ data Flow = Flow
     , flowUnit :: !Text -- Unité (e.g. kg, MJ)
     , flowType :: !FlowType -- Type de flux
     }
-    deriving (Eq, Show, Generic, NFData)
+    deriving (Eq, Show, Generic, NFData, Binary)
 
 -- | Échange dans un procédé (entrée ou sortie) - Version optimisée avec référence au flux
 data Exchange = Exchange
@@ -34,7 +35,7 @@ data Exchange = Exchange
     , exchangeIsInput :: !Bool -- Vrai si c'est une entrée
     , exchangeIsReference :: !Bool -- Vrai si c'est le flux de référence (output principal)
     }
-    deriving (Eq, Show, Generic, NFData)
+    deriving (Eq, Show, Generic, NFData, Binary)
 
 -- | Procédé ACV de base (activité)
 data Process = Process
@@ -43,13 +44,13 @@ data Process = Process
     , processLocation :: !Text -- Code de localisation (ex: FR, RER)
     , exchanges :: ![Exchange] -- Liste des échanges
     }
-    deriving (Eq, Show, Generic, NFData)
+    deriving (Eq, Show, Generic, NFData, Binary)
 
 -- | Arbre de calcul ACV (représentation récursive)
 data ProcessTree
     = Leaf !Process
     | Node !Process ![(Double, ProcessTree)] -- Processus et sous-processus pondérés
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données des flux (dédupliquée)
 type FlowDB = M.Map UUID Flow
@@ -103,7 +104,7 @@ data Indexes = Indexes
     , idxInputsByProcess :: !ProcessInputIndex       -- Entrées par procédé
     , idxOutputsByProcess :: !ProcessOutputIndex     -- Sorties par procédé
     }
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
@@ -111,21 +112,21 @@ data Database = Database
     , dbFlows :: !FlowDB
     , dbIndexes :: !Indexes
     }
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic, Binary)
 
 -- | Version simplifiée sans index (pour compatibilité)
 data SimpleDatabase = SimpleDatabase
     { sdbProcesses :: !ProcessDB
     , sdbFlows :: !FlowDB
     }
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic, Binary)
 
 -- | Catégorie d'impact (e.g. Changement climatique)
 data ImpactCategory = ImpactCategory
     { categoryId :: !Text
     , categoryName :: !Text
     }
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Show, Generic, Binary)
 
 -- | Facteur de caractérisation (lié à une méthode LCIA)
 data CF = CF
@@ -133,4 +134,4 @@ data CF = CF
     , cfCategory :: !ImpactCategory -- Catégorie d'impact
     , cfFactor :: !Double -- Facteur de caractérisation
     }
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic, Binary)

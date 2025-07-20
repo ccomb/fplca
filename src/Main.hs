@@ -9,10 +9,10 @@ import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType, findAllReferenceProducts, findExchangesByFlow)
+import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType, findAllReferenceProducts, findExchangesByFlow, buildIndexes)
 import ACV.Tree (buildProcessTreeWithDatabase)
 import ACV.Types
-import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes)
+import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
 import ILCD.Parser (parseMethodFromFile)
 import Network.Wai.Handler.Warp (run)
 import Servant
@@ -26,6 +26,7 @@ data Args = Args
     , csvOut :: Maybe FilePath -- Fichier de sortie CSV (optionnel)
     , serverMode :: Bool -- Mode serveur API
     , serverPort :: Int -- Port du serveur API
+    , cacheFile :: Maybe FilePath -- Fichier cache binaire (optionnel)
     }
 
 -- | Parser des arguments CLI
@@ -39,19 +40,34 @@ argsParser =
         <*> optional (strOption (long "csv" <> help "Fichier de sortie CSV"))
         <*> switch (long "server" <> help "Lancer le serveur API au lieu du calcul LCA")
         <*> option auto (long "port" <> value 8080 <> help "Port du serveur API (défaut: 8080)")
+        <*> optional (strOption (long "cache" <> help "Fichier cache binaire pour accélérer le chargement"))
 
 -- | Fonction principale
 main :: IO ()
 main = do
-    Args dir root methodFile output csvOut server port <-
+    Args dir root methodFile output csvOut server port cache <-
         execParser $
             info
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Charger tous les procédés avec déduplication des flux ET index (optimized memory + query approach)
-    print "loading processes with flow deduplication and indexes"
-    database <- loadAllSpoldsWithIndexes dir
+    -- Charger avec cache si spécifié
+    database <- case cache of
+        Nothing -> do
+            print "loading processes with flow deduplication and indexes (no cache)"
+            loadAllSpoldsWithIndexes dir
+        Just cacheFile -> do
+            print $ "attempting to load from cache: " ++ cacheFile
+            (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir cacheFile
+            if not wasFromCache
+                then do
+                    print "saving to cache for next time"
+                    saveCachedSpoldsWithFlows cacheFile simpleDb
+                else return ()
+            -- Convert SimpleDatabase to Database with indexes
+            print "building indexes for efficient queries"
+            let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
+            return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) indexes
 
     -- Afficher les statistiques de la base de données
     let stats = getDatabaseStats database
