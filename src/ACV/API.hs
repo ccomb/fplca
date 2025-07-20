@@ -67,10 +67,11 @@ data FlowDetail = FlowDetail
     , fdUsageCount :: Int  -- How many processes use this flow
     } deriving (Generic, Show)
 
--- | Exchange with flow and target process information
+-- | Exchange with flow, unit, and target process information
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
     , edFlow :: Flow
+    , edUnit :: Unit                           -- Unit information for the exchange
     , edTargetProcess :: Maybe ProcessSummary  -- Target process for technosphere inputs
     } deriving (Generic, Show)
 
@@ -103,6 +104,7 @@ instance ToJSON Process
 instance ToJSON Exchange
 instance ToJSON Flow
 instance ToJSON FlowType
+instance ToJSON Unit
 
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
@@ -257,19 +259,21 @@ getFlowUsageCount db flowUUID =
 -- | Get detailed input exchanges
 getProcessInputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessInputDetails db process =
-    [ ExchangeDetail exchange flow (getTargetProcess db exchange)
+    [ ExchangeDetail exchange flow unit (getTargetProcess db exchange)
     | exchange <- exchanges process
     , exchangeIsInput exchange
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+    , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
     ]
 
 -- | Get detailed output exchanges  
 getProcessOutputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessOutputDetails db process =
-    [ ExchangeDetail exchange flow (getTargetProcess db exchange)
+    [ ExchangeDetail exchange flow unit (getTargetProcess db exchange)
     | exchange <- exchanges process
     , not (exchangeIsInput exchange)
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+    , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
     ]
 
 
