@@ -50,17 +50,17 @@ parseProcess cursor =
         !exchs = interExchs ++ elemExchs
      in Process uuid name location exchs
 
--- | Parse un procédé et extrait les flux pour la déduplication
-parseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow])
+-- | Parse un procédé et extrait les flux et unités pour la déduplication
+parseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow], [Unit])
 parseProcessAndFlowsFromFile path = do
     print path
     doc <- Text.XML.readFile def path
     let cursor = fromDocument doc
-    let (proc, flows) = parseProcessWithFlows cursor
-    return (proc, flows)
+    let (proc, flows, units) = parseProcessWithFlowsAndUnits cursor
+    return (proc, flows, units)
 
-parseProcessWithFlows :: Cursor -> (Process, [Flow])
-parseProcessWithFlows cursor =
+parseProcessWithFlowsAndUnits :: Cursor -> (Process, [Flow], [Unit])
+parseProcessWithFlowsAndUnits cursor =
     let name =
                 headOrFail "Missing <activityName>" $
                     cursor $// element (nsElement "activityName") &/ content
@@ -76,13 +76,14 @@ parseProcessWithFlows cursor =
         -- Parse both intermediate and elementary exchanges
         interNodes = cursor $// element (nsElement "intermediateExchange")
         elemNodes = cursor $// element (nsElement "elementaryExchange")
-        !interExchsWithFlows = map parseExchangeWithFlow interNodes
-        !elemExchsWithFlows = map parseElementaryExchangeWithFlow elemNodes
-        (!interExchs, interFlows) = unzip interExchsWithFlows
-        (!elemExchs, elemFlows) = unzip elemExchsWithFlows
+        !interExchsWithFlowsAndUnits = map parseExchangeWithFlow interNodes
+        !elemExchsWithFlowsAndUnits = map parseElementaryExchangeWithFlow elemNodes
+        (!interExchs, !interFlows, !interUnits) = unzip3 interExchsWithFlowsAndUnits
+        (!elemExchs, !elemFlows, !elemUnits) = unzip3 elemExchsWithFlowsAndUnits
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
-     in (Process uuid name location exchs, flows)
+        !units = interUnits ++ elemUnits
+     in (Process uuid name location exchs, flows, units)
 
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
@@ -107,8 +108,8 @@ parseExchange cur =
         !isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
      in TechnosphereExchange fid amount unitId isInput isRef activityLinkId
 
--- | Parse un échange et extrait aussi le flux pour la déduplication
-parseExchangeWithFlow :: Cursor -> (Exchange, Flow)
+-- | Parse un échange et extrait aussi le flux et l'unité pour la déduplication
+parseExchangeWithFlow :: Cursor -> (Exchange, Flow, Unit)
 parseExchangeWithFlow cur =
     let get = getAttr cur
         -- Extract attributes with strict evaluation
@@ -143,8 +144,9 @@ parseExchangeWithFlow cur =
         !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
+        !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
-     in (exchange, flow)
+     in (exchange, flow, unit)
 
 getAttr :: Cursor -> Text -> Text
 getAttr cur attr =
@@ -159,18 +161,18 @@ headOrFail msg [] = error msg
 headOrFail _ (x : _) = x
 
 -- | Memory-optimized parser - forces early evaluation and cleanup
-streamParseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow])
+streamParseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow], [Unit])
 streamParseProcessAndFlowsFromFile path = do
     -- Read and parse with strict evaluation
     doc <- Text.XML.readFile def path
     let !cursor = fromDocument doc
-    let (!proc, !flows) = parseProcessWithFlowsOptimized cursor
+    let (!proc, !flows, !units) = parseProcessWithFlowsAndUnitsOptimized cursor
     -- Force full evaluation before returning
-    proc `seq` flows `seq` return (proc, flows)
+    proc `seq` flows `seq` units `seq` return (proc, flows, units)
 
--- | Optimized version of parseProcessWithFlows with better memory management
-parseProcessWithFlowsOptimized :: Cursor -> (Process, [Flow])
-parseProcessWithFlowsOptimized cursor =
+-- | Optimized version of parseProcessWithFlowsAndUnits with better memory management
+parseProcessWithFlowsAndUnitsOptimized :: Cursor -> (Process, [Flow], [Unit])
+parseProcessWithFlowsAndUnitsOptimized cursor =
     let !name = headOrFail "Missing <activityName>" $
                     cursor $// element (nsElement "activityName") &/ content
         !location = case cursor $// element (nsElement "geography") >=> attribute "location" of
@@ -184,18 +186,19 @@ parseProcessWithFlowsOptimized cursor =
         -- Process both types of exchanges
         !interNodes = cursor $// element (nsElement "intermediateExchange")
         !elemNodes = cursor $// element (nsElement "elementaryExchange")
-        !interExchsWithFlows = map parseExchangeWithFlowOptimized interNodes
-        !elemExchsWithFlows = map parseElementaryExchangeWithFlowOptimized elemNodes
-        (!interExchs, !interFlows) = unzip interExchsWithFlows
-        (!elemExchs, !elemFlows) = unzip elemExchsWithFlows
+        !interExchsWithFlowsAndUnits = map parseExchangeWithFlowOptimized interNodes
+        !elemExchsWithFlowsAndUnits = map parseElementaryExchangeWithFlowOptimized elemNodes
+        (!interExchs, !interFlows, !interUnits) = unzip3 interExchsWithFlowsAndUnits
+        (!elemExchs, !elemFlows, !elemUnits) = unzip3 elemExchsWithFlowsAndUnits
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
+        !units = interUnits ++ elemUnits
         
         !process = Process uuid name location exchs
-     in (process, flows)
+     in (process, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation
-parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
+parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow, Unit)
 parseExchangeWithFlowOptimized cur =
     let !fid = getAttr cur "intermediateExchangeId"
         !amount = read $ T.unpack $ getAttr cur "amount"
@@ -226,8 +229,9 @@ parseExchangeWithFlowOptimized cur =
         !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
+        !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
-     in (exchange, flow)
+     in (exchange, flow, unit)
 
 -- | Parse elementary exchange (biosphere flows)
 parseElementaryExchange :: Cursor -> Exchange
@@ -249,8 +253,8 @@ parseElementaryExchange cur =
         !isInput = inputGroup /= ""
      in BiosphereExchange fid amount unitId isInput
 
--- | Parse elementary exchange with flow extraction
-parseElementaryExchangeWithFlow :: Cursor -> (Exchange, Flow)
+-- | Parse elementary exchange with flow and unit extraction
+parseElementaryExchangeWithFlow :: Cursor -> (Exchange, Flow, Unit)
 parseElementaryExchangeWithFlow cur =
     let get = getAttr cur
         !fid = get "elementaryExchangeId"
@@ -280,11 +284,12 @@ parseElementaryExchangeWithFlow cur =
         !category = if isInput then "resource" else "emission"
         
         !flow = Flow fid fname category unitName ftype
+        !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
-     in (exchange, flow)
+     in (exchange, flow, unit)
 
 -- | Optimized elementary exchange parsing
-parseElementaryExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
+parseElementaryExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow, Unit)
 parseElementaryExchangeWithFlowOptimized cur =
     let !fid = getAttr cur "elementaryExchangeId"
         !amount = read $ T.unpack $ getAttr cur "amount"
@@ -309,5 +314,6 @@ parseElementaryExchangeWithFlowOptimized cur =
         !category = if isInput then "resource" else "emission"
         
         !flow = Flow fid fname category unitName ftype
+        !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
-     in (exchange, flow)
+     in (exchange, flow, unit)

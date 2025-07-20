@@ -105,30 +105,31 @@ loadAllSpoldsWithFlows dir = do
 
         -- Process chunks sequentially, but files within each chunk in parallel
         results <- mapM processChunkSimple chunks
-        let (procMaps, flowMaps) = unzip results
+        let (procMaps, flowMaps, unitMaps) = unzip3 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
+        let !finalUnitMap = M.unions unitMaps
 
-        print $ "Final: " ++ show (M.size finalProcMap) ++ " processes, " ++ show (M.size finalFlowMap) ++ " flows"
-        -- For now, create empty UnitDB - units parsing will be added later
-        let !finalUnitMap = M.empty
+        print $ "Final: " ++ show (M.size finalProcMap) ++ " processes, " ++ show (M.size finalFlowMap) ++ " flows, " ++ show (M.size finalUnitMap) ++ " units"
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
     -- Process one chunk: all files in chunk processed in parallel
-    processChunkSimple :: [FilePath] -> IO (ProcessDB, FlowDB)
+    processChunkSimple :: [FilePath] -> IO (ProcessDB, FlowDB, UnitDB)
     processChunkSimple chunk = do
         print $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
 
         -- All files in chunk processed in parallel
         chunkResults <- mapConcurrently streamParseProcessAndFlowsFromFile chunk
-        let (!procs, flowLists) = unzip chunkResults
+        let (!procs, flowLists, unitLists) = unzip3 chunkResults
         let !allFlows = concat flowLists
+        let !allUnits = concat unitLists
 
         -- Build maps for this chunk
         let !procMap = M.fromList [(processId p, p) | p <- procs]
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
+        let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
-        return (procMap, flowMap)
+        return (procMap, flowMap, unitMap)
 
     -- Utility function to split list into chunks
     chunksOf :: Int -> [a] -> [[a]]

@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module ACV.Types where
 
@@ -88,6 +89,24 @@ isTechnosphereExchange (BiosphereExchange _ _ _ _) = False
 -- | Check if exchange is biosphere  
 isBiosphereExchange :: Exchange -> Bool
 isBiosphereExchange = not . isTechnosphereExchange
+
+-- | Get unit information for an exchange
+getUnitForExchange :: UnitDB -> Exchange -> Maybe Unit
+getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB
+
+-- | Get unit name for an exchange (fallback to "unknown" if not found)
+getUnitNameForExchange :: UnitDB -> Exchange -> Text
+getUnitNameForExchange unitDB exchange = 
+    case getUnitForExchange unitDB exchange of
+        Just unit -> unitName unit
+        Nothing -> "unknown"
+
+-- | Get unit symbol for an exchange (fallback to "?" if not found)  
+getUnitSymbolForExchange :: UnitDB -> Exchange -> Text
+getUnitSymbolForExchange unitDB exchange =
+    case getUnitForExchange unitDB exchange of
+        Just unit -> unitSymbol unit
+        Nothing -> "?"
 
 -- | Procédé ACV de base (activité)
 data Process = Process
