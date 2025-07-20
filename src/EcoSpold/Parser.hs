@@ -89,6 +89,7 @@ parseExchange cur =
     let get = getAttr cur
         !fid = get "intermediateExchangeId"
         !amount = read $ T.unpack $ get "amount"
+        !unitId = get "unitId"
         
         -- Extract inputGroup and outputGroup from child elements (not attributes!)
         !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
@@ -104,7 +105,7 @@ parseExchange cur =
         -- Input if inputGroup exists, output if outputGroup exists (mutually exclusive)
         !isInput = inputGroup /= ""
         !isRef = outputGroup == "0"  -- Reference product has outputGroup="0"
-     in TechnosphereExchange fid amount isInput isRef activityLinkId
+     in TechnosphereExchange fid amount unitId isInput isRef activityLinkId
 
 -- | Parse un échange et extrait aussi le flux pour la déduplication
 parseExchangeWithFlow :: Cursor -> (Exchange, Flow)
@@ -113,6 +114,7 @@ parseExchangeWithFlow cur =
         -- Extract attributes with strict evaluation
         !fid = get "intermediateExchangeId"
         !amount = read $ T.unpack $ get "amount"
+        !unitId = get "unitId"
         
         -- Extract child element content with strict evaluation and safe access
         !fname = case cur $/ element (nsElement "name") &/ content of
@@ -141,7 +143,7 @@ parseExchangeWithFlow cur =
         !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
-        !exchange = TechnosphereExchange fid amount isInput isRef activityLinkId
+        !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow)
 
 getAttr :: Cursor -> Text -> Text
@@ -197,6 +199,7 @@ parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
 parseExchangeWithFlowOptimized cur =
     let !fid = getAttr cur "intermediateExchangeId"
         !amount = read $ T.unpack $ getAttr cur "amount"
+        !unitId = getAttr cur "unitId"
         
         -- Extract child element content with strict evaluation and safe access
         !fname = case cur $/ element (nsElement "name") &/ content of
@@ -223,7 +226,7 @@ parseExchangeWithFlowOptimized cur =
         !activityLinkId = getAttr cur "activityLinkId"
         
         !flow = Flow fid fname "technosphere" unitName ftype
-        !exchange = TechnosphereExchange fid amount isInput isRef activityLinkId
+        !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow)
 
 -- | Parse elementary exchange (biosphere flows)
@@ -232,6 +235,7 @@ parseElementaryExchange cur =
     let get = getAttr cur
         !fid = get "elementaryExchangeId"
         !amount = read $ T.unpack $ get "amount"
+        !unitId = get "unitId"
         
         -- Elementary exchanges use outputGroup for emissions/waste, inputGroup for resources
         !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
@@ -243,7 +247,7 @@ parseElementaryExchange cur =
         
         -- For elementary exchanges: inputGroup = resource extraction, outputGroup = emission
         !isInput = inputGroup /= ""
-     in BiosphereExchange fid amount isInput
+     in BiosphereExchange fid amount unitId isInput
 
 -- | Parse elementary exchange with flow extraction
 parseElementaryExchangeWithFlow :: Cursor -> (Exchange, Flow)
@@ -251,6 +255,7 @@ parseElementaryExchangeWithFlow cur =
     let get = getAttr cur
         !fid = get "elementaryExchangeId"
         !amount = read $ T.unpack $ get "amount"
+        !unitId = get "unitId"
         
         -- Extract child element content
         !fname = case cur $/ element (nsElement "name") &/ content of
@@ -275,7 +280,7 @@ parseElementaryExchangeWithFlow cur =
         !category = if isInput then "resource" else "emission"
         
         !flow = Flow fid fname category unitName ftype
-        !exchange = BiosphereExchange fid amount isInput
+        !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow)
 
 -- | Optimized elementary exchange parsing
@@ -283,6 +288,7 @@ parseElementaryExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
 parseElementaryExchangeWithFlowOptimized cur =
     let !fid = getAttr cur "elementaryExchangeId"
         !amount = read $ T.unpack $ getAttr cur "amount"
+        !unitId = getAttr cur "unitId"
         
         !fname = case cur $/ element (nsElement "name") &/ content of
                    [] -> fid
@@ -303,5 +309,5 @@ parseElementaryExchangeWithFlowOptimized cur =
         !category = if isInput then "resource" else "emission"
         
         !flow = Flow fid fname category unitName ftype
-        !exchange = BiosphereExchange fid amount isInput
+        !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow)

@@ -18,12 +18,21 @@ type UUID = Text
 data FlowType = Technosphere | Biosphere
     deriving (Eq, Ord, Show, Generic, NFData, Binary)
 
+-- | Représentation d'une unité (kg, MJ, m³, etc.)
+data Unit = Unit
+    { unitId :: !UUID -- Identifiant unique de l'unité
+    , unitName :: !Text -- Nom de l'unité (e.g. "kg", "kilogram")
+    , unitSymbol :: !Text -- Symbole (e.g. "kg", "MJ")
+    , unitComment :: !Text -- Description/commentaire
+    }
+    deriving (Eq, Show, Generic, NFData, Binary)
+
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
     { flowId :: !UUID -- Identifiant du flux
     , flowName :: !Text -- Nom lisible
     , flowCategory :: !Text -- Catégorie (e.g. air, eau, ressource)
-    , flowUnit :: !Text -- Unité (e.g. kg, MJ)
+    , flowUnit :: !Text -- Unité (e.g. kg, MJ) - DEPRECATED: use unitId in exchanges
     , flowType :: !FlowType -- Type de flux
     }
     deriving (Eq, Show, Generic, NFData, Binary)
@@ -33,42 +42,48 @@ data Exchange
     = TechnosphereExchange
         { techFlowId :: !UUID           -- Flow being exchanged
         , techAmount :: !Double         -- Quantity exchanged
+        , techUnitId :: !UUID           -- Unit of measurement
         , techIsInput :: !Bool          -- True if input
         , techIsReference :: !Bool      -- True if reference product (main output)
         , techActivityLinkId :: !UUID   -- Target process ID (always present for technosphere)
         }
     | BiosphereExchange
         { bioFlowId :: !UUID            -- Flow being exchanged
-        , bioAmount :: !Double          -- Quantity exchanged  
+        , bioAmount :: !Double          -- Quantity exchanged
+        , bioUnitId :: !UUID            -- Unit of measurement  
         , bioIsInput :: !Bool           -- True for resource extraction, False for emissions
         }
     deriving (Eq, Show, Generic, NFData, Binary)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
-exchangeFlowId (TechnosphereExchange fid _ _ _ _) = fid
-exchangeFlowId (BiosphereExchange fid _ _) = fid
+exchangeFlowId (TechnosphereExchange fid _ _ _ _ _) = fid
+exchangeFlowId (BiosphereExchange fid _ _ _) = fid
 
 exchangeAmount :: Exchange -> Double
-exchangeAmount (TechnosphereExchange _ amt _ _ _) = amt
-exchangeAmount (BiosphereExchange _ amt _) = amt
+exchangeAmount (TechnosphereExchange _ amt _ _ _ _) = amt
+exchangeAmount (BiosphereExchange _ amt _ _) = amt
+
+exchangeUnitId :: Exchange -> UUID
+exchangeUnitId (TechnosphereExchange _ _ uid _ _ _) = uid
+exchangeUnitId (BiosphereExchange _ _ uid _) = uid
 
 exchangeIsInput :: Exchange -> Bool
-exchangeIsInput (TechnosphereExchange _ _ isInput _ _) = isInput
-exchangeIsInput (BiosphereExchange _ _ isInput) = isInput
+exchangeIsInput (TechnosphereExchange _ _ _ isInput _ _) = isInput
+exchangeIsInput (BiosphereExchange _ _ _ isInput) = isInput
 
 exchangeIsReference :: Exchange -> Bool
-exchangeIsReference (TechnosphereExchange _ _ _ isRef _) = isRef
-exchangeIsReference (BiosphereExchange _ _ _) = False  -- Biosphere exchanges are never reference products
+exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _) = isRef
+exchangeIsReference (BiosphereExchange _ _ _ _) = False  -- Biosphere exchanges are never reference products
 
 exchangeActivityLinkId :: Exchange -> Maybe UUID
-exchangeActivityLinkId (TechnosphereExchange _ _ _ _ linkId) = Just linkId
-exchangeActivityLinkId (BiosphereExchange _ _ _) = Nothing
+exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId) = Just linkId
+exchangeActivityLinkId (BiosphereExchange _ _ _ _) = Nothing
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
-isTechnosphereExchange (TechnosphereExchange _ _ _ _ _) = True
-isTechnosphereExchange (BiosphereExchange _ _ _) = False
+isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _) = True
+isTechnosphereExchange (BiosphereExchange _ _ _ _) = False
 
 -- | Check if exchange is biosphere  
 isBiosphereExchange :: Exchange -> Bool
@@ -91,6 +106,9 @@ data ProcessTree
 
 -- | Base de données des flux (dédupliquée)
 type FlowDB = M.Map UUID Flow
+
+-- | Base de données des unités (dédupliquée)
+type UnitDB = M.Map UUID Unit
 
 -- | Base de données des procédés
 type ProcessDB = M.Map UUID Process
@@ -147,6 +165,7 @@ data Indexes = Indexes
 data Database = Database
     { dbProcesses :: !ProcessDB
     , dbFlows :: !FlowDB
+    , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     }
     deriving (Eq, Show, Generic, Binary)
@@ -155,6 +174,7 @@ data Database = Database
 data SimpleDatabase = SimpleDatabase
     { sdbProcesses :: !ProcessDB
     , sdbFlows :: !FlowDB
+    , sdbUnits :: !UnitDB
     }
     deriving (Eq, Show, Generic, Binary)
 

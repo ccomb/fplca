@@ -67,7 +67,7 @@ main = do
             -- Convert SimpleDatabase to Database with indexes
             print "building indexes for efficient queries"
             let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
-            return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) indexes
+            return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
 
     -- Afficher les statistiques de la base de données
     let stats = getDatabaseStats database

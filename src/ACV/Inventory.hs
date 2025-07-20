@@ -46,8 +46,8 @@ biosphereInventoryWithFlows flowDB w proc =
 isBiosphereFlow :: FlowDB -> Exchange -> Bool
 isBiosphereFlow _ ex =
     case ex of
-        BiosphereExchange _ _ _ -> True
-        TechnosphereExchange _ _ _ _ _ -> False
+        BiosphereExchange _ _ _ _ -> True
+        TechnosphereExchange _ _ _ _ _ _ -> False
 
 -- | Extrait les flux biosphère d'un procédé et les pondère (version originale)
 biosphereInventory :: Double -> Process -> Inventory

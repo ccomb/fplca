@@ -45,8 +45,8 @@ isTechnosphereInputOld ex =
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
 isTechnosphereInput _ ex = 
     case ex of
-        TechnosphereExchange _ _ isInput isRef _ -> isInput && not isRef
-        BiosphereExchange _ _ _ -> False
+        TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
+        BiosphereExchange _ _ _ _ -> False
 
 -- | Dummy process to indicate recursion stop
 placeholder :: Process
@@ -54,7 +54,7 @@ placeholder = Process "loop-detected" "Loop detected" "N/A" []
 
 -- | Version optimisée avec FlowDB - Compatible avec SimpleDatabase et Database
 buildProcessTreeWithFlows :: SimpleDatabase -> UUID -> ProcessTree
-buildProcessTreeWithFlows (SimpleDatabase procDB flowDB) = buildProcessTreeWithFlowDBs procDB flowDB
+buildProcessTreeWithFlows (SimpleDatabase procDB flowDB _) = buildProcessTreeWithFlowDBs procDB flowDB
 
 -- | Version optimisée avec Database complet (avec index)
 buildProcessTreeWithDatabase :: Database -> UUID -> ProcessTree

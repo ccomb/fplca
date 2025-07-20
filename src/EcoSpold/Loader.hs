@@ -43,8 +43,8 @@ buildProcessTreeIO index rootUuid = do
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
 isTechnosphereInput _ ex =
     case ex of
-        TechnosphereExchange _ _ isInput isRef _ -> isInput && not isRef
-        BiosphereExchange _ _ _ -> False
+        TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
+        BiosphereExchange _ _ _ _ -> False
 
 placeholder :: Process
 placeholder = Process "loop" "Loop detected" "N/A" []
@@ -110,7 +110,9 @@ loadAllSpoldsWithFlows dir = do
         let !finalFlowMap = M.unions flowMaps
 
         print $ "Final: " ++ show (M.size finalProcMap) ++ " processes, " ++ show (M.size finalFlowMap) ++ " flows"
-        return $ SimpleDatabase finalProcMap finalFlowMap
+        -- For now, create empty UnitDB - units parsing will be added later
+        let !finalUnitMap = M.empty
+        return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
     -- Process one chunk: all files in chunk processed in parallel
     processChunkSimple :: [FilePath] -> IO (ProcessDB, FlowDB)
@@ -145,7 +147,7 @@ loadAllSpoldsWithIndexes dir = do
     print "building indexes for efficient queries"
     let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
 
-    return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) indexes
+    return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
 
 {- | Load cached ProcessDB from binary file, or fallback to XML parsing
    Returns (database, wasFromCache)
