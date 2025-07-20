@@ -42,8 +42,12 @@ parseProcess cursor =
                 headOrFail "Missing activity@id or activity@activityId" $
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        exNodes = cursor $// element (nsElement "intermediateExchange")
-        !exchs = map parseExchange exNodes  -- Keep this strict to avoid retaining large lists
+        -- Parse both intermediate and elementary exchanges
+        interNodes = cursor $// element (nsElement "intermediateExchange")
+        elemNodes = cursor $// element (nsElement "elementaryExchange")
+        !interExchs = map parseExchange interNodes
+        !elemExchs = map parseElementaryExchange elemNodes
+        !exchs = interExchs ++ elemExchs
      in Process uuid name location exchs
 
 -- | Parse un procédé et extrait les flux pour la déduplication
@@ -69,9 +73,15 @@ parseProcessWithFlows cursor =
                 headOrFail "Missing activity@id or activity@activityId" $
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        exNodes = cursor $// element (nsElement "intermediateExchange")
-        !exchsWithFlows = map parseExchangeWithFlow exNodes
-        (!exchs, flows) = unzip exchsWithFlows
+        -- Parse both intermediate and elementary exchanges
+        interNodes = cursor $// element (nsElement "intermediateExchange")
+        elemNodes = cursor $// element (nsElement "elementaryExchange")
+        !interExchsWithFlows = map parseExchangeWithFlow interNodes
+        !elemExchsWithFlows = map parseElementaryExchangeWithFlow elemNodes
+        (!interExchs, interFlows) = unzip interExchsWithFlows
+        (!elemExchs, elemFlows) = unzip elemExchsWithFlows
+        !exchs = interExchs ++ elemExchs
+        !flows = interFlows ++ elemFlows
      in (Process uuid name location exchs, flows)
 
 parseExchange :: Cursor -> Exchange
@@ -163,10 +173,15 @@ parseProcessWithFlowsOptimized cursor =
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
         
-        -- Process exchanges one by one to avoid building large intermediate lists
-        !exNodes = cursor $// element (nsElement "intermediateExchange")
-        !exchsWithFlows = map parseExchangeWithFlowOptimized exNodes
-        (!exchs, !flows) = unzip exchsWithFlows
+        -- Process both types of exchanges
+        !interNodes = cursor $// element (nsElement "intermediateExchange")
+        !elemNodes = cursor $// element (nsElement "elementaryExchange")
+        !interExchsWithFlows = map parseExchangeWithFlowOptimized interNodes
+        !elemExchsWithFlows = map parseElementaryExchangeWithFlowOptimized elemNodes
+        (!interExchs, !interFlows) = unzip interExchsWithFlows
+        (!elemExchs, !elemFlows) = unzip elemExchsWithFlows
+        !exchs = interExchs ++ elemExchs
+        !flows = interFlows ++ elemFlows
         
         !process = Process uuid name location exchs
      in (process, flows)
@@ -199,5 +214,88 @@ parseExchangeWithFlowOptimized cur =
         !ftype = Technosphere
         
         !flow = Flow fid fname "technosphere" unitName ftype
+        !exchange = Exchange fid amount isInput isRef
+     in (exchange, flow)
+
+-- | Parse elementary exchange (biosphere flows)
+parseElementaryExchange :: Cursor -> Exchange
+parseElementaryExchange cur =
+    let get = getAttr cur
+        !fid = get "elementaryExchangeId"
+        !amount = read $ T.unpack $ get "amount"
+        
+        -- Elementary exchanges use outputGroup for emissions/waste, inputGroup for resources
+        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
+                       [] -> ""
+                       (x:_) -> x
+        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
+                        [] -> ""
+                        (x:_) -> x
+        
+        -- For elementary exchanges: inputGroup = resource extraction, outputGroup = emission
+        !isInput = inputGroup /= ""
+        !isRef = False  -- Elementary exchanges are never reference products
+     in Exchange fid amount isInput isRef
+
+-- | Parse elementary exchange with flow extraction
+parseElementaryExchangeWithFlow :: Cursor -> (Exchange, Flow)
+parseElementaryExchangeWithFlow cur =
+    let get = getAttr cur
+        !fid = get "elementaryExchangeId"
+        !amount = read $ T.unpack $ get "amount"
+        
+        -- Extract child element content
+        !fname = case cur $/ element (nsElement "name") &/ content of
+                   [] -> fid
+                   (x:_) -> x
+        !unitName = case cur $/ element (nsElement "unitName") &/ content of
+                      [] -> "kg"  -- Common default for biosphere flows
+                      (x:_) -> x
+        
+        -- Elementary exchanges use outputGroup for emissions, inputGroup for resources
+        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
+                       [] -> ""
+                       (x:_) -> x
+        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
+                        [] -> ""
+                        (x:_) -> x
+        
+        !isInput = inputGroup /= ""
+        !isRef = False
+        !ftype = Biosphere
+        
+        -- Determine category based on input/output group
+        !category = if isInput then "resource" else "emission"
+        
+        !flow = Flow fid fname category unitName ftype
+        !exchange = Exchange fid amount isInput isRef
+     in (exchange, flow)
+
+-- | Optimized elementary exchange parsing
+parseElementaryExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow)
+parseElementaryExchangeWithFlowOptimized cur =
+    let !fid = getAttr cur "elementaryExchangeId"
+        !amount = read $ T.unpack $ getAttr cur "amount"
+        
+        !fname = case cur $/ element (nsElement "name") &/ content of
+                   [] -> fid
+                   (x:_) -> x
+        !unitName = case cur $/ element (nsElement "unitName") &/ content of
+                      [] -> "kg"
+                      (x:_) -> x
+        
+        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
+                       [] -> ""
+                       (x:_) -> x
+        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
+                        [] -> ""
+                        (x:_) -> x
+        
+        !isInput = inputGroup /= ""
+        !isRef = False
+        !ftype = Biosphere
+        !category = if isInput then "resource" else "emission"
+        
+        !flow = Flow fid fname category unitName ftype
         !exchange = Exchange fid amount isInput isRef
      in (exchange, flow)
