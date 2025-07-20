@@ -53,6 +53,7 @@ data ProcessLinks = ProcessLinks
 -- | Lightweight flow information for lists
 data FlowSummary = FlowSummary
     { fsFlow :: Flow                  -- Core flow data
+    , fsUnitName :: Text              -- Unit name for the flow
     , fsUsageCount :: Int             -- How many processes use this flow
     , fsRole :: FlowRole              -- Role in this specific process
     } deriving (Generic, Show)
@@ -64,14 +65,17 @@ data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
 -- | Flow with additional metadata
 data FlowDetail = FlowDetail
     { fdFlow :: Flow
-    , fdUsageCount :: Int  -- How many processes use this flow
+    , fdUnitName :: Text      -- Unit name for the flow
+    , fdUsageCount :: Int     -- How many processes use this flow
     } deriving (Generic, Show)
 
 -- | Exchange with flow, unit, and target process information
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
     , edFlow :: Flow
+    , edFlowUnitName :: Text                   -- Unit name for the flow's default unit
     , edUnit :: Unit                           -- Unit information for the exchange
+    , edExchangeUnitName :: Text               -- Unit name for the exchange's specific unit
     , edTargetProcess :: Maybe ProcessSummary  -- Target process for technosphere inputs
     } deriving (Generic, Show)
 
@@ -171,7 +175,8 @@ acvServer db = getProcessInfo
         Nothing -> throwError err404 { errBody = "Flow not found" }
         Just flow -> do
           let usageCount = getFlowUsageCount db flowId
-          return $ FlowDetail flow usageCount
+          let unitName = getUnitNameForFlow (dbUnits db) flow
+          return $ FlowDetail flow unitName usageCount
     
     -- Processes using a specific flow
     getFlowProcesses :: Text -> Handler [ProcessSummary]
@@ -210,7 +215,7 @@ generateProcessLinks uuid = ProcessLinks
 -- | Get flows used by a process as lightweight summaries
 getProcessFlowSummaries :: Database -> Process -> [FlowSummary]
 getProcessFlowSummaries db process =
-    [ FlowSummary flow (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
+    [ FlowSummary flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
     | exchange <- exchanges process
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     ]
@@ -228,7 +233,8 @@ getProcessReferenceProductDetail db process = do
                      (ex:_) -> Just ex
     flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
     let usageCount = getFlowUsageCount db (flowId flow)
-    return $ FlowDetail flow usageCount
+    let unitName = getUnitNameForFlow (dbUnits db) flow
+    return $ FlowDetail flow unitName usageCount
 
 -- | Get processes that use a specific flow as ProcessSummary list
 getProcessesUsingFlow :: Database -> UUID -> [ProcessSummary]  
@@ -244,7 +250,7 @@ getProcessesUsingFlow db flowUUID =
 -- | Get all flows used by a process with usage statistics (legacy function - kept for compatibility)
 getProcessFlows :: Database -> Process -> [FlowDetail]
 getProcessFlows db process = 
-    [ FlowDetail flow (getFlowUsageCount db (flowId flow))
+    [ FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow))
     | exchange <- exchanges process
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     ]
@@ -259,7 +265,7 @@ getFlowUsageCount db flowUUID =
 -- | Get detailed input exchanges
 getProcessInputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessInputDetails db process =
-    [ ExchangeDetail exchange flow unit (getTargetProcess db exchange)
+    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetProcess db exchange)
     | exchange <- exchanges process
     , exchangeIsInput exchange
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
@@ -269,7 +275,7 @@ getProcessInputDetails db process =
 -- | Get detailed output exchanges  
 getProcessOutputDetails :: Database -> Process -> [ExchangeDetail]
 getProcessOutputDetails db process =
-    [ ExchangeDetail exchange flow unit (getTargetProcess db exchange)
+    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetProcess db exchange)
     | exchange <- exchanges process
     , not (exchangeIsInput exchange)
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
