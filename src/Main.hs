@@ -94,6 +94,7 @@ main = do
             putStrLn ""
             putStrLn "  Pagination: Default limit=50, offset=0. Max limit=1000"
             putStrLn "  Example: /api/v1/search/activities?name=electricity&limit=20&offset=40"
+            putStrLn "  Note: No search parameters returns all activities (paginated)"
             putStrLn ""
             putStrLn "  Synonym endpoints:"
             putStrLn "    GET /api/v1/synonyms/languages                  - Get available languages"

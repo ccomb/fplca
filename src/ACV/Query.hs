@@ -148,13 +148,10 @@ findActivitiesByName db searchTerm =
 -- | Recherche d'activités par champs spécifiques
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam = 
-    -- Return empty list if no search parameters provided
-    case (nameParam, geoParam, productParam) of
-        (Nothing, Nothing, Nothing) -> []
-        _ -> [ activity 
-             | activity <- M.elems (dbActivities db)
-             , matchesActivityFields db nameParam geoParam productParam activity
-             ]
+    [ activity 
+    | activity <- M.elems (dbActivities db)
+    , matchesActivityFields db nameParam geoParam productParam activity
+    ]
 
 -- | Matching par champs spécifiques d'activité
 matchesActivityFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Activity -> Bool
