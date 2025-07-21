@@ -14,7 +14,7 @@ import Control.Monad
 import Control.Parallel.Strategies
 import Data.Binary (decodeFile, encodeFile)
 import Data.Hashable (hash)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, isInfixOf)
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
@@ -41,15 +41,23 @@ generateCacheFilename dataDir = do
     let filesHash = abs $ hash (show (dataDir, spoldFiles)) -- Hash both directory path and file list
     return $ "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
--- | Find and clean up cache files with different format versions (but preserve different datasets)
+-- | Find and clean up cache files with different format versions for the same dataset only
 cleanupOldCaches :: FilePath -> IO ()
 cleanupOldCaches dataDir = do
     currentCache <- generateCacheFilename dataDir
     files <- listDirectory "."
-    let currentVersion = "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "."
-    let cacheFiles =
-            [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, not (currentVersion `isPrefixOf` f) -- Only remove files with different versions
-            ]
+    
+    -- Extract hash from current cache filename: "ecoinvent.cache.v7.HASH.bin" -> "HASH"
+    let currentHash = case reverse (take 2 (reverse (words (map (\c -> if c == '.' then ' ' else c) currentCache)))) of
+                        [hash, "bin"] -> hash
+                        _ -> ""  -- Fallback if parsing fails
+    
+    -- Only remove caches with same hash but different version
+    let cacheFiles = [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, 
+                           f /= currentCache,  -- Don't remove current cache
+                           currentHash `isInfixOf` f,  -- Same dataset (same hash)
+                           not (("ecoinvent.cache.v" ++ show cacheFormatVersion ++ ".") `isPrefixOf` f) -- Different version
+                     ]
     mapM_ removeOldCache cacheFiles
   where
     removeOldCache cacheFile = do
