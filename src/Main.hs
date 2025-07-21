@@ -73,7 +73,25 @@ main = do
             -- Mode serveur API
             putStrLn $ "\nStarting API server on port " ++ show port
             putStrLn "Available endpoints:"
-            putStrLn "  GET /api/v1/activity/{uuid} - Get detailed activity information"
+            putStrLn "  Activity endpoints:"
+            putStrLn "    GET /api/v1/activity/{uuid}                    - Get detailed activity information"
+            putStrLn "    GET /api/v1/activity/{uuid}/flows               - Get flows used by activity"
+            putStrLn "    GET /api/v1/activity/{uuid}/inputs              - Get input exchanges"
+            putStrLn "    GET /api/v1/activity/{uuid}/outputs             - Get output exchanges"
+            putStrLn "    GET /api/v1/activity/{uuid}/reference-product   - Get reference product"
+            putStrLn ""
+            putStrLn "  Flow endpoints:"
+            putStrLn "    GET /api/v1/flows/{flowId}                      - Get detailed flow information"
+            putStrLn "    GET /api/v1/flows/{flowId}/activities           - Get activities using this flow"
+            putStrLn ""
+            putStrLn "  Search endpoints:"
+            putStrLn "    GET /api/v1/search/flows?q={term}               - Search flows by name or synonym"
+            putStrLn "    GET /api/v1/search/flows?q={term}&lang={lang}   - Search flows by synonym in specific language"
+            putStrLn ""
+            putStrLn "  Synonym endpoints:"
+            putStrLn "    GET /api/v1/synonyms/languages                  - Get available languages"
+            putStrLn "    GET /api/v1/synonyms/stats                      - Get synonym statistics"
+            putStrLn ""
             run port (serve acvAPI (acvServer database))
         else do
             -- Mode calcul LCA traditionnel
