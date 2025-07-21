@@ -34,24 +34,26 @@ type Visited = S.Set UUID
 cacheFormatVersion :: Int
 cacheFormatVersion = 6  -- Increment when Activity/Flow/Exchange/Unit types change
 
--- | Generate cache filename based on data directory and version
+-- | Generate cache filename based on data directory, file list, and version
 generateCacheFilename :: FilePath -> IO FilePath
 generateCacheFilename dataDir = do
     files <- listDirectory dataDir
     let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let filesHash = abs $ hash (show spoldFiles)  -- Hash of file list
+    let filesHash = abs $ hash (show (dataDir, spoldFiles))  -- Hash both directory path and file list
     return $ "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
--- | Find and clean up old cache files with different versions
+-- | Find and clean up cache files with different format versions (but preserve different datasets)
 cleanupOldCaches :: FilePath -> IO ()
 cleanupOldCaches dataDir = do
     currentCache <- generateCacheFilename dataDir
     files <- listDirectory "."
-    let cacheFiles = [f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, f /= currentCache]
+    let currentVersion = "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "."
+    let cacheFiles = [f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, 
+                      not (currentVersion `isPrefixOf` f)]  -- Only remove files with different versions
     mapM_ removeOldCache cacheFiles
   where
     removeOldCache cacheFile = do
-        hPutStrLn stderr $ "Removing old cache: " ++ cacheFile
+        hPutStrLn stderr $ "Removing old format version cache: " ++ cacheFile
         catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
 
 buildSpoldIndex :: FilePath -> IO (M.Map UUID FilePath)
