@@ -54,3 +54,20 @@ biosphereInventory :: Double -> Activity -> Inventory
 biosphereInventory w proc =
   error "biosphereInventory: Use biosphereInventoryWithFlows instead"
 
+-- | Calcule l'inventaire global à partir d'un arbre LoopAwareTree (avec détection de boucles)
+computeInventoryFromLoopAwareTree :: FlowDB -> LoopAwareTree -> Inventory
+computeInventoryFromLoopAwareTree flowDB tree = computeLoopAwareInventoryWithWeight flowDB 1.0 tree
+
+-- | Calcule l'inventaire en tenant compte d'un facteur de pondération - Version LoopAwareTree
+computeLoopAwareInventoryWithWeight :: FlowDB -> Double -> LoopAwareTree -> Inventory
+computeLoopAwareInventoryWithWeight flowDB weight (TreeLeaf activity) =
+  biosphereInventoryWithFlows flowDB weight activity
+computeLoopAwareInventoryWithWeight flowDB weight (TreeLoop _ _ _) =
+  M.empty  -- Les boucles ne contribuent pas à l'inventaire (déjà comptées)
+computeLoopAwareInventoryWithWeight flowDB weight (TreeNode activity children) =
+  let localInv = biosphereInventoryWithFlows flowDB weight activity
+      childrenInvs = [ computeLoopAwareInventoryWithWeight flowDB (weight * quantity) subtree
+                     | (quantity, _, subtree) <- children  -- Ignore flow info, use quantity and subtree
+                     ]
+  in foldl (M.unionWith (+)) localInv childrenInvs
+

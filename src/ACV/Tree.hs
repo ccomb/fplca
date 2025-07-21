@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase, buildLoopAwareTree) where
+module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase, buildLoopAwareTree, buildSafeLoopAwareTree, buildCutoffLoopAwareTree) where
 
 import ACV.Types
 import qualified Data.Map as M
@@ -101,6 +101,16 @@ buildNode db proc =
 buildLoopAwareTree :: Database -> UUID -> Int -> LoopAwareTree
 buildLoopAwareTree db rootUUID maxDepth = buildLoopAwareTreeWithVisited db rootUUID S.empty 0 maxDepth
 
+-- | Build loop-aware tree with both depth and node count limits for safer inventory calculation
+buildSafeLoopAwareTree :: Database -> UUID -> Int -> Int -> LoopAwareTree  
+buildSafeLoopAwareTree db rootUUID maxDepth maxNodes = 
+    buildSafeTreeWithLimits db rootUUID S.empty 0 maxDepth (0, maxNodes)
+
+-- | Build loop-aware tree with cutoff-based pruning (professional LCA approach)
+buildCutoffLoopAwareTree :: Database -> UUID -> Int -> Double -> LoopAwareTree
+buildCutoffLoopAwareTree db rootUUID maxDepth cutoffThreshold =
+    buildCutoffTreeWithVisited db rootUUID S.empty 0 maxDepth 1.0 cutoffThreshold
+
 -- | Helper function with visited set and depth tracking
 buildLoopAwareTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int -> LoopAwareTree
 buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth
@@ -127,6 +137,88 @@ buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth
                                , Just targetUUID <- [exchangeActivityLinkId ex]
                                , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
                                , let subtree = buildLoopAwareTreeWithVisited db targetUUID visited' (depth + 1) maxDepth
+                               ]
+                in if null children
+                   then TreeLeaf activity
+                   else TreeNode activity children
+
+-- | Safe tree building with node count limits (nodeCount, maxNodes)
+buildSafeTreeWithLimits :: Database -> UUID -> S.Set UUID -> Int -> Int -> (Int, Int) -> LoopAwareTree
+buildSafeTreeWithLimits db activityUUID visited depth maxDepth (nodeCount, maxNodes)
+    -- Stop if too many nodes created
+    | nodeCount >= maxNodes =
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Node limit reached" depth
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Stop at maximum depth
+    | depth >= maxDepth = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Detect loop
+    | activityUUID `S.member` visited = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth  
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Build subtree
+    | otherwise = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity ->
+                let visited' = S.insert activityUUID visited
+                    techInputs = [ ex | ex <- exchanges activity
+                                     , isTechnosphereInput (dbFlows db) ex ]
+                    (children, finalNodeCount) = buildChildrenWithLimit db techInputs visited' depth maxDepth (nodeCount + 1) maxNodes
+                in if null children
+                   then TreeLeaf activity
+                   else TreeNode activity children
+  where
+    buildChildrenWithLimit :: Database -> [Exchange] -> S.Set UUID -> Int -> Int -> Int -> Int -> ([(Double, Flow, LoopAwareTree)], Int)
+    buildChildrenWithLimit _ [] _ _ _ currentCount _ = ([], currentCount)
+    buildChildrenWithLimit db (ex:exs) visited depth maxDepth currentCount maxNodes
+        | currentCount >= maxNodes = ([], currentCount)  -- Stop building children
+        | otherwise = 
+            case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows db)) of
+                (Just targetUUID, Just flow) ->
+                    let subtree = buildSafeTreeWithLimits db targetUUID visited (depth + 1) maxDepth (currentCount, maxNodes)
+                        child = (exchangeAmount ex, flow, subtree)
+                        (restChildren, restCount) = buildChildrenWithLimit db exs visited depth maxDepth (currentCount + 1) maxNodes
+                    in (child : restChildren, restCount)
+                _ -> buildChildrenWithLimit db exs visited depth maxDepth currentCount maxNodes
+
+-- | Cutoff-based tree building with contribution tracking
+buildCutoffTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int -> Double -> Double -> LoopAwareTree
+buildCutoffTreeWithVisited db activityUUID visited depth maxDepth scaleFactor cutoffThreshold
+    -- Stop if contribution becomes too small (cutoff pruning)
+    | scaleFactor < cutoffThreshold = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Below cutoff threshold" depth
+            Just activity -> TreeLoop activityUUID ("Cutoff: " <> activityName activity) depth
+    -- Stop at maximum depth
+    | depth >= maxDepth = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Detect loop
+    | activityUUID `S.member` visited = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth  
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Build subtree
+    | otherwise = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity ->
+                let visited' = S.insert activityUUID visited
+                    techInputs = [ ex | ex <- exchanges activity
+                                     , isTechnosphereInput (dbFlows db) ex ]
+                    children = [ (exchangeAmount ex, flow, subtree)
+                               | ex <- techInputs
+                               , Just targetUUID <- [exchangeActivityLinkId ex]
+                               , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+                               , let childScaleFactor = scaleFactor * abs (exchangeAmount ex)
+                               , childScaleFactor >= cutoffThreshold  -- Cutoff check before building subtree
+                               , let subtree = buildCutoffTreeWithVisited db targetUUID visited' (depth + 1) maxDepth childScaleFactor cutoffThreshold
                                ]
                 in if null children
                    then TreeLeaf activity
