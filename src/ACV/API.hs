@@ -43,6 +43,7 @@ data ExchangeWithUnit = ExchangeWithUnit
 data ActivityForAPI = ActivityForAPI
     { pfaId :: UUID
     , pfaName :: Text
+    , pfaDescription :: Text
     , pfaLocation :: Text
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     } deriving (Generic, Show)
@@ -404,6 +405,7 @@ convertActivityForAPI :: Database -> Activity -> ActivityForAPI
 convertActivityForAPI db activity = ActivityForAPI
     { pfaId = activityId activity
     , pfaName = activityName activity
+    , pfaDescription = activityDescription activity
     , pfaLocation = activityLocation activity
     , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
     }

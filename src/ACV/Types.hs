@@ -158,6 +158,7 @@ matchesFlowOrSynonym searchText flow =
 data Activity = Activity
     { activityId :: !UUID -- Identifiant unique du activité
     , activityName :: !Text -- Nom
+    , activityDescription :: !Text -- Description détaillée de l'activité
     , activityLocation :: !Text -- Code de localisation (ex: FR, RER)
     , exchanges :: ![Exchange] -- Liste des échanges
     }

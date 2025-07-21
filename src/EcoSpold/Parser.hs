@@ -49,7 +49,8 @@ parseActivity cursor =
         !interExchs = map parseExchange interNodes
         !elemExchs = map parseElementaryExchange elemNodes
         !exchs = interExchs ++ elemExchs
-     in Activity uuid name location exchs
+        !description = name  -- Start simple: use name as description
+     in Activity uuid name description location exchs
 
 -- | Parse un activité et extrait les flux et unités pour la déduplication
 parseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
@@ -84,7 +85,8 @@ parseActivityWithFlowsAndUnits cursor =
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
-     in (Activity uuid name location exchs, flows, units)
+        !description = name  -- Start simple: use name as description
+     in (Activity uuid name description location exchs, flows, units)
 
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
@@ -209,8 +211,9 @@ parseActivityWithFlowsAndUnitsOptimized cursor =
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
+        !description = name  -- Start simple: use name as description
         
-        !activity = Activity uuid name location exchs
+        !activity = Activity uuid name description location exchs
      in (activity, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation

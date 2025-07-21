@@ -50,7 +50,7 @@ isTechnosphereInput _ ex =
 
 -- | Dummy activity to indicate recursion stop
 placeholder :: Activity
-placeholder = Activity "loop-detected" "Loop detected" "N/A" []
+placeholder = Activity "loop-detected" "Loop detected" "Loop detected" "N/A" []
 
 -- | Version optimisée avec FlowDB - Compatible avec SimpleDatabase et Database
 buildActivityTreeWithFlows :: SimpleDatabase -> UUID -> ActivityTree

@@ -32,7 +32,7 @@ type Visited = S.Set UUID
 
 -- | Cache format version - increment this when types change to invalidate old caches
 cacheFormatVersion :: Int
-cacheFormatVersion = 2  -- Increment when Activity/Flow/Exchange/Unit types change
+cacheFormatVersion = 3  -- Increment when Activity/Flow/Exchange/Unit types change
 
 -- | Generate cache filename based on data directory and version
 generateCacheFilename :: FilePath -> IO FilePath
@@ -76,10 +76,10 @@ isTechnosphereInput _ ex =
         BiosphereExchange _ _ _ _ -> False
 
 placeholder :: Activity
-placeholder = Activity "loop" "Loop detected" "N/A" []
+placeholder = Activity "loop" "Loop detected" "Loop detected" "N/A" []
 
 missing :: Activity
-missing = Activity "missing" "Activity not found" "N/A" []
+missing = Activity "missing" "Activity not found" "Activity not found" "N/A" []
 
 {- | Version originale - Charge tous les fichiers .spold
   et retourne une base de activités indexée par UUID
