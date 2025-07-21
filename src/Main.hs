@@ -91,6 +91,7 @@ main = do
             putStrLn "    GET /api/v1/search/activities?geo={location}     - Search activities by geography (exact match)"
             putStrLn "    GET /api/v1/search/activities?product={product}  - Search activities by reference product"
             putStrLn "    GET /api/v1/search/activities?name={n}&geo={g}   - Combine multiple criteria (AND logic)"
+            putStrLn "    Note: At least one search parameter is required, otherwise returns empty list"
             putStrLn ""
             putStrLn "  Synonym endpoints:"
             putStrLn "    GET /api/v1/synonyms/languages                  - Get available languages"
