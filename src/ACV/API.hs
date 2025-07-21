@@ -6,7 +6,8 @@
 module ACV.API where
 
 import ACV.Query
-import ACV.Tree (buildLoopAwareTree)
+import ACV.Tree (buildLoopAwareTree, buildActivityTreeWithDatabase)
+import ACV.Inventory (computeInventoryWithFlows, Inventory)
 import ACV.Types
 import Data.Aeson
 import qualified Data.Map as M
@@ -27,6 +28,7 @@ type ACVAPI =
                 :<|> "activity" :> Capture "uuid" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
                 :<|> "activity" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
                 :<|> "activity" :> Capture "uuid" Text :> "tree" :> Get '[JSON] TreeExport
+                :<|> "activity" :> Capture "uuid" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] [FlowDetail]
@@ -214,6 +216,42 @@ instance ToJSON NodeType
 instance ToJSON TreeEdge
 instance ToJSON FlowInfo
 
+-- | Inventory export data structures
+data InventoryExport = InventoryExport
+    { ieMetadata :: InventoryMetadata
+    , ieFlows :: [InventoryFlowDetail]
+    , ieStatistics :: InventoryStatistics
+    } deriving (Generic, Show)
+
+data InventoryMetadata = InventoryMetadata
+    { imRootActivity :: ActivitySummary
+    , imCalculationDepth :: Int
+    , imTotalFlows :: Int
+    , imEmissionFlows :: Int      -- Biosphere outputs (negative environmental impact)
+    , imResourceFlows :: Int      -- Biosphere inputs (resource extraction)  
+    } deriving (Generic, Show)
+
+data InventoryFlowDetail = InventoryFlowDetail
+    { ifdFlow :: Flow
+    , ifdQuantity :: Double
+    , ifdUnitName :: Text
+    , ifdIsEmission :: Bool       -- True for emissions, False for resource extraction
+    , ifdCategory :: Text         -- Flow category for grouping
+    } deriving (Generic, Show)
+
+data InventoryStatistics = InventoryStatistics  
+    { isTotalQuantity :: Double   -- Sum of absolute values
+    , isEmissionQuantity :: Double -- Sum of emissions (should be positive)
+    , isResourceQuantity :: Double -- Sum of resource extraction (should be positive)
+    , isTopCategories :: [(Text, Int)] -- Top flow categories by count
+    } deriving (Generic, Show)
+
+-- JSON instances for inventory export
+instance ToJSON InventoryExport
+instance ToJSON InventoryMetadata  
+instance ToJSON InventoryFlowDetail
+instance ToJSON InventoryStatistics
+
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
 acvServer db =
@@ -223,6 +261,7 @@ acvServer db =
         :<|> getActivityOutputs
         :<|> getActivityReferenceProduct
         :<|> getActivityTree
+        :<|> getActivityInventory
         :<|> getFlowDetail
         :<|> getFlowActivities
         :<|> searchFlows
@@ -293,6 +332,17 @@ acvServer db =
                 let maxDepth = 2 -- Fixed depth for interactive navigation
                 let loopAwareTree = buildLoopAwareTree db uuid maxDepth
                 return $ convertToTreeExport db uuid maxDepth loopAwareTree
+
+    -- Activity inventory calculation (full supply chain LCI)
+    getActivityInventory :: Text -> Handler InventoryExport
+    getActivityInventory uuid = do
+        case M.lookup uuid (dbActivities db) of
+            Nothing -> throwError err404{errBody = "Activity not found"}
+            Just activity -> do
+                -- Build full activity tree for inventory calculation
+                let activityTree = buildActivityTreeWithDatabase db uuid
+                let inventory = computeInventoryWithFlows (dbFlows db) activityTree
+                return $ convertToInventoryExport db activity inventory
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
@@ -613,6 +663,46 @@ countPotentialChildren db activity =
                , Just targetUUID <- [exchangeActivityLinkId ex]
                , M.member targetUUID (dbActivities db)
                ]
+
+-- | Convert raw inventory to structured export format
+convertToInventoryExport :: Database -> Activity -> Inventory -> InventoryExport
+convertToInventoryExport db rootActivity inventory =
+    let flowDetails = [ InventoryFlowDetail flow quantity (getUnitNameForFlow (dbUnits db) flow) isEmission (flowCategory flow)
+                      | (flowUUID, quantity) <- M.toList inventory
+                      , Just flow <- [M.lookup flowUUID (dbFlows db)]
+                      , let isEmission = not (isResourceExtraction flow quantity)
+                      ]
+        
+        emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
+        resourceFlows = length [f | f <- flowDetails, not (ifdIsEmission f)]
+        
+        totalQuantity = sum [abs (ifdQuantity f) | f <- flowDetails]
+        emissionQuantity = sum [ifdQuantity f | f <- flowDetails, ifdIsEmission f, ifdQuantity f > 0]
+        resourceQuantity = sum [abs (ifdQuantity f) | f <- flowDetails, not (ifdIsEmission f)]
+        
+        categoryStats = take 10 $ 
+            M.toList $ M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
+        
+        metadata = InventoryMetadata
+            { imRootActivity = ActivitySummary (activityId rootActivity) (activityName rootActivity) (activityLocation rootActivity)
+            , imCalculationDepth = -1  -- Full tree depth (unknown beforehand)
+            , imTotalFlows = length flowDetails
+            , imEmissionFlows = emissionFlows
+            , imResourceFlows = resourceFlows
+            }
+        
+        statistics = InventoryStatistics
+            { isTotalQuantity = totalQuantity
+            , isEmissionQuantity = emissionQuantity  
+            , isResourceQuantity = resourceQuantity
+            , isTopCategories = categoryStats
+            }
+    
+    in InventoryExport metadata flowDetails statistics
+
+-- | Determine if a flow represents resource extraction (negative quantity = extraction from environment)
+isResourceExtraction :: Flow -> Double -> Bool
+isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
 
 -- | Simple stats tracking
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves
