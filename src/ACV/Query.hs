@@ -145,6 +145,39 @@ findActivitiesByName db searchTerm =
         uniqueUUIDs = S.toList $ S.fromList matchingUUIDs
     in mapMaybe (`M.lookup` dbActivities db) uniqueUUIDs
 
+-- | Recherche d'activités fuzzy (nom, localisation, flux utilisés)
+findActivitiesFuzzy :: Database -> Text -> [Activity]
+findActivitiesFuzzy db searchText =
+    let lowerSearch = T.toLower searchText
+        searchTerms = T.words lowerSearch  -- Split on whitespace for multi-term search
+    in [ activity 
+       | activity <- M.elems (dbActivities db)
+       , matchesActivityFuzzy db searchTerms activity
+       ]
+
+-- | Advanced fuzzy matching for activities
+matchesActivityFuzzy :: Database -> [Text] -> Activity -> Bool
+matchesActivityFuzzy db searchTerms activity = 
+    let lowerName = T.toLower (activityName activity)
+        lowerLocation = T.toLower (activityLocation activity)
+        
+        -- Get names of flows used by this activity
+        flowNames = [ T.toLower (flowName flow)
+                    | exchange <- exchanges activity
+                    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+                    ]
+        
+        -- Check if all search terms match somewhere
+        matchesTerm term = 
+            -- Substring in activity name
+            term `T.isInfixOf` lowerName ||
+            -- Substring in location
+            term `T.isInfixOf` lowerLocation ||
+            -- Substring in any flow name used by this activity
+            any (term `T.isInfixOf`) flowNames
+            
+    in all matchesTerm searchTerms
+
 -- | Recherche de activityus par localisation exacte
 findActivitiesByLocation :: Database -> Text -> [Activity]
 findActivitiesByLocation db location = 
