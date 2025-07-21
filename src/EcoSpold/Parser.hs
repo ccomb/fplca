@@ -194,6 +194,21 @@ parseSynonyms cursor =
             ]
      in M.fromListWith S.union [(lang, S.singleton text) | (lang, text) <- synonymPairs]
 
+-- | Extract compartment category from elementaryExchange cursor
+extractCompartmentCategory :: Cursor -> T.Text
+extractCompartmentCategory cur =
+    let compartmentTexts = cur $// element (nsElement "compartment") 
+                              &// element (nsElement "compartment") 
+                              &/ content
+        subcompartmentTexts = cur $// element (nsElement "compartment")
+                                 &// element (nsElement "subcompartment") 
+                                 &/ content
+    in case (compartmentTexts, subcompartmentTexts) of
+        ([], []) -> "unspecified"  -- Fallback if no compartment info
+        (comp:_, []) -> comp       -- Just compartment, no subcompartment
+        ([], sub:_) -> sub         -- Just subcompartment (shouldn't happen)
+        (comp:_, sub:_) -> comp <> "/" <> sub  -- Full hierarchy: "water/ground-, long-term"
+
 -- | Safer alternative to head
 headOrFail :: String -> [a] -> a
 headOrFail msg [] = error msg
@@ -332,8 +347,8 @@ parseElementaryExchangeWithFlow cur =
         !isInput = inputGroup /= ""
         !ftype = Biosphere
 
-        -- Determine category based on input/output group
-        !category = if isInput then "resource" else "emission"
+        -- Extract compartment hierarchy from XML
+        !category = extractCompartmentCategory cur
 
         !synonyms = parseSynonyms cur
         !flow = Flow fid fname category unitId ftype synonyms
@@ -364,7 +379,7 @@ parseElementaryExchangeWithFlowOptimized cur =
 
         !isInput = inputGroup /= ""
         !ftype = Biosphere
-        !category = if isInput then "resource" else "emission"
+        !category = extractCompartmentCategory cur
 
         !synonyms = parseSynonyms cur
         !flow = Flow fid fname category unitId ftype synonyms

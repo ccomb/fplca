@@ -1,45 +1,44 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DeriveAnyClass #-}
 
 module EcoSpold.Loader (buildActivityTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes, loadCachedSpolds, saveCachedSpolds, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
 
 import ACV.Query (buildIndexes)
 import ACV.Types
 import Control.Concurrent.Async
-import Control.Exception (catch, SomeException)
+import Control.Exception (SomeException, catch)
 import Control.Monad
 import Control.Parallel.Strategies
+import Data.Binary (decodeFile, encodeFile)
+import Data.Hashable (hash)
 import Data.List (isPrefixOf)
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Data.Binary (encodeFile, decodeFile)
+import Data.Time (diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (parseActivityAndFlowsFromFile, parseActivityFromFile, streamParseActivityAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
-import System.Directory (listDirectory, doesFileExist, getModificationTime, removeFile)
-import System.FilePath (takeExtension, (</>))
+import System.Directory (doesFileExist, getModificationTime, listDirectory, removeFile)
+import System.FilePath (dropExtension, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
-import Data.Time (getCurrentTime, diffUTCTime)
-import Data.Hashable (hash)
-import System.FilePath (dropExtension)
 
 type SpoldIndex = M.Map UUID FilePath
 type Visited = S.Set UUID
 
 -- | Cache format version - increment this when types change to invalidate old caches
 cacheFormatVersion :: Int
-cacheFormatVersion = 6  -- Increment when Activity/Flow/Exchange/Unit types change
+cacheFormatVersion = 7 -- Increment when Activity/Flow/Exchange/Unit types change
 
 -- | Generate cache filename based on data directory, file list, and version
 generateCacheFilename :: FilePath -> IO FilePath
 generateCacheFilename dataDir = do
     files <- listDirectory dataDir
     let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let filesHash = abs $ hash (show (dataDir, spoldFiles))  -- Hash both directory path and file list
+    let filesHash = abs $ hash (show (dataDir, spoldFiles)) -- Hash both directory path and file list
     return $ "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
 -- | Find and clean up cache files with different format versions (but preserve different datasets)
@@ -48,8 +47,9 @@ cleanupOldCaches dataDir = do
     currentCache <- generateCacheFilename dataDir
     files <- listDirectory "."
     let currentVersion = "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "."
-    let cacheFiles = [f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, 
-                      not (currentVersion `isPrefixOf` f)]  -- Only remove files with different versions
+    let cacheFiles =
+            [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, not (currentVersion `isPrefixOf` f) -- Only remove files with different versions
+            ]
     mapM_ removeOldCache cacheFiles
   where
     removeOldCache cacheFile = do
@@ -188,13 +188,13 @@ loadCachedSpolds :: FilePath -> IO (ActivityDB, Bool)
 loadCachedSpolds dataDir = do
     cacheFile <- generateCacheFilename dataDir
     cleanupOldCaches dataDir
-    
+
     cacheExists <- doesFileExist cacheFile
     if cacheExists
         then do
             hPutStrLn stderr $ "Loading from cache: " ++ cacheFile
             startTime <- getCurrentTime
-            !db <- decodeFile cacheFile  -- Simple decode, no error handling needed
+            !db <- decodeFile cacheFile -- Simple decode, no error handling needed
             endTime <- getCurrentTime
             let elapsed = diffUTCTime endTime startTime
             hPutStrLn stderr $ "Cache loaded in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " activities)"
@@ -208,34 +208,39 @@ loadCachedSpolds dataDir = do
             hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " activities)"
             return (db, False)
 
-{- | Save ActivityDB to binary cache file with automatic filename -}
+-- | Save ActivityDB to binary cache file with automatic filename
 saveCachedSpolds :: FilePath -> ActivityDB -> IO ()
 saveCachedSpolds dataDir db = do
     cacheFile <- generateCacheFilename dataDir
     hPutStrLn stderr $ "Saving to cache: " ++ cacheFile
     startTime <- getCurrentTime
-    encodeFile cacheFile db  -- Simple encode, filename ensures compatibility
+    encodeFile cacheFile db -- Simple encode, filename ensures compatibility
     endTime <- getCurrentTime
     let elapsed = diffUTCTime endTime startTime
     hPutStrLn stderr $ "Cache saved in " ++ show elapsed
 
-{- | Load cached SimpleDatabase with automatic filename management -}
+-- | Load cached SimpleDatabase with automatic filename management
 loadCachedSpoldsWithFlows :: FilePath -> IO (SimpleDatabase, Bool)
 loadCachedSpoldsWithFlows dataDir = do
     cacheFile <- generateCacheFilename dataDir
     cleanupOldCaches dataDir
-    
+
     cacheExists <- doesFileExist cacheFile
     if cacheExists
         then do
             hPutStrLn stderr $ "Loading SimpleDatabase from cache: " ++ cacheFile
             startTime <- getCurrentTime
-            !db <- decodeFile cacheFile  -- Simple decode, no error handling needed
+            !db <- decodeFile cacheFile -- Simple decode, no error handling needed
             endTime <- getCurrentTime
             let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed 
-                ++ " (" ++ show (M.size $ sdbActivities db) ++ " activities, " 
-                ++ show (M.size $ sdbFlows db) ++ " flows)"
+            hPutStrLn stderr $
+                "Cache loaded in "
+                    ++ show elapsed
+                    ++ " ("
+                    ++ show (M.size $ sdbActivities db)
+                    ++ " activities, "
+                    ++ show (M.size $ sdbFlows db)
+                    ++ " flows)"
             return (db, True)
         else do
             hPutStrLn stderr "No cache found, parsing XML files..."
@@ -243,18 +248,23 @@ loadCachedSpoldsWithFlows dataDir = do
             !db <- loadAllSpoldsWithFlows dataDir
             endTime <- getCurrentTime
             let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed
-                ++ " (" ++ show (M.size $ sdbActivities db) ++ " activities, " 
-                ++ show (M.size $ sdbFlows db) ++ " flows)"
+            hPutStrLn stderr $
+                "XML parsing completed in "
+                    ++ show elapsed
+                    ++ " ("
+                    ++ show (M.size $ sdbActivities db)
+                    ++ " activities, "
+                    ++ show (M.size $ sdbFlows db)
+                    ++ " flows)"
             return (db, False)
 
-{- | Save SimpleDatabase to binary cache file with automatic filename -}
+-- | Save SimpleDatabase to binary cache file with automatic filename
 saveCachedSpoldsWithFlows :: FilePath -> SimpleDatabase -> IO ()
 saveCachedSpoldsWithFlows dataDir db = do
     cacheFile <- generateCacheFilename dataDir
     hPutStrLn stderr $ "Saving SimpleDatabase to cache: " ++ cacheFile
     startTime <- getCurrentTime
-    encodeFile cacheFile db  -- Simple encode, filename ensures compatibility
+    encodeFile cacheFile db -- Simple encode, filename ensures compatibility
     endTime <- getCurrentTime
     let elapsed = diffUTCTime endTime startTime
     hPutStrLn stderr $ "Cache saved in " ++ show elapsed
