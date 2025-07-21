@@ -31,7 +31,7 @@ type Visited = S.Set UUID
 
 -- | Cache format version - increment this when types change to invalidate old caches
 cacheFormatVersion :: Int
-cacheFormatVersion = 1  -- Increment when Activity/Flow/Exchange/Unit types change
+cacheFormatVersion = 2  -- Increment when Activity/Flow/Exchange/Unit types change
 
 -- | Generate cache filename based on data directory and version
 generateCacheFilename :: FilePath -> IO FilePath
