@@ -41,10 +41,13 @@ type ACVAPI =
                 :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
            )
 
--- | Enhanced exchange with unit name for API responses
+-- | Enhanced exchange with flow details for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
-    , ewuUnitName :: Text -- Unit name for the exchange
+    , ewuUnitName :: Text           -- Unit name for the exchange
+    , ewuFlowName :: Text           -- Name of the flow being exchanged
+    , ewuFlowCategory :: Text       -- Category/compartment (for biosphere) or "technosphere"
+    , ewuTargetActivity :: Maybe Text  -- For technosphere: name of target activity
     }
     deriving (Generic, Show)
 
@@ -565,9 +568,23 @@ convertActivityForAPI db activity =
         }
   where
     convertExchangeWithUnit exchange =
-        ExchangeWithUnit
+        let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
+            targetActivityInfo = case exchange of
+                TechnosphereExchange _ _ _ _ _ linkId -> 
+                    case M.lookup linkId (dbActivities db) of
+                        Just targetActivity -> Just (activityName targetActivity)
+                        Nothing -> Nothing
+                BiosphereExchange _ _ _ _ -> Nothing
+        in ExchangeWithUnit
             { ewuExchange = exchange
             , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
+            , ewuFlowName = maybe "unknown" flowName flowInfo
+            , ewuFlowCategory = case flowInfo of
+                Just flow -> case isTechnosphereExchange exchange of
+                    True -> "technosphere"
+                    False -> flowCategory flow  -- This will now include compartment info like "water/ground-, long-term"
+                Nothing -> "unknown"
+            , ewuTargetActivity = targetActivityInfo
             }
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
