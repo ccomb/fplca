@@ -36,7 +36,7 @@ data Flow = Flow
     , flowCategory :: !Text -- Catégorie (e.g. air, eau, ressource)
     , flowUnitId :: !UUID -- Référence vers l'unité par défaut dans UnitDB
     , flowType :: !FlowType -- Type de flux
-    , flowSynonyms :: !(M.Map Text [Text]) -- Synonymes par langue (e.g. "en" -> ["BaP", "benzo[a]pyrene"])
+    , flowSynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue (e.g. "en" -> {"BaP", "benzo[a]pyrene"})
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
@@ -133,16 +133,16 @@ getSynonymsForLanguage :: Flow -> Text -> [Text]
 getSynonymsForLanguage flow lang = 
     case M.lookup lang (flowSynonyms flow) of
         Nothing -> []
-        Just syns -> syns
+        Just syns -> S.toList syns
 
 -- | Get all synonyms across all languages
 getAllSynonyms :: Flow -> [Text]
-getAllSynonyms flow = concat $ M.elems (flowSynonyms flow)
+getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
 
 -- | Add synonym to a flow for a specific language
 addSynonym :: Text -> Text -> Flow -> Flow
 addSynonym lang synonym flow = flow
-    { flowSynonyms = M.insertWith (++) lang [synonym] (flowSynonyms flow) }
+    { flowSynonyms = M.insertWith S.union lang (S.singleton synonym) (flowSynonyms flow) }
 
 -- | Check if text matches flow name or any synonym
 matchesFlowOrSynonym :: Text -> Flow -> Bool

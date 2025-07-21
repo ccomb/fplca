@@ -321,7 +321,9 @@ findFlowsWithSynonymsInLanguage :: Database -> Text -> [Flow]
 findFlowsWithSynonymsInLanguage db lang = 
     [ flow 
     | flow <- M.elems (dbFlows db)
-    , not . null $ getSynonymsForLanguage flow lang
+    , case M.lookup lang (flowSynonyms flow) of
+        Nothing -> False
+        Just synonyms -> not (S.null synonyms)
     ]
 
 -- | Recherche de flux par synonyme dans une langue spécifique
@@ -330,9 +332,9 @@ findFlowsBySynonymInLanguage db lang searchText =
     let lowerSearch = T.toLower searchText
     in [ flow 
        | flow <- M.elems (dbFlows db)
-       , let synonyms = getSynonymsForLanguage flow lang
-       , let lowerSynonyms = map T.toLower synonyms
-       , lowerSearch `elem` lowerSynonyms
+       , case M.lookup lang (flowSynonyms flow) of
+           Nothing -> False
+           Just synonyms -> S.member lowerSearch (S.map T.toLower synonyms)
        ]
 
 -- | Obtient toutes les langues disponibles dans les synonymes
@@ -356,7 +358,7 @@ getSynonymStats :: Database -> SynonymStats
 getSynonymStats db = 
     let flows = M.elems (dbFlows db)
         flowsWithSynonyms = [flow | flow <- flows, not . M.null $ flowSynonyms flow]
-        totalSynonyms = sum [length syns | flow <- flows, syns <- M.elems (flowSynonyms flow)]
+        totalSynonyms = sum [S.size syns | flow <- flows, syns <- M.elems (flowSynonyms flow)]
         languageStats = 
             [ (lang, length [flow | flow <- flows, M.member lang (flowSynonyms flow)])
             | lang <- getAvailableLanguages db

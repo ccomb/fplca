@@ -8,6 +8,7 @@ import ACV.Types
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Text.XML
 import Text.XML.Cursor
 
@@ -157,7 +158,7 @@ getAttr cur attr =
          (x:_) -> x
 
 -- | Parse synonyms from XML cursor 
-parseSynonyms :: Cursor -> M.Map Text [Text]
+parseSynonyms :: Cursor -> M.Map Text (S.Set Text)
 parseSynonyms cursor = 
     let synonymNodes = cursor $/ element (nsElement "synonym")
         synonymPairs = [(lang, text) | node <- synonymNodes
@@ -168,7 +169,7 @@ parseSynonyms cursor =
                                                     [] -> ""
                                                     (t:_) -> t
                                      , not (T.null text)]
-    in M.fromListWith (++) [(lang, [text]) | (lang, text) <- synonymPairs]
+    in M.fromListWith S.union [(lang, S.singleton text) | (lang, text) <- synonymPairs]
 
 -- | Safer alternative to head
 headOrFail :: String -> [a] -> a
