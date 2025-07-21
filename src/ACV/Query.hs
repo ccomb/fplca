@@ -166,9 +166,9 @@ matchesActivityFields db nameParam geoParam productParam activity =
         geoMatch = case geoParam of
             Nothing -> True
             Just geoQuery -> 
-                let lowerLocation = T.toLower (activityLocation activity)
-                    searchTerms = T.words (T.toLower geoQuery)
-                in all (`T.isInfixOf` lowerLocation) searchTerms
+                let activityLoc = T.toLower (activityLocation activity)
+                    queryLoc = T.toLower geoQuery
+                in activityLoc == queryLoc  -- Exact match for geography codes
         
         productMatch = case productParam of
             Nothing -> True

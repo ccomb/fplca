@@ -88,7 +88,7 @@ main = do
             putStrLn "    GET /api/v1/search/flows?q={term}               - Fuzzy search flows (name, category, synonyms)"
             putStrLn "    GET /api/v1/search/flows?q={term}&lang={lang}   - Fuzzy search flows in specific language"  
             putStrLn "    GET /api/v1/search/activities?name={term}        - Search activities by name"
-            putStrLn "    GET /api/v1/search/activities?geo={location}     - Search activities by geography"
+            putStrLn "    GET /api/v1/search/activities?geo={location}     - Search activities by geography (exact match)"
             putStrLn "    GET /api/v1/search/activities?product={product}  - Search activities by reference product"
             putStrLn "    GET /api/v1/search/activities?name={n}&geo={g}   - Combine multiple criteria (AND logic)"
             putStrLn ""
