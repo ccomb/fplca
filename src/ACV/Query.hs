@@ -307,14 +307,35 @@ findMostUsedFlows db limit =
         sorted = sortOn (negate . snd) usageCounts
     in take limit sorted
 
--- | Recherche de flux par synonymes
--- | Trouve tous les flux qui correspondent au texte de recherche (nom ou synonyme)
+-- | Recherche de flux par synonymes et nom (fuzzy search)
+-- | Trouve tous les flux qui correspondent au texte de recherche (substring dans le nom ou synonymes)
 findFlowsBySynonym :: Database -> Text -> [Flow]
 findFlowsBySynonym db searchText = 
-    [ flow 
-    | flow <- M.elems (dbFlows db)
-    , matchesFlowOrSynonym searchText flow
-    ]
+    let lowerSearch = T.toLower searchText
+        searchTerms = T.words lowerSearch  -- Split on whitespace for multi-term search
+    in [ flow 
+       | flow <- M.elems (dbFlows db)
+       , matchesFlowFuzzy searchTerms flow
+       ]
+
+-- | Advanced fuzzy matching for flows (substring matching + multi-term)
+matchesFlowFuzzy :: [Text] -> Flow -> Bool
+matchesFlowFuzzy searchTerms flow = 
+    let lowerName = T.toLower (flowName flow)
+        lowerCategory = T.toLower (flowCategory flow)
+        allSynonyms = getAllSynonyms flow
+        lowerSynonyms = map T.toLower allSynonyms
+        
+        -- Check if all search terms match somewhere
+        matchesTerm term = 
+            -- Substring in flow name
+            term `T.isInfixOf` lowerName ||
+            -- Substring in category
+            term `T.isInfixOf` lowerCategory ||
+            -- Substring in any synonym
+            any (term `T.isInfixOf`) lowerSynonyms
+            
+    in all matchesTerm searchTerms
 
 -- | Trouve tous les flux qui ont des synonymes dans une langue donnée
 findFlowsWithSynonymsInLanguage :: Database -> Text -> [Flow]
@@ -326,16 +347,32 @@ findFlowsWithSynonymsInLanguage db lang =
         Just synonyms -> not (S.null synonyms)
     ]
 
--- | Recherche de flux par synonyme dans une langue spécifique
+-- | Recherche de flux par synonyme dans une langue spécifique (fuzzy search)
 findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
 findFlowsBySynonymInLanguage db lang searchText = 
     let lowerSearch = T.toLower searchText
+        searchTerms = T.words lowerSearch
     in [ flow 
        | flow <- M.elems (dbFlows db)
-       , case M.lookup lang (flowSynonyms flow) of
-           Nothing -> False
-           Just synonyms -> S.member lowerSearch (S.map T.toLower synonyms)
+       , matchesFlowInLanguage searchTerms lang flow
        ]
+
+-- | Fuzzy matching for flows in specific language
+matchesFlowInLanguage :: [Text] -> Text -> Flow -> Bool
+matchesFlowInLanguage searchTerms lang flow =
+    let lowerName = T.toLower (flowName flow)
+        langSynonyms = case M.lookup lang (flowSynonyms flow) of
+                        Nothing -> []
+                        Just syns -> S.toList syns
+        lowerSynonyms = map T.toLower langSynonyms
+        
+        matchesTerm term = 
+            -- Substring in flow name
+            term `T.isInfixOf` lowerName ||
+            -- Substring in language-specific synonyms
+            any (term `T.isInfixOf`) lowerSynonyms
+            
+    in all matchesTerm searchTerms
 
 -- | Obtient toutes les langues disponibles dans les synonymes
 getAvailableLanguages :: Database -> [Text]
