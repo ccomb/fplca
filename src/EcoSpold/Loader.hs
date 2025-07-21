@@ -12,6 +12,7 @@ import Control.Concurrent.Async
 import Control.Exception (catch, SomeException)
 import Control.Monad
 import Control.Parallel.Strategies
+import Data.List (isPrefixOf)
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
@@ -46,7 +47,7 @@ cleanupOldCaches :: FilePath -> IO ()
 cleanupOldCaches dataDir = do
     currentCache <- generateCacheFilename dataDir
     files <- listDirectory "."
-    let cacheFiles = [f | f <- files, "ecoinvent.cache.v" `elem` [take 16 f], f /= currentCache]
+    let cacheFiles = [f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, f /= currentCache]
     mapM_ removeOldCache cacheFiles
   where
     removeOldCache cacheFile = do
