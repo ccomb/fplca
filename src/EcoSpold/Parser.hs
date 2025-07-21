@@ -143,7 +143,8 @@ parseExchangeWithFlow cur =
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
         !activityLinkId = getAttr cur "activityLinkId"
         
-        !flow = Flow fid fname "technosphere" unitId ftype
+        !synonyms = parseSynonyms cur
+        !flow = Flow fid fname "technosphere" unitId ftype synonyms
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow, unit)
@@ -154,6 +155,20 @@ getAttr cur attr =
      in case cur $| attribute name of
          [] -> ""  -- Return empty string for missing attributes
          (x:_) -> x
+
+-- | Parse synonyms from XML cursor 
+parseSynonyms :: Cursor -> M.Map Text [Text]
+parseSynonyms cursor = 
+    let synonymNodes = cursor $/ element (nsElement "synonym")
+        synonymPairs = [(lang, text) | node <- synonymNodes
+                                     , let lang = case node $| attribute "xml:lang" of
+                                                    [] -> "en"  -- Default to English
+                                                    (l:_) -> l
+                                     , let text = case node $/ content of
+                                                    [] -> ""
+                                                    (t:_) -> t
+                                     , not (T.null text)]
+    in M.fromListWith (++) [(lang, [text]) | (lang, text) <- synonymPairs]
 
 -- | Safer alternative to head
 headOrFail :: String -> [a] -> a
@@ -228,7 +243,8 @@ parseExchangeWithFlowOptimized cur =
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
         !activityLinkId = getAttr cur "activityLinkId"
         
-        !flow = Flow fid fname "technosphere" unitId ftype
+        !synonyms = parseSynonyms cur
+        !flow = Flow fid fname "technosphere" unitId ftype synonyms
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
      in (exchange, flow, unit)
@@ -283,7 +299,8 @@ parseElementaryExchangeWithFlow cur =
         -- Determine category based on input/output group
         !category = if isInput then "resource" else "emission"
         
-        !flow = Flow fid fname category unitId ftype
+        !synonyms = parseSynonyms cur
+        !flow = Flow fid fname category unitId ftype synonyms
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow, unit)
@@ -313,7 +330,8 @@ parseElementaryExchangeWithFlowOptimized cur =
         !ftype = Biosphere
         !category = if isInput then "resource" else "emission"
         
-        !flow = Flow fid fname category unitId ftype
+        !synonyms = parseSynonyms cur
+        !flow = Flow fid fname category unitId ftype synonyms
         !unit = Unit unitId unitName unitName ""  -- Use unitName for both name and symbol, empty comment
         !exchange = BiosphereExchange fid amount unitId isInput
      in (exchange, flow, unit)

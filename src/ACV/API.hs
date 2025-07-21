@@ -23,6 +23,10 @@ type ACVAPI = "api" :> "v1" :> (
   :<|> "process" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
   :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
   :<|> "flows" :> Capture "flowId" Text :> "processes" :> Get '[JSON] [ProcessSummary]
+  :<|> "search" :> "flows" :> QueryParam "q" Text :> Get '[JSON] [FlowDetail]
+  :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> Get '[JSON] [FlowDetail]
+  :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
+  :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
   )
 
 -- | Enhanced exchange with unit name for API responses
@@ -125,6 +129,7 @@ instance ToJSON Exchange
 instance ToJSON Flow
 instance ToJSON FlowType
 instance ToJSON Unit
+instance ToJSON SynonymStats
 
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
@@ -135,6 +140,10 @@ acvServer db = getProcessInfo
          :<|> getProcessReferenceProduct
          :<|> getFlowDetail
          :<|> getFlowProcesses
+         :<|> searchFlows
+         :<|> searchFlowsInLanguage
+         :<|> getAvailableLanguagesAPI
+         :<|> getSynonymStatsAPI
   where
     -- Core process endpoint - streamlined data
     getProcessInfo :: Text -> Handler ProcessInfo
@@ -201,6 +210,29 @@ acvServer db = getProcessInfo
       case M.lookup flowId (dbFlows db) of
         Nothing -> throwError err404 { errBody = "Flow not found" }
         Just _ -> return $ getProcessesUsingFlow db flowId
+    
+    -- Search flows by name or synonym
+    searchFlows :: Maybe Text -> Handler [FlowDetail]
+    searchFlows Nothing = return []
+    searchFlows (Just query) = do
+      let flows = findFlowsBySynonym db query
+      return [FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) | flow <- flows]
+    
+    -- Search flows by synonym in specific language
+    searchFlowsInLanguage :: Maybe Text -> Maybe Text -> Handler [FlowDetail]
+    searchFlowsInLanguage Nothing _ = return []
+    searchFlowsInLanguage _ Nothing = return []
+    searchFlowsInLanguage (Just query) (Just lang) = do
+      let flows = findFlowsBySynonymInLanguage db lang query
+      return [FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) | flow <- flows]
+    
+    -- Get available languages
+    getAvailableLanguagesAPI :: Handler [Text]
+    getAvailableLanguagesAPI = return $ getAvailableLanguages db
+    
+    -- Get synonym statistics
+    getSynonymStatsAPI :: Handler SynonymStats
+    getSynonymStatsAPI = return $ getSynonymStats db
 
 -- | Calculate extended metadata for a process  
 calculateProcessMetadata :: Database -> Process -> ProcessMetadata

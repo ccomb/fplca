@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module ACV.Query where
 
@@ -10,6 +11,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Maybe (mapMaybe)
 import Data.List (sortOn)
+import GHC.Generics (Generic)
 
 -- | Construction d'index vides
 emptyIndexes :: Indexes
@@ -304,3 +306,65 @@ findMostUsedFlows db limit =
             ]
         sorted = sortOn (negate . snd) usageCounts
     in take limit sorted
+
+-- | Recherche de flux par synonymes
+-- | Trouve tous les flux qui correspondent au texte de recherche (nom ou synonyme)
+findFlowsBySynonym :: Database -> Text -> [Flow]
+findFlowsBySynonym db searchText = 
+    [ flow 
+    | flow <- M.elems (dbFlows db)
+    , matchesFlowOrSynonym searchText flow
+    ]
+
+-- | Trouve tous les flux qui ont des synonymes dans une langue donnée
+findFlowsWithSynonymsInLanguage :: Database -> Text -> [Flow]
+findFlowsWithSynonymsInLanguage db lang = 
+    [ flow 
+    | flow <- M.elems (dbFlows db)
+    , not . null $ getSynonymsForLanguage flow lang
+    ]
+
+-- | Recherche de flux par synonyme dans une langue spécifique
+findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
+findFlowsBySynonymInLanguage db lang searchText = 
+    let lowerSearch = T.toLower searchText
+    in [ flow 
+       | flow <- M.elems (dbFlows db)
+       , let synonyms = getSynonymsForLanguage flow lang
+       , let lowerSynonyms = map T.toLower synonyms
+       , lowerSearch `elem` lowerSynonyms
+       ]
+
+-- | Obtient toutes les langues disponibles dans les synonymes
+getAvailableLanguages :: Database -> [Text]
+getAvailableLanguages db = 
+    S.toList $ S.fromList $ concat
+        [ M.keys (flowSynonyms flow)
+        | flow <- M.elems (dbFlows db)
+        ]
+
+-- | Statistiques sur les synonymes
+data SynonymStats = SynonymStats
+    { ssFlowsWithSynonyms :: Int                -- Nombre de flux avec synonymes
+    , ssAveragePerFlow :: Double                -- Nombre moyen de synonymes par flux
+    , ssLanguageStats :: [(Text, Int)]          -- Statistiques par langue
+    , ssTotalSynonyms :: Int                    -- Total des synonymes
+    } deriving (Eq, Show, Generic)
+
+-- | Calcule les statistiques des synonymes
+getSynonymStats :: Database -> SynonymStats
+getSynonymStats db = 
+    let flows = M.elems (dbFlows db)
+        flowsWithSynonyms = [flow | flow <- flows, not . M.null $ flowSynonyms flow]
+        totalSynonyms = sum [length syns | flow <- flows, syns <- M.elems (flowSynonyms flow)]
+        languageStats = 
+            [ (lang, length [flow | flow <- flows, M.member lang (flowSynonyms flow)])
+            | lang <- getAvailableLanguages db
+            ]
+        avgSynonyms = if null flows then 0 else fromIntegral totalSynonyms / fromIntegral (length flows)
+    in SynonymStats
+        { ssFlowsWithSynonyms = length flowsWithSynonyms
+        , ssAveragePerFlow = avgSynonyms
+        , ssLanguageStats = languageStats
+        , ssTotalSynonyms = totalSynonyms
+        }

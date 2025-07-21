@@ -7,6 +7,7 @@ module ACV.Types where
 import Control.DeepSeq (NFData)
 import Data.Binary (Binary)
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.Set as S
 import GHC.Generics (Generic, Generic1)
@@ -35,6 +36,7 @@ data Flow = Flow
     , flowCategory :: !Text -- Catégorie (e.g. air, eau, ressource)
     , flowUnitId :: !UUID -- Référence vers l'unité par défaut dans UnitDB
     , flowType :: !FlowType -- Type de flux
+    , flowSynonyms :: !(M.Map Text [Text]) -- Synonymes par langue (e.g. "en" -> ["BaP", "benzo[a]pyrene"])
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
@@ -125,6 +127,30 @@ getUnitSymbolForFlow unitDB flow =
     case getUnitForFlow unitDB flow of
         Just unit -> unitSymbol unit
         Nothing -> "?"
+
+-- | Get synonyms for a specific language
+getSynonymsForLanguage :: Flow -> Text -> [Text]
+getSynonymsForLanguage flow lang = 
+    case M.lookup lang (flowSynonyms flow) of
+        Nothing -> []
+        Just syns -> syns
+
+-- | Get all synonyms across all languages
+getAllSynonyms :: Flow -> [Text]
+getAllSynonyms flow = concat $ M.elems (flowSynonyms flow)
+
+-- | Add synonym to a flow for a specific language
+addSynonym :: Text -> Text -> Flow -> Flow
+addSynonym lang synonym flow = flow
+    { flowSynonyms = M.insertWith (++) lang [synonym] (flowSynonyms flow) }
+
+-- | Check if text matches flow name or any synonym
+matchesFlowOrSynonym :: Text -> Flow -> Bool
+matchesFlowOrSynonym searchText flow = 
+    let lowerSearch = T.toLower searchText
+        lowerName = T.toLower (flowName flow)
+        lowerSynonyms = map T.toLower (getAllSynonyms flow)
+    in lowerSearch == lowerName || lowerSearch `elem` lowerSynonyms
 
 -- | Procédé ACV de base (activité)
 data Process = Process
