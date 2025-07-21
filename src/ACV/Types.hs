@@ -173,6 +173,13 @@ data ActivityTree
     | Node !Activity ![(Double, ActivityTree)] -- Activités et sous-activités pondérés
     deriving (Eq, Show, Generic, Binary)
 
+-- | Arbre avec détection de boucles pour export SVG
+data LoopAwareTree
+    = TreeLeaf !Activity
+    | TreeNode !Activity ![(Double, Flow, LoopAwareTree)] -- Activity + (quantity, flow, subtree)
+    | TreeLoop !UUID !Text !Int  -- Loop reference: UUID + ActivityName + Depth
+    deriving (Eq, Show, Generic, Binary)
+
 -- | Base de données des flux (dédupliquée)
 type FlowDB = M.Map UUID Flow
 

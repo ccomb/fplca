@@ -79,6 +79,7 @@ main = do
             putStrLn "    GET /api/v1/activity/{uuid}/inputs              - Get input exchanges"
             putStrLn "    GET /api/v1/activity/{uuid}/outputs             - Get output exchanges"
             putStrLn "    GET /api/v1/activity/{uuid}/reference-product   - Get reference product"
+            putStrLn "    GET /api/v1/activity/{uuid}/tree?depth={n}      - Get activity supply chain tree (JSON)"
             putStrLn ""
             putStrLn "  Flow endpoints:"
             putStrLn "    GET /api/v1/flows/{flowId}                      - Get detailed flow information"

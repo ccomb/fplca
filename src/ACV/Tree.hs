@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase) where
+module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase, buildLoopAwareTree) where
 
 import ACV.Types
 import qualified Data.Map as M
@@ -96,3 +96,38 @@ buildNode db proc =
      in if null subTrees
             then Leaf proc
             else Node proc subTrees
+
+-- | Build loop-aware tree for SVG export with maximum depth limit
+buildLoopAwareTree :: Database -> UUID -> Int -> LoopAwareTree
+buildLoopAwareTree db rootUUID maxDepth = buildLoopAwareTreeWithVisited db rootUUID S.empty 0 maxDepth
+
+-- | Helper function with visited set and depth tracking
+buildLoopAwareTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int -> LoopAwareTree
+buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth
+    -- Stop at maximum depth
+    | depth >= maxDepth = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Detect loop
+    | activityUUID `S.member` visited = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth  
+            Just activity -> TreeLoop activityUUID (activityName activity) depth
+    -- Build subtree
+    | otherwise = 
+        case M.lookup activityUUID (dbActivities db) of
+            Nothing -> TreeLoop activityUUID "Missing Activity" depth
+            Just activity ->
+                let visited' = S.insert activityUUID visited
+                    techInputs = [ ex | ex <- exchanges activity
+                                     , isTechnosphereInput (dbFlows db) ex ]
+                    children = [ (exchangeAmount ex, flow, subtree)
+                               | ex <- techInputs
+                               , Just targetUUID <- [exchangeActivityLinkId ex]
+                               , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+                               , let subtree = buildLoopAwareTreeWithVisited db targetUUID visited' (depth + 1) maxDepth
+                               ]
+                in if null children
+                   then TreeLeaf activity
+                   else TreeNode activity children
