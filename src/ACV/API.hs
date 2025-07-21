@@ -25,7 +25,10 @@ type ACVAPI = "api" :> "v1" :> (
   :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] [FlowDetail]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] [FlowDetail]
+  :<|> "search" :> "flows" :> "count" :> QueryParam "q" Text :> Get '[JSON] Int
+  :<|> "search" :> "flows" :> "count" :> QueryParam "q" Text :> QueryParam "lang" Text :> Get '[JSON] Int
   :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] [ActivitySummary]
+  :<|> "search" :> "activities" :> "count" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> Get '[JSON] Int
   :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
   :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
   )
@@ -143,7 +146,10 @@ acvServer db = getActivityInfo
          :<|> getFlowActivities
          :<|> searchFlows
          :<|> searchFlowsInLanguage
+         :<|> countFlows
+         :<|> countFlowsInLanguage
          :<|> searchActivities
+         :<|> countActivities
          :<|> getAvailableLanguagesAPI
          :<|> getSynonymStatsAPI
   where
@@ -245,6 +251,27 @@ acvServer db = getActivityInfo
           offset = maybe 0 id offsetParam -- Default offset: 0
           paginatedResults = take limit $ drop offset activitySummaries
       return paginatedResults
+    
+    -- Count flows by name or synonym
+    countFlows :: Maybe Text -> Handler Int
+    countFlows Nothing = return 0
+    countFlows (Just query) = do
+      let flows = findFlowsBySynonym db query
+      return $ length flows
+    
+    -- Count flows by synonym in specific language
+    countFlowsInLanguage :: Maybe Text -> Maybe Text -> Handler Int
+    countFlowsInLanguage Nothing _ = return 0
+    countFlowsInLanguage _ Nothing = return 0
+    countFlowsInLanguage (Just query) (Just lang) = do
+      let flows = findFlowsBySynonymInLanguage db lang query
+      return $ length flows
+    
+    -- Count activities by specific fields
+    countActivities :: Maybe Text -> Maybe Text -> Maybe Text -> Handler Int
+    countActivities nameParam geoParam productParam = do
+      let activities = findActivitiesByFields db nameParam geoParam productParam
+      return $ length activities
     
     -- Get available languages
     getAvailableLanguagesAPI :: Handler [Text]
