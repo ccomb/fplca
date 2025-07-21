@@ -1,5 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase) where
 
@@ -36,14 +36,14 @@ buildActivityTree db = go S.empty
 
 -- | Version originale pour compatibilité (ne devrait plus être utilisée)
 isTechnosphereInputOld :: Exchange -> Bool
-isTechnosphereInputOld ex = 
+isTechnosphereInputOld ex =
     -- Cette fonction ne peut plus fonctionner avec la nouvelle structure!
     -- Elle est gardée temporairement pour la compatibilité
     error "isTechnosphereInputOld: Cannot determine flow type without FlowDB access"
 
 -- | Nouvelle version optimisée avec les variants Exchange
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
-isTechnosphereInput _ ex = 
+isTechnosphereInput _ ex =
     case ex of
         TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
         BiosphereExchange _ _ _ _ -> False

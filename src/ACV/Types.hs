@@ -16,7 +16,7 @@ import Text.XML (Instruction (instructionData))
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text
 
--- | Type de flux : Technosphère (échange entre activityus) ou Biosphère (échange avec l'environnement)
+-- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
     deriving (Eq, Ord, Show, Generic, NFData, Binary)
 
@@ -170,7 +170,7 @@ data Activity = Activity
 -- | Arbre de calcul ACV (représentation récursive)
 data ActivityTree
     = Leaf !Activity
-    | Node !Activity ![(Double, ActivityTree)] -- Activityus et sous-activityus pondérés
+    | Node !Activity ![(Double, ActivityTree)] -- Activités et sous-activités pondérés
     deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données des flux (dédupliquée)
@@ -212,12 +212,16 @@ type ActivityInputIndex = M.Map UUID [Exchange] -- ActivityID -> [Input Exchange
 -- | Index des sorties par activité - sépare inputs/outputs pour recherches efficaces
 type ActivityOutputIndex = M.Map UUID [Exchange] -- ActivityID -> [Output Exchanges]
 
+-- | Index par unité de référence - permet la recherche par unité
+type ActivityUnitIndex = M.Map Text [UUID] -- Unit -> Liste des UUIDs des activités
+
 -- | Structure d'index complète pour recherches efficaces
 data Indexes = Indexes
     { -- Index au niveau activité
       idxByName :: !NameIndex -- Recherche activités par nom
     , idxByLocation :: !LocationIndex -- Recherche activités par localisation
     , idxByFlow :: !FlowIndex -- Recherche activités utilisant un flux
+    , idxByUnit :: !ActivityUnitIndex -- Recherche activités par unité de référence
     -- Index au niveau flux
     , idxFlowByCategory :: !FlowCategoryIndex -- Recherche flux par catégorie
     , idxFlowByType :: !FlowTypeIndex -- Recherche flux par type
