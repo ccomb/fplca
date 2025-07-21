@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
 
-module ACV.Tree (buildProcessTree, buildProcessTreeWithFlows, buildProcessTreeWithDatabase) where
+module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase) where
 
 import ACV.Types
 import qualified Data.Map as M
@@ -11,10 +11,10 @@ import Data.Text (Text)
 type VisitedSet = S.Set UUID
 
 -- | Version originale - fonctionne avec l'ancienne structure
-buildProcessTree :: ProcessDB -> UUID -> ProcessTree
-buildProcessTree db = go S.empty
+buildActivityTree :: ActivityDB -> UUID -> ActivityTree
+buildActivityTree db = go S.empty
   where
-    go :: VisitedSet -> UUID -> ProcessTree
+    go :: VisitedSet -> UUID -> ActivityTree
     go seen pid
         | S.member pid seen = Leaf placeholder -- Prevent infinite loop
         | otherwise =
@@ -48,23 +48,23 @@ isTechnosphereInput _ ex =
         TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
         BiosphereExchange _ _ _ _ -> False
 
--- | Dummy process to indicate recursion stop
-placeholder :: Process
-placeholder = Process "loop-detected" "Loop detected" "N/A" []
+-- | Dummy activity to indicate recursion stop
+placeholder :: Activity
+placeholder = Activity "loop-detected" "Loop detected" "N/A" []
 
 -- | Version optimisée avec FlowDB - Compatible avec SimpleDatabase et Database
-buildProcessTreeWithFlows :: SimpleDatabase -> UUID -> ProcessTree
-buildProcessTreeWithFlows (SimpleDatabase procDB flowDB _) = buildProcessTreeWithFlowDBs procDB flowDB
+buildActivityTreeWithFlows :: SimpleDatabase -> UUID -> ActivityTree
+buildActivityTreeWithFlows (SimpleDatabase procDB flowDB _) = buildActivityTreeWithFlowDBs procDB flowDB
 
 -- | Version optimisée avec Database complet (avec index)
-buildProcessTreeWithDatabase :: Database -> UUID -> ProcessTree
-buildProcessTreeWithDatabase db = buildProcessTreeWithFlowDBs (dbProcesses db) (dbFlows db)
+buildActivityTreeWithDatabase :: Database -> UUID -> ActivityTree
+buildActivityTreeWithDatabase db = buildActivityTreeWithFlowDBs (dbActivities db) (dbFlows db)
 
 -- | Version optimisée avec FlowDB - Implémentation interne
-buildProcessTreeWithFlowDBs :: ProcessDB -> FlowDB -> UUID -> ProcessTree
-buildProcessTreeWithFlowDBs procDB flowDB = go S.empty
+buildActivityTreeWithFlowDBs :: ActivityDB -> FlowDB -> UUID -> ActivityTree
+buildActivityTreeWithFlowDBs procDB flowDB = go S.empty
   where
-    go :: VisitedSet -> UUID -> ProcessTree
+    go :: VisitedSet -> UUID -> ActivityTree
     go seen pid
         | S.member pid seen = Leaf placeholder -- Prevent infinite loop
         | otherwise =
@@ -85,11 +85,11 @@ buildProcessTreeWithFlowDBs procDB flowDB = go S.empty
                             else Node proc children'
 
 -- | Fonction récursive : construit un nœud de l'arbre (version originale)
-buildNode :: ProcessDB -> Process -> ProcessTree
+buildNode :: ActivityDB -> Activity -> ActivityTree
 buildNode db proc =
     let subExchanges = [] -- filter isTechnosphereInputOld (exchanges proc) -- Désactivé car non fonctionnel
         subTrees =
-            [ (exchangeAmount ex, buildProcessTree db (exchangeFlowId ex))
+            [ (exchangeAmount ex, buildActivityTree db (exchangeFlowId ex))
             | ex <- subExchanges
             , M.member (exchangeFlowId ex) db
             ]

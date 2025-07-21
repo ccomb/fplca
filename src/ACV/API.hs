@@ -16,13 +16,13 @@ import Servant
 
 -- | API type definition - RESTful design with focused endpoints
 type ACVAPI = "api" :> "v1" :> (
-       "process" :> Capture "uuid" Text :> Get '[JSON] ProcessInfo
-  :<|> "process" :> Capture "uuid" Text :> "flows" :> Get '[JSON] [FlowSummary]
-  :<|> "process" :> Capture "uuid" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
-  :<|> "process" :> Capture "uuid" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
-  :<|> "process" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
+       "activity" :> Capture "uuid" Text :> Get '[JSON] ActivityInfo
+  :<|> "activity" :> Capture "uuid" Text :> "flows" :> Get '[JSON] [FlowSummary]
+  :<|> "activity" :> Capture "uuid" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
+  :<|> "activity" :> Capture "uuid" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
+  :<|> "activity" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
   :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
-  :<|> "flows" :> Capture "flowId" Text :> "processes" :> Get '[JSON] [ProcessSummary]
+  :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> Get '[JSON] [FlowDetail]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> Get '[JSON] [FlowDetail]
   :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
@@ -35,33 +35,33 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuUnitName :: Text               -- Unit name for the exchange
     } deriving (Generic, Show)
 
--- | Process information optimized for API responses
-data ProcessForAPI = ProcessForAPI
+-- | Activity information optimized for API responses
+data ActivityForAPI = ActivityForAPI
     { pfaId :: UUID
     , pfaName :: Text
     , pfaLocation :: Text
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     } deriving (Generic, Show)
 
--- | Streamlined process information - core data only
-data ProcessInfo = ProcessInfo
-    { piProcess :: ProcessForAPI        -- Enhanced process with unit names
-    , piMetadata :: ProcessMetadata     -- Extended metadata
-    , piStatistics :: ProcessStats      -- Usage statistics
-    , piLinks :: ProcessLinks           -- Links to sub-resources
+-- | Streamlined activity information - core data only
+data ActivityInfo = ActivityInfo
+    { piActivity :: ActivityForAPI        -- Enhanced activity with unit names
+    , piMetadata :: ActivityMetadata     -- Extended metadata
+    , piStatistics :: ActivityStats      -- Usage statistics
+    , piLinks :: ActivityLinks           -- Links to sub-resources
     } deriving (Generic, Show)
 
--- | Extended process metadata
-data ProcessMetadata = ProcessMetadata
+-- | Extended activity metadata
+data ActivityMetadata = ActivityMetadata
     { pmTotalFlows :: Int              -- Number of unique flows used
     , pmTechnosphereInputs :: Int      -- Count of technosphere inputs
     , pmBiosphereExchanges :: Int      -- Count of biosphere exchanges  
-    , pmHasReferenceProduct :: Bool    -- Whether process has reference product
+    , pmHasReferenceProduct :: Bool    -- Whether activity has reference product
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     } deriving (Generic, Show)
 
 -- | Links to related resources
-data ProcessLinks = ProcessLinks
+data ActivityLinks = ActivityLinks
     { plFlowsUrl :: Text              -- URL to flows endpoint
     , plInputsUrl :: Text             -- URL to inputs endpoint  
     , plOutputsUrl :: Text            -- URL to outputs endpoint
@@ -72,11 +72,11 @@ data ProcessLinks = ProcessLinks
 data FlowSummary = FlowSummary
     { fsFlow :: Flow                  -- Core flow data
     , fsUnitName :: Text              -- Unit name for the flow
-    , fsUsageCount :: Int             -- How many processes use this flow
-    , fsRole :: FlowRole              -- Role in this specific process
+    , fsUsageCount :: Int             -- How many activities use this flow
+    , fsRole :: FlowRole              -- Role in this specific activity
     } deriving (Generic, Show)
 
--- | Role of a flow in a specific process context
+-- | Role of a flow in a specific activity context
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
     deriving (Eq, Show, Generic)
 
@@ -84,28 +84,28 @@ data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
 data FlowDetail = FlowDetail
     { fdFlow :: Flow
     , fdUnitName :: Text      -- Unit name for the flow
-    , fdUsageCount :: Int     -- How many processes use this flow
+    , fdUsageCount :: Int     -- How many activities use this flow
     } deriving (Generic, Show)
 
--- | Exchange with flow, unit, and target process information
+-- | Exchange with flow, unit, and target activity information
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
     , edFlow :: Flow
     , edFlowUnitName :: Text                   -- Unit name for the flow's default unit
     , edUnit :: Unit                           -- Unit information for the exchange
     , edExchangeUnitName :: Text               -- Unit name for the exchange's specific unit
-    , edTargetProcess :: Maybe ProcessSummary  -- Target process for technosphere inputs
+    , edTargetActivity :: Maybe ActivitySummary  -- Target activity for technosphere inputs
     } deriving (Generic, Show)
 
--- | Minimal process information for navigation
-data ProcessSummary = ProcessSummary
+-- | Minimal activity information for navigation
+data ActivitySummary = ActivitySummary
     { prsId :: UUID
     , prsName :: Text
     , prsLocation :: Text
     } deriving (Generic, Show)
 
--- | Process statistics
-data ProcessStats = ProcessStats
+-- | Activity statistics
+data ActivityStats = ActivityStats
     { psInputCount :: Int
     , psOutputCount :: Int
     , psTotalExchanges :: Int
@@ -113,18 +113,18 @@ data ProcessStats = ProcessStats
     } deriving (Generic, Show)
 
 -- JSON instances
-instance ToJSON ProcessInfo
-instance ToJSON ProcessForAPI
+instance ToJSON ActivityInfo
+instance ToJSON ActivityForAPI
 instance ToJSON ExchangeWithUnit
-instance ToJSON ProcessMetadata
-instance ToJSON ProcessLinks
+instance ToJSON ActivityMetadata
+instance ToJSON ActivityLinks
 instance ToJSON FlowSummary
 instance ToJSON FlowRole
 instance ToJSON FlowDetail  
 instance ToJSON ExchangeDetail
-instance ToJSON ProcessStats
-instance ToJSON ProcessSummary
-instance ToJSON Process
+instance ToJSON ActivityStats
+instance ToJSON ActivitySummary
+instance ToJSON Activity
 instance ToJSON Exchange
 instance ToJSON Flow
 instance ToJSON FlowType
@@ -133,64 +133,64 @@ instance ToJSON SynonymStats
 
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
-acvServer db = getProcessInfo
-         :<|> getProcessFlows  
-         :<|> getProcessInputs
-         :<|> getProcessOutputs
-         :<|> getProcessReferenceProduct
+acvServer db = getActivityInfo
+         :<|> getActivityFlows  
+         :<|> getActivityInputs
+         :<|> getActivityOutputs
+         :<|> getActivityReferenceProduct
          :<|> getFlowDetail
-         :<|> getFlowProcesses
+         :<|> getFlowActivities
          :<|> searchFlows
          :<|> searchFlowsInLanguage
          :<|> getAvailableLanguagesAPI
          :<|> getSynonymStatsAPI
   where
-    -- Core process endpoint - streamlined data
-    getProcessInfo :: Text -> Handler ProcessInfo
-    getProcessInfo uuid = do
-      case M.lookup uuid (dbProcesses db) of
-        Nothing -> throwError err404 { errBody = "Process not found" }
-        Just process -> do
-          let processForAPI = convertProcessForAPI db process
-          let metadata = calculateProcessMetadata db process
-          let stats = calculateProcessStats process
-          let links = generateProcessLinks uuid
+    -- Core activity endpoint - streamlined data
+    getActivityInfo :: Text -> Handler ActivityInfo
+    getActivityInfo uuid = do
+      case M.lookup uuid (dbActivities db) of
+        Nothing -> throwError err404 { errBody = "Activity not found" }
+        Just activity -> do
+          let activityForAPI = convertActivityForAPI db activity
+          let metadata = calculateActivityMetadata db activity
+          let stats = calculateActivityStats activity
+          let links = generateActivityLinks uuid
           
-          return $ ProcessInfo
-            { piProcess = processForAPI
+          return $ ActivityInfo
+            { piActivity = activityForAPI
             , piMetadata = metadata  
             , piStatistics = stats
             , piLinks = links
             }
     
-    -- Process flows sub-resource
-    getProcessFlows :: Text -> Handler [FlowSummary]
-    getProcessFlows uuid = do
-      case M.lookup uuid (dbProcesses db) of
-        Nothing -> throwError err404 { errBody = "Process not found" }
-        Just process -> return $ getProcessFlowSummaries db process
+    -- Activity flows sub-resource
+    getActivityFlows :: Text -> Handler [FlowSummary]
+    getActivityFlows uuid = do
+      case M.lookup uuid (dbActivities db) of
+        Nothing -> throwError err404 { errBody = "Activity not found" }
+        Just activity -> return $ getActivityFlowSummaries db activity
     
-    -- Process inputs sub-resource  
-    getProcessInputs :: Text -> Handler [ExchangeDetail]
-    getProcessInputs uuid = do
-      case M.lookup uuid (dbProcesses db) of
-        Nothing -> throwError err404 { errBody = "Process not found" }
-        Just process -> return $ getProcessInputDetails db process
+    -- Activity inputs sub-resource  
+    getActivityInputs :: Text -> Handler [ExchangeDetail]
+    getActivityInputs uuid = do
+      case M.lookup uuid (dbActivities db) of
+        Nothing -> throwError err404 { errBody = "Activity not found" }
+        Just activity -> return $ getActivityInputDetails db activity
     
-    -- Process outputs sub-resource
-    getProcessOutputs :: Text -> Handler [ExchangeDetail] 
-    getProcessOutputs uuid = do
-      case M.lookup uuid (dbProcesses db) of
-        Nothing -> throwError err404 { errBody = "Process not found" }
-        Just process -> return $ getProcessOutputDetails db process
+    -- Activity outputs sub-resource
+    getActivityOutputs :: Text -> Handler [ExchangeDetail] 
+    getActivityOutputs uuid = do
+      case M.lookup uuid (dbActivities db) of
+        Nothing -> throwError err404 { errBody = "Activity not found" }
+        Just activity -> return $ getActivityOutputDetails db activity
     
-    -- Process reference product sub-resource
-    getProcessReferenceProduct :: Text -> Handler FlowDetail
-    getProcessReferenceProduct uuid = do
-      case M.lookup uuid (dbProcesses db) of
-        Nothing -> throwError err404 { errBody = "Process not found" }
-        Just process -> do
-          case getProcessReferenceProductDetail db process of
+    -- Activity reference product sub-resource
+    getActivityReferenceProduct :: Text -> Handler FlowDetail
+    getActivityReferenceProduct uuid = do
+      case M.lookup uuid (dbActivities db) of
+        Nothing -> throwError err404 { errBody = "Activity not found" }
+        Just activity -> do
+          case getActivityReferenceProductDetail db activity of
             Nothing -> throwError err404 { errBody = "No reference product found" }
             Just refProduct -> return refProduct
     
@@ -204,12 +204,12 @@ acvServer db = getProcessInfo
           let unitName = getUnitNameForFlow (dbUnits db) flow
           return $ FlowDetail flow unitName usageCount
     
-    -- Processes using a specific flow
-    getFlowProcesses :: Text -> Handler [ProcessSummary]
-    getFlowProcesses flowId = do
+    -- Activities using a specific flow
+    getFlowActivities :: Text -> Handler [ActivitySummary]
+    getFlowActivities flowId = do
       case M.lookup flowId (dbFlows db) of
         Nothing -> throwError err404 { errBody = "Flow not found" }
-        Just _ -> return $ getProcessesUsingFlow db flowId
+        Just _ -> return $ getActivitiesUsingFlow db flowId
     
     -- Search flows by name or synonym
     searchFlows :: Maybe Text -> Handler [FlowDetail]
@@ -234,17 +234,17 @@ acvServer db = getProcessInfo
     getSynonymStatsAPI :: Handler SynonymStats
     getSynonymStatsAPI = return $ getSynonymStats db
 
--- | Calculate extended metadata for a process  
-calculateProcessMetadata :: Database -> Process -> ProcessMetadata
-calculateProcessMetadata db process =
-    let allExchanges = exchanges process
+-- | Calculate extended metadata for a activity  
+calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
+calculateActivityMetadata db activity =
+    let allExchanges = exchanges activity
         uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
         techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
         bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
         refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
                        [] -> Nothing
                        (ex:_) -> Just (exchangeFlowId ex)
-    in ProcessMetadata
+    in ActivityMetadata
         { pmTotalFlows = uniqueFlows
         , pmTechnosphereInputs = techInputs  
         , pmBiosphereExchanges = bioExchanges
@@ -252,20 +252,20 @@ calculateProcessMetadata db process =
         , pmReferenceProductFlow = refProduct
         }
 
--- | Generate links to sub-resources for a process
-generateProcessLinks :: Text -> ProcessLinks
-generateProcessLinks uuid = ProcessLinks
-    { plFlowsUrl = "/api/v1/process/" <> uuid <> "/flows"
-    , plInputsUrl = "/api/v1/process/" <> uuid <> "/inputs"
-    , plOutputsUrl = "/api/v1/process/" <> uuid <> "/outputs"  
-    , plReferenceProductUrl = Just ("/api/v1/process/" <> uuid <> "/reference-product")
+-- | Generate links to sub-resources for a activity
+generateActivityLinks :: Text -> ActivityLinks
+generateActivityLinks uuid = ActivityLinks
+    { plFlowsUrl = "/api/v1/activity/" <> uuid <> "/flows"
+    , plInputsUrl = "/api/v1/activity/" <> uuid <> "/inputs"
+    , plOutputsUrl = "/api/v1/activity/" <> uuid <> "/outputs"  
+    , plReferenceProductUrl = Just ("/api/v1/activity/" <> uuid <> "/reference-product")
     }
 
--- | Get flows used by a process as lightweight summaries
-getProcessFlowSummaries :: Database -> Process -> [FlowSummary]
-getProcessFlowSummaries db process =
+-- | Get flows used by a activity as lightweight summaries
+getActivityFlowSummaries :: Database -> Activity -> [FlowSummary]
+getActivityFlowSummaries db activity =
     [ FlowSummary flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
-    | exchange <- exchanges process
+    | exchange <- exchanges activity
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     ]
   where
@@ -275,9 +275,9 @@ getProcessFlowSummaries db process =
         | otherwise = OutputFlow
 
 -- | Get reference product as FlowDetail (if exists)
-getProcessReferenceProductDetail :: Database -> Process -> Maybe FlowDetail
-getProcessReferenceProductDetail db process = do
-    refExchange <- case filter exchangeIsReference (exchanges process) of
+getActivityReferenceProductDetail :: Database -> Activity -> Maybe FlowDetail
+getActivityReferenceProductDetail db activity = do
+    refExchange <- case filter exchangeIsReference (exchanges activity) of
                      [] -> Nothing
                      (ex:_) -> Just ex
     flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
@@ -285,80 +285,80 @@ getProcessReferenceProductDetail db process = do
     let unitName = getUnitNameForFlow (dbUnits db) flow
     return $ FlowDetail flow unitName usageCount
 
--- | Get processes that use a specific flow as ProcessSummary list
-getProcessesUsingFlow :: Database -> UUID -> [ProcessSummary]  
-getProcessesUsingFlow db flowUUID =
+-- | Get activities that use a specific flow as ActivitySummary list
+getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]  
+getActivitiesUsingFlow db flowUUID =
     case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
         Nothing -> []
-        Just processUUIDs -> 
-            [ ProcessSummary (processId proc) (processName proc) (processLocation proc)
-            | procUUID <- processUUIDs
-            , Just proc <- [M.lookup procUUID (dbProcesses db)]
+        Just activityUUIDs -> 
+            [ ActivitySummary (activityId proc) (activityName proc) (activityLocation proc)
+            | procUUID <- activityUUIDs
+            , Just proc <- [M.lookup procUUID (dbActivities db)]
             ]
 
--- | Get all flows used by a process with usage statistics (legacy function - kept for compatibility)
-getProcessFlows :: Database -> Process -> [FlowDetail]
-getProcessFlows db process = 
+-- | Get all flows used by a activity with usage statistics (legacy function - kept for compatibility)
+getActivityFlows :: Database -> Activity -> [FlowDetail]
+getActivityFlows db activity = 
     [ FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow))
-    | exchange <- exchanges process
+    | exchange <- exchanges activity
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     ]
 
--- | Get flow usage count across all processes
+-- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int
 getFlowUsageCount db flowUUID = 
     case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
         Nothing -> 0
-        Just processUUIDs -> length processUUIDs
+        Just activityUUIDs -> length activityUUIDs
 
 -- | Get detailed input exchanges
-getProcessInputDetails :: Database -> Process -> [ExchangeDetail]
-getProcessInputDetails db process =
-    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetProcess db exchange)
-    | exchange <- exchanges process
+getActivityInputDetails :: Database -> Activity -> [ExchangeDetail]
+getActivityInputDetails db activity =
+    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetActivity db exchange)
+    | exchange <- exchanges activity
     , exchangeIsInput exchange
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
     ]
 
 -- | Get detailed output exchanges  
-getProcessOutputDetails :: Database -> Process -> [ExchangeDetail]
-getProcessOutputDetails db process =
-    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetProcess db exchange)
-    | exchange <- exchanges process
+getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
+getActivityOutputDetails db activity =
+    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetActivity db exchange)
+    | exchange <- exchanges activity
     , not (exchangeIsInput exchange)
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
     ]
 
 
--- | Get target process for technosphere navigation
-getTargetProcess :: Database -> Exchange -> Maybe ProcessSummary
-getTargetProcess db exchange = do
+-- | Get target activity for technosphere navigation
+getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
+getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
-    targetProcess <- M.lookup targetId (dbProcesses db)
-    return $ ProcessSummary
-        { prsId = processId targetProcess
-        , prsName = processName targetProcess
-        , prsLocation = processLocation targetProcess
+    targetActivity <- M.lookup targetId (dbActivities db)
+    return $ ActivitySummary
+        { prsId = activityId targetActivity
+        , prsName = activityName targetActivity
+        , prsLocation = activityLocation targetActivity
         }
 
--- | Calculate process statistics
-calculateProcessStats :: Process -> ProcessStats
-calculateProcessStats process = ProcessStats
-    { psInputCount = length $ filter exchangeIsInput (exchanges process)
-    , psOutputCount = length $ filter (not . exchangeIsInput) (exchanges process)  
-    , psTotalExchanges = length (exchanges process)
-    , psLocation = processLocation process
+-- | Calculate activity statistics
+calculateActivityStats :: Activity -> ActivityStats
+calculateActivityStats activity = ActivityStats
+    { psInputCount = length $ filter exchangeIsInput (exchanges activity)
+    , psOutputCount = length $ filter (not . exchangeIsInput) (exchanges activity)  
+    , psTotalExchanges = length (exchanges activity)
+    , psLocation = activityLocation activity
     }
 
--- | Convert Process to ProcessForAPI with unit names
-convertProcessForAPI :: Database -> Process -> ProcessForAPI
-convertProcessForAPI db process = ProcessForAPI
-    { pfaId = processId process
-    , pfaName = processName process
-    , pfaLocation = processLocation process
-    , pfaExchanges = map convertExchangeWithUnit (exchanges process)
+-- | Convert Activity to ActivityForAPI with unit names
+convertActivityForAPI :: Database -> Activity -> ActivityForAPI
+convertActivityForAPI db activity = ActivityForAPI
+    { pfaId = activityId activity
+    , pfaName = activityName activity
+    , pfaLocation = activityLocation activity
+    , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
     }
   where
     convertExchangeWithUnit exchange = ExchangeWithUnit

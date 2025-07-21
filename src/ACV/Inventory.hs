@@ -7,12 +7,12 @@ import Data.Maybe (mapMaybe)
 -- | Un inventaire est une agrégation de flux biosphère : UUID -> quantité
 type Inventory = M.Map UUID Double
 
--- | Calcule l'inventaire global à partir de l'arbre de procédés - Version optimisée avec FlowDB
-computeInventoryWithFlows :: FlowDB -> ProcessTree -> Inventory
+-- | Calcule l'inventaire global à partir de l'arbre de activités - Version optimisée avec FlowDB
+computeInventoryWithFlows :: FlowDB -> ActivityTree -> Inventory
 computeInventoryWithFlows flowDB tree = computeInventoryWithWeightAndFlows flowDB 1.0 tree
 
 -- | Calcule l'inventaire en tenant compte d'un facteur de pondération - Version optimisée avec FlowDB
-computeInventoryWithWeightAndFlows :: FlowDB -> Double -> ProcessTree -> Inventory
+computeInventoryWithWeightAndFlows :: FlowDB -> Double -> ActivityTree -> Inventory
 computeInventoryWithWeightAndFlows flowDB weight (Leaf proc) =
   biosphereInventoryWithFlows flowDB weight proc
 computeInventoryWithWeightAndFlows flowDB weight (Node proc children) =
@@ -22,19 +22,19 @@ computeInventoryWithWeightAndFlows flowDB weight (Node proc children) =
                      ]
   in foldl (M.unionWith (+)) localInv childrenInvs
 
--- | Calcule l'inventaire global à partir de l'arbre de procédés (version originale)
-computeInventory :: ProcessTree -> Inventory
+-- | Calcule l'inventaire global à partir de l'arbre de activités (version originale)
+computeInventory :: ActivityTree -> Inventory
 computeInventory = error "computeInventory: Use computeInventoryWithFlows instead"
 
 -- | Calcule l'inventaire en tenant compte d'un facteur de pondération (version originale)
-computeInventoryWithWeight :: Double -> ProcessTree -> Inventory
+computeInventoryWithWeight :: Double -> ActivityTree -> Inventory
 computeInventoryWithWeight weight (Leaf proc) =
   error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
 computeInventoryWithWeight weight (Node proc children) =
   error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
 
--- | Extrait les flux biosphère d'un procédé et les pondère - Version optimisée avec FlowDB
-biosphereInventoryWithFlows :: FlowDB -> Double -> Process -> Inventory
+-- | Extrait les flux biosphère d'un activité et les pondère - Version optimisée avec FlowDB
+biosphereInventoryWithFlows :: FlowDB -> Double -> Activity -> Inventory
 biosphereInventoryWithFlows flowDB w proc =
   M.fromListWith (+)
     [ (exchangeFlowId ex, w * exchangeAmount ex)
@@ -49,8 +49,8 @@ isBiosphereFlow _ ex =
         BiosphereExchange _ _ _ _ -> True
         TechnosphereExchange _ _ _ _ _ _ -> False
 
--- | Extrait les flux biosphère d'un procédé et les pondère (version originale)
-biosphereInventory :: Double -> Process -> Inventory
+-- | Extrait les flux biosphère d'un activité et les pondère (version originale)
+biosphereInventory :: Double -> Activity -> Inventory
 biosphereInventory w proc =
   error "biosphereInventory: Use biosphereInventoryWithFlows instead"
 

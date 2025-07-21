@@ -6,17 +6,17 @@ module ACV.Types where
 
 import Control.DeepSeq (NFData)
 import Data.Binary (Binary)
-import Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text
 
--- | Type de flux : Technosphère (échange entre processus) ou Biosphère (échange avec l'environnement)
+-- | Type de flux : Technosphère (échange entre activityus) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
     deriving (Eq, Ord, Show, Generic, NFData, Binary)
 
@@ -40,21 +40,21 @@ data Flow = Flow
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
--- | Échange dans un procédé - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
-data Exchange 
+-- | Échange dans un activité - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
+data Exchange
     = TechnosphereExchange
-        { techFlowId :: !UUID           -- Flow being exchanged
-        , techAmount :: !Double         -- Quantity exchanged
-        , techUnitId :: !UUID           -- Unit of measurement
-        , techIsInput :: !Bool          -- True if input
-        , techIsReference :: !Bool      -- True if reference product (main output)
-        , techActivityLinkId :: !UUID   -- Target process ID (always present for technosphere)
+        { techFlowId :: !UUID -- Flow being exchanged
+        , techAmount :: !Double -- Quantity exchanged
+        , techUnitId :: !UUID -- Unit of measurement
+        , techIsInput :: !Bool -- True if input
+        , techIsReference :: !Bool -- True if reference product (main output)
+        , techActivityLinkId :: !UUID -- Target activity ID (always present for technosphere)
         }
     | BiosphereExchange
-        { bioFlowId :: !UUID            -- Flow being exchanged
-        , bioAmount :: !Double          -- Quantity exchanged
-        , bioUnitId :: !UUID            -- Unit of measurement  
-        , bioIsInput :: !Bool           -- True for resource extraction, False for emissions
+        { bioFlowId :: !UUID -- Flow being exchanged
+        , bioAmount :: !Double -- Quantity exchanged
+        , bioUnitId :: !UUID -- Unit of measurement
+        , bioIsInput :: !Bool -- True for resource extraction, False for emissions
         }
     deriving (Eq, Show, Generic, NFData, Binary)
 
@@ -77,7 +77,7 @@ exchangeIsInput (BiosphereExchange _ _ _ isInput) = isInput
 
 exchangeIsReference :: Exchange -> Bool
 exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _) = isRef
-exchangeIsReference (BiosphereExchange _ _ _ _) = False  -- Biosphere exchanges are never reference products
+exchangeIsReference (BiosphereExchange _ _ _ _) = False -- Biosphere exchanges are never reference products
 
 exchangeActivityLinkId :: Exchange -> Maybe UUID
 exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId) = Just linkId
@@ -88,7 +88,7 @@ isTechnosphereExchange :: Exchange -> Bool
 isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _) = True
 isTechnosphereExchange (BiosphereExchange _ _ _ _) = False
 
--- | Check if exchange is biosphere  
+-- | Check if exchange is biosphere
 isBiosphereExchange :: Exchange -> Bool
 isBiosphereExchange = not . isTechnosphereExchange
 
@@ -98,12 +98,12 @@ getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB
 
 -- | Get unit name for an exchange (fallback to "unknown" if not found)
 getUnitNameForExchange :: UnitDB -> Exchange -> Text
-getUnitNameForExchange unitDB exchange = 
+getUnitNameForExchange unitDB exchange =
     case getUnitForExchange unitDB exchange of
         Just unit -> unitName unit
         Nothing -> "unknown"
 
--- | Get unit symbol for an exchange (fallback to "?" if not found)  
+-- | Get unit symbol for an exchange (fallback to "?" if not found)
 getUnitSymbolForExchange :: UnitDB -> Exchange -> Text
 getUnitSymbolForExchange unitDB exchange =
     case getUnitForExchange unitDB exchange of
@@ -116,7 +116,7 @@ getUnitForFlow unitDB flow = M.lookup (flowUnitId flow) unitDB
 
 -- | Get unit name for a flow (fallback to "unknown" if not found)
 getUnitNameForFlow :: UnitDB -> Flow -> Text
-getUnitNameForFlow unitDB flow = 
+getUnitNameForFlow unitDB flow =
     case getUnitForFlow unitDB flow of
         Just unit -> unitName unit
         Nothing -> "unknown"
@@ -130,7 +130,7 @@ getUnitSymbolForFlow unitDB flow =
 
 -- | Get synonyms for a specific language
 getSynonymsForLanguage :: Flow -> Text -> [Text]
-getSynonymsForLanguage flow lang = 
+getSynonymsForLanguage flow lang =
     case M.lookup lang (flowSynonyms flow) of
         Nothing -> []
         Just syns -> S.toList syns
@@ -141,30 +141,32 @@ getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
 
 -- | Add synonym to a flow for a specific language
 addSynonym :: Text -> Text -> Flow -> Flow
-addSynonym lang synonym flow = flow
-    { flowSynonyms = M.insertWith S.union lang (S.singleton synonym) (flowSynonyms flow) }
+addSynonym lang synonym flow =
+    flow
+        { flowSynonyms = M.insertWith S.union lang (S.singleton synonym) (flowSynonyms flow)
+        }
 
 -- | Check if text matches flow name or any synonym
 matchesFlowOrSynonym :: Text -> Flow -> Bool
-matchesFlowOrSynonym searchText flow = 
+matchesFlowOrSynonym searchText flow =
     let lowerSearch = T.toLower searchText
         lowerName = T.toLower (flowName flow)
         lowerSynonyms = map T.toLower (getAllSynonyms flow)
-    in lowerSearch == lowerName || lowerSearch `elem` lowerSynonyms
+     in lowerSearch == lowerName || lowerSearch `elem` lowerSynonyms
 
--- | Procédé ACV de base (activité)
-data Process = Process
-    { processId :: !UUID -- Identifiant unique du procédé
-    , processName :: !Text -- Nom
-    , processLocation :: !Text -- Code de localisation (ex: FR, RER)
+-- | Activité ACV de base (activité)
+data Activity = Activity
+    { activityId :: !UUID -- Identifiant unique du activité
+    , activityName :: !Text -- Nom
+    , activityLocation :: !Text -- Code de localisation (ex: FR, RER)
     , exchanges :: ![Exchange] -- Liste des échanges
     }
     deriving (Eq, Show, Generic, NFData, Binary)
 
 -- | Arbre de calcul ACV (représentation récursive)
-data ProcessTree
-    = Leaf !Process
-    | Node !Process ![(Double, ProcessTree)] -- Processus et sous-processus pondérés
+data ActivityTree
+    = Leaf !Activity
+    | Node !Activity ![(Double, ActivityTree)] -- Activityus et sous-activityus pondérés
     deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données des flux (dédupliquée)
@@ -173,60 +175,60 @@ type FlowDB = M.Map UUID Flow
 -- | Base de données des unités (dédupliquée)
 type UnitDB = M.Map UUID Unit
 
--- | Base de données des procédés
-type ProcessDB = M.Map UUID Process
+-- | Base de données des activités
+type ActivityDB = M.Map UUID Activity
 
--- | Index par nom de procédé - permet la recherche par nom (insensible à la casse)
-type NameIndex = M.Map Text [UUID]  -- Nom -> Liste des UUIDs des procédés
+-- | Index par nom de activité - permet la recherche par nom (insensible à la casse)
+type NameIndex = M.Map Text [UUID] -- Nom -> Liste des UUIDs des activités
 
 -- | Index par localisation - permet la recherche par zone géographique
-type LocationIndex = M.Map Text [UUID]  -- Location -> Liste des UUIDs des procédés
+type LocationIndex = M.Map Text [UUID] -- Location -> Liste des UUIDs des activités
 
--- | Index par flux - permet de trouver quels procédés utilisent un flux donné
-type FlowIndex = M.Map UUID [UUID]  -- FlowID -> Liste des UUIDs des procédés qui l'utilisent
+-- | Index par flux - permet de trouver quels activités utilisent un flux donné
+type FlowIndex = M.Map UUID [UUID] -- FlowID -> Liste des UUIDs des activités qui l'utilisent
 
 -- | Index par catégorie de flux - permet la recherche par type de flux
-type FlowCategoryIndex = M.Map Text [UUID]  -- Category -> Liste des UUIDs des flux
+type FlowCategoryIndex = M.Map Text [UUID] -- Category -> Liste des UUIDs des flux
 
 -- | Index par type de flux - sépare Technosphere/Biosphere
-type FlowTypeIndex = M.Map FlowType [UUID]  -- FlowType -> Liste des UUIDs des flux
+type FlowTypeIndex = M.Map FlowType [UUID] -- FlowType -> Liste des UUIDs des flux
 
 -- | Index des échanges par flux - permet de trouver tous les échanges utilisant un flux
-type ExchangeIndex = M.Map UUID [(UUID, Exchange)]  -- FlowID -> [(ProcessID, Exchange)]
+type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]
 
--- | Index des échanges par procédé - accès rapide aux échanges d'un procédé
-type ProcessExchangeIndex = M.Map UUID [Exchange]  -- ProcessID -> [Exchange]
+-- | Index des échanges par activité - accès rapide aux échanges d'un activité
+type ActivityExchangeIndex = M.Map UUID [Exchange] -- ActivityID -> [Exchange]
 
 -- | Index des produits de référence - tous les outputs principaux
-type ReferenceProductIndex = M.Map UUID (UUID, Exchange)  -- FlowID -> (ProcessID, Exchange)
+type ReferenceProductIndex = M.Map UUID (UUID, Exchange) -- FlowID -> (ActivityID, Exchange)
 
--- | Index des entrées par procédé - sépare inputs/outputs pour recherches efficaces
-type ProcessInputIndex = M.Map UUID [Exchange]  -- ProcessID -> [Input Exchanges]
+-- | Index des entrées par activité - sépare inputs/outputs pour recherches efficaces
+type ActivityInputIndex = M.Map UUID [Exchange] -- ActivityID -> [Input Exchanges]
 
--- | Index des sorties par procédé - sépare inputs/outputs pour recherches efficaces
-type ProcessOutputIndex = M.Map UUID [Exchange]  -- ProcessID -> [Output Exchanges]
+-- | Index des sorties par activité - sépare inputs/outputs pour recherches efficaces
+type ActivityOutputIndex = M.Map UUID [Exchange] -- ActivityID -> [Output Exchanges]
 
 -- | Structure d'index complète pour recherches efficaces
 data Indexes = Indexes
-    { -- Index au niveau procédé
-      idxByName :: !NameIndex           -- Recherche procédés par nom
-    , idxByLocation :: !LocationIndex   -- Recherche procédés par localisation
-    , idxByFlow :: !FlowIndex           -- Recherche procédés utilisant un flux
-      -- Index au niveau flux
-    , idxFlowByCategory :: !FlowCategoryIndex  -- Recherche flux par catégorie
-    , idxFlowByType :: !FlowTypeIndex   -- Recherche flux par type
-      -- Index au niveau échange
-    , idxExchangeByFlow :: !ExchangeIndex       -- Tous les échanges par flux
-    , idxExchangeByProcess :: !ProcessExchangeIndex  -- Tous les échanges par procédé
+    { -- Index au niveau activité
+      idxByName :: !NameIndex -- Recherche activités par nom
+    , idxByLocation :: !LocationIndex -- Recherche activités par localisation
+    , idxByFlow :: !FlowIndex -- Recherche activités utilisant un flux
+    -- Index au niveau flux
+    , idxFlowByCategory :: !FlowCategoryIndex -- Recherche flux par catégorie
+    , idxFlowByType :: !FlowTypeIndex -- Recherche flux par type
+    -- Index au niveau échange
+    , idxExchangeByFlow :: !ExchangeIndex -- Tous les échanges par flux
+    , idxExchangeByActivity :: !ActivityExchangeIndex -- Tous les échanges par activité
     , idxReferenceProducts :: !ReferenceProductIndex -- Produits de référence
-    , idxInputsByProcess :: !ProcessInputIndex       -- Entrées par procédé
-    , idxOutputsByProcess :: !ProcessOutputIndex     -- Sorties par procédé
+    , idxInputsByActivity :: !ActivityInputIndex -- Entrées par activité
+    , idxOutputsByActivity :: !ActivityOutputIndex -- Sorties par activité
     }
     deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
-    { dbProcesses :: !ProcessDB
+    { dbActivities :: !ActivityDB
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
@@ -235,7 +237,7 @@ data Database = Database
 
 -- | Version simplifiée sans index (pour compatibilité)
 data SimpleDatabase = SimpleDatabase
-    { sdbProcesses :: !ProcessDB
+    { sdbActivities :: !ActivityDB
     , sdbFlows :: !FlowDB
     , sdbUnits :: !UnitDB
     }

@@ -9,10 +9,10 @@ import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (getDatabaseStats, findProcessesByName, findFlowsByType, findAllReferenceProducts, findExchangesByFlow, buildIndexes)
-import ACV.Tree (buildProcessTreeWithDatabase)
+import ACV.Query (getDatabaseStats, findActivitiesByName, findFlowsByType, findAllReferenceProducts, findExchangesByFlow, buildIndexes)
+import ACV.Tree (buildActivityTreeWithDatabase)
 import ACV.Types
-import EcoSpold.Loader (buildProcessTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
+import EcoSpold.Loader (buildActivityTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithIndexes, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
 import ILCD.Parser (parseMethodFromFile)
 import Network.Wai.Handler.Warp (run)
 import Servant
@@ -20,7 +20,7 @@ import Servant
 -- | Arguments de ligne de commande
 data Args = Args
     { dir :: FilePath -- Répertoire contenant les fichiers .spold
-    , rootId :: String -- UUID du procédé racine
+    , rootId :: String -- UUID du activité racine
     , method :: FilePath -- Fichier méthode PEF au format XML
     , output :: Maybe FilePath -- Fichier de sortie XML (optionnel)
     , csvOut :: Maybe FilePath -- Fichier de sortie CSV (optionnel)
@@ -33,7 +33,7 @@ argsParser :: Parser Args
 argsParser =
     Args
         <$> strOption (long "data" <> help "Répertoire des fichiers .spold")
-        <*> strOption (long "root" <> help "UUID du procédé racine")
+        <*> strOption (long "root" <> help "UUID du activité racine")
         <*> strOption (long "method" <> help "Fichier méthode PEF (XML)")
         <*> optional (strOption (long "output" <> help "Fichier de sortie XML"))
         <*> optional (strOption (long "csv" <> help "Fichier de sortie CSV"))
@@ -50,7 +50,7 @@ main = do
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
     -- Load database with automatic caching
-    print "Loading processes with flow deduplication and automatic caching"
+    print "Loading activities with flow deduplication and automatic caching"
     (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir
     if not wasFromCache
         then do
@@ -60,8 +60,8 @@ main = do
     
     -- Convert SimpleDatabase to Database with indexes
     print "Building indexes for efficient queries"
-    let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
-    let database = Database (sdbProcesses simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
+    let indexes = buildIndexes (sdbActivities simpleDb) (sdbFlows simpleDb)
+    let database = Database (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
 
     -- Afficher les statistiques de la base de données
     let stats = getDatabaseStats database
@@ -73,7 +73,7 @@ main = do
             -- Mode serveur API
             putStrLn $ "\nStarting API server on port " ++ show port
             putStrLn "Available endpoints:"
-            putStrLn "  GET /api/v1/process/{uuid} - Get detailed process information"
+            putStrLn "  GET /api/v1/activity/{uuid} - Get detailed activity information"
             run port (serve acvAPI (acvServer database))
         else do
             -- Mode calcul LCA traditionnel
@@ -82,11 +82,11 @@ main = do
             putStrLn "\n=== EXCHANGE-LEVEL QUERIES EXAMPLES ==="
             let refProducts = take 5 $ findAllReferenceProducts database
             putStrLn $ "First 5 reference products: " ++ show (length refProducts)
-            mapM_ (\(proc, flow, ex) -> putStrLn $ "  " ++ show (processName proc) ++ " -> " ++ show (flowName flow)) refProducts
+            mapM_ (\(proc, flow, ex) -> putStrLn $ "  " ++ show (activityName proc) ++ " -> " ++ show (flowName flow)) refProducts
 
-            -- Construire l'arbre du procédé racine
-            print "building process tree"
-            let tree = buildProcessTreeWithDatabase database (T.pack root)
+            -- Construire l'arbre du activité racine
+            print "building activity tree"
+            let tree = buildActivityTreeWithDatabase database (T.pack root)
             -- Calculer l'inventaire global
             print "computing inventory tree"
             let inventory = computeInventoryWithFlows (dbFlows database) tree

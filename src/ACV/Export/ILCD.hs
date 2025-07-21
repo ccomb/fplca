@@ -20,7 +20,7 @@ exportInventoryAsILCD outPath inv = do
 toElement :: Inventory -> Element
 toElement inv =
     Element
-        "processDataSet"
+        "activityDataSet"
         M.empty
         [ NodeElement $
             Element

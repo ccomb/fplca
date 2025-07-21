@@ -18,7 +18,7 @@ emptyIndexes :: Indexes
 emptyIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty
 
 -- | Construction des index à partir d'une base de données simple (parallélisée)
-buildIndexes :: ProcessDB -> FlowDB -> Indexes
+buildIndexes :: ActivityDB -> FlowDB -> Indexes
 buildIndexes procDB flowDB = 
     let -- Build indexes with parallel evaluation
         nameIdx = buildNameIndex procDB `using` rdeepseq
@@ -27,12 +27,12 @@ buildIndexes procDB flowDB =
         flowCatIdx = buildFlowCategoryIndex flowDB `using` rdeepseq
         flowTypeIdx = buildFlowTypeIndex flowDB `using` rdeepseq
         exchangeIdx = buildExchangeIndex procDB `using` rdeepseq
-        procExchangeIdx = buildProcessExchangeIndex procDB `using` rdeepseq
+        procExchangeIdx = buildActivityExchangeIndex procDB `using` rdeepseq
         refProdIdx = buildReferenceProductIndex procDB `using` rdeepseq
-        inputIdx = buildProcessInputIndex procDB `using` rdeepseq
-        outputIdx = buildProcessOutputIndex procDB `using` rdeepseq
+        inputIdx = buildActivityInputIndex procDB `using` rdeepseq
+        outputIdx = buildActivityOutputIndex procDB `using` rdeepseq
     in Indexes
-    { -- Index au niveau procédé
+    { -- Index au niveau activité
       idxByName = nameIdx
     , idxByLocation = locationIdx
     , idxByFlow = flowIdx
@@ -41,33 +41,33 @@ buildIndexes procDB flowDB =
     , idxFlowByType = flowTypeIdx
       -- Index au niveau échange
     , idxExchangeByFlow = exchangeIdx
-    , idxExchangeByProcess = procExchangeIdx
+    , idxExchangeByActivity = procExchangeIdx
     , idxReferenceProducts = refProdIdx
-    , idxInputsByProcess = inputIdx
-    , idxOutputsByProcess = outputIdx
+    , idxInputsByActivity = inputIdx
+    , idxOutputsByActivity = outputIdx
     }
 
 -- | Construction de l'index par nom (insensible à la casse)
-buildNameIndex :: ProcessDB -> NameIndex
+buildNameIndex :: ActivityDB -> NameIndex
 buildNameIndex procDB = 
     M.fromListWith (++) 
-    [ (T.toLower (processName proc), [processId proc])
+    [ (T.toLower (activityName proc), [activityId proc])
     | proc <- M.elems procDB
     ]
 
 -- | Construction de l'index par localisation
-buildLocationIndex :: ProcessDB -> LocationIndex
+buildLocationIndex :: ActivityDB -> LocationIndex
 buildLocationIndex procDB = 
     M.fromListWith (++)
-    [ (processLocation proc, [processId proc])
+    [ (activityLocation proc, [activityId proc])
     | proc <- M.elems procDB
     ]
 
--- | Construction de l'index par flux (quels processus utilisent un flux)
-buildFlowIndex :: ProcessDB -> FlowIndex
+-- | Construction de l'index par flux (quels activityus utilisent un flux)
+buildFlowIndex :: ActivityDB -> FlowIndex
 buildFlowIndex procDB = 
     M.fromListWith (++)
-    [ (exchangeFlowId ex, [processId proc])
+    [ (exchangeFlowId ex, [activityId proc])
     | proc <- M.elems procDB
     , ex <- exchanges proc
     ]
@@ -89,53 +89,53 @@ buildFlowTypeIndex flowDB =
     ]
 
 -- | Construction de l'index des échanges par flux
-buildExchangeIndex :: ProcessDB -> ExchangeIndex
+buildExchangeIndex :: ActivityDB -> ExchangeIndex
 buildExchangeIndex procDB = 
     M.fromListWith (++)
-    [ (exchangeFlowId ex, [(processId proc, ex)])
+    [ (exchangeFlowId ex, [(activityId proc, ex)])
     | proc <- M.elems procDB
     , ex <- exchanges proc
     ]
 
--- | Construction de l'index des échanges par procédé
-buildProcessExchangeIndex :: ProcessDB -> ProcessExchangeIndex
-buildProcessExchangeIndex procDB = 
+-- | Construction de l'index des échanges par activité
+buildActivityExchangeIndex :: ActivityDB -> ActivityExchangeIndex
+buildActivityExchangeIndex procDB = 
     M.fromList
-    [ (processId proc, exchanges proc)
+    [ (activityId proc, exchanges proc)
     | proc <- M.elems procDB
     ]
 
 -- | Construction de l'index des produits de référence
-buildReferenceProductIndex :: ProcessDB -> ReferenceProductIndex
+buildReferenceProductIndex :: ActivityDB -> ReferenceProductIndex
 buildReferenceProductIndex procDB = 
     M.fromList
-    [ (exchangeFlowId ex, (processId proc, ex))
+    [ (exchangeFlowId ex, (activityId proc, ex))
     | proc <- M.elems procDB
     , ex <- exchanges proc
     , exchangeIsReference ex
     ]
 
--- | Construction de l'index des entrées par procédé
-buildProcessInputIndex :: ProcessDB -> ProcessInputIndex
-buildProcessInputIndex procDB = 
+-- | Construction de l'index des entrées par activité
+buildActivityInputIndex :: ActivityDB -> ActivityInputIndex
+buildActivityInputIndex procDB = 
     M.fromList
-    [ (processId proc, filter exchangeIsInput (exchanges proc))
+    [ (activityId proc, filter exchangeIsInput (exchanges proc))
     | proc <- M.elems procDB
     ]
 
--- | Construction de l'index des sorties par procédé
-buildProcessOutputIndex :: ProcessDB -> ProcessOutputIndex
-buildProcessOutputIndex procDB = 
+-- | Construction de l'index des sorties par activité
+buildActivityOutputIndex :: ActivityDB -> ActivityOutputIndex
+buildActivityOutputIndex procDB = 
     M.fromList
-    [ (processId proc, filter (not . exchangeIsInput) (exchanges proc))
+    [ (activityId proc, filter (not . exchangeIsInput) (exchanges proc))
     | proc <- M.elems procDB
     ]
 
 -- | Requêtes utilisant les index
 
--- | Recherche de processus par nom (recherche partielle, insensible à la casse)
-findProcessesByName :: Database -> Text -> [Process]
-findProcessesByName db searchTerm = 
+-- | Recherche de activityus par nom (recherche partielle, insensible à la casse)
+findActivitiesByName :: Database -> Text -> [Activity]
+findActivitiesByName db searchTerm = 
     let searchLower = T.toLower searchTerm
         matchingUUIDs = concat 
             [ uuids 
@@ -143,21 +143,21 @@ findProcessesByName db searchTerm =
             , searchLower `T.isInfixOf` name
             ]
         uniqueUUIDs = S.toList $ S.fromList matchingUUIDs
-    in mapMaybe (`M.lookup` dbProcesses db) uniqueUUIDs
+    in mapMaybe (`M.lookup` dbActivities db) uniqueUUIDs
 
--- | Recherche de processus par localisation exacte
-findProcessesByLocation :: Database -> Text -> [Process]
-findProcessesByLocation db location = 
+-- | Recherche de activityus par localisation exacte
+findActivitiesByLocation :: Database -> Text -> [Activity]
+findActivitiesByLocation db location = 
     case M.lookup location (idxByLocation $ dbIndexes db) of
         Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbProcesses db) uuids
+        Just uuids -> mapMaybe (`M.lookup` dbActivities db) uuids
 
--- | Recherche de processus utilisant un flux donné
-findProcessesUsingFlow :: Database -> UUID -> [Process]
-findProcessesUsingFlow db flowUUID = 
+-- | Recherche de activityus utilisant un flux donné
+findActivitiesUsingFlow :: Database -> UUID -> [Activity]
+findActivitiesUsingFlow db flowUUID = 
     case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
         Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbProcesses db) uuids
+        Just uuids -> mapMaybe (`M.lookup` dbActivities db) uuids
 
 -- | Recherche de flux par catégorie
 findFlowsByCategory :: Database -> Text -> [Flow]
@@ -176,41 +176,41 @@ findFlowsByType db ftype =
 -- | ===== REQUÊTES AU NIVEAU ÉCHANGE =====
 
 -- | Trouve tous les échanges utilisant un flux donné
-findExchangesByFlow :: Database -> UUID -> [(Process, Exchange)]
+findExchangesByFlow :: Database -> UUID -> [(Activity, Exchange)]
 findExchangesByFlow db flowUUID = 
     case M.lookup flowUUID (idxExchangeByFlow $ dbIndexes db) of
         Nothing -> []
         Just procExchanges -> 
             [ (proc, exchange)
             | (procUUID, exchange) <- procExchanges
-            , Just proc <- [M.lookup procUUID (dbProcesses db)]
+            , Just proc <- [M.lookup procUUID (dbActivities db)]
             ]
 
--- | Trouve tous les échanges d'un procédé
-findExchangesByProcess :: Database -> UUID -> [Exchange]
-findExchangesByProcess db procUUID = 
-    case M.lookup procUUID (idxExchangeByProcess $ dbIndexes db) of
+-- | Trouve tous les échanges d'un activité
+findExchangesByActivity :: Database -> UUID -> [Exchange]
+findExchangesByActivity db procUUID = 
+    case M.lookup procUUID (idxExchangeByActivity $ dbIndexes db) of
         Nothing -> []
         Just exchanges -> exchanges
 
--- | Trouve toutes les entrées d'un procédé
-findInputsForProcess :: Database -> UUID -> [Exchange]
-findInputsForProcess db procUUID = 
-    case M.lookup procUUID (idxInputsByProcess $ dbIndexes db) of
+-- | Trouve toutes les entrées d'un activité
+findInputsForActivity :: Database -> UUID -> [Exchange]
+findInputsForActivity db procUUID = 
+    case M.lookup procUUID (idxInputsByActivity $ dbIndexes db) of
         Nothing -> []
         Just inputs -> inputs
 
--- | Trouve toutes les sorties d'un procédé
-findOutputsForProcess :: Database -> UUID -> [Exchange]
-findOutputsForProcess db procUUID = 
-    case M.lookup procUUID (idxOutputsByProcess $ dbIndexes db) of
+-- | Trouve toutes les sorties d'un activité
+findOutputsForActivity :: Database -> UUID -> [Exchange]
+findOutputsForActivity db procUUID = 
+    case M.lookup procUUID (idxOutputsByActivity $ dbIndexes db) of
         Nothing -> []
         Just outputs -> outputs
 
--- | Trouve le produit de référence d'un procédé (s'il existe)
+-- | Trouve le produit de référence d'un activité (s'il existe)
 findReferenceProduct :: Database -> UUID -> Maybe (Flow, Exchange)
 findReferenceProduct db procUUID = 
-    case findOutputsForProcess db procUUID of
+    case findOutputsForActivity db procUUID of
         [] -> Nothing
         outputs -> 
             case filter exchangeIsReference outputs of
@@ -220,40 +220,40 @@ findReferenceProduct db procUUID =
                     return (flow, refEx)
 
 -- | Trouve tous les produits de référence de la base de données
-findAllReferenceProducts :: Database -> [(Process, Flow, Exchange)]
+findAllReferenceProducts :: Database -> [(Activity, Flow, Exchange)]
 findAllReferenceProducts db = 
     [ (proc, flow, exchange)
     | (flowUUID, (procUUID, exchange)) <- M.toList (idxReferenceProducts $ dbIndexes db)
-    , Just proc <- [M.lookup procUUID (dbProcesses db)]
+    , Just proc <- [M.lookup procUUID (dbActivities db)]
     , Just flow <- [M.lookup flowUUID (dbFlows db)]
     ]
 
 -- | Trouve les échanges par unité
-findExchangesByUnit :: Database -> Text -> [(Process, Flow, Exchange)]
+findExchangesByUnit :: Database -> Text -> [(Activity, Flow, Exchange)]
 findExchangesByUnit db unit = 
     [ (proc, flow, exchange)
-    | (procUUID, exchanges) <- M.toList (idxExchangeByProcess $ dbIndexes db)
+    | (procUUID, exchanges) <- M.toList (idxExchangeByActivity $ dbIndexes db)
     , exchange <- exchanges
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     , getUnitNameForFlow (dbUnits db) flow == unit
-    , Just proc <- [M.lookup procUUID (dbProcesses db)]
+    , Just proc <- [M.lookup procUUID (dbActivities db)]
     ]
 
 -- | Trouve les échanges dans une plage de quantité
-findExchangesByAmountRange :: Database -> Double -> Double -> [(Process, Flow, Exchange)]
+findExchangesByAmountRange :: Database -> Double -> Double -> [(Activity, Flow, Exchange)]
 findExchangesByAmountRange db minAmount maxAmount = 
     [ (proc, flow, exchange)
-    | (procUUID, exchanges) <- M.toList (idxExchangeByProcess $ dbIndexes db)
+    | (procUUID, exchanges) <- M.toList (idxExchangeByActivity $ dbIndexes db)
     , exchange <- exchanges
     , let amount = exchangeAmount exchange
     , amount >= minAmount && amount <= maxAmount
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , Just proc <- [M.lookup procUUID (dbProcesses db)]
+    , Just proc <- [M.lookup procUUID (dbActivities db)]
     ]
 
 -- | Statistiques de la base de données
 data DatabaseStats = DatabaseStats
-    { statsProcessCount :: !Int
+    { statsActivityCount :: !Int
     , statsFlowCount :: !Int
     , statsExchangeCount :: !Int
     , statsTechnosphereFlows :: !Int
@@ -269,14 +269,14 @@ data DatabaseStats = DatabaseStats
 -- | Calcule les statistiques de la base de données
 getDatabaseStats :: Database -> DatabaseStats
 getDatabaseStats db = DatabaseStats
-    { statsProcessCount = M.size (dbProcesses db)
+    { statsActivityCount = M.size (dbActivities db)
     , statsFlowCount = M.size (dbFlows db)
     , statsExchangeCount = M.size (idxExchangeByFlow $ dbIndexes db)
     , statsTechnosphereFlows = length $ findFlowsByType db Technosphere
     , statsBiosphereFlows = length $ findFlowsByType db Biosphere
     , statsReferenceProducts = M.size (idxReferenceProducts $ dbIndexes db)
-    , statsInputCount = sum [length inputs | inputs <- M.elems (idxInputsByProcess $ dbIndexes db)]
-    , statsOutputCount = sum [length outputs | outputs <- M.elems (idxOutputsByProcess $ dbIndexes db)]
+    , statsInputCount = sum [length inputs | inputs <- M.elems (idxInputsByActivity $ dbIndexes db)]
+    , statsOutputCount = sum [length outputs | outputs <- M.elems (idxOutputsByActivity $ dbIndexes db)]
     , statsLocations = M.keys (idxByLocation $ dbIndexes db)
     , statsCategories = M.keys (idxFlowByCategory $ dbIndexes db)
     , statsUnits = S.toList $ S.fromList [getUnitNameForFlow (dbUnits db) flow | flow <- M.elems (dbFlows db)]
@@ -284,14 +284,14 @@ getDatabaseStats db = DatabaseStats
 
 -- | Fonctions utilitaires pour les requêtes complexes
 
--- | Trouve les processus les plus utilisés (qui apparaissent dans le plus d'échanges)
-findMostUsedProcesses :: Database -> Int -> [(Process, Int)]
-findMostUsedProcesses db limit = 
+-- | Trouve les activityus les plus utilisés (qui apparaissent dans le plus d'échanges)
+findMostUsedActivities :: Database -> Int -> [(Activity, Int)]
+findMostUsedActivities db limit = 
     let usageCounts = 
             [ (proc, length uuids)
             | (flowUUID, procUUIDs) <- M.toList (idxByFlow $ dbIndexes db)
             , let uuids = procUUIDs
-            , proc <- mapMaybe (`M.lookup` dbProcesses db) procUUIDs
+            , proc <- mapMaybe (`M.lookup` dbActivities db) procUUIDs
             ]
         sorted = sortOn (negate . snd) usageCounts
     in take limit sorted

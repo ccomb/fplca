@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 
-module EcoSpold.Parser (parseProcessFromFile, parseProcessAndFlowsFromFile, streamParseProcessAndFlowsFromFile) where
+module EcoSpold.Parser (parseActivityFromFile, parseActivityAndFlowsFromFile, streamParseActivityAndFlowsFromFile) where
 
 import ACV.Types
 import Data.Text (Text)
@@ -20,17 +20,17 @@ ecoSpoldNS = "http://www.EcoInvent.org/EcoSpold02"
 nsElement :: Text -> Name
 nsElement name = Name name (Just ecoSpoldNS) Nothing
 
-parseProcessFromFile :: FilePath -> IO Process
-parseProcessFromFile path = do
+parseActivityFromFile :: FilePath -> IO Activity
+parseActivityFromFile path = do
     print path
     doc <- Text.XML.readFile def path
     let cursor = fromDocument doc
-    let !proc = parseProcess cursor
+    let !proc = parseActivity cursor
     -- Force deep evaluation to avoid memory leaks
     return proc
 
-parseProcess :: Cursor -> Process
-parseProcess cursor =
+parseActivity :: Cursor -> Activity
+parseActivity cursor =
     let name =
                 headOrFail "Missing <activityName>" $
                     cursor $// element (nsElement "activityName") &/ content
@@ -49,19 +49,19 @@ parseProcess cursor =
         !interExchs = map parseExchange interNodes
         !elemExchs = map parseElementaryExchange elemNodes
         !exchs = interExchs ++ elemExchs
-     in Process uuid name location exchs
+     in Activity uuid name location exchs
 
--- | Parse un procédé et extrait les flux et unités pour la déduplication
-parseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow], [Unit])
-parseProcessAndFlowsFromFile path = do
+-- | Parse un activité et extrait les flux et unités pour la déduplication
+parseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
+parseActivityAndFlowsFromFile path = do
     print path
     doc <- Text.XML.readFile def path
     let cursor = fromDocument doc
-    let (proc, flows, units) = parseProcessWithFlowsAndUnits cursor
+    let (proc, flows, units) = parseActivityWithFlowsAndUnits cursor
     return (proc, flows, units)
 
-parseProcessWithFlowsAndUnits :: Cursor -> (Process, [Flow], [Unit])
-parseProcessWithFlowsAndUnits cursor =
+parseActivityWithFlowsAndUnits :: Cursor -> (Activity, [Flow], [Unit])
+parseActivityWithFlowsAndUnits cursor =
     let name =
                 headOrFail "Missing <activityName>" $
                     cursor $// element (nsElement "activityName") &/ content
@@ -84,7 +84,7 @@ parseProcessWithFlowsAndUnits cursor =
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
-     in (Process uuid name location exchs, flows, units)
+     in (Activity uuid name location exchs, flows, units)
 
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
@@ -177,18 +177,18 @@ headOrFail msg [] = error msg
 headOrFail _ (x : _) = x
 
 -- | Memory-optimized parser - forces early evaluation and cleanup
-streamParseProcessAndFlowsFromFile :: FilePath -> IO (Process, [Flow], [Unit])
-streamParseProcessAndFlowsFromFile path = do
+streamParseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
+streamParseActivityAndFlowsFromFile path = do
     -- Read and parse with strict evaluation
     doc <- Text.XML.readFile def path
     let !cursor = fromDocument doc
-    let (!proc, !flows, !units) = parseProcessWithFlowsAndUnitsOptimized cursor
+    let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor
     -- Force full evaluation before returning
     proc `seq` flows `seq` units `seq` return (proc, flows, units)
 
--- | Optimized version of parseProcessWithFlowsAndUnits with better memory management
-parseProcessWithFlowsAndUnitsOptimized :: Cursor -> (Process, [Flow], [Unit])
-parseProcessWithFlowsAndUnitsOptimized cursor =
+-- | Optimized version of parseActivityWithFlowsAndUnits with better memory management
+parseActivityWithFlowsAndUnitsOptimized :: Cursor -> (Activity, [Flow], [Unit])
+parseActivityWithFlowsAndUnitsOptimized cursor =
     let !name = headOrFail "Missing <activityName>" $
                     cursor $// element (nsElement "activityName") &/ content
         !location = case cursor $// element (nsElement "geography") >=> attribute "location" of
@@ -199,7 +199,7 @@ parseProcessWithFlowsAndUnitsOptimized cursor =
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
         
-        -- Process both types of exchanges
+        -- Activity both types of exchanges
         !interNodes = cursor $// element (nsElement "intermediateExchange")
         !elemNodes = cursor $// element (nsElement "elementaryExchange")
         !interExchsWithFlowsAndUnits = map parseExchangeWithFlowOptimized interNodes
@@ -210,8 +210,8 @@ parseProcessWithFlowsAndUnitsOptimized cursor =
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
         
-        !process = Process uuid name location exchs
-     in (process, flows, units)
+        !activity = Activity uuid name location exchs
+     in (activity, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation
 parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow, Unit)
