@@ -158,8 +158,11 @@ matchesFlowOrSynonym searchText flow =
 data Activity = Activity
     { activityId :: !UUID -- Identifiant unique du activité
     , activityName :: !Text -- Nom
-    , activityDescription :: !Text -- Description détaillée de l'activité
+    , activityDescription :: !Text -- Description générale (generalComment)
+    , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue comme les flux
+    , activityClassification :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
     , activityLocation :: !Text -- Code de localisation (ex: FR, RER)
+    , activityUnit :: !Text -- Unité de référence
     , exchanges :: ![Exchange] -- Liste des échanges
     }
     deriving (Eq, Show, Generic, NFData, Binary)

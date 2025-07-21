@@ -11,6 +11,7 @@ import Data.Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map as M
+import qualified Data.Set as S
 import GHC.Generics
 import Servant
 
@@ -44,7 +45,10 @@ data ActivityForAPI = ActivityForAPI
     { pfaId :: UUID
     , pfaName :: Text
     , pfaDescription :: Text
+    , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
+    , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
     , pfaLocation :: Text
+    , pfaUnit :: Text -- Unité de référence
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     } deriving (Generic, Show)
 
@@ -406,7 +410,10 @@ convertActivityForAPI db activity = ActivityForAPI
     { pfaId = activityId activity
     , pfaName = activityName activity
     , pfaDescription = activityDescription activity
+    , pfaSynonyms = activitySynonyms activity
+    , pfaClassifications = activityClassification activity
     , pfaLocation = activityLocation activity
+    , pfaUnit = activityUnit activity
     , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
     }
   where

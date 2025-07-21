@@ -43,14 +43,27 @@ parseActivity cursor =
                 headOrFail "Missing activity@id or activity@activityId" $
                     (cursor $// element (nsElement "activity") >=> attribute "id") <>
                     (cursor $// element (nsElement "activity") >=> attribute "activityId")
+        description =
+                case cursor $// element (nsElement "generalComment") &/ content of
+                    [] -> name  -- Fallback to name if no generalComment
+                    (comment:_) -> comment
+        -- Extract synonyms (similar to flow synonyms structure)
+        synonyms = M.empty  -- TODO: Extract from XML when available
+        -- Extract classifications 
+        classifications = M.empty  -- TODO: Extract ISIC, CPC classifications
+        -- Extract reference unit from reference product
+        refUnit = case cursor $// element (nsElement "intermediateExchange") 
+                             >=> attributeIs "outputGroup" "0" 
+                             >=> attribute "unitName" of
+                    [] -> "unit"  -- Default fallback
+                    (unit:_) -> unit
         -- Parse both intermediate and elementary exchanges
         interNodes = cursor $// element (nsElement "intermediateExchange")
         elemNodes = cursor $// element (nsElement "elementaryExchange")
         !interExchs = map parseExchange interNodes
         !elemExchs = map parseElementaryExchange elemNodes
         !exchs = interExchs ++ elemExchs
-        !description = name  -- Start simple: use name as description
-     in Activity uuid name description location exchs
+     in Activity uuid name description synonyms classifications location refUnit exchs
 
 -- | Parse un activité et extrait les flux et unités pour la déduplication
 parseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
@@ -85,8 +98,18 @@ parseActivityWithFlowsAndUnits cursor =
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
-        !description = name  -- Start simple: use name as description
-     in (Activity uuid name description location exchs, flows, units)
+        description =
+                case cursor $// element (nsElement "generalComment") &/ content of
+                    [] -> name  -- Fallback to name if no generalComment
+                    (comment:_) -> comment
+        synonyms = M.empty  -- TODO: Extract from XML when available
+        classifications = M.empty  -- TODO: Extract ISIC, CPC classifications
+        refUnit = case cursor $// element (nsElement "intermediateExchange") 
+                             >=> attributeIs "outputGroup" "0" 
+                             >=> attribute "unitName" of
+                    [] -> "unit"  -- Default fallback
+                    (unit:_) -> unit
+     in (Activity uuid name description synonyms classifications location refUnit exchs, flows, units)
 
 parseExchange :: Cursor -> Exchange
 parseExchange cur =
@@ -211,9 +234,19 @@ parseActivityWithFlowsAndUnitsOptimized cursor =
         !exchs = interExchs ++ elemExchs
         !flows = interFlows ++ elemFlows
         !units = interUnits ++ elemUnits
-        !description = name  -- Start simple: use name as description
+        description =
+                case cursor $// element (nsElement "generalComment") &/ content of
+                    [] -> name  -- Fallback to name if no generalComment
+                    (comment:_) -> comment
+        synonyms = M.empty  -- TODO: Extract from XML when available
+        classifications = M.empty  -- TODO: Extract ISIC, CPC classifications
+        refUnit = case cursor $// element (nsElement "intermediateExchange") 
+                             >=> attributeIs "outputGroup" "0" 
+                             >=> attribute "unitName" of
+                    [] -> "unit"  -- Default fallback
+                    (unit:_) -> unit
         
-        !activity = Activity uuid name description location exchs
+        !activity = Activity uuid name description synonyms classifications location refUnit exchs
      in (activity, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation
