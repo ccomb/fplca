@@ -145,38 +145,44 @@ findActivitiesByName db searchTerm =
         uniqueUUIDs = S.toList $ S.fromList matchingUUIDs
     in mapMaybe (`M.lookup` dbActivities db) uniqueUUIDs
 
--- | Recherche d'activités fuzzy (nom, localisation, flux utilisés)
-findActivitiesFuzzy :: Database -> Text -> [Activity]
-findActivitiesFuzzy db searchText =
-    let lowerSearch = T.toLower searchText
-        searchTerms = T.words lowerSearch  -- Split on whitespace for multi-term search
-    in [ activity 
-       | activity <- M.elems (dbActivities db)
-       , matchesActivityFuzzy db searchTerms activity
-       ]
+-- | Recherche d'activités par champs spécifiques
+findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
+findActivitiesByFields db nameParam geoParam productParam = 
+    [ activity 
+    | activity <- M.elems (dbActivities db)
+    , matchesActivityFields db nameParam geoParam productParam activity
+    ]
 
--- | Advanced fuzzy matching for activities
-matchesActivityFuzzy :: Database -> [Text] -> Activity -> Bool
-matchesActivityFuzzy db searchTerms activity = 
-    let lowerName = T.toLower (activityName activity)
-        lowerLocation = T.toLower (activityLocation activity)
+-- | Matching par champs spécifiques d'activité
+matchesActivityFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Activity -> Bool
+matchesActivityFields db nameParam geoParam productParam activity = 
+    let nameMatch = case nameParam of
+            Nothing -> True
+            Just nameQuery -> 
+                let lowerName = T.toLower (activityName activity)
+                    searchTerms = T.words (T.toLower nameQuery)
+                in all (`T.isInfixOf` lowerName) searchTerms
         
-        -- Get names of flows used by this activity
-        flowNames = [ T.toLower (flowName flow)
-                    | exchange <- exchanges activity
-                    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-                    ]
+        geoMatch = case geoParam of
+            Nothing -> True
+            Just geoQuery -> 
+                let lowerLocation = T.toLower (activityLocation activity)
+                    searchTerms = T.words (T.toLower geoQuery)
+                in all (`T.isInfixOf` lowerLocation) searchTerms
         
-        -- Check if all search terms match somewhere
-        matchesTerm term = 
-            -- Substring in activity name
-            term `T.isInfixOf` lowerName ||
-            -- Substring in location
-            term `T.isInfixOf` lowerLocation ||
-            -- Substring in any flow name used by this activity
-            any (term `T.isInfixOf`) flowNames
-            
-    in all matchesTerm searchTerms
+        productMatch = case productParam of
+            Nothing -> True
+            Just productQuery ->
+                let referenceFlowNames = [ T.toLower (flowName flow)
+                                         | exchange <- exchanges activity
+                                         , exchangeIsReference exchange
+                                         , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+                                         ]
+                    searchTerms = T.words (T.toLower productQuery)
+                    matchesProduct = any (\flowName -> all (`T.isInfixOf` flowName) searchTerms) referenceFlowNames
+                in matchesProduct
+        
+    in nameMatch && geoMatch && productMatch
 
 -- | Recherche de activityus par localisation exacte
 findActivitiesByLocation :: Database -> Text -> [Activity]

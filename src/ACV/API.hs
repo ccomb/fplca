@@ -25,7 +25,7 @@ type ACVAPI = "api" :> "v1" :> (
   :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> Get '[JSON] [FlowDetail]
   :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> Get '[JSON] [FlowDetail]
-  :<|> "search" :> "activities" :> QueryParam "q" Text :> Get '[JSON] [ActivitySummary]
+  :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> Get '[JSON] [ActivitySummary]
   :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
   :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
   )
@@ -228,11 +228,10 @@ acvServer db = getActivityInfo
       let flows = findFlowsBySynonymInLanguage db lang query
       return [FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) | flow <- flows]
     
-    -- Search activities by name, location, or flows used
-    searchActivities :: Maybe Text -> Handler [ActivitySummary]
-    searchActivities Nothing = return []
-    searchActivities (Just query) = do
-      let activities = findActivitiesFuzzy db query
+    -- Search activities by specific fields
+    searchActivities :: Maybe Text -> Maybe Text -> Maybe Text -> Handler [ActivitySummary]
+    searchActivities nameParam geoParam productParam = do
+      let activities = findActivitiesByFields db nameParam geoParam productParam
       return [ActivitySummary (activityId activity) (activityName activity) (activityLocation activity) | activity <- activities]
     
     -- Get available languages
