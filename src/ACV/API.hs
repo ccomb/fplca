@@ -343,10 +343,11 @@ getActivitiesUsingFlow db flowUUID =
     case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
         Nothing -> []
         Just activityUUIDs -> 
-            [ ActivitySummary (activityId proc) (activityName proc) (activityLocation proc)
-            | procUUID <- activityUUIDs
-            , Just proc <- [M.lookup procUUID (dbActivities db)]
-            ]
+            let uniqueUUIDs = S.toList $ S.fromList activityUUIDs  -- Deduplicate activity UUIDs
+            in [ ActivitySummary (activityId proc) (activityName proc) (activityLocation proc)
+               | procUUID <- uniqueUUIDs
+               , Just proc <- [M.lookup procUUID (dbActivities db)]
+               ]
 
 -- | Get all flows used by a activity with usage statistics (legacy function - kept for compatibility)
 getActivityFlows :: Database -> Activity -> [FlowDetail]
