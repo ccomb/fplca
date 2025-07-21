@@ -26,7 +26,6 @@ data Args = Args
     , csvOut :: Maybe FilePath -- Fichier de sortie CSV (optionnel)
     , serverMode :: Bool -- Mode serveur API
     , serverPort :: Int -- Port du serveur API
-    , cacheFile :: Maybe FilePath -- Fichier cache binaire (optionnel)
     }
 
 -- | Parser des arguments CLI
@@ -40,34 +39,29 @@ argsParser =
         <*> optional (strOption (long "csv" <> help "Fichier de sortie CSV"))
         <*> switch (long "server" <> help "Lancer le serveur API au lieu du calcul LCA")
         <*> option auto (long "port" <> value 8080 <> help "Port du serveur API (défaut: 8080)")
-        <*> optional (strOption (long "cache" <> help "Fichier cache binaire pour accélérer le chargement"))
 
 -- | Fonction principale
 main :: IO ()
 main = do
-    Args dir root methodFile output csvOut server port cache <-
+    Args dir root methodFile output csvOut server port <-
         execParser $
             info
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Charger avec cache si spécifié
-    database <- case cache of
-        Nothing -> do
-            print "loading processes with flow deduplication and indexes (no cache)"
-            loadAllSpoldsWithIndexes dir
-        Just cacheFile -> do
-            print $ "attempting to load from cache: " ++ cacheFile
-            (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir cacheFile
-            if not wasFromCache
-                then do
-                    print "saving to cache for next time"
-                    saveCachedSpoldsWithFlows cacheFile simpleDb
-                else return ()
-            -- Convert SimpleDatabase to Database with indexes
-            print "building indexes for efficient queries"
-            let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
-            return $ Database (sdbProcesses simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
+    -- Load database with automatic caching
+    print "Loading processes with flow deduplication and automatic caching"
+    (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir
+    if not wasFromCache
+        then do
+            print "Saving to cache for next time"
+            saveCachedSpoldsWithFlows dir simpleDb
+        else return ()
+    
+    -- Convert SimpleDatabase to Database with indexes
+    print "Building indexes for efficient queries"
+    let indexes = buildIndexes (sdbProcesses simpleDb) (sdbFlows simpleDb)
+    let database = Database (sdbProcesses simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
 
     -- Afficher les statistiques de la base de données
     let stats = getDatabaseStats database
