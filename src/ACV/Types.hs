@@ -158,7 +158,7 @@ matchesFlowOrSynonym searchText flow =
 data Activity = Activity
     { activityId :: !UUID -- Identifiant unique du activité
     , activityName :: !Text -- Nom
-    , activityDescription :: !Text -- Description générale (generalComment)
+    , activityDescription :: ![Text] -- Description générale (generalComment) par paragraphes
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue comme les flux
     , activityClassification :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
     , activityLocation :: !Text -- Code de localisation (ex: FR, RER)

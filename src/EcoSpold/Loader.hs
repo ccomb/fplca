@@ -32,7 +32,7 @@ type Visited = S.Set UUID
 
 -- | Cache format version - increment this when types change to invalidate old caches
 cacheFormatVersion :: Int
-cacheFormatVersion = 4  -- Increment when Activity/Flow/Exchange/Unit types change
+cacheFormatVersion = 6  -- Increment when Activity/Flow/Exchange/Unit types change
 
 -- | Generate cache filename based on data directory and version
 generateCacheFilename :: FilePath -> IO FilePath
@@ -76,10 +76,10 @@ isTechnosphereInput _ ex =
         BiosphereExchange _ _ _ _ -> False
 
 placeholder :: Activity
-placeholder = Activity "loop" "Loop detected" "Loop detected" M.empty M.empty "N/A" "unit" []
+placeholder = Activity "loop" "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
 
 missing :: Activity
-missing = Activity "missing" "Activity not found" "Activity not found" M.empty M.empty "N/A" "unit" []
+missing = Activity "missing" "Activity not found" ["Activity not found"] M.empty M.empty "N/A" "unit" []
 
 {- | Version originale - Charge tous les fichiers .spold
   et retourne une base de activités indexée par UUID
@@ -100,7 +100,7 @@ loadAllSpolds dir = do
     loadSpoldsInChunks [] acc = return acc
     loadSpoldsInChunks files acc = do
         let (chunk, rest) = splitAt chunkSize files
-        print $ "Activitying chunk of " ++ show (length chunk) ++ " files"
+        print $ "Processing chunk of " ++ show (length chunk) ++ " files"
 
         -- Force evaluation of chunk to avoid building up thunks
         chunk' <- mapM parseActivityFromFile chunk
@@ -130,7 +130,7 @@ loadAllSpoldsWithFlows dir = do
     loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
     loadWithSimpleChunks allFiles = do
         let chunks = chunksOf optimalChunkSize allFiles
-        print $ "Activitying " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each"
+        print $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each"
 
         -- Activity chunks sequentially, but files within each chunk in parallel
         results <- mapM activityChunkSimple chunks
@@ -145,7 +145,7 @@ loadAllSpoldsWithFlows dir = do
     -- Activity one chunk: all files in chunk activityed in parallel
     activityChunkSimple :: [FilePath] -> IO (ActivityDB, FlowDB, UnitDB)
     activityChunkSimple chunk = do
-        print $ "Activitying chunk of " ++ show (length chunk) ++ " files in parallel"
+        print $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
 
         -- All files in chunk activityed in parallel
         chunkResults <- mapConcurrently streamParseActivityAndFlowsFromFile chunk

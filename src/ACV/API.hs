@@ -44,7 +44,7 @@ data ExchangeWithUnit = ExchangeWithUnit
 data ActivityForAPI = ActivityForAPI
     { pfaId :: UUID
     , pfaName :: Text
-    , pfaDescription :: Text
+    , pfaDescription :: [Text] -- Description par paragraphes
     , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
     , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
     , pfaLocation :: Text
