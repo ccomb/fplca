@@ -26,7 +26,7 @@ type ACVAPI =
                 :<|> "activity" :> Capture "uuid" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
                 :<|> "activity" :> Capture "uuid" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
                 :<|> "activity" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
-                :<|> "activity" :> Capture "uuid" Text :> "tree" :> QueryParam "depth" Int :> Get '[JSON] TreeExport
+                :<|> "activity" :> Capture "uuid" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] [FlowDetail]
@@ -169,6 +169,7 @@ data TreeMetadata = TreeMetadata
     , tmTotalNodes :: Int
     , tmLoopNodes :: Int
     , tmLeafNodes :: Int
+    , tmExpandableNodes :: Int  -- Nodes that could expand further
     }
     deriving (Generic, Show)
 
@@ -181,6 +182,8 @@ data ExportNode = ExportNode
     , enNodeType :: NodeType
     , enDepth :: Int
     , enLoopTarget :: Maybe UUID
+    , enParentId :: Maybe UUID      -- For navigation back up
+    , enChildrenCount :: Int        -- Number of potential children for expandability
     }
     deriving (Generic, Show)
 
@@ -281,13 +284,13 @@ acvServer db =
                     Nothing -> throwError err404{errBody = "No reference product found"}
                     Just refProduct -> return refProduct
 
-    -- Activity tree export for visualization
-    getActivityTree :: Text -> Maybe Int -> Handler TreeExport
-    getActivityTree uuid depthParam = do
+    -- Activity tree export for visualization (fixed depth=2)
+    getActivityTree :: Text -> Handler TreeExport
+    getActivityTree uuid = do
         case M.lookup uuid (dbActivities db) of
             Nothing -> throwError err404{errBody = "Activity not found"}
             Just _ -> do
-                let maxDepth = maybe 1 id depthParam -- Default depth: 1
+                let maxDepth = 2 -- Fixed depth for interactive navigation
                 let loopAwareTree = buildLoopAwareTree db uuid maxDepth
                 return $ convertToTreeExport db uuid maxDepth loopAwareTree
 
@@ -514,7 +517,7 @@ convertActivityForAPI db activity =
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> UUID -> Int -> LoopAwareTree -> TreeExport
 convertToTreeExport db rootUUID maxDepth tree =
-    let (nodes, edges, stats) = extractNodesAndEdges db tree 0 M.empty []
+    let (nodes, edges, stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
         metadata =
             TreeMetadata
                 { tmRootId = rootUUID
@@ -522,14 +525,16 @@ convertToTreeExport db rootUUID maxDepth tree =
                 , tmTotalNodes = M.size nodes
                 , tmLoopNodes = length [() | (_, node) <- M.toList nodes, enNodeType node == LoopNode]
                 , tmLeafNodes = length [() | (_, node) <- M.toList nodes, null [e | e <- edges, teFrom e == enId node]]
+                , tmExpandableNodes = length [() | (_, node) <- M.toList nodes, enChildrenCount node > 0]
                 }
      in TreeExport metadata nodes edges
 
 -- | Extract nodes and edges from LoopAwareTree
-extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> M.Map UUID ExportNode -> [TreeEdge] -> (M.Map UUID ExportNode, [TreeEdge], TreeStats)
-extractNodesAndEdges db tree depth nodeAcc edgeAcc = case tree of
+extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe UUID -> M.Map UUID ExportNode -> [TreeEdge] -> (M.Map UUID ExportNode, [TreeEdge], TreeStats)
+extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
     TreeLeaf activity ->
-        let node =
+        let childrenCount = countPotentialChildren db activity
+            node =
                 ExportNode
                     { enId = activityId activity
                     , enName = activityName activity
@@ -539,6 +544,8 @@ extractNodesAndEdges db tree depth nodeAcc edgeAcc = case tree of
                     , enNodeType = ActivityNode
                     , enDepth = depth
                     , enLoopTarget = Nothing
+                    , enParentId = parentId
+                    , enChildrenCount = childrenCount
                     }
             nodes' = M.insert (activityId activity) node nodeAcc
          in (nodes', edgeAcc, TreeStats 1 0 1)
@@ -553,11 +560,14 @@ extractNodesAndEdges db tree depth nodeAcc edgeAcc = case tree of
                     , enNodeType = LoopNode
                     , enDepth = depth
                     , enLoopTarget = Just uuid
+                    , enParentId = parentId
+                    , enChildrenCount = 0  -- Loops don't expand
                     }
             nodes' = M.insert uuid node nodeAcc
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
-        let parentNode =
+        let childrenCount = countPotentialChildren db activity
+            parentNode =
                 ExportNode
                     { enId = activityId activity
                     , enName = activityName activity
@@ -567,14 +577,16 @@ extractNodesAndEdges db tree depth nodeAcc edgeAcc = case tree of
                     , enNodeType = ActivityNode
                     , enDepth = depth
                     , enLoopTarget = Nothing
+                    , enParentId = parentId
+                    , enChildrenCount = childrenCount
                     }
             nodes' = M.insert (activityId activity) parentNode nodeAcc
-            parentId = activityId activity
+            currentId = activityId activity
             processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
-                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) nodeAcc edgeAcc
+                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentId) nodeAcc edgeAcc
                     edge =
                         TreeEdge
-                            { teFrom = parentId
+                            { teFrom = currentId
                             , teTo = getTreeNodeId subtree
                             , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
                             , teQuantity = quantity
@@ -590,6 +602,17 @@ getTreeNodeId :: LoopAwareTree -> UUID
 getTreeNodeId (TreeLeaf activity) = activityId activity
 getTreeNodeId (TreeLoop uuid _ _) = uuid
 getTreeNodeId (TreeNode activity _) = activityId activity
+
+-- | Count potential children for navigation (technosphere inputs that could be expanded)
+countPotentialChildren :: Database -> Activity -> Int
+countPotentialChildren db activity = 
+    length [ ex | ex <- exchanges activity
+               , isTechnosphereExchange ex
+               , exchangeIsInput ex
+               , not (exchangeIsReference ex)
+               , Just targetUUID <- [exchangeActivityLinkId ex]
+               , M.member targetUUID (dbActivities db)
+               ]
 
 -- | Simple stats tracking
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves
