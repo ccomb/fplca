@@ -14,9 +14,12 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
+import qualified Data.ByteString.Lazy as BSL
 import Data.Time (UTCTime, getCurrentTime)
 import GHC.Generics
 import Servant
+import qualified Data.UUID as UUID
 
 -- | API type definition - RESTful design with focused endpoints
 type ACVAPI =
@@ -29,8 +32,8 @@ type ACVAPI =
                 :<|> "activity" :> Capture "uuid" Text :> "reference-product" :> Get '[JSON] FlowDetail
                 :<|> "activity" :> Capture "uuid" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "activity" :> Capture "uuid" Text :> "inventory" :> Get '[JSON] InventoryExport
-                :<|> "flows" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
-                :<|> "flows" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
+                :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
+                :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowDetail)
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowDetail)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
@@ -267,6 +270,34 @@ instance ToJSON InventoryMetadata
 instance ToJSON InventoryFlowDetail
 instance ToJSON InventoryStatistics
 
+-- | Validate UUID format and provide helpful error messages
+validateUUID :: Text -> Either Text Text
+validateUUID uuidText
+    -- Check if it's a standard UUID format (36 characters, 4 hyphens)
+    | Just _ <- UUID.fromText uuidText = Right uuidText
+    -- Reject anything else
+    | otherwise = Left $ "Invalid UUID format. Expected standard UUID (e.g. 550e8400-e29b-41d4-a716-446655440000). Got: " <> uuidText
+
+-- | Helper function to validate UUID and lookup activity
+withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
+withValidatedActivity db uuid action = do
+    case validateUUID uuid of
+        Left errorMsg -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+        Right validUuid -> 
+            case M.lookup validUuid (dbActivities db) of
+                Nothing -> throwError err404{errBody = "Activity not found"}
+                Just activity -> action activity
+
+-- | Helper function to validate UUID and lookup flow
+withValidatedFlow :: Database -> Text -> (Flow -> Handler a) -> Handler a
+withValidatedFlow db uuid action = do
+    case validateUUID uuid of
+        Left errorMsg -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+        Right validUuid -> 
+            case M.lookup validUuid (dbFlows db) of
+                Nothing -> throwError err404{errBody = "Flow not found"}
+                Just flow -> action flow
+
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Server ACVAPI
 acvServer db =
@@ -287,70 +318,52 @@ acvServer db =
   where
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
-    getActivityInfo uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> do
-                let activityForAPI = convertActivityForAPI db activity
-                let metadata = calculateActivityMetadata db activity
-                let stats = calculateActivityStats activity
-                let links = generateActivityLinks uuid
+    getActivityInfo uuid = withValidatedActivity db uuid $ \activity -> do
+        let activityForAPI = convertActivityForAPI db activity
+        let metadata = calculateActivityMetadata db activity
+        let stats = calculateActivityStats activity
+        let links = generateActivityLinks uuid
 
-                return $
-                    ActivityInfo
-                        { piActivity = activityForAPI
-                        , piMetadata = metadata
-                        , piStatistics = stats
-                        , piLinks = links
-                        }
+        return $
+            ActivityInfo
+                { piActivity = activityForAPI
+                , piMetadata = metadata
+                , piStatistics = stats
+                , piLinks = links
+                }
 
     -- Activity flows sub-resource
     getActivityFlows :: Text -> Handler [FlowSummary]
-    getActivityFlows uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> return $ getActivityFlowSummaries db activity
+    getActivityFlows uuid = withValidatedActivity db uuid $ \activity ->
+        return $ getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
     getActivityInputs :: Text -> Handler [ExchangeDetail]
-    getActivityInputs uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> return $ getActivityInputDetails db activity
+    getActivityInputs uuid = withValidatedActivity db uuid $ \activity ->
+        return $ getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
     getActivityOutputs :: Text -> Handler [ExchangeDetail]
-    getActivityOutputs uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> return $ getActivityOutputDetails db activity
+    getActivityOutputs uuid = withValidatedActivity db uuid $ \activity ->
+        return $ getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
     getActivityReferenceProduct :: Text -> Handler FlowDetail
-    getActivityReferenceProduct uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> do
-                case getActivityReferenceProductDetail db activity of
-                    Nothing -> throwError err404{errBody = "No reference product found"}
-                    Just refProduct -> return refProduct
+    getActivityReferenceProduct uuid = withValidatedActivity db uuid $ \activity -> do
+        case getActivityReferenceProductDetail db activity of
+            Nothing -> throwError err404{errBody = "No reference product found"}
+            Just refProduct -> return refProduct
 
     -- Activity tree export for visualization (fixed depth=2)
     getActivityTree :: Text -> Handler TreeExport
-    getActivityTree uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just _ -> do
-                let maxDepth = 2 -- Fixed depth for interactive navigation
-                let loopAwareTree = buildLoopAwareTree db uuid maxDepth
-                return $ convertToTreeExport db uuid maxDepth loopAwareTree
+    getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
+        let maxDepth = 2 -- Fixed depth for interactive navigation
+        let loopAwareTree = buildLoopAwareTree db uuid maxDepth
+        return $ convertToTreeExport db uuid maxDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
-    getActivityInventory uuid = do
-        case M.lookup uuid (dbActivities db) of
-            Nothing -> throwError err404{errBody = "Activity not found"}
-            Just activity -> do
+    getActivityInventory uuid = withValidatedActivity db uuid $ \activity -> do
                 -- Build tree with cutoff-based pruning (professional LCA approach)
                 let maxDepth = 35 -- Higher depth since cutoffs will control tree size
                 let cutoffThreshold = 1e-8 -- 0.01% cutoff - more permissive to capture full supply chain
@@ -360,20 +373,15 @@ acvServer db =
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
-    getFlowDetail flowId = do
-        case M.lookup flowId (dbFlows db) of
-            Nothing -> throwError err404{errBody = "Flow not found"}
-            Just flow -> do
-                let usageCount = getFlowUsageCount db flowId
-                let unitName = getUnitNameForFlow (dbUnits db) flow
-                return $ FlowDetail flow unitName usageCount
+    getFlowDetail flowId = withValidatedFlow db flowId $ \flow -> do
+        let usageCount = getFlowUsageCount db flowId
+        let unitName = getUnitNameForFlow (dbUnits db) flow
+        return $ FlowDetail flow unitName usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Handler [ActivitySummary]
-    getFlowActivities flowId = do
-        case M.lookup flowId (dbFlows db) of
-            Nothing -> throwError err404{errBody = "Flow not found"}
-            Just _ -> return $ getActivitiesUsingFlow db flowId
+    getFlowActivities flowId = withValidatedFlow db flowId $ \_ ->
+        return $ getActivitiesUsingFlow db flowId
 
     -- Search flows by name or synonym with pagination and count
     searchFlowsWithCount :: Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowDetail)

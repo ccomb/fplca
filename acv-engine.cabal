@@ -41,6 +41,7 @@ executable acv-cli
                      , binary
                      , time
                      , hashable
+                     , uuid
 
   other-modules:     ACV.Types
                      , ACV.Tree
