@@ -26,7 +26,7 @@
     <flowData>
       <!-- INPUT: 7.2 MJ electricity (= 2.0 kWh × 3.6 MJ/kWh) -->
       <intermediateExchange id="int-1" unitId="mj-unit-test" amount="7.2" 
-                           mathematicalRelation="7.2" intermediateExchangeId="electricity-test-flow"
+                           mathematicalRelation="7.2" intermediateExchangeId="12345678-1234-5678-9abc-123456789202"
                            activityLinkId="12345678-1234-5678-9abc-123456789002">
         <name xml:lang="en">Electricity, from coal, synthetic test</name>
         <unitName xml:lang="en">MJ</unitName>
@@ -41,7 +41,7 @@
       
       <!-- OUTPUT: 2.2 lb steel (= 1.0 kg × 2.2 lb/kg) -->
       <intermediateExchange id="int-2" unitId="lb-unit-test" amount="2.2" 
-                           mathematicalRelation="2.2" intermediateExchangeId="steel-test-flow"
+                           mathematicalRelation="2.2" intermediateExchangeId="12345678-1234-5678-9abc-123456789203"
                            activityLinkId="12345678-1234-5678-9abc-123456789001">
         <name xml:lang="en">Steel, synthetic test</name>
         <unitName xml:lang="en">lb</unitName>
@@ -56,7 +56,7 @@
       
       <!-- EMISSION: 1.8 kg CO2 to air -->
       <elementaryExchange id="elem-1" unitId="kg-unit-test" amount="1.8" 
-                         mathematicalRelation="1.8" elementaryExchangeId="co2-test-flow">
+                         mathematicalRelation="1.8" elementaryExchangeId="12345678-1234-5678-9abc-123456789301">
         <name xml:lang="en">Carbon dioxide</name>
         <unitName xml:lang="en">kg</unitName>
         <compartment>

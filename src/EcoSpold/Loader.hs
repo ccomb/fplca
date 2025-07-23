@@ -96,11 +96,11 @@ missing = Activity "missing" "Activity not found" ["Activity not found"] M.empty
 -}
 loadAllSpolds :: FilePath -> IO ActivityDB
 loadAllSpolds dir = do
-    print "listing directory"
+    hPutStrLn stderr "listing directory"
     files <- listDirectory dir
-    print "getting spold files"
+    hPutStrLn stderr "getting spold files"
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
-    print $ "Found " ++ show (length spoldFiles) ++ " spold files"
+    hPutStrLn stderr $ "Found " ++ show (length spoldFiles) ++ " spold files"
 
     -- Load files in chunks to avoid memory explosion
     loadSpoldsInChunks spoldFiles M.empty
@@ -110,7 +110,7 @@ loadAllSpolds dir = do
     loadSpoldsInChunks [] acc = return acc
     loadSpoldsInChunks files acc = do
         let (chunk, rest) = splitAt chunkSize files
-        print $ "Processing chunk of " ++ show (length chunk) ++ " files"
+        hPutStrLn stderr $ "Processing chunk of " ++ show (length chunk) ++ " files"
 
         -- Force evaluation of chunk to avoid building up thunks
         chunk' <- mapM parseActivityFromFile chunk
@@ -125,11 +125,11 @@ loadAllSpolds dir = do
 -}
 loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
 loadAllSpoldsWithFlows dir = do
-    print "listing directory"
+    hPutStrLn stderr "listing directory"
     files <- listDirectory dir
-    print "getting spold files"
+    hPutStrLn stderr "getting spold files"
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
-    print $ "Found " ++ show (length spoldFiles) ++ " spold files"
+    hPutStrLn stderr $ "Found " ++ show (length spoldFiles) ++ " spold files"
 
     -- OPTION B: Simple chunking - optimal chunk size with direct parallelism
     loadWithSimpleChunks spoldFiles
@@ -140,7 +140,7 @@ loadAllSpoldsWithFlows dir = do
     loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
     loadWithSimpleChunks allFiles = do
         let chunks = chunksOf optimalChunkSize allFiles
-        print $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each"
+        hPutStrLn stderr $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each"
 
         -- Activity chunks sequentially, but files within each chunk in parallel
         results <- mapM activityChunkSimple chunks
@@ -149,15 +149,15 @@ loadAllSpoldsWithFlows dir = do
         let !finalFlowMap = M.unions flowMaps
         let !finalUnitMap = M.unions unitMaps
 
-        print $ "Final: " ++ show (M.size finalProcMap) ++ " activities, " ++ show (M.size finalFlowMap) ++ " flows, " ++ show (M.size finalUnitMap) ++ " units"
+        hPutStrLn stderr $ "Final: " ++ show (M.size finalProcMap) ++ " activities, " ++ show (M.size finalFlowMap) ++ " flows, " ++ show (M.size finalUnitMap) ++ " units"
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
-    -- Activity one chunk: all files in chunk activityed in parallel
+    -- Activity one chunk: all files in chunk processed in parallel
     activityChunkSimple :: [FilePath] -> IO (ActivityDB, FlowDB, UnitDB)
     activityChunkSimple chunk = do
-        print $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
+        hPutStrLn stderr $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
 
-        -- All files in chunk activityed in parallel
+        -- All files in chunk processed in parallel
         chunkResults <- mapConcurrently streamParseActivityAndFlowsFromFile chunk
         let (!procs, flowLists, unitLists) = unzip3 chunkResults
         let !allFlows = concat flowLists
@@ -181,10 +181,10 @@ loadAllSpoldsWithFlows dir = do
 loadAllSpoldsWithIndexes :: FilePath -> IO Database
 loadAllSpoldsWithIndexes dir = do
     numCaps <- getNumCapabilities
-    print $ "loading activities with flow deduplication and indexes using " ++ show numCaps ++ " cores"
+    hPutStrLn stderr $ "loading activities with flow deduplication and indexes using " ++ show numCaps ++ " cores"
     simpleDb <- loadAllSpoldsWithFlows dir
 
-    print "building indexes for efficient queries"
+    hPutStrLn stderr "building indexes for efficient queries"
     let indexes = buildIndexes (sdbActivities simpleDb) (sdbFlows simpleDb)
 
     return $ Database (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes

@@ -156,7 +156,7 @@ matchesFlowOrSynonym searchText flow =
 
 -- | Activité ACV de base (activité)
 data Activity = Activity
-    { activityId :: !UUID -- Identifiant unique du activité
+    { activityId :: !UUID -- Identifiant unique de l'activité
     , activityName :: !Text -- Nom
     , activityDescription :: ![Text] -- Description générale (generalComment) par paragraphes
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue comme les flux
@@ -177,7 +177,7 @@ data ActivityTree
 data LoopAwareTree
     = TreeLeaf !Activity
     | TreeNode !Activity ![(Double, Flow, LoopAwareTree)] -- Activity + (quantity, flow, subtree)
-    | TreeLoop !UUID !Text !Int  -- Loop reference: UUID + ActivityName + Depth
+    | TreeLoop !UUID !Text !Int -- Loop reference: UUID + ActivityName + Depth
     deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données des flux (dédupliquée)

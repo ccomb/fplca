@@ -11,10 +11,11 @@ echo ""
 DATA_DIR="test-data"
 ROOT_UUID="12345678-1234-5678-9abc-123456789001" 
 METHOD_FILE="test-data/method.xml"
+CLI_ARGS="--data $DATA_DIR --root $ROOT_UUID --method $METHOD_FILE --no-cache"
 
 # Test 1: Search for steel activities
 echo "Test 1: Search activities by name"
-RESULT=$(cabal run acv-cli -- --data $DATA_DIR --root $ROOT_UUID --method $METHOD_FILE --query "search/activities?name=steel" 2>/dev/null)
+RESULT=$(cabal run acv-cli -- $CLI_ARGS --query "search/activities?name=steel" 2>/dev/null)
 echo "Query: search/activities?name=steel"
 echo "Result: $RESULT"
 
@@ -29,13 +30,14 @@ fi
 # Test 2: Get steel activity inventory 
 echo ""
 echo "Test 2: Get activity inventory"
-INVENTORY=$(cabal run acv-cli -- --data $DATA_DIR --root $ROOT_UUID --method $METHOD_FILE --query "activity/$ROOT_UUID/inventory" 2>/dev/null)
+INVENTORY=$(cabal run acv-cli -- $CLI_ARGS --query "activity/$ROOT_UUID/inventory" 2>/dev/null)
 echo "Query: activity/$ROOT_UUID/inventory"
 echo "Result: $INVENTORY"
 
-# Validate that we get CO2 emissions from steel production
-if echo "$INVENTORY" | jq -e '."co2-test-flow"' >/dev/null 2>&1; then
-    CO2_VALUE=$(echo "$INVENTORY" | jq -r '."co2-test-flow"')
+# Validate that we get CO2 emissions from steel production (using proper UUID)
+CO2_FLOW_UUID="12345678-1234-5678-9abc-123456789301"
+if echo "$INVENTORY" | jq -e ".\"$CO2_FLOW_UUID\"" >/dev/null 2>&1; then
+    CO2_VALUE=$(echo "$INVENTORY" | jq -r ".\"$CO2_FLOW_UUID\"")
     echo "✓ Inventory contains CO2 emissions: $CO2_VALUE kg"
     
     # Validate the value is reasonable (should be ~9.07 kg with full supply chain)
@@ -47,14 +49,14 @@ if echo "$INVENTORY" | jq -e '."co2-test-flow"' >/dev/null 2>&1; then
         exit 1
     fi
 else
-    echo "✗ Inventory missing CO2 emissions"
+    echo "✗ Inventory missing CO2 emissions for UUID: $CO2_FLOW_UUID"
     exit 1
 fi
 
 # Test 3: Search for flows
 echo ""
 echo "Test 3: Search flows"
-FLOWS=$(cabal run acv-cli -- --data $DATA_DIR --root $ROOT_UUID --method $METHOD_FILE --query "search/flows?q=electricity" 2>/dev/null)
+FLOWS=$(cabal run acv-cli -- $CLI_ARGS --query "search/flows?q=electricity" 2>/dev/null)
 echo "Query: search/flows?q=electricity"  
 echo "Result: $FLOWS"
 
@@ -69,7 +71,7 @@ fi
 # Test 4: Activity tree structure
 echo ""
 echo "Test 4: Get activity tree"
-TREE=$(cabal run acv-cli -- --data $DATA_DIR --root $ROOT_UUID --method $METHOD_FILE --query "activity/$ROOT_UUID/tree" 2>/dev/null)
+TREE=$(cabal run acv-cli -- $CLI_ARGS --query "activity/$ROOT_UUID/tree" 2>/dev/null)
 echo "Query: activity/$ROOT_UUID/tree"
 echo "Result: $TREE"
 

@@ -26,7 +26,7 @@
     <flowData>
       <!-- OUTPUT: 2.2 lb coal (= 1.0 kg × 2.2 lb/kg) -->
       <intermediateExchange id="int-1" unitId="lb-unit-test" amount="2.2" 
-                           mathematicalRelation="2.2" intermediateExchangeId="coal-test-flow"
+                           mathematicalRelation="2.2" intermediateExchangeId="12345678-1234-5678-9abc-123456789201"
                            activityLinkId="12345678-1234-5678-9abc-123456789003">
         <name xml:lang="en">Coal, hard, synthetic test</name>
         <unitName xml:lang="en">lb</unitName>
@@ -41,7 +41,7 @@
       
       <!-- EMISSION: 0.1 kg CO2 to air from extraction -->
       <elementaryExchange id="elem-1" unitId="kg-unit-test" amount="0.1" 
-                         mathematicalRelation="0.1" elementaryExchangeId="co2-test-flow">
+                         mathematicalRelation="0.1" elementaryExchangeId="12345678-1234-5678-9abc-123456789301">
         <name xml:lang="en">Carbon dioxide</name>
         <unitName xml:lang="en">kg</unitName>
         <compartment>
