@@ -7,9 +7,12 @@ module ACV.API where
 
 import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
 import ACV.Query
+import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree, buildSafeLoopAwareTree)
 import ACV.Types
+import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..))
 import Data.Aeson
+import Data.Aeson.Types (Result(..), fromJSON)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -34,265 +37,25 @@ type ACVAPI =
                 :<|> "activity" :> Capture "uuid" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
-                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
                 :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
            )
 
--- | Enhanced exchange with flow details for API responses
-data ExchangeWithUnit = ExchangeWithUnit
-    { ewuExchange :: Exchange
-    , ewuUnitName :: Text           -- Unit name for the exchange
-    , ewuFlowName :: Text           -- Name of the flow being exchanged
-    , ewuFlowCategory :: Text       -- Category/compartment (for biosphere) or "technosphere"
-    , ewuTargetActivity :: Maybe Text  -- For technosphere: name of target activity
-    }
-    deriving (Generic, Show)
-
--- | Activity information optimized for API responses
-data ActivityForAPI = ActivityForAPI
-    { pfaId :: UUID
-    , pfaName :: Text
-    , pfaDescription :: [Text] -- Description par paragraphes
-    , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
-    , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
-    , pfaLocation :: Text
-    , pfaUnit :: Text -- Unité de référence
-    , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
-    }
-    deriving (Generic, Show)
-
--- | Streamlined activity information - core data only
-data ActivityInfo = ActivityInfo
-    { piActivity :: ActivityForAPI -- Enhanced activity with unit names
-    , piMetadata :: ActivityMetadata -- Extended metadata
-    , piStatistics :: ActivityStats -- Usage statistics
-    , piLinks :: ActivityLinks -- Links to sub-resources
-    }
-    deriving (Generic, Show)
-
--- | Extended activity metadata
-data ActivityMetadata = ActivityMetadata
-    { pmTotalFlows :: Int -- Number of unique flows used
-    , pmTechnosphereInputs :: Int -- Count of technosphere inputs
-    , pmBiosphereExchanges :: Int -- Count of biosphere exchanges
-    , pmHasReferenceProduct :: Bool -- Whether activity has reference product
-    , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
-    }
-    deriving (Generic, Show)
-
--- | Links to related resources
-data ActivityLinks = ActivityLinks
-    { plFlowsUrl :: Text -- URL to flows endpoint
-    , plInputsUrl :: Text -- URL to inputs endpoint
-    , plOutputsUrl :: Text -- URL to outputs endpoint
-    , plReferenceProductUrl :: Maybe Text -- URL to reference product (if exists)
-    }
-    deriving (Generic, Show)
-
--- | Search response combining results and count
-data SearchResults a = SearchResults
-    { srResults :: [a]      -- The actual search results
-    , srTotal :: Int        -- Total count of all matching items (before pagination)
-    , srOffset :: Int       -- Starting offset for pagination
-    , srLimit :: Int        -- Maximum number of results requested
-    , srHasMore :: Bool     -- Whether there are more results available
-    }
-    deriving (Generic, Show)
-
--- | Lightweight flow information for lists
-data FlowSummary = FlowSummary
-    { fsFlow :: Flow -- Core flow data
-    , fsUnitName :: Text -- Unit name for the flow
-    , fsUsageCount :: Int -- How many activities use this flow
-    , fsRole :: FlowRole -- Role in this specific activity
-    }
-    deriving (Generic, Show)
-
--- | Role of a flow in a specific activity context
-data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
-    deriving (Eq, Show, Generic)
-
--- | Flow with additional metadata
-data FlowDetail = FlowDetail
-    { fdFlow :: Flow
-    , fdUnitName :: Text -- Unit name for the flow
-    , fdUsageCount :: Int -- How many activities use this flow
-    }
-    deriving (Generic, Show)
-
--- | Exchange with flow, unit, and target activity information
-data ExchangeDetail = ExchangeDetail
-    { edExchange :: Exchange
-    , edFlow :: Flow
-    , edFlowUnitName :: Text -- Unit name for the flow's default unit
-    , edUnit :: Unit -- Unit information for the exchange
-    , edExchangeUnitName :: Text -- Unit name for the exchange's specific unit
-    , edTargetActivity :: Maybe ActivitySummary -- Target activity for technosphere inputs
-    }
-    deriving (Generic, Show)
-
--- | Minimal activity information for navigation
-data ActivitySummary = ActivitySummary
-    { prsId :: UUID
-    , prsName :: Text
-    , prsLocation :: Text
-    }
-    deriving (Generic, Show)
-
--- | Minimal flow information for search results
-data FlowSearchResult = FlowSearchResult
-    { fsrId :: UUID
-    , fsrName :: Text
-    , fsrCategory :: Text
-    , fsrUnitName :: Text
-    }
-    deriving (Generic, Show)
-
--- | Activity statistics
-data ActivityStats = ActivityStats
-    { psInputCount :: Int
-    , psOutputCount :: Int
-    , psTotalExchanges :: Int
-    , psLocation :: Text
-    }
-    deriving (Generic, Show)
 
 -- JSON instances
-instance ToJSON ActivityInfo
-instance ToJSON ActivityForAPI
-instance ToJSON ExchangeWithUnit
-instance ToJSON ActivityMetadata
-instance ToJSON ActivityLinks
-instance ToJSON a => ToJSON (SearchResults a)
-instance ToJSON FlowSummary
-instance ToJSON FlowRole
-instance ToJSON FlowDetail
-instance ToJSON ExchangeDetail
-instance ToJSON ActivityStats
-instance ToJSON ActivitySummary
-instance ToJSON FlowSearchResult
-instance ToJSON Activity
-instance ToJSON Exchange
-instance ToJSON Flow
-instance ToJSON FlowType
-instance ToJSON Unit
 instance ToJSON SynonymStats
 
--- | Tree export data structures for Elm frontend
-data TreeExport = TreeExport
-    { teTree :: TreeMetadata
-    , teNodes :: M.Map UUID ExportNode
-    , teEdges :: [TreeEdge]
-    }
-    deriving (Generic, Show)
 
-data TreeMetadata = TreeMetadata
-    { tmRootId :: UUID
-    , tmMaxDepth :: Int
-    , tmTotalNodes :: Int
-    , tmLoopNodes :: Int
-    , tmLeafNodes :: Int
-    , tmExpandableNodes :: Int -- Nodes that could expand further
-    }
-    deriving (Generic, Show)
 
-data ExportNode = ExportNode
-    { enId :: UUID
-    , enName :: Text
-    , enDescription :: [Text]
-    , enLocation :: Text
-    , enUnit :: Text
-    , enNodeType :: NodeType
-    , enDepth :: Int
-    , enLoopTarget :: Maybe UUID
-    , enParentId :: Maybe UUID -- For navigation back up
-    , enChildrenCount :: Int -- Number of potential children for expandability
-    }
-    deriving (Generic, Show)
-
-data NodeType = ActivityNode | LoopNode
-    deriving (Eq, Generic, Show)
-
-data TreeEdge = TreeEdge
-    { teFrom :: UUID
-    , teTo :: UUID
-    , teFlow :: FlowInfo
-    , teQuantity :: Double
-    , teUnit :: Text
-    }
-    deriving (Generic, Show)
-
-data FlowInfo = FlowInfo
-    { fiId :: UUID
-    , fiName :: Text
-    , fiCategory :: Text
-    }
-    deriving (Generic, Show)
-
--- JSON instances for tree export
-instance ToJSON TreeExport
-instance ToJSON TreeMetadata
-instance ToJSON ExportNode
-instance ToJSON NodeType
-instance ToJSON TreeEdge
-instance ToJSON FlowInfo
-
--- | Inventory export data structures
-data InventoryExport = InventoryExport
-    { ieMetadata :: InventoryMetadata
-    , ieFlows :: [InventoryFlowDetail]
-    , ieStatistics :: InventoryStatistics
-    }
-    deriving (Generic, Show)
-
-data InventoryMetadata = InventoryMetadata
-    { imRootActivity :: ActivitySummary
-    , imCalculationDepth :: Int
-    , imTotalFlows :: Int
-    , imEmissionFlows :: Int -- Biosphere outputs (negative environmental impact)
-    , imResourceFlows :: Int -- Biosphere inputs (resource extraction)
-    }
-    deriving (Generic, Show)
-
-data InventoryFlowDetail = InventoryFlowDetail
-    { ifdFlow :: Flow
-    , ifdQuantity :: Double
-    , ifdUnitName :: Text
-    , ifdIsEmission :: Bool -- True for emissions, False for resource extraction
-    , ifdCategory :: Text -- Flow category for grouping
-    }
-    deriving (Generic, Show)
-
-data InventoryStatistics = InventoryStatistics
-    { isTotalQuantity :: Double -- Sum of absolute values
-    , isEmissionQuantity :: Double -- Sum of emissions (should be positive)
-    , isResourceQuantity :: Double -- Sum of resource extraction (should be positive)
-    , isTopCategories :: [(Text, Int)] -- Top flow categories by count
-    }
-    deriving (Generic, Show)
-
--- JSON instances for inventory export
-instance ToJSON InventoryExport
-instance ToJSON InventoryMetadata
-instance ToJSON InventoryFlowDetail
-instance ToJSON InventoryStatistics
-
--- | Validate UUID format and provide helpful error messages
-validateUUID :: Text -> Either Text Text
-validateUUID uuidText
-    -- Check if it's a standard UUID format (36 characters, 4 hyphens)
-    | Just _ <- UUID.fromText uuidText = Right uuidText
-    -- Reject anything else
-    | otherwise = Left $ "Invalid UUID format. Expected standard UUID (e.g. 550e8400-e29b-41d4-a716-446655440000). Got: " <> uuidText
 
 -- | Helper function to validate UUID and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
 withValidatedActivity db uuid action = do
-    case validateUUID uuid of
-        Left errorMsg -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+    case ACV.Service.validateUUID uuid of
+        Left (ACV.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+        Left _ -> throwError err400{errBody = "Invalid request"}
         Right validUuid -> 
             case M.lookup validUuid (dbActivities db) of
                 Nothing -> throwError err404{errBody = "Activity not found"}
@@ -301,8 +64,9 @@ withValidatedActivity db uuid action = do
 -- | Helper function to validate UUID and lookup flow
 withValidatedFlow :: Database -> Text -> (Flow -> Handler a) -> Handler a
 withValidatedFlow db uuid action = do
-    case validateUUID uuid of
-        Left errorMsg -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+    case ACV.Service.validateUUID uuid of
+        Left (ACV.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+        Left _ -> throwError err400{errBody = "Invalid request"}
         Right validUuid -> 
             case M.lookup validUuid (dbFlows db) of
                 Nothing -> throwError err404{errBody = "Flow not found"}
@@ -320,47 +84,40 @@ acvServer db =
         :<|> getActivityInventory
         :<|> getFlowDetail
         :<|> getFlowActivities
-        :<|> searchFlowsWithCount
-        :<|> searchFlowsInLanguageWithCount
+        :<|> searchFlows
         :<|> searchActivitiesWithCount
         :<|> getAvailableLanguagesAPI
         :<|> getSynonymStatsAPI
   where
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
-    getActivityInfo uuid = withValidatedActivity db uuid $ \activity -> do
-        let activityForAPI = convertActivityForAPI db activity
-        let metadata = calculateActivityMetadata db activity
-        let stats = calculateActivityStats activity
-        let links = generateActivityLinks uuid
-
-        return $
-            ActivityInfo
-                { piActivity = activityForAPI
-                , piMetadata = metadata
-                , piStatistics = stats
-                , piLinks = links
-                }
+    getActivityInfo uuid = do
+        case ACV.Service.getActivityInfo db uuid of
+            Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (ACV.Service.InvalidUUID _) -> throwError err400{errBody = "Invalid UUID format"}
+            Right result -> case fromJSON result of
+                Success activityInfo -> return activityInfo
+                Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
 
     -- Activity flows sub-resource
     getActivityFlows :: Text -> Handler [FlowSummary]
     getActivityFlows uuid = withValidatedActivity db uuid $ \activity ->
-        return $ getActivityFlowSummaries db activity
+        return $ ACV.Service.getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
     getActivityInputs :: Text -> Handler [ExchangeDetail]
     getActivityInputs uuid = withValidatedActivity db uuid $ \activity ->
-        return $ getActivityInputDetails db activity
+        return $ ACV.Service.getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
     getActivityOutputs :: Text -> Handler [ExchangeDetail]
     getActivityOutputs uuid = withValidatedActivity db uuid $ \activity ->
-        return $ getActivityOutputDetails db activity
+        return $ ACV.Service.getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
     getActivityReferenceProduct :: Text -> Handler FlowDetail
     getActivityReferenceProduct uuid = withValidatedActivity db uuid $ \activity -> do
-        case getActivityReferenceProductDetail db activity of
+        case ACV.Service.getActivityReferenceProductDetail db activity of
             Nothing -> throwError err404{errBody = "No reference product found"}
             Just refProduct -> return refProduct
 
@@ -369,68 +126,39 @@ acvServer db =
     getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
         let maxDepth = 3 -- Fixed depth for testing synthetic data
         let loopAwareTree = buildLoopAwareTree db uuid maxDepth
-        return $ convertToTreeExport db uuid maxDepth loopAwareTree
+        return $ ACV.Service.convertToTreeExport db uuid maxDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
     getActivityInventory uuid = withValidatedActivity db uuid $ \activity -> do
-                -- Build tree with cutoff-based pruning (professional LCA approach)
-                let maxDepth = 35 -- Higher depth since cutoffs will control tree size
-                let cutoffThreshold = 1e-8 -- 0.01% cutoff - more permissive to capture full supply chain
-                let loopAwareTree = buildCutoffLoopAwareTree db uuid maxDepth cutoffThreshold
-                let inventory = computeInventoryFromLoopAwareTree (dbFlows db) loopAwareTree
-                return $ convertToInventoryExport db activity inventory maxDepth
+        case ACV.Service.computeActivityInventory db uuid of
+            Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (ACV.Service.InvalidUUID _) -> throwError err400{errBody = "Invalid UUID format"}
+            Right inventory -> return $ ACV.Service.convertToInventoryExport db activity inventory 35
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
     getFlowDetail flowId = withValidatedFlow db flowId $ \flow -> do
-        let usageCount = getFlowUsageCount db flowId
+        let usageCount = ACV.Service.getFlowUsageCount db flowId
         let unitName = getUnitNameForFlow (dbUnits db) flow
         return $ FlowDetail flow unitName usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Handler [ActivitySummary]
     getFlowActivities flowId = withValidatedFlow db flowId $ \_ ->
-        return $ getActivitiesUsingFlow db flowId
+        return $ ACV.Service.getActivitiesUsingFlow db flowId
 
-    -- Search flows by name or synonym with pagination and count
-    searchFlowsWithCount :: Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-    searchFlowsWithCount Nothing _ _ = return $ SearchResults [] 0 0 50 False
-    searchFlowsWithCount (Just query) limitParam offsetParam = do
-        let flows = findFlowsBySynonym db query
-            flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
-            totalCount = length flowSearchResults
-            limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
-            offset = maybe 0 id offsetParam -- Default offset: 0
-            paginatedResults = take limit $ drop offset flowSearchResults
-            hasMore = offset + length paginatedResults < totalCount
-        return $ SearchResults paginatedResults totalCount offset limit hasMore
-
-    -- Search flows by synonym in specific language with pagination and count
-    searchFlowsInLanguageWithCount :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-    searchFlowsInLanguageWithCount Nothing _ _ _ = return $ SearchResults [] 0 0 50 False
-    searchFlowsInLanguageWithCount _ Nothing _ _ = return $ SearchResults [] 0 0 50 False
-    searchFlowsInLanguageWithCount (Just query) (Just lang) limitParam offsetParam = do
-        let flows = findFlowsBySynonymInLanguage db lang query
-            flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
-            totalCount = length flowSearchResults
-            limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
-            offset = maybe 0 id offsetParam -- Default offset: 0
-            paginatedResults = take limit $ drop offset flowSearchResults
-            hasMore = offset + length paginatedResults < totalCount
-        return $ SearchResults paginatedResults totalCount offset limit hasMore
+    -- Search flows by name or synonym with optional language filtering and pagination
+    searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
+    searchFlows queryParam langParam limitParam offsetParam = 
+        searchFlowsInternal db queryParam langParam limitParam offsetParam
 
     -- Search activities by specific fields with pagination and count
     searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
     searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
         let activities = findActivitiesByFields db nameParam geoParam productParam
             activitySummaries = [ActivitySummary (activityId activity) (activityName activity) (activityLocation activity) | activity <- activities]
-            totalCount = length activitySummaries
-            limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
-            offset = maybe 0 id offsetParam -- Default offset: 0
-            paginatedResults = take limit $ drop offset activitySummaries
-            hasMore = offset + length paginatedResults < totalCount
-        return $ SearchResults paginatedResults totalCount offset limit hasMore
+        return $ paginateResults activitySummaries limitParam offsetParam
 
 
     -- Get available languages
@@ -441,306 +169,25 @@ acvServer db =
     getSynonymStatsAPI :: Handler SynonymStats
     getSynonymStatsAPI = return $ getSynonymStats db
 
--- | Calculate extended metadata for a activity
-calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
-calculateActivityMetadata db activity =
-    let allExchanges = exchanges activity
-        uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
-        techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
-        bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
-        refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
-            [] -> Nothing
-            (ex : _) -> Just (exchangeFlowId ex)
-     in ActivityMetadata
-            { pmTotalFlows = uniqueFlows
-            , pmTechnosphereInputs = techInputs
-            , pmBiosphereExchanges = bioExchanges
-            , pmHasReferenceProduct = refProduct /= Nothing
-            , pmReferenceProductFlow = refProduct
-            }
+-- | Helper function to apply pagination to search results
+paginateResults :: [a] -> Maybe Int -> Maybe Int -> SearchResults a
+paginateResults results limitParam offsetParam =
+    let totalCount = length results
+        limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
+        offset = maybe 0 id offsetParam -- Default offset: 0
+        paginatedResults = take limit $ drop offset results
+        hasMore = offset + length paginatedResults < totalCount
+    in SearchResults paginatedResults totalCount offset limit hasMore
 
--- | Generate links to sub-resources for a activity
-generateActivityLinks :: Text -> ActivityLinks
-generateActivityLinks uuid =
-    ActivityLinks
-        { plFlowsUrl = "/api/v1/activity/" <> uuid <> "/flows"
-        , plInputsUrl = "/api/v1/activity/" <> uuid <> "/inputs"
-        , plOutputsUrl = "/api/v1/activity/" <> uuid <> "/outputs"
-        , plReferenceProductUrl = Just ("/api/v1/activity/" <> uuid <> "/reference-product")
-        }
-
--- | Get flows used by a activity as lightweight summaries
-getActivityFlowSummaries :: Database -> Activity -> [FlowSummary]
-getActivityFlowSummaries db activity =
-    [ FlowSummary flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
-    | exchange <- exchanges activity
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    ]
-  where
-    determineFlowRole ex
-        | exchangeIsReference ex = ReferenceProductFlow
-        | exchangeIsInput ex = InputFlow
-        | otherwise = OutputFlow
-
--- | Get reference product as FlowDetail (if exists)
-getActivityReferenceProductDetail :: Database -> Activity -> Maybe FlowDetail
-getActivityReferenceProductDetail db activity = do
-    refExchange <- case filter exchangeIsReference (exchanges activity) of
-        [] -> Nothing
-        (ex : _) -> Just ex
-    flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
-    let usageCount = getFlowUsageCount db (flowId flow)
-    let unitName = getUnitNameForFlow (dbUnits db) flow
-    return $ FlowDetail flow unitName usageCount
-
--- | Get activities that use a specific flow as ActivitySummary list
-getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
-getActivitiesUsingFlow db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> []
-        Just activityUUIDs ->
-            let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
-             in [ ActivitySummary (activityId proc) (activityName proc) (activityLocation proc)
-                | procUUID <- uniqueUUIDs
-                , Just proc <- [M.lookup procUUID (dbActivities db)]
-                ]
-
--- | Get all flows used by a activity with usage statistics (legacy function - kept for compatibility)
-getActivityFlows :: Database -> Activity -> [FlowDetail]
-getActivityFlows db activity =
-    [ FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow))
-    | exchange <- exchanges activity
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    ]
-
--- | Get flow usage count across all activities
-getFlowUsageCount :: Database -> UUID -> Int
-getFlowUsageCount db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> 0
-        Just activityUUIDs -> length activityUUIDs
-
--- | Get detailed input exchanges
-getActivityInputDetails :: Database -> Activity -> [ExchangeDetail]
-getActivityInputDetails db activity =
-    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetActivity db exchange)
-    | exchange <- exchanges activity
-    , exchangeIsInput exchange
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
-    ]
-
--- | Get detailed output exchanges
-getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
-getActivityOutputDetails db activity =
-    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetActivity db exchange)
-    | exchange <- exchanges activity
-    , not (exchangeIsInput exchange)
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
-    ]
-
--- | Get target activity for technosphere navigation
-getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
-getTargetActivity db exchange = do
-    targetId <- exchangeActivityLinkId exchange
-    targetActivity <- M.lookup targetId (dbActivities db)
-    return $
-        ActivitySummary
-            { prsId = activityId targetActivity
-            , prsName = activityName targetActivity
-            , prsLocation = activityLocation targetActivity
-            }
-
--- | Calculate activity statistics
-calculateActivityStats :: Activity -> ActivityStats
-calculateActivityStats activity =
-    ActivityStats
-        { psInputCount = length $ filter exchangeIsInput (exchanges activity)
-        , psOutputCount = length $ filter (not . exchangeIsInput) (exchanges activity)
-        , psTotalExchanges = length (exchanges activity)
-        , psLocation = activityLocation activity
-        }
-
--- | Convert Activity to ActivityForAPI with unit names
-convertActivityForAPI :: Database -> Activity -> ActivityForAPI
-convertActivityForAPI db activity =
-    ActivityForAPI
-        { pfaId = activityId activity
-        , pfaName = activityName activity
-        , pfaDescription = activityDescription activity
-        , pfaSynonyms = activitySynonyms activity
-        , pfaClassifications = activityClassification activity
-        , pfaLocation = activityLocation activity
-        , pfaUnit = activityUnit activity
-        , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
-        }
-  where
-    convertExchangeWithUnit exchange =
-        let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
-            targetActivityInfo = case exchange of
-                TechnosphereExchange _ _ _ _ _ linkId -> 
-                    case M.lookup linkId (dbActivities db) of
-                        Just targetActivity -> Just (activityName targetActivity)
-                        Nothing -> Nothing
-                BiosphereExchange _ _ _ _ -> Nothing
-        in ExchangeWithUnit
-            { ewuExchange = exchange
-            , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
-            , ewuFlowName = maybe "unknown" flowName flowInfo
-            , ewuFlowCategory = case flowInfo of
-                Just flow -> case isTechnosphereExchange exchange of
-                    True -> "technosphere"
-                    False -> flowCategory flow  -- This will now include compartment info like "water/ground-, long-term"
-                Nothing -> "unknown"
-            , ewuTargetActivity = targetActivityInfo
-            }
-
--- | Convert LoopAwareTree to TreeExport format for JSON serialization
-convertToTreeExport :: Database -> UUID -> Int -> LoopAwareTree -> TreeExport
-convertToTreeExport db rootUUID maxDepth tree =
-    let (nodes, edges, stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
-        metadata =
-            TreeMetadata
-                { tmRootId = rootUUID
-                , tmMaxDepth = maxDepth
-                , tmTotalNodes = M.size nodes
-                , tmLoopNodes = length [() | (_, node) <- M.toList nodes, enNodeType node == LoopNode]
-                , tmLeafNodes = length [() | (_, node) <- M.toList nodes, null [e | e <- edges, teFrom e == enId node]]
-                , tmExpandableNodes = length [() | (_, node) <- M.toList nodes, enChildrenCount node > 0]
-                }
-     in TreeExport metadata nodes edges
-
--- | Extract nodes and edges from LoopAwareTree
-extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe UUID -> M.Map UUID ExportNode -> [TreeEdge] -> (M.Map UUID ExportNode, [TreeEdge], TreeStats)
-extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
-    TreeLeaf activity ->
-        let childrenCount = countPotentialChildren db activity
-            node =
-                ExportNode
-                    { enId = activityId activity
-                    , enName = activityName activity
-                    , enDescription = activityDescription activity
-                    , enLocation = activityLocation activity
-                    , enUnit = activityUnit activity
-                    , enNodeType = ActivityNode
-                    , enDepth = depth
-                    , enLoopTarget = Nothing
-                    , enParentId = parentId
-                    , enChildrenCount = childrenCount
-                    }
-            nodes' = M.insert (activityId activity) node nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 0 1)
-    TreeLoop uuid name depth ->
-        let node =
-                ExportNode
-                    { enId = uuid
-                    , enName = name
-                    , enDescription = ["Loop reference"]
-                    , enLocation = "N/A"
-                    , enUnit = "N/A"
-                    , enNodeType = LoopNode
-                    , enDepth = depth
-                    , enLoopTarget = Just uuid
-                    , enParentId = parentId
-                    , enChildrenCount = 0 -- Loops don't expand
-                    }
-            nodes' = M.insert uuid node nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 1 0)
-    TreeNode activity children ->
-        let childrenCount = countPotentialChildren db activity
-            parentNode =
-                ExportNode
-                    { enId = activityId activity
-                    , enName = activityName activity
-                    , enDescription = activityDescription activity
-                    , enLocation = activityLocation activity
-                    , enUnit = activityUnit activity
-                    , enNodeType = ActivityNode
-                    , enDepth = depth
-                    , enLoopTarget = Nothing
-                    , enParentId = parentId
-                    , enChildrenCount = childrenCount
-                    }
-            nodes' = M.insert (activityId activity) parentNode nodeAcc
-            currentId = activityId activity
-            processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
-                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentId) nodeAcc edgeAcc
-                    edge =
-                        TreeEdge
-                            { teFrom = currentId
-                            , teTo = getTreeNodeId subtree
-                            , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
-                            , teQuantity = quantity
-                            , teUnit = getUnitNameForFlow (dbUnits db) flow
-                            }
-                    newStats = combineStats statsAcc childStats
-                 in (childNodes, edge : childEdges, newStats)
-            (finalNodes, finalEdges, childStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
-         in (finalNodes, finalEdges, childStats)
-
--- | Helper to get node ID from LoopAwareTree
-getTreeNodeId :: LoopAwareTree -> UUID
-getTreeNodeId (TreeLeaf activity) = activityId activity
-getTreeNodeId (TreeLoop uuid _ _) = uuid
-getTreeNodeId (TreeNode activity _) = activityId activity
-
--- | Count potential children for navigation (technosphere inputs that could be expanded)
-countPotentialChildren :: Database -> Activity -> Int
-countPotentialChildren db activity =
-    length
-        [ ex | ex <- exchanges activity, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex), Just targetUUID <- [exchangeActivityLinkId ex], M.member targetUUID (dbActivities db)
-        ]
-
--- | Convert raw inventory to structured export format
-convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
-convertToInventoryExport db rootActivity inventory calculationDepth =
-    let flowDetails =
-            [ InventoryFlowDetail flow quantity (getUnitNameForFlow (dbUnits db) flow) isEmission (flowCategory flow)
-            | (flowUUID, quantity) <- M.toList inventory
-            , Just flow <- [M.lookup flowUUID (dbFlows db)]
-            , let isEmission = not (isResourceExtraction flow quantity)
-            ]
-
-        emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
-        resourceFlows = length [f | f <- flowDetails, not (ifdIsEmission f)]
-
-        totalQuantity = sum [abs (ifdQuantity f) | f <- flowDetails]
-        emissionQuantity = sum [ifdQuantity f | f <- flowDetails, ifdIsEmission f, ifdQuantity f > 0]
-        resourceQuantity = sum [abs (ifdQuantity f) | f <- flowDetails, not (ifdIsEmission f)]
-
-        categoryStats =
-            take 10 $
-                M.toList $
-                    M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
-
-        metadata =
-            InventoryMetadata
-                { imRootActivity = ActivitySummary (activityId rootActivity) (activityName rootActivity) (activityLocation rootActivity)
-                , imCalculationDepth = calculationDepth -- Actual calculation depth used
-                , imTotalFlows = length flowDetails
-                , imEmissionFlows = emissionFlows
-                , imResourceFlows = resourceFlows
-                }
-
-        statistics =
-            InventoryStatistics
-                { isTotalQuantity = totalQuantity
-                , isEmissionQuantity = emissionQuantity
-                , isResourceQuantity = resourceQuantity
-                , isTopCategories = categoryStats
-                }
-     in InventoryExport metadata flowDetails statistics
-
--- | Determine if a flow represents resource extraction (negative quantity = extraction from environment)
-isResourceExtraction :: Flow -> Double -> Bool
-isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
-
--- | Simple stats tracking
-data TreeStats = TreeStats Int Int Int -- total, loops, leaves
-
-combineStats :: TreeStats -> TreeStats -> TreeStats
-combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
+-- | Internal helper for flow search with optional language filtering
+searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
+searchFlowsInternal _ Nothing _ _ _ = return $ SearchResults [] 0 0 50 False
+searchFlowsInternal db (Just query) langParam limitParam offsetParam = do
+    let flows = case langParam of
+            Nothing -> findFlowsBySynonym db query
+            Just lang -> findFlowsBySynonymInLanguage db lang query
+        flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
+    return $ paginateResults flowSearchResults limitParam offsetParam
 
 -- | Proxy for the API
 acvAPI :: Proxy ACVAPI

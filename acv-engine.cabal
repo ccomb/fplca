@@ -47,6 +47,7 @@ executable acv-cli
                      , streaming-commons
 
   other-modules:     ACV.Types
+                     , ACV.Types.API
                      , ACV.Tree
                      , ACV.Inventory
                      , ACV.PEF

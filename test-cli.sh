@@ -34,10 +34,10 @@ INVENTORY=$(cabal run acv-cli -- $CLI_ARGS --query "activity/$ROOT_UUID/inventor
 echo "Query: activity/$ROOT_UUID/inventory"
 echo "Result: $INVENTORY"
 
-# Validate that we get CO2 emissions from steel production (using proper UUID)
+# Validate that we get CO2 emissions from steel production (using proper UUID in rich format)
 CO2_FLOW_UUID="12345678-1234-5678-9abc-123456789301"
-if echo "$INVENTORY" | jq -e ".\"$CO2_FLOW_UUID\"" >/dev/null 2>&1; then
-    CO2_VALUE=$(echo "$INVENTORY" | jq -r ".\"$CO2_FLOW_UUID\"")
+if echo "$INVENTORY" | jq -e ".ieFlows[] | select(.ifdFlow.flowId == \"$CO2_FLOW_UUID\")" >/dev/null 2>&1; then
+    CO2_VALUE=$(echo "$INVENTORY" | jq -r ".ieFlows[] | select(.ifdFlow.flowId == \"$CO2_FLOW_UUID\") | .ifdQuantity")
     echo "✓ Inventory contains CO2 emissions: $CO2_VALUE kg"
     
     # Validate the value is reasonable (should be ~9.07 kg with full supply chain)

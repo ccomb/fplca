@@ -5,6 +5,7 @@
 module ACV.Types where
 
 import Control.DeepSeq (NFData)
+import Data.Aeson (ToJSON, FromJSON)
 import Data.Binary (Binary)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -272,3 +273,18 @@ data CF = CF
     , cfFactor :: !Double -- Facteur de caractérisation
     }
     deriving (Eq, Show, Generic, Binary)
+
+-- JSON instances for API compatibility
+instance ToJSON FlowType
+instance ToJSON Unit  
+instance ToJSON Flow
+instance ToJSON Exchange
+instance ToJSON Activity
+instance ToJSON ImpactCategory
+instance ToJSON CF
+
+instance FromJSON FlowType
+instance FromJSON Unit
+instance FromJSON Flow
+instance FromJSON Exchange
+instance FromJSON Activity

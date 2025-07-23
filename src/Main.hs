@@ -189,6 +189,10 @@ executeQuery db queryStr = do
             case ACV.Service.getActivityInfo db uuid of
                 Left err -> hPutStrLn stderr $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
+        ActivityFlows uuid ->
+            case ACV.Service.getActivityFlows db uuid of
+                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+                Right result -> BSL.putStrLn $ encode result
         ActivityInventory uuid ->
             case ACV.Service.getActivityInventory db uuid of
                 Left err -> hPutStrLn stderr $ "Error: " ++ show err
