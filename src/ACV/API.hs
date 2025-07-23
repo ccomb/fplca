@@ -34,8 +34,8 @@ type ACVAPI =
                 :<|> "activity" :> Capture "uuid" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
-                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowDetail)
-                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowDetail)
+                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
+                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
                 :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
@@ -142,6 +142,15 @@ data ActivitySummary = ActivitySummary
     }
     deriving (Generic, Show)
 
+-- | Minimal flow information for search results
+data FlowSearchResult = FlowSearchResult
+    { fsrId :: UUID
+    , fsrName :: Text
+    , fsrCategory :: Text
+    , fsrUnitName :: Text
+    }
+    deriving (Generic, Show)
+
 -- | Activity statistics
 data ActivityStats = ActivityStats
     { psInputCount :: Int
@@ -164,6 +173,7 @@ instance ToJSON FlowDetail
 instance ToJSON ExchangeDetail
 instance ToJSON ActivityStats
 instance ToJSON ActivitySummary
+instance ToJSON FlowSearchResult
 instance ToJSON Activity
 instance ToJSON Exchange
 instance ToJSON Flow
@@ -384,29 +394,29 @@ acvServer db =
         return $ getActivitiesUsingFlow db flowId
 
     -- Search flows by name or synonym with pagination and count
-    searchFlowsWithCount :: Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowDetail)
+    searchFlowsWithCount :: Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
     searchFlowsWithCount Nothing _ _ = return $ SearchResults [] 0 0 50 False
     searchFlowsWithCount (Just query) limitParam offsetParam = do
         let flows = findFlowsBySynonym db query
-            flowDetails = [FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) | flow <- flows]
-            totalCount = length flowDetails
+            flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
+            totalCount = length flowSearchResults
             limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
             offset = maybe 0 id offsetParam -- Default offset: 0
-            paginatedResults = take limit $ drop offset flowDetails
+            paginatedResults = take limit $ drop offset flowSearchResults
             hasMore = offset + length paginatedResults < totalCount
         return $ SearchResults paginatedResults totalCount offset limit hasMore
 
     -- Search flows by synonym in specific language with pagination and count
-    searchFlowsInLanguageWithCount :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowDetail)
+    searchFlowsInLanguageWithCount :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
     searchFlowsInLanguageWithCount Nothing _ _ _ = return $ SearchResults [] 0 0 50 False
     searchFlowsInLanguageWithCount _ Nothing _ _ = return $ SearchResults [] 0 0 50 False
     searchFlowsInLanguageWithCount (Just query) (Just lang) limitParam offsetParam = do
         let flows = findFlowsBySynonymInLanguage db lang query
-            flowDetails = [FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) | flow <- flows]
-            totalCount = length flowDetails
+            flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
+            totalCount = length flowSearchResults
             limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
             offset = maybe 0 id offsetParam -- Default offset: 0
-            paginatedResults = take limit $ drop offset flowDetails
+            paginatedResults = take limit $ drop offset flowSearchResults
             hasMore = offset + length paginatedResults < totalCount
         return $ SearchResults paginatedResults totalCount offset limit hasMore
 

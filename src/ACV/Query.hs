@@ -168,10 +168,46 @@ findActivitiesByName db searchTerm =
 -- | Recherche d'activités par champs spécifiques
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam =
-    [ activity
-    | activity <- M.elems (dbActivities db)
-    , matchesActivityFields db nameParam geoParam productParam activity
-    ]
+    let -- Get candidate UUIDs using indexes for faster filtering
+        candidateUUIDs = case (nameParam, geoParam, productParam) of
+            -- If we have a name parameter, use the name index for initial filtering
+            (Just name, _, _) -> getCandidatesFromNameIndex db name
+            -- If we have a location but no name, use location index
+            (Nothing, Just geo, _) -> getCandidatesFromLocationIndex db geo
+            -- If we only have product parameter, use reference product index
+            (Nothing, Nothing, Just _) -> M.keys (dbActivities db) -- Fall back to all activities
+            -- If no parameters, return all activities
+            (Nothing, Nothing, Nothing) -> M.keys (dbActivities db)
+        
+        -- Filter the candidates with the full criteria
+        filteredActivities = [ activity
+                             | uuid <- candidateUUIDs
+                             , Just activity <- [M.lookup uuid (dbActivities db)]
+                             , matchesActivityFields db nameParam geoParam productParam activity
+                             ]
+    in filteredActivities
+
+-- | Get candidate activity UUIDs from name index using fuzzy matching
+getCandidatesFromNameIndex :: Database -> Text -> [UUID]
+getCandidatesFromNameIndex db searchName =
+    let nameIndex = idxByName (dbIndexes db)
+        lowerSearch = T.toLower searchName
+        matchingEntries = [ uuids 
+                          | (indexedName, uuids) <- M.toList nameIndex
+                          , lowerSearch `T.isInfixOf` indexedName  -- Note: indexedName is already lowercase from buildNameIndex
+                          ]
+    in concat matchingEntries
+
+-- | Get candidate activity UUIDs from location index
+getCandidatesFromLocationIndex :: Database -> Text -> [UUID]
+getCandidatesFromLocationIndex db searchLocation =
+    let locationIndex = idxByLocation (dbIndexes db)
+        lowerSearch = T.toLower searchLocation
+        matchingEntries = [ uuids
+                          | (indexedLocation, uuids) <- M.toList locationIndex
+                          , lowerSearch `T.isInfixOf` T.toLower indexedLocation
+                          ]
+    in concat matchingEntries
 
 -- | Matching par champs spécifiques d'activité
 matchesActivityFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Activity -> Bool
@@ -381,10 +417,39 @@ findFlowsBySynonym :: Database -> Text -> [Flow]
 findFlowsBySynonym db searchText =
     let lowerSearch = T.toLower searchText
         searchTerms = T.words lowerSearch -- Split on whitespace for multi-term search
-     in [ flow
-        | flow <- M.elems (dbFlows db)
-        , matchesFlowFuzzy searchTerms flow
-        ]
+        -- Try to get candidates from category index first for better performance
+        candidateUUIDs = getCandidatesFromFlowSearch db searchText
+        candidateFlows = mapMaybe (`M.lookup` dbFlows db) candidateUUIDs
+        -- Filter candidates with full fuzzy matching
+        matchingFlows = filter (matchesFlowFuzzy searchTerms) candidateFlows
+     in matchingFlows
+
+-- | Get candidate flow UUIDs using category index and name matching
+getCandidatesFromFlowSearch :: Database -> Text -> [UUID]
+getCandidatesFromFlowSearch db searchText =
+    let lowerSearch = T.toLower searchText
+        categoryIndex = idxFlowByCategory (dbIndexes db)
+        -- Get flows from categories that match the search text
+        categoryMatches = [ uuids
+                          | (category, uuids) <- M.toList categoryIndex
+                          , T.isInfixOf lowerSearch (T.toLower category)
+                          ]
+        categoryUUIDs = concat categoryMatches
+        
+        -- For name matching, use a more efficient approach
+        -- Check if we can find exact matches first, then fallback to partial matching
+        flowsDB = dbFlows db
+        nameMatches = if length categoryUUIDs < 100 then -- Only do expensive name search if category search was restrictive
+                        [ flowId flow
+                        | flow <- M.elems flowsDB
+                        , T.isInfixOf lowerSearch (T.toLower (flowName flow))
+                        ]
+                      else
+                        [] -- Skip name matching if we already have many category matches
+        
+        -- Combine and deduplicate
+        allCandidates = S.toList $ S.fromList (categoryUUIDs ++ nameMatches)
+     in allCandidates
 
 -- | Advanced fuzzy matching for flows (substring matching + multi-term)
 matchesFlowFuzzy :: [Text] -> Flow -> Bool
@@ -421,10 +486,12 @@ findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
 findFlowsBySynonymInLanguage db lang searchText =
     let lowerSearch = T.toLower searchText
         searchTerms = T.words lowerSearch
-     in [ flow
-        | flow <- M.elems (dbFlows db)
-        , matchesFlowInLanguage searchTerms lang flow
-        ]
+        -- Use the same candidate filtering approach as the general search
+        candidateUUIDs = getCandidatesFromFlowSearch db searchText
+        candidateFlows = mapMaybe (`M.lookup` dbFlows db) candidateUUIDs
+        -- Filter candidates with language-specific matching
+        matchingFlows = filter (matchesFlowInLanguage searchTerms lang) candidateFlows
+     in matchingFlows
 
 -- | Fuzzy matching for flows in specific language
 matchesFlowInLanguage :: [Text] -> Text -> Flow -> Bool
