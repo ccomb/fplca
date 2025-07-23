@@ -4,6 +4,7 @@
 module ACV.Tree (buildActivityTree, buildActivityTreeWithFlows, buildActivityTreeWithDatabase, buildLoopAwareTree, buildSafeLoopAwareTree, buildCutoffLoopAwareTree) where
 
 import ACV.Types
+import ACV.UnitConversion (convertExchangeAmount)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -51,6 +52,23 @@ isTechnosphereInput _ ex =
 -- | Dummy activity to indicate recursion stop
 placeholder :: Activity
 placeholder = Activity "loop-detected" "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
+
+-- | Get converted exchange amount ensuring unit compatibility
+-- Converts exchange amount to the target activity's reference unit for proper scaling
+getConvertedExchangeAmount :: Database -> Exchange -> UUID -> Double
+getConvertedExchangeAmount db exchange targetActivityUUID = 
+    let originalAmount = exchangeAmount exchange
+        -- Get exchange unit name
+        exchangeUnitName = case M.lookup (exchangeUnitId exchange) (dbUnits db) of
+            Just unit -> unitName unit
+            Nothing -> "unknown"
+        -- Get target activity's reference unit
+        targetReferenceUnit = case M.lookup targetActivityUUID (dbActivities db) of
+            Just targetActivity -> activityUnit targetActivity
+            Nothing -> "unknown"
+    in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
+       then originalAmount  -- No conversion possible, use original
+       else convertExchangeAmount exchangeUnitName targetReferenceUnit originalAmount
 
 -- | Version optimisée avec FlowDB - Compatible avec SimpleDatabase et Database
 buildActivityTreeWithFlows :: SimpleDatabase -> UUID -> ActivityTree
@@ -132,10 +150,11 @@ buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth
                 let visited' = S.insert activityUUID visited
                     techInputs = [ ex | ex <- exchanges activity
                                      , isTechnosphereInput (dbFlows db) ex ]
-                    children = [ (exchangeAmount ex, flow, subtree)
+                    children = [ (convertedAmount, flow, subtree)
                                | ex <- techInputs
                                , Just targetUUID <- [exchangeActivityLinkId ex]
                                , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+                               , let convertedAmount = getConvertedExchangeAmount db ex targetUUID
                                , let subtree = buildLoopAwareTreeWithVisited db targetUUID visited' (depth + 1) maxDepth
                                ]
                 in if null children
@@ -180,8 +199,9 @@ buildSafeTreeWithLimits db activityUUID visited depth maxDepth (nodeCount, maxNo
         | otherwise = 
             case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows db)) of
                 (Just targetUUID, Just flow) ->
-                    let subtree = buildSafeTreeWithLimits db targetUUID visited (depth + 1) maxDepth (currentCount, maxNodes)
-                        child = (exchangeAmount ex, flow, subtree)
+                    let convertedAmount = getConvertedExchangeAmount db ex targetUUID
+                        subtree = buildSafeTreeWithLimits db targetUUID visited (depth + 1) maxDepth (currentCount, maxNodes)
+                        child = (convertedAmount, flow, subtree)
                         (restChildren, restCount) = buildChildrenWithLimit db exs visited depth maxDepth (currentCount + 1) maxNodes
                     in (child : restChildren, restCount)
                 _ -> buildChildrenWithLimit db exs visited depth maxDepth currentCount maxNodes
@@ -212,11 +232,12 @@ buildCutoffTreeWithVisited db activityUUID visited depth maxDepth scaleFactor cu
                 let visited' = S.insert activityUUID visited
                     techInputs = [ ex | ex <- exchanges activity
                                      , isTechnosphereInput (dbFlows db) ex ]
-                    children = [ (exchangeAmount ex, flow, subtree)
+                    children = [ (convertedAmount, flow, subtree)
                                | ex <- techInputs
                                , Just targetUUID <- [exchangeActivityLinkId ex]
                                , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
-                               , let childScaleFactor = scaleFactor * abs (exchangeAmount ex)
+                               , let convertedAmount = getConvertedExchangeAmount db ex targetUUID
+                               , let childScaleFactor = scaleFactor * abs convertedAmount
                                , childScaleFactor >= cutoffThreshold  -- Cutoff check before building subtree
                                , let subtree = buildCutoffTreeWithVisited db targetUUID visited' (depth + 1) maxDepth childScaleFactor cutoffThreshold
                                ]

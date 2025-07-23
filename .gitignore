@@ -1,3 +1,4 @@
 acv-engine-cabal.zip
 dist-newstyle
+*.cache.*.bin
 
