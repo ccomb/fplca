@@ -51,12 +51,9 @@ parseActivity cursor =
         -- Extract classifications
         classifications = M.empty -- TODO: Extract ISIC, CPC classifications
         -- Extract reference unit from reference product
-        refUnit = case cursor
-            $// element (nsElement "intermediateExchange")
-            >=> attributeIs "outputGroup" "0"
-            >=> attribute "unitName" of
-            [] -> "unit" -- Default fallback
-            (unit : _) -> unit
+        -- Note: We need to resolve unitId later when we have access to units database
+        -- For now, just use "unit" as placeholder - will be resolved in parseActivityWithFlowsAndUnits
+        refUnit = "unit" -- Placeholder - resolved later with units database access
         -- Parse both intermediate and elementary exchanges
         interNodes = cursor $// element (nsElement "intermediateExchange")
         elemNodes = cursor $// element (nsElement "elementaryExchange")
@@ -102,12 +99,16 @@ parseActivityWithFlowsAndUnits cursor =
         description = extractGeneralComment cursor name
         synonyms = M.empty -- TODO: Extract from XML when available
         classifications = M.empty -- TODO: Extract ISIC, CPC classifications
+        -- Extract reference unit by finding reference product's unitId and resolving from units
         refUnit = case cursor
             $// element (nsElement "intermediateExchange")
             >=> attributeIs "outputGroup" "0"
-            >=> attribute "unitName" of
+            >=> attribute "unitId" of
             [] -> "unit" -- Default fallback
-            (unit : _) -> unit
+            (unitId : _) -> 
+                case [u | u <- units, unitId == ACV.Types.unitId u] of
+                    [] -> "unit" -- Unit not found, use fallback
+                    (unit : _) -> ACV.Types.unitName unit
      in (Activity uuid name description synonyms classifications location refUnit exchs, flows, units)
 
 parseExchange :: Cursor -> Exchange

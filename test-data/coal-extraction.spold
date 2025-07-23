@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02">
+  <activityDataset>
+    <activityDescription>
+      <activity id="12345678-1234-5678-9abc-123456789003" activityNameId="coal-extraction-test">
+        <activityName xml:lang="en">Coal extraction, synthetic test</activityName>
+        <generalComment xml:lang="en">Synthetic coal extraction for testing (leaf node)</generalComment>
+        <includedActivitiesStart xml:lang="en">Coal mining</includedActivitiesStart>
+        <includedActivitiesEnd xml:lang="en">Coal ready for use</includedActivitiesEnd>
+      </activity>
+      <geography geographyId="TEST">
+        <shortname xml:lang="en">TEST</shortname>
+        <comment xml:lang="en">Test geography</comment>
+      </geography>
+      <technology technologyLevel="3">
+        <comment xml:lang="en">Coal mining technology</comment>
+      </technology>
+      <timePeriod startDate="2020-01-01" endDate="2020-12-31" isDataValidForEntirePeriod="true">
+        <comment xml:lang="en">Test time period</comment>
+      </timePeriod>
+      <macroEconomicScenario macroEconomicScenarioId="test-scenario">
+        <name xml:lang="en">Test scenario</name>
+      </macroEconomicScenario>
+    </activityDescription>
+    
+    <flowData>
+      <!-- OUTPUT: 2.2 lb coal (= 1.0 kg × 2.2 lb/kg) -->
+      <intermediateExchange id="int-1" unitId="lb-unit-test" amount="2.2" 
+                           mathematicalRelation="2.2" intermediateExchangeId="coal-test-flow"
+                           activityLinkId="12345678-1234-5678-9abc-123456789003">
+        <name xml:lang="en">Coal, hard, synthetic test</name>
+        <unitName xml:lang="en">lb</unitName>
+        <comment xml:lang="en">Coal output (reference product)</comment>
+        <uncertainty>
+          <lognormal meanValue="1.0" mu="0.0" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+      
+      <!-- EMISSION: 0.1 kg CO2 to air from extraction -->
+      <elementaryExchange id="elem-1" unitId="kg-unit-test" amount="0.1" 
+                         mathematicalRelation="0.1" elementaryExchangeId="co2-test-flow">
+        <name xml:lang="en">Carbon dioxide</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <comment xml:lang="en">CO2 emission from coal extraction</comment>
+        <uncertainty>
+          <lognormal meanValue="0.1" mu="-2.303" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    
+    <modellingAndValidation>
+      <representativeness systemModelId="test-model">
+        <systemModelName xml:lang="en">Test system model</systemModelName>
+        <samplingProcedure xml:lang="en">Test sampling</samplingProcedure>
+        <extrapolations xml:lang="en">Test extrapolation</extrapolations>
+      </representativeness>
+    </modellingAndValidation>
+    
+    <administrativeInformation>
+      <dataEntryBy personId="test-person" isActiveAuthor="true" personName="Test Person" personEmail="test@example.com"/>
+      <dataGeneratorAndPublication personId="test-person" dataPublishedIn="0" accessRestrictedTo="0" 
+                                  companyCode="TEST" personName="Test Person" personEmail="test@example.com"/>
+      <fileAttributes majorRelease="1" minorRelease="0" majorRevision="0" minorRevision="0" 
+                     defaultLanguage="en" creationTimestamp="2024-01-01T00:00:00" 
+                     lastEditTimestamp="2024-01-01T00:00:00" internalSchemaVersion="2.0.12" 
+                     fileGenerator="Test Generator" fileTimestamp="2024-01-01T00:00:00"/>
+    </administrativeInformation>
+  </activityDataset>
+</ecoSpold>

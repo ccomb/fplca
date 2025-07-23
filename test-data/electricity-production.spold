@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02">
+  <activityDataset>
+    <activityDescription>
+      <activity id="12345678-1234-5678-9abc-123456789002" activityNameId="electricity-test">
+        <activityName xml:lang="en">Electricity, from coal, synthetic test</activityName>
+        <generalComment xml:lang="en">Synthetic coal-fired electricity for testing</generalComment>
+        <includedActivitiesStart xml:lang="en">Coal combustion</includedActivitiesStart>
+        <includedActivitiesEnd xml:lang="en">Electricity generation</includedActivitiesEnd>
+      </activity>
+      <geography geographyId="TEST">
+        <shortname xml:lang="en">TEST</shortname>
+        <comment xml:lang="en">Test geography</comment>
+      </geography>
+      <technology technologyLevel="3">
+        <comment xml:lang="en">Coal-fired power plant</comment>
+      </technology>
+      <timePeriod startDate="2020-01-01" endDate="2020-12-31" isDataValidForEntirePeriod="true">
+        <comment xml:lang="en">Test time period</comment>
+      </timePeriod>
+      <macroEconomicScenario macroEconomicScenarioId="test-scenario">
+        <name xml:lang="en">Test scenario</name>
+      </macroEconomicScenario>
+    </activityDescription>
+    
+    <flowData>
+      <!-- INPUT: 1.1 lb coal (= 0.5 kg × 2.2 lb/kg) -->
+      <intermediateExchange id="int-1" unitId="lb-unit-test" amount="1.1" 
+                           mathematicalRelation="1.1" intermediateExchangeId="coal-test-flow"
+                           activityLinkId="12345678-1234-5678-9abc-123456789003">
+        <name xml:lang="en">Coal, hard, synthetic test</name>
+        <unitName xml:lang="en">lb</unitName>
+        <comment xml:lang="en">Coal input for electricity generation</comment>
+        <uncertainty>
+          <lognormal meanValue="0.5" mu="-0.693" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+      
+      <!-- OUTPUT: 1.0 kWh electricity (reference product) -->
+      <intermediateExchange id="int-2" unitId="kwh-unit-test" amount="1.0" 
+                           mathematicalRelation="1.0" intermediateExchangeId="electricity-test-flow"
+                           activityLinkId="12345678-1234-5678-9abc-123456789002">
+        <name xml:lang="en">Electricity, from coal, synthetic test</name>
+        <unitName xml:lang="en">kWh</unitName>
+        <comment xml:lang="en">Electricity output (reference product)</comment>
+        <uncertainty>
+          <lognormal meanValue="1.0" mu="0.0" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+      
+      <!-- EMISSION: 0.9 kg CO2 to air -->
+      <elementaryExchange id="elem-1" unitId="kg-unit-test" amount="0.9" 
+                         mathematicalRelation="0.9" elementaryExchangeId="co2-test-flow">
+        <name xml:lang="en">Carbon dioxide</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <comment xml:lang="en">CO2 emission from coal combustion</comment>
+        <uncertainty>
+          <lognormal meanValue="0.9" mu="-0.105" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+      
+      <!-- EMISSION: 0.01 kg SO2 to air -->
+      <elementaryExchange id="elem-2" unitId="kg-unit-test" amount="0.01" 
+                         mathematicalRelation="0.01" elementaryExchangeId="so2-test-flow">
+        <name xml:lang="en">Sulfur dioxide</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <comment xml:lang="en">SO2 emission from coal combustion</comment>
+        <uncertainty>
+          <lognormal meanValue="0.01" mu="-4.605" variance="0.0001" varianceWithPedigreeUncertainty="0.0001"/>
+          <pedigreeMatrix reliability="1" completeness="1" temporalCorrelation="1" 
+                         geographicalCorrelation="1" furtherTechnologyCorrelation="1"/>
+        </uncertainty>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    
+    <modellingAndValidation>
+      <representativeness systemModelId="test-model">
+        <systemModelName xml:lang="en">Test system model</systemModelName>
+        <samplingProcedure xml:lang="en">Test sampling</samplingProcedure>
+        <extrapolations xml:lang="en">Test extrapolation</extrapolations>
+      </representativeness>
+    </modellingAndValidation>
+    
+    <administrativeInformation>
+      <dataEntryBy personId="test-person" isActiveAuthor="true" personName="Test Person" personEmail="test@example.com"/>
+      <dataGeneratorAndPublication personId="test-person" dataPublishedIn="0" accessRestrictedTo="0" 
+                                  companyCode="TEST" personName="Test Person" personEmail="test@example.com"/>
+      <fileAttributes majorRelease="1" minorRelease="0" majorRevision="0" minorRevision="0" 
+                     defaultLanguage="en" creationTimestamp="2024-01-01T00:00:00" 
+                     lastEditTimestamp="2024-01-01T00:00:00" internalSchemaVersion="2.0.12" 
+                     fileGenerator="Test Generator" fileTimestamp="2024-01-01T00:00:00"/>
+    </administrativeInformation>
+  </activityDataset>
+</ecoSpold>

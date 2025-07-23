@@ -364,10 +364,10 @@ acvServer db =
             Nothing -> throwError err404{errBody = "No reference product found"}
             Just refProduct -> return refProduct
 
-    -- Activity tree export for visualization (fixed depth=2)
+    -- Activity tree export for visualization (fixed depth=3)
     getActivityTree :: Text -> Handler TreeExport
     getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
-        let maxDepth = 2 -- Fixed depth for interactive navigation
+        let maxDepth = 3 -- Fixed depth for testing synthetic data
         let loopAwareTree = buildLoopAwareTree db uuid maxDepth
         return $ convertToTreeExport db uuid maxDepth loopAwareTree
 
