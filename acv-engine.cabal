@@ -42,6 +42,9 @@ executable acv-cli
                      , time
                      , hashable
                      , uuid
+                     , http-types
+                     , network-uri
+                     , streaming-commons
 
   other-modules:     ACV.Types
                      , ACV.Tree
@@ -49,6 +52,7 @@ executable acv-cli
                      , ACV.PEF
                      , ACV.Query
                      , ACV.API
+                     , ACV.Service
                      , ACV.UnitConversion
                      , ACV.Export.CSV
                      , ACV.Export.ILCD
