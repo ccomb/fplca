@@ -8,7 +8,7 @@ module ACV.API where
 import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
 import ACV.Query
 import qualified ACV.Service
-import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree, buildSafeLoopAwareTree)
+import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
 import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..))
 import Data.Aeson
@@ -124,7 +124,7 @@ acvServer db =
     -- Activity tree export for visualization (fixed depth=3)
     getActivityTree :: Text -> Handler TreeExport
     getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
-        let maxDepth = 3 -- Fixed depth for testing synthetic data
+        let maxDepth = 2 -- Fixed depth for testing synthetic data
         let loopAwareTree = buildLoopAwareTree db uuid maxDepth
         return $ ACV.Service.convertToTreeExport db uuid maxDepth loopAwareTree
 

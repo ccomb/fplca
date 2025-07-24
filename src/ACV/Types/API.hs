@@ -3,22 +3,22 @@
 
 module ACV.Types.API where
 
-import ACV.Types (UUID, Flow, Exchange, Unit)
+import ACV.Types (Exchange, Flow, UUID, Unit)
 import Data.Aeson
-import Data.Text (Text)
-import GHC.Generics
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Text (Text)
+import GHC.Generics
 
 -- | Search response combining results and count
 data SearchResults a = SearchResults
-    { srResults :: [a]      -- The actual search results
-    , srTotal :: Int        -- Total count of all matching items (before pagination)
-    , srOffset :: Int       -- Starting offset for pagination
-    , srLimit :: Int        -- Maximum number of results requested
-    , srHasMore :: Bool     -- Whether there are more results available
+    { srResults :: [a] -- The actual search results
+    , srTotal :: Int -- Total count of all matching items (before pagination)
+    , srOffset :: Int -- Starting offset for pagination
+    , srLimit :: Int -- Maximum number of results requested
+    , srHasMore :: Bool -- Whether there are more results available
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
@@ -26,7 +26,7 @@ data ActivitySummary = ActivitySummary
     , prsName :: Text
     , prsLocation :: Text
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Minimal flow information for search results
 data FlowSearchResult = FlowSearchResult
@@ -35,7 +35,7 @@ data FlowSearchResult = FlowSearchResult
     , fsrCategory :: Text
     , fsrUnitName :: Text
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Inventory export data structures
 data InventoryExport = InventoryExport
@@ -43,7 +43,7 @@ data InventoryExport = InventoryExport
     , ieFlows :: [InventoryFlowDetail]
     , ieStatistics :: InventoryStatistics
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data InventoryMetadata = InventoryMetadata
     { imRootActivity :: ActivitySummary
@@ -52,7 +52,7 @@ data InventoryMetadata = InventoryMetadata
     , imEmissionFlows :: Int -- Biosphere outputs (negative environmental impact)
     , imResourceFlows :: Int -- Biosphere inputs (resource extraction)
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data InventoryFlowDetail = InventoryFlowDetail
     { ifdFlow :: Flow
@@ -61,7 +61,7 @@ data InventoryFlowDetail = InventoryFlowDetail
     , ifdIsEmission :: Bool -- True for emissions, False for resource extraction
     , ifdCategory :: Text -- Flow category for grouping
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data InventoryStatistics = InventoryStatistics
     { isTotalQuantity :: Double -- Sum of absolute values
@@ -69,7 +69,7 @@ data InventoryStatistics = InventoryStatistics
     , isResourceQuantity :: Double -- Sum of resource extraction (should be positive)
     , isTopCategories :: [(Text, Int)] -- Top flow categories by count
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Tree export data structures for visualization
 data TreeExport = TreeExport
@@ -77,7 +77,7 @@ data TreeExport = TreeExport
     , teNodes :: M.Map UUID ExportNode
     , teEdges :: [TreeEdge]
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data TreeMetadata = TreeMetadata
     { tmRootId :: UUID
@@ -87,7 +87,7 @@ data TreeMetadata = TreeMetadata
     , tmLeafNodes :: Int
     , tmExpandableNodes :: Int -- Nodes that could expand further
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data ExportNode = ExportNode
     { enId :: UUID
@@ -101,10 +101,10 @@ data ExportNode = ExportNode
     , enParentId :: Maybe UUID -- For navigation back up
     , enChildrenCount :: Int -- Number of potential children for expandability
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data NodeType = ActivityNode | LoopNode
-    deriving (Eq, Generic, Show)
+    deriving (Eq, Generic)
 
 data TreeEdge = TreeEdge
     { teFrom :: UUID
@@ -113,14 +113,14 @@ data TreeEdge = TreeEdge
     , teQuantity :: Double
     , teUnit :: Text
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 data FlowInfo = FlowInfo
     { fiId :: UUID
     , fiName :: Text
     , fiCategory :: Text
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Lightweight flow information for lists
 data FlowSummary = FlowSummary
@@ -129,21 +129,21 @@ data FlowSummary = FlowSummary
     , fsUsageCount :: Int -- How many activities use this flow
     , fsRole :: FlowRole -- Role in this specific activity
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Role of a flow in a specific activity context
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
-    deriving (Eq, Show, Generic)
+    deriving (Generic)
 
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
-    , ewuUnitName :: Text           -- Unit name for the exchange
-    , ewuFlowName :: Text           -- Name of the flow being exchanged
-    , ewuFlowCategory :: Text       -- Category/compartment (for biosphere) or "technosphere"
-    , ewuTargetActivity :: Maybe Text  -- For technosphere: name of target activity
+    , ewuUnitName :: Text -- Unit name for the exchange
+    , ewuFlowName :: Text -- Name of the flow being exchanged
+    , ewuFlowCategory :: Text -- Category/compartment (for biosphere) or "technosphere"
+    , ewuTargetActivity :: Maybe Text -- For technosphere: name of target activity
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Activity information optimized for API responses
 data ActivityForAPI = ActivityForAPI
@@ -156,7 +156,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaUnit :: Text -- Unité de référence
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Streamlined activity information - core data only
 data ActivityInfo = ActivityInfo
@@ -165,7 +165,7 @@ data ActivityInfo = ActivityInfo
     , piStatistics :: ActivityStats -- Usage statistics
     , piLinks :: ActivityLinks -- Links to sub-resources
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Extended activity metadata
 data ActivityMetadata = ActivityMetadata
@@ -175,7 +175,7 @@ data ActivityMetadata = ActivityMetadata
     , pmHasReferenceProduct :: Bool -- Whether activity has reference product
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Links to related resources
 data ActivityLinks = ActivityLinks
@@ -184,7 +184,7 @@ data ActivityLinks = ActivityLinks
     , plOutputsUrl :: Text -- URL to outputs endpoint
     , plReferenceProductUrl :: Maybe Text -- URL to reference product (if exists)
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Activity statistics
 data ActivityStats = ActivityStats
@@ -193,7 +193,7 @@ data ActivityStats = ActivityStats
     , psTotalExchanges :: Int
     , psLocation :: Text
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Flow with additional metadata
 data FlowDetail = FlowDetail
@@ -201,7 +201,7 @@ data FlowDetail = FlowDetail
     , fdUnitName :: Text -- Unit name for the flow
     , fdUsageCount :: Int -- How many activities use this flow
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- | Exchange with flow, unit, and target activity information
 data ExchangeDetail = ExchangeDetail
@@ -212,15 +212,13 @@ data ExchangeDetail = ExchangeDetail
     , edExchangeUnitName :: Text -- Unit name for the exchange's specific unit
     , edTargetActivity :: Maybe ActivitySummary -- Target activity for technosphere inputs
     }
-    deriving (Generic, Show)
+    deriving (Generic)
 
 -- JSON instances
-instance ToJSON a => ToJSON (SearchResults a)
+instance (ToJSON a) => ToJSON (SearchResults a)
 instance ToJSON ActivitySummary
 instance ToJSON FlowSearchResult
-instance ToJSON InventoryExport
 instance ToJSON InventoryMetadata
-instance ToJSON InventoryFlowDetail
 instance ToJSON InventoryStatistics
 instance ToJSON TreeExport
 instance ToJSON TreeMetadata
@@ -228,7 +226,6 @@ instance ToJSON ExportNode
 instance ToJSON NodeType
 instance ToJSON TreeEdge
 instance ToJSON FlowInfo
-instance ToJSON FlowSummary
 instance ToJSON FlowRole
 instance ToJSON ExchangeWithUnit
 instance ToJSON ActivityForAPI
@@ -236,12 +233,17 @@ instance ToJSON ActivityInfo
 instance ToJSON ActivityMetadata
 instance ToJSON ActivityLinks
 instance ToJSON ActivityStats
-instance ToJSON FlowDetail
+instance ToJSON InventoryFlowDetail
+instance ToJSON Flow
+instance ToJSON FlowSummary
+instance ToJSON InventoryExport
 instance ToJSON ExchangeDetail
+instance ToJSON Unit
+instance ToJSON FlowDetail
 
 -- FromJSON instances needed for API conversion
 instance FromJSON ActivityInfo
-instance FromJSON ActivityForAPI  
+instance FromJSON ActivityForAPI
 instance FromJSON ActivityMetadata
 instance FromJSON ActivityLinks
 instance FromJSON ActivityStats

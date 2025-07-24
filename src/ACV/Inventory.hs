@@ -22,16 +22,6 @@ computeInventoryWithWeightAndFlows flowDB weight (Node proc children) =
                      ]
   in foldl (M.unionWith (+)) localInv childrenInvs
 
--- | Calcule l'inventaire global à partir de l'arbre de activités (version originale)
-computeInventory :: ActivityTree -> Inventory
-computeInventory = error "computeInventory: Use computeInventoryWithFlows instead"
-
--- | Calcule l'inventaire en tenant compte d'un facteur de pondération (version originale)
-computeInventoryWithWeight :: Double -> ActivityTree -> Inventory
-computeInventoryWithWeight weight (Leaf proc) =
-  error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
-computeInventoryWithWeight weight (Node proc children) =
-  error "computeInventoryWithWeight: Use computeInventoryWithWeightAndFlows instead"
 
 -- | Extrait les flux biosphère d'un activité et les pondère - Version optimisée avec FlowDB
 biosphereInventoryWithFlows :: FlowDB -> Double -> Activity -> Inventory
@@ -49,10 +39,6 @@ isBiosphereFlow _ ex =
         BiosphereExchange _ _ _ _ -> True
         TechnosphereExchange _ _ _ _ _ _ -> False
 
--- | Extrait les flux biosphère d'un activité et les pondère (version originale)
-biosphereInventory :: Double -> Activity -> Inventory
-biosphereInventory w proc =
-  error "biosphereInventory: Use biosphereInventoryWithFlows instead"
 
 -- | Calcule l'inventaire global à partir d'un arbre LoopAwareTree (avec détection de boucles)
 computeInventoryFromLoopAwareTree :: FlowDB -> LoopAwareTree -> Inventory

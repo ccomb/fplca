@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module EcoSpold.Loader (buildActivityTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes, loadCachedSpolds, saveCachedSpolds, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
+module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
 
 import ACV.Query (buildIndexes)
 import ACV.Types
@@ -14,13 +14,13 @@ import Control.Monad
 import Control.Parallel.Strategies
 import Data.Binary (decodeFile, encodeFile)
 import Data.Hashable (hash)
-import Data.List (isPrefixOf, isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Map as M
 import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Time (diffUTCTime, getCurrentTime)
-import EcoSpold.Parser (parseActivityAndFlowsFromFile, parseActivityFromFile, streamParseActivityAndFlowsFromFile)
+import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
 import System.Directory (doesFileExist, getModificationTime, listDirectory, removeFile)
 import System.FilePath (dropExtension, takeExtension, (</>))
@@ -46,79 +46,23 @@ cleanupOldCaches :: FilePath -> IO ()
 cleanupOldCaches dataDir = do
     currentCache <- generateCacheFilename dataDir
     files <- listDirectory "."
-    
+
     -- Extract hash from current cache filename: "ecoinvent.cache.v7.HASH.bin" -> "HASH"
     let currentHash = case reverse (take 2 (reverse (words (map (\c -> if c == '.' then ' ' else c) currentCache)))) of
-                        [hash, "bin"] -> hash
-                        _ -> ""  -- Fallback if parsing fails
-    
+            [hash, "bin"] -> hash
+            _ -> "" -- Fallback if parsing fails
+
     -- Only remove caches with same hash but different version
-    let cacheFiles = [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, 
-                           f /= currentCache,  -- Don't remove current cache
-                           currentHash `isInfixOf` f,  -- Same dataset (same hash)
-                           not (("ecoinvent.cache.v" ++ show cacheFormatVersion ++ ".") `isPrefixOf` f) -- Different version
-                     ]
+    let cacheFiles =
+            [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, f /= currentCache, currentHash `isInfixOf` f, not (("ecoinvent.cache.v" ++ show cacheFormatVersion ++ ".") `isPrefixOf` f) -- Don't remove current cache
+            -- Same dataset (same hash)
+            -- Different version
+            ]
     mapM_ removeOldCache cacheFiles
   where
     removeOldCache cacheFile = do
         hPutStrLn stderr $ "Removing old format version cache: " ++ cacheFile
         catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
-
-buildSpoldIndex :: FilePath -> IO (M.Map UUID FilePath)
-buildSpoldIndex dir = do
-    files <- listDirectory dir
-    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let pairs = [(T.pack (takeWhile (/= '_') f), dir </> f) | f <- spoldFiles]
-    return $! M.fromList pairs -- Keep strict return to force Map evaluation
-
-buildActivityTreeIO :: SpoldIndex -> UUID -> IO ActivityTree
-buildActivityTreeIO index rootUuid = do
-    -- Cette fonction ne peut plus fonctionner efficacement avec la nouvelle structure
-    -- car elle nécessiterait de parser chaque fichier deux fois (une fois pour extraire les flux,
-    -- une fois pour construire l'arbre). Il vaut mieux utiliser loadAllSpoldsWithFlows + buildActivityTreeWithFlows
-    error "buildActivityTreeIO: Use loadAllSpoldsWithFlows + buildActivityTreeWithFlows instead for better performance"
-
--- | Fonction auxiliaire optimisée avec variants Exchange
-isTechnosphereInput :: FlowDB -> Exchange -> Bool
-isTechnosphereInput _ ex =
-    case ex of
-        TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
-        BiosphereExchange _ _ _ _ -> False
-
-placeholder :: Activity
-placeholder = Activity "loop" "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
-
-missing :: Activity
-missing = Activity "missing" "Activity not found" ["Activity not found"] M.empty M.empty "N/A" "unit" []
-
-{- | Version originale - Charge tous les fichiers .spold
-  et retourne une base de activités indexée par UUID
--}
-loadAllSpolds :: FilePath -> IO ActivityDB
-loadAllSpolds dir = do
-    hPutStrLn stderr "listing directory"
-    files <- listDirectory dir
-    hPutStrLn stderr "getting spold files"
-    let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
-    hPutStrLn stderr $ "Found " ++ show (length spoldFiles) ++ " spold files"
-
-    -- Load files in chunks to avoid memory explosion
-    loadSpoldsInChunks spoldFiles M.empty
-  where
-    chunkSize = 1000 -- Activity 1000 files at a time
-    loadSpoldsInChunks :: [FilePath] -> ActivityDB -> IO ActivityDB
-    loadSpoldsInChunks [] acc = return acc
-    loadSpoldsInChunks files acc = do
-        let (chunk, rest) = splitAt chunkSize files
-        hPutStrLn stderr $ "Processing chunk of " ++ show (length chunk) ++ " files"
-
-        -- Force evaluation of chunk to avoid building up thunks
-        chunk' <- mapM parseActivityFromFile chunk
-        let !chunkMap = M.fromList [(activityId p, p) | p <- chunk'] -- Keep strict for Map
-
-        -- Force evaluation and merge
-        let !newAcc = M.union acc chunkMap -- Keep strict for accumulator
-        loadSpoldsInChunks rest newAcc
 
 {- | Version optimisée avec déduplication des flux (sans index)
   Charge tous les fichiers .spold et déduplique les flux
@@ -174,58 +118,6 @@ loadAllSpoldsWithFlows dir = do
     chunksOf :: Int -> [a] -> [[a]]
     chunksOf _ [] = []
     chunksOf n xs = take n xs : chunksOf n (drop n xs)
-
-{- | Version complète avec déduplication des flux ET construction d'index
-  Charge tous les fichiers .spold, déduplique les flux, et construit les index pour recherches efficaces
--}
-loadAllSpoldsWithIndexes :: FilePath -> IO Database
-loadAllSpoldsWithIndexes dir = do
-    numCaps <- getNumCapabilities
-    hPutStrLn stderr $ "loading activities with flow deduplication and indexes using " ++ show numCaps ++ " cores"
-    simpleDb <- loadAllSpoldsWithFlows dir
-
-    hPutStrLn stderr "building indexes for efficient queries"
-    let indexes = buildIndexes (sdbActivities simpleDb) (sdbFlows simpleDb)
-
-    return $ Database (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
-
-{- | Load cached ActivityDB with automatic filename management
-   Returns (database, wasFromCache)
--}
-loadCachedSpolds :: FilePath -> IO (ActivityDB, Bool)
-loadCachedSpolds dataDir = do
-    cacheFile <- generateCacheFilename dataDir
-    cleanupOldCaches dataDir
-
-    cacheExists <- doesFileExist cacheFile
-    if cacheExists
-        then do
-            hPutStrLn stderr $ "Loading from cache: " ++ cacheFile
-            startTime <- getCurrentTime
-            !db <- decodeFile cacheFile -- Simple decode, no error handling needed
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "Cache loaded in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " activities)"
-            return (db, True)
-        else do
-            hPutStrLn stderr "No cache found, parsing XML files..."
-            startTime <- getCurrentTime
-            !db <- loadAllSpolds dataDir
-            endTime <- getCurrentTime
-            let elapsed = diffUTCTime endTime startTime
-            hPutStrLn stderr $ "XML parsing completed in " ++ show elapsed ++ " (" ++ show (M.size db) ++ " activities)"
-            return (db, False)
-
--- | Save ActivityDB to binary cache file with automatic filename
-saveCachedSpolds :: FilePath -> ActivityDB -> IO ()
-saveCachedSpolds dataDir db = do
-    cacheFile <- generateCacheFilename dataDir
-    hPutStrLn stderr $ "Saving to cache: " ++ cacheFile
-    startTime <- getCurrentTime
-    encodeFile cacheFile db -- Simple encode, filename ensures compatibility
-    endTime <- getCurrentTime
-    let elapsed = diffUTCTime endTime startTime
-    hPutStrLn stderr $ "Cache saved in " ++ show elapsed
 
 -- | Load cached SimpleDatabase with automatic filename management
 loadCachedSpoldsWithFlows :: FilePath -> IO (SimpleDatabase, Bool)

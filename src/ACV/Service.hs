@@ -2,24 +2,24 @@
 
 module ACV.Service where
 
-import ACV.Inventory (computeInventoryWithFlows, computeInventoryFromLoopAwareTree, Inventory)
-import ACV.Query (findFlowsBySynonym, findActivitiesByFields)
-import ACV.Tree (buildActivityTreeWithDatabase, buildLoopAwareTree, buildCutoffLoopAwareTree)
+import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
+import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
+import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
-import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..))
-import Data.Text (Text)
-import qualified Data.Text as T
+import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import Data.Aeson (Value, toJSON)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Data.Aeson (Value, toJSON)
 
 -- | Domain service errors
-data ServiceError 
+data ServiceError
     = InvalidUUID Text
     | ActivityNotFound Text
     | FlowNotFound Text
-    deriving (Show, Eq)
+    deriving (Show)
 
 -- | Validate UUID format
 validateUUID :: Text -> Either ServiceError Text
@@ -33,18 +33,19 @@ getActivityInfo db uuid = do
     validUuid <- validateUUID uuid
     case M.lookup validUuid (dbActivities db) of
         Nothing -> Left $ ActivityNotFound validUuid
-        Just activity -> 
+        Just activity ->
             let activityForAPI = convertActivityForAPI db activity
                 metadata = calculateActivityMetadata db activity
                 stats = calculateActivityStats activity
                 links = generateActivityLinks uuid
-                activityInfo = ActivityInfo
-                    { piActivity = activityForAPI
-                    , piMetadata = metadata
-                    , piStatistics = stats
-                    , piLinks = links
-                    }
-            in Right $ toJSON activityInfo
+                activityInfo =
+                    ActivityInfo
+                        { piActivity = activityForAPI
+                        , piMetadata = metadata
+                        , piStatistics = stats
+                        , piLinks = links
+                        }
+             in Right $ toJSON activityInfo
 
 -- | Core inventory calculation logic (pure domain function)
 computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
@@ -52,13 +53,13 @@ computeActivityInventory db uuid = do
     validUuid <- validateUUID uuid
     case M.lookup validUuid (dbActivities db) of
         Nothing -> Left $ ActivityNotFound validUuid
-        Just _ -> 
+        Just _ ->
             -- Use cutoff-based loop-aware tree for proper supply chain calculation
-            let maxDepth = 35 -- Higher depth since cutoffs will control tree size
-                cutoffThreshold = 1e-8 -- 0.01% cutoff - more permissive to capture full supply chain
+            let maxDepth = 25 -- Higher depth since cutoffs will control tree size
+                cutoffThreshold = 1e-2 -- 0.01% cutoff - more permissive to capture full supply chain
                 loopAwareTree = buildCutoffLoopAwareTree db validUuid maxDepth cutoffThreshold
                 inventory = computeInventoryFromLoopAwareTree (dbFlows db) loopAwareTree
-            in Right inventory
+             in Right inventory
 
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
@@ -224,11 +225,11 @@ getActivityTree db uuid = do
     validUuid <- validateUUID uuid
     case M.lookup validUuid (dbActivities db) of
         Nothing -> Left $ ActivityNotFound validUuid
-        Just _ -> 
+        Just _ ->
             let maxDepth = 3 -- Match API depth
                 loopAwareTree = buildLoopAwareTree db validUuid maxDepth
                 treeExport = convertToTreeExport db validUuid maxDepth loopAwareTree
-            in Right $ toJSON treeExport
+             in Right $ toJSON treeExport
 
 -- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int
@@ -256,14 +257,14 @@ getActivityFlows db uuid = do
     validUuid <- validateUUID uuid
     case M.lookup validUuid (dbActivities db) of
         Nothing -> Left $ ActivityNotFound validUuid
-        Just activity -> 
+        Just activity ->
             let flowSummaries = getActivityFlowSummaries db activity
-            in Right $ toJSON flowSummaries
+             in Right $ toJSON flowSummaries
 
 -- | Search flows (returns same format as API)
 searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
-searchFlows _  Nothing _ _ _ = Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False
-searchFlows db (Just query) langParam limitParam offsetParam = 
+searchFlows _ Nothing _ _ _ = Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False
+searchFlows db (Just query) langParam limitParam offsetParam =
     let lang = maybe "en" id langParam
         limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
@@ -272,11 +273,11 @@ searchFlows db (Just query) langParam limitParam offsetParam =
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
         flowResults = map (\flow -> FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow)) pagedResults
-    in Right $ toJSON $ SearchResults flowResults total offset limit hasMore
+     in Right $ toJSON $ SearchResults flowResults total offset limit hasMore
 
 -- | Search activities (returns same format as API)
 searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
-searchActivities db nameParam geoParam productParam limitParam offsetParam = 
+searchActivities db nameParam geoParam productParam limitParam offsetParam =
     let limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
         allResults = findActivitiesByFields db nameParam geoParam productParam
@@ -284,7 +285,7 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam =
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
         activityResults = map (\activity -> ActivitySummary (activityId activity) (activityName activity) (activityLocation activity)) pagedResults
-    in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
+     in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
 
 -- | Calculate extended metadata for an activity
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
@@ -341,22 +342,22 @@ convertActivityForAPI db activity =
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             targetActivityInfo = case exchange of
-                TechnosphereExchange _ _ _ _ _ linkId -> 
+                TechnosphereExchange _ _ _ _ _ linkId ->
                     case M.lookup linkId (dbActivities db) of
                         Just targetActivity -> Just (activityName targetActivity)
                         Nothing -> Nothing
                 BiosphereExchange _ _ _ _ -> Nothing
-        in ExchangeWithUnit
-            { ewuExchange = exchange
-            , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
-            , ewuFlowName = maybe "unknown" flowName flowInfo
-            , ewuFlowCategory = case flowInfo of
-                Just flow -> case isTechnosphereExchange exchange of
-                    True -> "technosphere"
-                    False -> flowCategory flow  -- This will now include compartment info like "water/ground-, long-term"
-                Nothing -> "unknown"
-            , ewuTargetActivity = targetActivityInfo
-            }
+         in ExchangeWithUnit
+                { ewuExchange = exchange
+                , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
+                , ewuFlowName = maybe "unknown" flowName flowInfo
+                , ewuFlowCategory = case flowInfo of
+                    Just flow -> case isTechnosphereExchange exchange of
+                        True -> "technosphere"
+                        False -> flowCategory flow -- This will now include compartment info like "water/ground-, long-term"
+                    Nothing -> "unknown"
+                , ewuTargetActivity = targetActivityInfo
+                }
 
 -- | Get target activity for technosphere navigation
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
@@ -393,14 +394,6 @@ getActivitiesUsingFlow db flowUUID =
                 , Just proc <- [M.lookup procUUID (dbActivities db)]
                 ]
 
--- | Get all flows used by an activity with usage statistics (legacy function - kept for compatibility)
-getActivityFlowDetails :: Database -> Activity -> [FlowDetail]
-getActivityFlowDetails db activity =
-    [ FlowDetail flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow))
-    | exchange <- exchanges activity
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    ]
-
 -- | Helper function to get detailed exchanges with filtering
 getActivityExchangeDetails :: Database -> Activity -> (Exchange -> Bool) -> [ExchangeDetail]
 getActivityExchangeDetails db activity filterFn =
@@ -418,4 +411,3 @@ getActivityInputDetails db activity = getActivityExchangeDetails db activity exc
 -- | Get detailed output exchanges
 getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
 getActivityOutputDetails db activity = getActivityExchangeDetails db activity (not . exchangeIsInput)
-

@@ -5,7 +5,7 @@
 module ACV.Types where
 
 import Control.DeepSeq (NFData)
-import Data.Aeson (ToJSON, FromJSON)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Binary (Binary)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -19,7 +19,7 @@ type UUID = Text
 
 -- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
-    deriving (Eq, Ord, Show, Generic, NFData, Binary)
+    deriving (Eq, Ord, Generic, NFData, Binary)
 
 -- | Représentation d'une unité (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -28,7 +28,7 @@ data Unit = Unit
     , unitSymbol :: !Text -- Symbole (e.g. "kg", "MJ")
     , unitComment :: !Text -- Description/commentaire
     }
-    deriving (Eq, Show, Generic, NFData, Binary)
+    deriving (Generic, Binary)
 
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
@@ -39,7 +39,7 @@ data Flow = Flow
     , flowType :: !FlowType -- Type de flux
     , flowSynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue (e.g. "en" -> {"BaP", "benzo[a]pyrene"})
     }
-    deriving (Eq, Show, Generic, NFData, Binary)
+    deriving (Generic, Binary)
 
 -- | Échange dans un activité - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
 data Exchange
@@ -57,7 +57,7 @@ data Exchange
         , bioUnitId :: !UUID -- Unit of measurement
         , bioIsInput :: !Bool -- True for resource extraction, False for emissions
         }
-    deriving (Eq, Show, Generic, NFData, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
@@ -104,13 +104,6 @@ getUnitNameForExchange unitDB exchange =
         Just unit -> unitName unit
         Nothing -> "unknown"
 
--- | Get unit symbol for an exchange (fallback to "?" if not found)
-getUnitSymbolForExchange :: UnitDB -> Exchange -> Text
-getUnitSymbolForExchange unitDB exchange =
-    case getUnitForExchange unitDB exchange of
-        Just unit -> unitSymbol unit
-        Nothing -> "?"
-
 -- | Get unit information for a flow
 getUnitForFlow :: UnitDB -> Flow -> Maybe Unit
 getUnitForFlow unitDB flow = M.lookup (flowUnitId flow) unitDB
@@ -122,38 +115,9 @@ getUnitNameForFlow unitDB flow =
         Just unit -> unitName unit
         Nothing -> "unknown"
 
--- | Get unit symbol for a flow (fallback to "?" if not found)
-getUnitSymbolForFlow :: UnitDB -> Flow -> Text
-getUnitSymbolForFlow unitDB flow =
-    case getUnitForFlow unitDB flow of
-        Just unit -> unitSymbol unit
-        Nothing -> "?"
-
--- | Get synonyms for a specific language
-getSynonymsForLanguage :: Flow -> Text -> [Text]
-getSynonymsForLanguage flow lang =
-    case M.lookup lang (flowSynonyms flow) of
-        Nothing -> []
-        Just syns -> S.toList syns
-
 -- | Get all synonyms across all languages
 getAllSynonyms :: Flow -> [Text]
 getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
-
--- | Add synonym to a flow for a specific language
-addSynonym :: Text -> Text -> Flow -> Flow
-addSynonym lang synonym flow =
-    flow
-        { flowSynonyms = M.insertWith S.union lang (S.singleton synonym) (flowSynonyms flow)
-        }
-
--- | Check if text matches flow name or any synonym
-matchesFlowOrSynonym :: Text -> Flow -> Bool
-matchesFlowOrSynonym searchText flow =
-    let lowerSearch = T.toLower searchText
-        lowerName = T.toLower (flowName flow)
-        lowerSynonyms = map T.toLower (getAllSynonyms flow)
-     in lowerSearch == lowerName || lowerSearch `elem` lowerSynonyms
 
 -- | Activité ACV de base (activité)
 data Activity = Activity
@@ -166,20 +130,18 @@ data Activity = Activity
     , activityUnit :: !Text -- Unité de référence
     , exchanges :: ![Exchange] -- Liste des échanges
     }
-    deriving (Eq, Show, Generic, NFData, Binary)
+    deriving (Generic, Binary)
 
 -- | Arbre de calcul ACV (représentation récursive)
 data ActivityTree
     = Leaf !Activity
     | Node !Activity ![(Double, ActivityTree)] -- Activités et sous-activités pondérés
-    deriving (Eq, Show, Generic, Binary)
 
 -- | Arbre avec détection de boucles pour export SVG
 data LoopAwareTree
     = TreeLeaf !Activity
     | TreeNode !Activity ![(Double, Flow, LoopAwareTree)] -- Activity + (quantity, flow, subtree)
     | TreeLoop !UUID !Text !Int -- Loop reference: UUID + ActivityName + Depth
-    deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données des flux (dédupliquée)
 type FlowDB = M.Map UUID Flow
@@ -240,7 +202,6 @@ data Indexes = Indexes
     , idxInputsByActivity :: !ActivityInputIndex -- Entrées par activité
     , idxOutputsByActivity :: !ActivityOutputIndex -- Sorties par activité
     }
-    deriving (Eq, Show, Generic, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
@@ -249,7 +210,6 @@ data Database = Database
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     }
-    deriving (Eq, Show, Generic, Binary)
 
 -- | Version simplifiée sans index (pour compatibilité)
 data SimpleDatabase = SimpleDatabase
@@ -257,14 +217,14 @@ data SimpleDatabase = SimpleDatabase
     , sdbFlows :: !FlowDB
     , sdbUnits :: !UnitDB
     }
-    deriving (Eq, Show, Generic, Binary)
+    deriving (Generic, Binary)
 
 -- | Catégorie d'impact (e.g. Changement climatique)
 data ImpactCategory = ImpactCategory
     { categoryId :: !Text
     , categoryName :: !Text
     }
-    deriving (Eq, Ord, Show, Generic, Binary)
+    deriving (Eq, Ord, Show)
 
 -- | Facteur de caractérisation (lié à une méthode LCIA)
 data CF = CF
@@ -272,19 +232,9 @@ data CF = CF
     , cfCategory :: !ImpactCategory -- Catégorie d'impact
     , cfFactor :: !Double -- Facteur de caractérisation
     }
-    deriving (Eq, Show, Generic, Binary)
 
 -- JSON instances for API compatibility
-instance ToJSON FlowType
-instance ToJSON Unit  
-instance ToJSON Flow
 instance ToJSON Exchange
-instance ToJSON Activity
-instance ToJSON ImpactCategory
-instance ToJSON CF
+instance ToJSON FlowType
 
-instance FromJSON FlowType
-instance FromJSON Unit
-instance FromJSON Flow
 instance FromJSON Exchange
-instance FromJSON Activity

@@ -14,7 +14,7 @@ import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (buildIndexes, findActivitiesByFields, findActivitiesByName, findAllReferenceProducts, findExchangesByFlow, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
+import ACV.Query (buildIndexes, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildLoopAwareTree)
 import ACV.Types
@@ -22,7 +22,7 @@ import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.IORef (newIORef, readIORef, writeIORef)
-import EcoSpold.Loader (buildActivityTreeIO, buildSpoldIndex, loadAllSpolds, loadAllSpoldsWithFlows, loadAllSpoldsWithIndexes, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
+import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
 import ILCD.Parser (parseMethodFromFile)
 import Network.HTTP.Types (Query, methodGet, ok200, statusCode)
 import Network.HTTP.Types.Status (Status (..))

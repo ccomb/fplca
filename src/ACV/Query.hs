@@ -13,9 +13,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 
--- | Construction d'index vides
-emptyIndexes :: Indexes
-emptyIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty
 
 -- | Construction des index à partir d'une base de données simple (parallélisée)
 buildIndexes :: ActivityDB -> FlowDB -> Indexes
@@ -152,18 +149,6 @@ buildActivityOutputIndex procDB =
 
 -- | Requêtes utilisant les index
 
--- | Recherche de activités par nom (recherche partielle, insensible à la casse)
-findActivitiesByName :: Database -> Text -> [Activity]
-findActivitiesByName db searchTerm =
-    let searchLower = T.toLower searchTerm
-        matchingUUIDs =
-            concat
-                [ uuids
-                | (name, uuids) <- M.toList (idxByName $ dbIndexes db)
-                , searchLower `T.isInfixOf` name
-                ]
-        uniqueUUIDs = S.toList $ S.fromList matchingUUIDs
-     in mapMaybe (`M.lookup` dbActivities db) uniqueUUIDs
 
 -- | Recherche d'activités par champs spécifiques
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
@@ -239,33 +224,9 @@ matchesActivityFields db nameParam geoParam productParam activity =
                  in matchesProduct
      in nameMatch && geoMatch && productMatch
 
--- | Recherche de activités par localisation exacte
-findActivitiesByLocation :: Database -> Text -> [Activity]
-findActivitiesByLocation db location =
-    case M.lookup location (idxByLocation $ dbIndexes db) of
-        Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbActivities db) uuids
 
--- | Recherche de activités par unité de référence
-findActivitiesByUnit :: Database -> Text -> [Activity]
-findActivitiesByUnit db unit =
-    case M.lookup unit (idxByUnit $ dbIndexes db) of
-        Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbActivities db) uuids
 
--- | Recherche de activités utilisant un flux donné
-findActivitiesUsingFlow :: Database -> UUID -> [Activity]
-findActivitiesUsingFlow db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbActivities db) uuids
 
--- | Recherche de flux par catégorie
-findFlowsByCategory :: Database -> Text -> [Flow]
-findFlowsByCategory db category =
-    case M.lookup category (idxFlowByCategory $ dbIndexes db) of
-        Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbFlows db) uuids
 
 -- | Recherche de flux par type (Technosphere ou Biosphere)
 findFlowsByType :: Database -> FlowType -> [Flow]
@@ -276,49 +237,10 @@ findFlowsByType db ftype =
 
 -- | ===== REQUÊTES AU NIVEAU ÉCHANGE =====
 
--- | Trouve tous les échanges utilisant un flux donné
-findExchangesByFlow :: Database -> UUID -> [(Activity, Exchange)]
-findExchangesByFlow db flowUUID =
-    case M.lookup flowUUID (idxExchangeByFlow $ dbIndexes db) of
-        Nothing -> []
-        Just procExchanges ->
-            [ (proc, exchange)
-            | (procUUID, exchange) <- procExchanges
-            , Just proc <- [M.lookup procUUID (dbActivities db)]
-            ]
 
--- | Trouve tous les échanges d'un activité
-findExchangesByActivity :: Database -> UUID -> [Exchange]
-findExchangesByActivity db procUUID =
-    case M.lookup procUUID (idxExchangeByActivity $ dbIndexes db) of
-        Nothing -> []
-        Just exchanges -> exchanges
 
--- | Trouve toutes les entrées d'un activité
-findInputsForActivity :: Database -> UUID -> [Exchange]
-findInputsForActivity db procUUID =
-    case M.lookup procUUID (idxInputsByActivity $ dbIndexes db) of
-        Nothing -> []
-        Just inputs -> inputs
 
--- | Trouve toutes les sorties d'un activité
-findOutputsForActivity :: Database -> UUID -> [Exchange]
-findOutputsForActivity db procUUID =
-    case M.lookup procUUID (idxOutputsByActivity $ dbIndexes db) of
-        Nothing -> []
-        Just outputs -> outputs
 
--- | Trouve le produit de référence d'un activité (s'il existe)
-findReferenceProduct :: Database -> UUID -> Maybe (Flow, Exchange)
-findReferenceProduct db procUUID =
-    case findOutputsForActivity db procUUID of
-        [] -> Nothing
-        outputs ->
-            case filter exchangeIsReference outputs of
-                [] -> Nothing
-                (refEx : _) -> do
-                    flow <- M.lookup (exchangeFlowId refEx) (dbFlows db)
-                    return (flow, refEx)
 
 -- | Trouve tous les produits de référence de la base de données
 findAllReferenceProducts :: Database -> [(Activity, Flow, Exchange)]
@@ -329,28 +251,7 @@ findAllReferenceProducts db =
     , Just flow <- [M.lookup flowUUID (dbFlows db)]
     ]
 
--- | Trouve les échanges par unité
-findExchangesByUnit :: Database -> Text -> [(Activity, Flow, Exchange)]
-findExchangesByUnit db unit =
-    [ (proc, flow, exchange)
-    | (procUUID, exchanges) <- M.toList (idxExchangeByActivity $ dbIndexes db)
-    , exchange <- exchanges
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , getUnitNameForFlow (dbUnits db) flow == unit
-    , Just proc <- [M.lookup procUUID (dbActivities db)]
-    ]
 
--- | Trouve les échanges dans une plage de quantité
-findExchangesByAmountRange :: Database -> Double -> Double -> [(Activity, Flow, Exchange)]
-findExchangesByAmountRange db minAmount maxAmount =
-    [ (proc, flow, exchange)
-    | (procUUID, exchanges) <- M.toList (idxExchangeByActivity $ dbIndexes db)
-    , exchange <- exchanges
-    , let amount = exchangeAmount exchange
-    , amount >= minAmount && amount <= maxAmount
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , Just proc <- [M.lookup procUUID (dbActivities db)]
-    ]
 
 -- | Statistiques de la base de données
 data DatabaseStats = DatabaseStats
@@ -366,7 +267,7 @@ data DatabaseStats = DatabaseStats
     , statsCategories :: ![Text]
     , statsUnits :: ![Text]
     }
-    deriving (Show, Eq)
+    deriving (Show)
 
 -- | Calcule les statistiques de la base de données
 getDatabaseStats :: Database -> DatabaseStats
@@ -387,28 +288,7 @@ getDatabaseStats db =
 
 -- | Fonctions utilitaires pour les requêtes complexes
 
--- | Trouve les activités les plus utilisés (qui apparaissent dans le plus d'échanges)
-findMostUsedActivities :: Database -> Int -> [(Activity, Int)]
-findMostUsedActivities db limit =
-    let usageCounts =
-            [ (proc, length uuids)
-            | (flowUUID, procUUIDs) <- M.toList (idxByFlow $ dbIndexes db)
-            , let uuids = procUUIDs
-            , proc <- mapMaybe (`M.lookup` dbActivities db) procUUIDs
-            ]
-        sorted = sortOn (negate . snd) usageCounts
-     in take limit sorted
 
--- | Trouve les flux les plus utilisés
-findMostUsedFlows :: Database -> Int -> [(Flow, Int)]
-findMostUsedFlows db limit =
-    let usageCounts =
-            [ (flow, length procUUIDs)
-            | (flowUUID, procUUIDs) <- M.toList (idxByFlow $ dbIndexes db)
-            , Just flow <- [M.lookup flowUUID (dbFlows db)]
-            ]
-        sorted = sortOn (negate . snd) usageCounts
-     in take limit sorted
 
 {- | Recherche de flux par synonymes et nom (fuzzy search)
 | Trouve tous les flux qui correspondent au texte de recherche (substring dans le nom ou synonymes)
@@ -471,15 +351,6 @@ matchesFlowFuzzy searchTerms flow =
                 any (term `T.isInfixOf`) lowerSynonyms
      in all matchesTerm searchTerms
 
--- | Trouve tous les flux qui ont des synonymes dans une langue donnée
-findFlowsWithSynonymsInLanguage :: Database -> Text -> [Flow]
-findFlowsWithSynonymsInLanguage db lang =
-    [ flow
-    | flow <- M.elems (dbFlows db)
-    , case M.lookup lang (flowSynonyms flow) of
-        Nothing -> False
-        Just synonyms -> not (S.null synonyms)
-    ]
 
 -- | Recherche de flux par synonyme dans une langue spécifique (fuzzy search)
 findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
@@ -527,7 +398,7 @@ data SynonymStats = SynonymStats
     , ssLanguageStats :: [(Text, Int)] -- Statistiques par langue
     , ssTotalSynonyms :: Int -- Total des synonymes
     }
-    deriving (Eq, Show, Generic)
+    deriving (Generic)
 
 -- | Calcule les statistiques des synonymes
 getSynonymStats :: Database -> SynonymStats
