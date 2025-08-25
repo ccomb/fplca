@@ -13,6 +13,7 @@ import qualified ACV.API as API
 import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
+import ACV.Matrix (computeInventoryMatrix)
 import ACV.PEF (applyCharacterization)
 import ACV.Query (buildIndexes, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
 import qualified ACV.Service
@@ -146,9 +147,13 @@ main = do
                     -- Construire l'arbre de l'activité racine
                     print "building activity tree"
                     let tree = buildActivityTreeWithDatabase database (T.pack root)
-                    -- Calculer l'inventaire global
+                    -- Calculer l'inventaire global (méthode arbre)
                     print "computing inventory tree"
                     let inventory = computeInventoryWithFlows (dbFlows database) tree
+                    
+                    -- Calculer l'inventaire avec la méthode matricielle
+                    print "computing inventory matrix"  
+                    let inventoryMatrix = computeInventoryMatrix database (T.pack root)
 
                     -- Charger la méthode PEF
                     print "loading PEF method"
@@ -158,9 +163,25 @@ main = do
                     print "Applying characterization"
                     let scores = applyCharacterization inventory method
 
-                    -- Affichage
-                    putStrLn "\nInventaire ACV :"
+                    -- Affichage comparaison
+                    putStrLn "\nInventaire ACV (Tree method):"
                     mapM_ print (M.toList inventory)
+                    
+                    putStrLn "\nInventaire ACV (Matrix method):"
+                    mapM_ print (M.toList inventoryMatrix)
+                    
+                    -- Comparison for specific flows
+                    putStrLn "\nComparison for key flows:"
+                    let compareFlow flowId name = do
+                          let treeVal = M.findWithDefault 0.0 flowId inventory
+                          let matrixVal = M.findWithDefault 0.0 flowId inventoryMatrix  
+                          if treeVal /= 0.0 || matrixVal /= 0.0
+                          then putStrLn $ name ++ ": Tree=" ++ show treeVal ++ ", Matrix=" ++ show matrixVal ++ ", Ratio=" ++ show (if treeVal /= 0 then matrixVal/treeVal else 0)
+                          else return ()
+                    
+                    -- Check Zinc II and Water flows
+                    compareFlow (T.pack "5ce378a0-b48d-471c-977d-79681521efde") "Zinc(II)"
+                    compareFlow (T.pack "51254820-3456-4373-b7b4-056cf7b16e01") "Water"
 
                     putStrLn "\nScore PEF par catégorie :"
                     mapM_ print (M.toList scores)

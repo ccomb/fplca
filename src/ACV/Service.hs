@@ -3,6 +3,7 @@
 module ACV.Service where
 
 import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
+import ACV.Matrix (computeInventoryMatrix)
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
@@ -54,11 +55,8 @@ computeActivityInventory db uuid = do
     case M.lookup validUuid (dbActivities db) of
         Nothing -> Left $ ActivityNotFound validUuid
         Just _ ->
-            -- Use cutoff-based loop-aware tree for proper supply chain calculation
-            let maxDepth = 25 -- Higher depth since cutoffs will control tree size
-                cutoffThreshold = 1e-2 -- 0.01% cutoff - more permissive to capture full supply chain
-                loopAwareTree = buildCutoffLoopAwareTree db validUuid maxDepth cutoffThreshold
-                inventory = computeInventoryFromLoopAwareTree (dbFlows db) loopAwareTree
+            -- Use matrix-based calculation for proper cycle resolution
+            let inventory = computeInventoryMatrix db validUuid
              in Right inventory
 
 -- | Convert raw inventory to structured export format

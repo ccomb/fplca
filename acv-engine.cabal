@@ -46,11 +46,14 @@ executable acv-cli
                      , http-types
                      , network-uri
                      , streaming-commons
+                     , hmatrix
+                     , vector
 
   other-modules:     ACV.Types
                      , ACV.Types.API
                      , ACV.Tree
                      , ACV.Inventory
+                     , ACV.Matrix
                      , ACV.PEF
                      , ACV.Query
                      , ACV.API
