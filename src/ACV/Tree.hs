@@ -59,10 +59,11 @@ buildActivityTreeWithFlowDBs procDB flowDB = go S.empty
                 Just proc ->
                     let newSeen = S.insert pid seen
                         children =
-                            [ (exchangeAmount ex, go newSeen (exchangeFlowId ex))
+                            [ (exchangeAmount ex, go newSeen targetUUID)
                             | ex <- exchanges proc
                             , isTechnosphereInput flowDB ex
-                            , M.member (exchangeFlowId ex) procDB
+                            , Just targetUUID <- [exchangeActivityLinkId ex]
+                            , M.member targetUUID procDB
                             ]
                         -- Force evaluation of children list to avoid thunk buildup in recursive tree
                         !children' = children
