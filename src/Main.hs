@@ -1,5 +1,7 @@
+{-# LANGUAGE BangPatterns #-}
 module Main where
 
+import Control.Monad (when)
 import Data.Aeson (encode)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.Map as M
@@ -15,7 +17,7 @@ import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Inventory (computeInventoryWithFlows)
 import ACV.Matrix (computeInventoryMatrix)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (buildIndexes, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
+import ACV.Query (buildIndexes, buildDatabaseWithMatrices, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildLoopAwareTree)
 import ACV.Types
@@ -23,7 +25,7 @@ import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.IORef (newIORef, readIORef, writeIORef)
-import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows)
+import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
 import ILCD.Parser (parseMethodFromFile)
 import Network.HTTP.Types (Query, methodGet, ok200, statusCode)
 import Network.HTTP.Types.Status (Status (..))
@@ -68,27 +70,35 @@ main = do
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Load database with conditional caching (debug to stderr)
-    (simpleDb, wasFromCache) <-
+    -- Load database with matrix caching (debug to stderr)
+    database <-
         if disableCache
             then do
                 hPutStrLn stderr "Loading activities with flow deduplication (caching disabled)"
                 simpleDb <- loadAllSpoldsWithFlows dir
-                return (simpleDb, False)
+                hPutStrLn stderr "Building indexes and pre-computing matrices (no caching)"
+                let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+                return db
             else do
-                hPutStrLn stderr "Loading activities with flow deduplication and automatic caching"
-                (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir
-                if not wasFromCache
-                    then do
-                        hPutStrLn stderr "Saving to cache for next time"
-                        saveCachedSpoldsWithFlows dir simpleDb
-                    else return ()
-                return (simpleDb, wasFromCache)
-
-    -- Convert SimpleDatabase to Database with indexes (debug to stderr)
-    hPutStrLn stderr "Building indexes for efficient queries"
-    let indexes = buildIndexes (sdbActivities simpleDb) (sdbFlows simpleDb)
-    let database = Database (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb) indexes
+                hPutStrLn stderr "Checking for cached Database with matrices"
+                cachedDb <- loadCachedDatabaseWithMatrices dir
+                case cachedDb of
+                    Just db -> do
+                        hPutStrLn stderr "Using cached Database with pre-computed matrices"
+                        return db
+                    Nothing -> do
+                        hPutStrLn stderr "No matrix cache found, building from SimpleDatabase cache"
+                        (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir
+                        when (not wasFromCache) $ do
+                            hPutStrLn stderr "Saving SimpleDatabase to cache for next time"
+                            saveCachedSpoldsWithFlows dir simpleDb
+                        
+                        hPutStrLn stderr "Building indexes and pre-computing matrices for efficient queries"
+                        let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+                        
+                        hPutStrLn stderr "Saving Database with matrices to cache for next time"
+                        saveCachedDatabaseWithMatrices dir db
+                        return db
 
     -- Afficher les statistiques de la base de données (debug to stderr)
     let stats = getDatabaseStats database

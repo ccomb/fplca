@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -11,7 +12,9 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import Debug.Trace (trace)
 import GHC.Generics (Generic)
+import Numeric.LinearAlgebra
 
 
 -- | Construction des index à partir d'une base de données simple (parallélisée)
@@ -47,6 +50,90 @@ buildIndexes procDB flowDB =
             , idxInputsByActivity = inputIdx
             , idxOutputsByActivity = outputIdx
             }
+
+-- | Build complete database with pre-computed sparse matrices (Brightway approach)
+buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database  
+buildDatabaseWithMatrices activityDB flowDB unitDB =
+    let _ = trace ("=== BUILDING DATABASE WITH MATRICES ===") ()
+        indexes = buildIndexes activityDB flowDB
+        -- Build complete sparse coordinate lists for entire database
+        _ = trace ("Building activity indexes...") ()
+        allActivities = activityDB
+        activityUUIDs = M.keys allActivities
+        activityCount = length activityUUIDs
+        activityIndex = M.fromList $ zip activityUUIDs [0..]
+        _ = trace ("Activity index built: " ++ show activityCount ++ " activities") ()
+        
+        -- Build technosphere sparse triplets (optimized with strict evaluation)
+        _ = trace ("Building technosphere matrix triplets...") ()
+        !techTriples = 
+            let buildTechTriple j consumerActivity ex
+                    | not (isTechnosphereExchange ex) = []
+                    | exchangeIsReference ex = 
+                        let value = exchangeAmount ex
+                        in if abs value > 1e-15 then [(j, j, value)] else []
+                    | otherwise =
+                        case exchangeActivityLinkId ex of
+                            Just inputActivityUUID -> 
+                                case M.lookup inputActivityUUID activityIndex of
+                                    Just producerIdx -> 
+                                        let value = -(exchangeAmount ex)
+                                        in if abs value > 1e-15 then [(producerIdx, j, value)] else []
+                                    Nothing -> []
+                            Nothing -> []
+                buildActivityTriplets (j, consumerActivity) = 
+                    concatMap (buildTechTriple j consumerActivity) (exchanges consumerActivity)
+                !result = concatMap buildActivityTriplets (zip [0..] (M.elems allActivities))
+                _ = trace ("Technosphere matrix: " ++ show (length result) ++ " non-zero entries") ()
+            in result
+        
+        -- Build biosphere sparse triplets (optimized with strict evaluation)
+        _ = trace ("Building biosphere flow index...") ()
+        !bioFlowUUIDs = S.toList $ S.fromList 
+                      [ exchangeFlowId ex 
+                      | activity <- M.elems allActivities
+                      , ex <- exchanges activity
+                      , isBiosphereExchange ex
+                      ]
+        !bioFlowCount = length bioFlowUUIDs
+        !bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0..]
+        _ = trace ("Biosphere index built: " ++ show bioFlowCount ++ " flows") ()
+        
+        _ = trace ("Building biosphere matrix triplets...") ()
+        !bioTriples = 
+            let buildBioTriple j activity ex
+                    | not (isBiosphereExchange ex) = []
+                    | otherwise =
+                        case M.lookup (exchangeFlowId ex) bioFlowIndex of
+                            Just i -> 
+                                let amount = if exchangeIsInput ex 
+                                           then -(exchangeAmount ex)  -- Resource consumption (negative)
+                                           else exchangeAmount ex     -- Emission (positive)
+                                in if abs amount > 1e-15 then [(i, j, amount)] else []
+                            Nothing -> []
+                buildActivityBioTriplets (j, activity) = 
+                    concatMap (buildBioTriple j activity) (exchanges activity)
+                !result = concatMap buildActivityBioTriplets (zip [0..] (M.elems allActivities))
+                _ = trace ("Biosphere matrix: " ++ show (length result) ++ " non-zero entries") ()
+            in result
+        
+        -- Force evaluation of matrix contents to ensure they're built now, not lazily later
+        _ = techTriples `seq` bioTriples `seq` trace ("=== DATABASE WITH MATRICES BUILT SUCCESSFULLY ===") ()
+        _ = trace ("Final matrix stats: " ++ show (length techTriples) ++ " tech entries, " ++ show (length bioTriples) ++ " bio entries") ()
+        
+    in Database 
+        { dbActivities = activityDB
+        , dbFlows = flowDB
+        , dbUnits = unitDB  
+        , dbIndexes = indexes
+        , dbTechnosphereTriples = techTriples
+        , dbBiosphereTriples = bioTriples
+        , dbActivityIndex = activityIndex
+        , dbBiosphereFlows = bioFlowUUIDs
+        , dbActivityCount = activityCount
+        , dbBiosphereCount = bioFlowCount
+        }
+
 
 -- | Construction de l'index par nom (insensible à la casse)
 buildNameIndex :: ActivityDB -> NameIndex

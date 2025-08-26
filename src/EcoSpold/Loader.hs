@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows) where
+module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices) where
 
 import ACV.Query (buildIndexes)
 import ACV.Types
@@ -31,7 +31,7 @@ type Visited = S.Set UUID
 
 -- | Cache format version - increment this when types change to invalidate old caches
 cacheFormatVersion :: Int
-cacheFormatVersion = 7 -- Increment when Activity/Flow/Exchange/Unit types change
+cacheFormatVersion = 8 -- Increment when Activity/Flow/Exchange/Unit types change or matrix caching is added
 
 -- | Generate cache filename based on data directory, file list, and version
 generateCacheFilename :: FilePath -> IO FilePath
@@ -168,3 +168,58 @@ saveCachedSpoldsWithFlows dataDir db = do
     endTime <- getCurrentTime
     let elapsed = diffUTCTime endTime startTime
     hPutStrLn stderr $ "Cache saved in " ++ show elapsed
+
+-- | Generate matrix cache filename (separate from SimpleDatabase cache)
+generateMatrixCacheFilename :: FilePath -> IO FilePath
+generateMatrixCacheFilename dataDir = do
+    files <- listDirectory dataDir
+    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
+    let filesHash = abs $ hash (show (dataDir, spoldFiles)) -- Hash both directory path and file list
+    return $ "ecoinvent.matrix.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
+
+-- | Load cached Database with matrices from disk
+loadCachedDatabaseWithMatrices :: FilePath -> IO (Maybe Database)
+loadCachedDatabaseWithMatrices dataDir = do
+    cacheFile <- generateMatrixCacheFilename dataDir
+    cacheExists <- doesFileExist cacheFile
+    if cacheExists
+        then do
+            hPutStrLn stderr $ "Loading Database with matrices from cache: " ++ cacheFile
+            startTime <- getCurrentTime
+            !db <- decodeFile cacheFile
+            endTime <- getCurrentTime
+            let elapsed = diffUTCTime endTime startTime
+            hPutStrLn stderr $
+                "Matrix cache loaded in "
+                    ++ show elapsed
+                    ++ " ("
+                    ++ show (dbActivityCount db)
+                    ++ " activities, "
+                    ++ show (length $ dbTechnosphereTriples db)
+                    ++ " tech entries, "
+                    ++ show (length $ dbBiosphereTriples db)
+                    ++ " bio entries)"
+            return (Just db)
+        else do
+            hPutStrLn stderr "No matrix cache found"
+            return Nothing
+
+-- | Save Database with matrices to binary cache file
+saveCachedDatabaseWithMatrices :: FilePath -> Database -> IO ()
+saveCachedDatabaseWithMatrices dataDir db = do
+    cacheFile <- generateMatrixCacheFilename dataDir
+    hPutStrLn stderr $ "Saving Database with matrices to cache: " ++ cacheFile
+    startTime <- getCurrentTime
+    encodeFile cacheFile db
+    endTime <- getCurrentTime
+    let elapsed = diffUTCTime endTime startTime
+    hPutStrLn stderr $
+        "Matrix cache saved in "
+            ++ show elapsed
+            ++ " ("
+            ++ show (dbActivityCount db)
+            ++ " activities, "
+            ++ show (length $ dbTechnosphereTriples db)
+            ++ " tech entries, "
+            ++ show (length $ dbBiosphereTriples db)
+            ++ " bio entries)"

@@ -13,6 +13,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
+import Numeric.LinearAlgebra (Matrix, Vector)
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text
@@ -202,6 +203,10 @@ data Indexes = Indexes
     , idxInputsByActivity :: !ActivityInputIndex -- Entrées par activité
     , idxOutputsByActivity :: !ActivityOutputIndex -- Sorties par activité
     }
+    deriving (Generic, Binary)
+
+-- | Sparse matrix coordinate triplet (row, col, value)
+type SparseTriple = (Int, Int, Double)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
@@ -209,7 +214,15 @@ data Database = Database
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
+    -- Pre-computed sparse matrices for efficient LCA calculations (Brightway approach)
+    , dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
+    , dbBiosphereTriples :: ![SparseTriple]    -- B matrix: biosphere flows × activities (sparse)
+    , dbActivityIndex :: !(M.Map UUID Int)     -- Activity UUID → matrix index mapping
+    , dbBiosphereFlows :: ![UUID]              -- Ordered list of biosphere flow UUIDs
+    , dbActivityCount :: !Int                  -- Number of activities (matrix dimension)
+    , dbBiosphereCount :: !Int                 -- Number of biosphere flows (matrix dimension)
     }
+    deriving (Generic, Binary)
 
 -- | Version simplifiée sans index (pour compatibilité)
 data SimpleDatabase = SimpleDatabase
