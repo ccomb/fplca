@@ -2,9 +2,11 @@
 
 module ACV.Matrix 
     ( computeInventoryMatrix
-    , buildTechnosphereMatrix
-    , buildBiosphereMatrix
+    , buildCompleteTechnosphereMatrix
+    , buildCompleteBiosphereMatrix
+    , buildMatrixFromTriples
     , buildDemandVector
+    , getAllBiosphereFlowsFromDB
     ) where
 
 import ACV.Types
@@ -15,124 +17,129 @@ import Data.List (elemIndex, sortOn)
 import Data.Maybe (fromMaybe, mapMaybe, fromJust)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Debug.Trace (trace)
 import Numeric.LinearAlgebra
 
--- | Matrix-based inventory calculation following standard LCA methodology
--- Solves: A * supply = demand, then g = B * supply  
--- Where: A = technosphere matrix, B = biosphere matrix, supply = scaling factors
+-- | Matrix-based inventory calculation using Brightway approach
+-- Builds complete matrices for entire database, then solves: (I - A)^-1 * f
+-- Where: I = identity, A = technosphere matrix, f = demand vector
 computeInventoryMatrix :: Database -> UUID -> M.Map UUID Double
 computeInventoryMatrix db rootUUID = 
-    let activities = getAllReachableActivities db rootUUID
-        activityList = M.elems activities
-        activityUUIDs = M.keys activities
+    let allActivities = dbActivities db
+        activityUUIDs = M.keys allActivities
+        activityCount = length activityUUIDs
         
-        -- Debug: check what we found
-        _ = if length activities == 0 
-            then error $ "No reachable activities found from root: " ++ show rootUUID
-            else ()
+        _ = trace ("Complete matrix calculation for " ++ show activityCount ++ " activities") ()
         
-        -- Build matrices using standard LCA approach
-        techMatrix = buildTechnosphereMatrix activities activityUUIDs
-        bioMatrix = buildBiosphereMatrix activities activityUUIDs  
-        demandVec = buildDemandVector activities activityUUIDs rootUUID
+        -- Build complete sparse matrices for entire database
+        (techMatrix, activityIndex) = buildCompleteTechnosphereMatrix db
+        bioMatrix = buildCompleteBiosphereMatrix db
         
-        -- Debug: check matrix dimensions
-        _ = if rows techMatrix == 0 || cols techMatrix == 0
-            then error $ "Empty technosphere matrix: " ++ show (rows techMatrix) ++ "x" ++ show (cols techMatrix)
-            else ()
+        -- Build demand vector for root activity
+        demandVec = buildDemandVector allActivities activityUUIDs rootUUID
         
-        -- Solve linear system: A * supply = demand
-        -- Supply vector contains scaling factors for each process
-        supplyVec = techMatrix <\> demandVec
+        -- Solve standard LCA equation: (I - A)^-1 * f
+        identityMatrix = ident activityCount
+        supplyVec = (identityMatrix - techMatrix) <\> demandVec
         
-        -- Note: supplyVec contains scaling factors, including cycle resolution
-            
-        -- Calculate inventory: g = B * supply (standard LCA calculation)
+        -- Calculate inventory: g = B * supply
         inventoryVec = bioMatrix #> supplyVec
         
-        -- Get biosphere flow UUIDs
-        bioFlowUUIDs = getAllBiosphereFlows activities
+        -- Convert back to Map with biosphere flow UUIDs
+        bioFlowUUIDs = getAllBiosphereFlowsFromDB db
         
     in M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
 
--- | Get all activities reachable from root (using technosphere inputs only)
-getAllReachableActivities :: Database -> UUID -> ActivityDB
-getAllReachableActivities db rootUUID = 
-    let go visited actUUID
-            | S.member actUUID visited = M.empty
-            | otherwise = 
-                case M.lookup actUUID (dbActivities db) of
-                    Nothing -> M.empty
-                    Just activity ->
-                        let visited' = S.insert actUUID visited
-                            -- Get technosphere inputs
-                            techInputs = [ ex | ex <- exchanges activity
-                                         , isTechnosphereInput (dbFlows db) ex ]
-                            -- Recursively get connected activities
-                            childActivities = M.unions 
-                                [ go visited' targetUUID 
-                                | ex <- techInputs
-                                , Just targetUUID <- [exchangeActivityLinkId ex]
-                                , M.member targetUUID (dbActivities db)
-                                ]
-                        in M.insert actUUID activity childActivities
-    in go S.empty rootUUID
 
--- | Build technosphere matrix A (activities × activities)
--- A[i,j] = net flow from activity i to activity j
---        = positive for outputs (what i produces for j)
---        = negative for inputs (what i consumes from j)
-buildTechnosphereMatrix :: ActivityDB -> [UUID] -> Matrix Double  
-buildTechnosphereMatrix activities actUUIDs =
-    let n = length actUUIDs
-        indexMap = M.fromList $ zip actUUIDs [0..]
+-- | Build complete technosphere matrix for entire database (Brightway approach)
+-- Returns matrix and activity index mapping for efficient lookup
+buildCompleteTechnosphereMatrix :: Database -> (Matrix Double, M.Map UUID Int)
+buildCompleteTechnosphereMatrix db =
+    let allActivities = dbActivities db
+        activityUUIDs = M.keys allActivities
+        activityCount = length activityUUIDs
+        activityIndex = M.fromList $ zip activityUUIDs [0..]
         
-        -- Build matrix directly from exchange data
-        matrixElements i j =
-            let producerUUID = actUUIDs !! i  -- Activity that could be producing
-                consumerUUID = actUUIDs !! j  -- Activity that could be consuming
-            in case M.lookup consumerUUID activities of
-                Nothing -> 0.0
-                Just consumerActivity ->
-                    -- Sum all flows between producer i and consumer j
-                    sum [ exchangeFlow
-                        | ex <- exchanges consumerActivity
-                        , isTechnosphereExchange ex
-                        , let exchangeFlow = 
-                                if exchangeIsReference ex && consumerUUID == producerUUID
-                                then exchangeAmount ex  -- Positive: what this activity produces
-                                else case exchangeActivityLinkId ex of
-                                       Just inputActivityUUID | inputActivityUUID == producerUUID ->
-                                           -(exchangeAmount ex)  -- Negative: what this activity consumes from producer
-                                       _ -> 0.0
-                        , exchangeFlow /= 0.0
-                        ]
+        -- Build sparse triplets for entire database
+        techTriples = [ (i, j, value)
+                      | (j, consumerUUID) <- zip [0..] activityUUIDs
+                      , Just consumerActivity <- [M.lookup consumerUUID allActivities]
+                      , ex <- exchanges consumerActivity
+                      , isTechnosphereExchange ex
+                      , let (i, value) = 
+                              if exchangeIsReference ex
+                              then (j, exchangeAmount ex)  -- Diagonal: production output
+                              else case exchangeActivityLinkId ex of
+                                     Just inputActivityUUID -> 
+                                         case M.lookup inputActivityUUID activityIndex of
+                                             Just producerIdx -> (producerIdx, -(exchangeAmount ex))  -- Input consumption  
+                                             Nothing -> (-1, 0.0)  -- Invalid link
+                                     Nothing -> (-1, 0.0)  -- Invalid exchange
+                      , i >= 0 && abs value > 1e-15  -- Only significant non-zero values
+                      ]
         
-    in (n><n) [ matrixElements i j | i <- [0..n-1], j <- [0..n-1] ]
+        -- Convert to dense matrix
+        techMatrix = buildMatrixFromTriples activityCount activityCount techTriples
+        
+    in (techMatrix, activityIndex)
 
--- | Build biosphere matrix B (elementary flows × activities)  
--- B[i,j] = amount of elementary flow i emitted by 1 unit of activity j
-buildBiosphereMatrix :: ActivityDB -> [UUID] -> Matrix Double
-buildBiosphereMatrix activities actUUIDs =
+-- | Build complete biosphere matrix for entire database (Brightway approach) 
+-- Returns matrix mapping biosphere flows × activities 
+buildCompleteBiosphereMatrix :: Database -> Matrix Double
+buildCompleteBiosphereMatrix db =
+    let allActivities = dbActivities db
+        activityUUIDs = M.keys allActivities
+        activityCount = length activityUUIDs
+        activityIndex = M.fromList $ zip activityUUIDs [0..]
+        
+        -- Get all unique biosphere flows in database
+        bioFlowUUIDs = getAllBiosphereFlowsFromDB db
+        bioFlowCount = length bioFlowUUIDs
+        bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0..]
+        
+        -- Build sparse triplets for all biosphere exchanges
+        bioTriples = [ (i, j, amount)
+                     | (j, actUUID) <- zip [0..] activityUUIDs  -- j = activity index
+                     , Just activity <- [M.lookup actUUID allActivities]
+                     , ex <- exchanges activity
+                     , isBiosphereExchange ex
+                     , Just i <- [M.lookup (exchangeFlowId ex) bioFlowIndex]  -- i = biosphere flow index
+                     , let amount = if exchangeIsInput ex 
+                                   then -(exchangeAmount ex)  -- Resource consumption (negative)
+                                   else exchangeAmount ex     -- Emission (positive)
+                     , abs amount > 1e-15  -- Only significant flows
+                     ]
+        
+        -- Convert to dense matrix
+        bioMatrix = buildMatrixFromTriples bioFlowCount activityCount bioTriples
+        
+    in bioMatrix
+
+-- | Build biosphere matrix triplets (sparse coordinate format)
+buildSparseBiosphereTriples :: ActivityDB -> [UUID] -> M.Map UUID Int -> [(Int, Int, Double)]
+buildSparseBiosphereTriples activities actUUIDs activityIndex =
     let bioFlows = getAllBiosphereFlows activities
-        m = length bioFlows
-        n = length actUUIDs
-        
-        -- Build matrix using element function
-        matrixElements i j =
-            case M.lookup (actUUIDs !! j) activities of
-                Nothing -> 0.0
-                Just activity ->
-                    -- Sum all biosphere exchanges of flow i from activity j
-                    sum [ if exchangeIsInput ex 
-                          then -(exchangeAmount ex)  -- Resource consumption (negative)
-                          else exchangeAmount ex     -- Emission (positive)
-                        | ex <- exchanges activity
-                        , isBiosphereExchange ex
-                        , exchangeFlowId ex == (bioFlows !! i)
-                        ]
-        
-    in (m><n) [ matrixElements i j | i <- [0..m-1], j <- [0..n-1] ]
+        bioFlowIndex = M.fromList $ zip bioFlows [0..]
+    in [ (i, j, amount)
+       | (j, actUUID) <- zip [0..] actUUIDs  -- j = activity index
+       , Just activity <- [M.lookup actUUID activities]
+       , ex <- exchanges activity
+       , isBiosphereExchange ex
+       , Just i <- [M.lookup (exchangeFlowId ex) bioFlowIndex]  -- i = biosphere flow index
+       , let amount = if exchangeIsInput ex 
+                     then -(exchangeAmount ex)  -- Resource consumption (negative)
+                     else exchangeAmount ex     -- Emission (positive)
+       , abs amount > 1e-15  -- Only significant flows
+       ]
+
+-- | Build dense matrix from sparse triplets (efficient for final solving)
+buildMatrixFromTriples :: Int -> Int -> [(Int, Int, Double)] -> Matrix Double
+buildMatrixFromTriples nRows nCols triplets =
+    let elemMap = M.fromList [((i, j), val) | (i, j, val) <- triplets]
+        -- Convert to row-major list format for hmatrix
+        elements = [ M.findWithDefault 0.0 (i, j) elemMap | i <- [0..nRows-1], j <- [0..nCols-1] ]
+    in (nRows><nCols) elements
+
 
 -- | Build final demand vector f 
 -- f[i] = external demand for product from activity i
@@ -143,7 +150,18 @@ buildDemandVector activities actUUIDs rootUUID =
         rootIndex = fromMaybe 0 (M.lookup rootUUID indexMap)
     in fromList [ if i == rootIndex then 1.0 else 0.0 | i <- [0..n-1] ]
 
--- | Get all unique biosphere flows from activities
+-- | Get all unique biosphere flows from entire database
+getAllBiosphereFlowsFromDB :: Database -> [UUID]
+getAllBiosphereFlowsFromDB db = 
+    let bioFlows = S.fromList 
+            [ exchangeFlowId ex 
+            | activity <- M.elems (dbActivities db)
+            , ex <- exchanges activity
+            , isBiosphereExchange ex
+            ]
+    in S.toList bioFlows
+
+-- | Get all unique biosphere flows from activities (legacy function)
 getAllBiosphereFlows :: ActivityDB -> [UUID]
 getAllBiosphereFlows activities = 
     let bioFlows = S.fromList 

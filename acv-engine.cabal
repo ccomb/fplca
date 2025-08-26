@@ -47,7 +47,8 @@ executable acv-cli
                      , network-uri
                      , streaming-commons
                      , hmatrix
-                     , vector
+                     , vector 
+                     , containers
 
   other-modules:     ACV.Types
                      , ACV.Types.API
