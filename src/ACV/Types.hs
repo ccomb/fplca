@@ -13,7 +13,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
-import Numeric.LinearAlgebra (Matrix, Vector)
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text

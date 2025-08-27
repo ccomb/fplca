@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module ACV.Service where
@@ -14,6 +15,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
+import Debug.Trace (trace)
 
 -- | Domain service errors
 data ServiceError
@@ -51,37 +53,61 @@ getActivityInfo db uuid = do
 -- | Core inventory calculation logic (pure domain function)
 computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
 computeActivityInventory db uuid = do
+    let _ = trace ("SERVICE: computeActivityInventory starting for UUID: " ++ T.unpack uuid) ()
+    let _ = trace ("SERVICE: About to validate UUID") ()
     validUuid <- validateUUID uuid
+    let _ = trace ("SERVICE: UUID validation returned: " ++ show validUuid) ()
+    let _ = trace ("SERVICE: computeActivityInventory UUID validation completed") ()
+    
     case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
+        Nothing -> 
+            let _ = trace ("SERVICE: computeActivityInventory - Activity not found") ()
+            in Left $ ActivityNotFound validUuid
         Just _ ->
-            -- Use matrix-based calculation for proper cycle resolution
-            let inventory = computeInventoryMatrix db validUuid
+            let _ = trace ("SERVICE: computeActivityInventory - Activity found, calling computeInventoryMatrix") ()
+                _ = trace ("SERVICE: About to call computeInventoryMatrix with UUID: " ++ show validUuid) ()
+                -- Use matrix-based calculation for proper cycle resolution
+                !inventory = computeInventoryMatrix db validUuid
+                _ = trace ("SERVICE: computeInventoryMatrix returned, inventory size: " ++ show (M.size inventory)) ()
+                _ = trace ("SERVICE: computeInventoryMatrix call completed successfully") ()
              in Right inventory
 
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
 convertToInventoryExport db rootActivity inventory calculationDepth =
-    let flowDetails =
-            [ InventoryFlowDetail flow quantity (getUnitNameForFlow (dbUnits db) flow) isEmission (flowCategory flow)
-            | (flowUUID, quantity) <- M.toList inventory
-            , Just flow <- [M.lookup flowUUID (dbFlows db)]
-            , let isEmission = not (isResourceExtraction flow quantity)
+    let _ = trace ("EXPORT: Starting conversion with " ++ show (M.size inventory) ++ " inventory flows") ()
+        inventoryList = take 10 $ M.toList inventory  -- Limit inventory to first 10 items
+        _ = trace ("EXPORT: Limited inventory to " ++ show (length inventoryList) ++ " items") ()
+        
+        !flowDetails = 
+            [ let _ = trace ("EXPORT: Processing flow " ++ show i ++ "/" ++ show (length inventoryList)) ()
+                  !flow = f
+                  _ = trace ("EXPORT: Flow lookup successful") ()
+                  !unitName = getUnitNameForFlow (dbUnits db) flow
+                  _ = trace ("EXPORT: Unit name retrieved") ()  
+                  !isEmission = not (isResourceExtraction flow quantity)
+                  _ = trace ("EXPORT: Emission status computed") ()
+                  !category = flowCategory flow
+                  _ = trace ("EXPORT: Category retrieved") ()
+              in InventoryFlowDetail flow quantity unitName isEmission category
+            | ((flowUUID, quantity), i) <- zip inventoryList [1..]
+            , Just f <- [M.lookup flowUUID (dbFlows db)]
             ]
+        _ = trace ("EXPORT: Created " ++ show (length flowDetails) ++ " flow details") ()
 
-        emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
-        resourceFlows = length [f | f <- flowDetails, not (ifdIsEmission f)]
+        !emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
+        !resourceFlows = length [f | f <- flowDetails, not (ifdIsEmission f)]
 
-        totalQuantity = sum [abs (ifdQuantity f) | f <- flowDetails]
-        emissionQuantity = sum [ifdQuantity f | f <- flowDetails, ifdIsEmission f, ifdQuantity f > 0]
-        resourceQuantity = sum [abs (ifdQuantity f) | f <- flowDetails, not (ifdIsEmission f)]
+        !totalQuantity = sum [abs (ifdQuantity f) | f <- flowDetails]
+        !emissionQuantity = sum [ifdQuantity f | f <- flowDetails, ifdIsEmission f, ifdQuantity f > 0]
+        !resourceQuantity = sum [abs (ifdQuantity f) | f <- flowDetails, not (ifdIsEmission f)]
 
-        categoryStats =
+        !categoryStats =
             take 10 $
                 M.toList $
                     M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
 
-        metadata =
+        !metadata =
             InventoryMetadata
                 { imRootActivity = ActivitySummary (activityId rootActivity) (activityName rootActivity) (activityLocation rootActivity)
                 , imCalculationDepth = calculationDepth -- Actual calculation depth used
@@ -90,13 +116,14 @@ convertToInventoryExport db rootActivity inventory calculationDepth =
                 , imResourceFlows = resourceFlows
                 }
 
-        statistics =
+        !statistics =
             InventoryStatistics
                 { isTotalQuantity = totalQuantity
                 , isEmissionQuantity = emissionQuantity
                 , isResourceQuantity = resourceQuantity
                 , isTopCategories = categoryStats
                 }
+        _ = trace ("EXPORT: Completed all calculations, returning InventoryExport") ()
      in InventoryExport metadata flowDetails statistics
 
 -- | Determine if a flow represents resource extraction (negative quantity = extraction from environment)
@@ -105,15 +132,29 @@ isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> Either ServiceError Value
-getActivityInventory db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity -> do
-            inventory <- computeActivityInventory db uuid
-            -- Use the same rich export format as the API
-            let inventoryExport = convertToInventoryExport db activity inventory 35
-            return $ toJSON inventoryExport
+getActivityInventory db uuid = 
+    let _ = trace ("SERVICE: getActivityInventory ENTRY POINT - function called with UUID: " ++ T.unpack uuid) ()
+        _ = trace ("SERVICE: Testing UUID validation only") ()
+    in case validateUUID uuid of
+        Left err -> 
+            let _ = trace ("SERVICE: UUID validation failed") ()
+            in Left err
+        Right validUuid ->
+            let _ = trace ("SERVICE: UUID validation succeeded") ()
+                _ = trace ("SERVICE: Testing database lookup") ()
+            in case M.lookup validUuid (dbActivities db) of
+                Nothing -> 
+                    let _ = trace ("SERVICE: Activity not found in database") ()
+                    in Left $ ActivityNotFound validUuid
+                Just activity ->
+                    let _ = trace ("SERVICE: Activity found in database, starting matrix computation") ()
+                        !inventory = computeInventoryMatrix db validUuid
+                        _ = trace ("SERVICE: Matrix computation completed successfully") ()
+                        _ = trace ("SERVICE: Inventory size: " ++ show (M.size inventory)) ()
+                        _ = trace ("SERVICE: Converting to export format...") ()
+                        !inventoryExport = convertToInventoryExport db activity inventory 35
+                        _ = trace ("SERVICE: Export format conversion completed") ()
+                    in Right $ toJSON inventoryExport
 
 -- | Simple stats tracking for tree processing
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves

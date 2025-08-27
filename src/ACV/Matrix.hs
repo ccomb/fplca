@@ -1,311 +1,328 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Matrix 
-    ( computeInventoryMatrix
-    , buildDemandVector
-    , buildDemandVectorFromIndex
-    ) where
+module ACV.Matrix (
+    computeInventoryMatrix,
+    buildDemandVector,
+    buildDemandVectorFromIndex,
+) where
 
 import ACV.Types
 import ACV.UnitConversion (convertExchangeAmount)
-import qualified Data.Map as M
-import qualified Data.Set as S
+import Control.Monad (forM_)
+import Control.Monad.ST
 import Data.List (elemIndex, sortOn)
-import Data.Maybe (fromMaybe, mapMaybe, fromJust)
+import qualified Data.Map as M
+import Data.Maybe (fromJust, fromMaybe, mapMaybe)
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Debug.Trace (trace)
-import Numeric.LinearAlgebra
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
-import Control.Monad.ST
-import Control.Monad (forM_)
+import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as MU
+import Debug.Trace (trace)
+import System.Random (randomRs, mkStdGen)
 
--- | Compressed Row Storage (CRS) format for efficient sparse operations
+-- | Simple vector operations (replacing hmatrix dependency)
+type Vector = U.Vector Double
+
+-- Vector operations
+norm2 :: Vector -> Double
+norm2 v = sqrt $ U.sum $ U.map (^2) v
+
+dot :: Vector -> Vector -> Double
+dot v1 v2 = U.sum $ U.zipWith (*) v1 v2
+
+scale :: Double -> Vector -> Vector
+scale s v = U.map (*s) v
+
+vectorAdd :: Vector -> Vector -> Vector
+vectorAdd = U.zipWith (+)
+
+vectorSub :: Vector -> Vector -> Vector
+vectorSub = U.zipWith (-)
+
+fromList :: [Double] -> Vector
+fromList = U.fromList
+
+toList :: Vector -> [Double]
+toList = U.toList
+
+-- | Compressed Row Storage (CRS) format for efficient sparse operations with unboxed vectors
 data CRSMatrix = CRSMatrix
-    { crsValues :: !(V.Vector Double)     -- Non-zero values
-    , crsColIndices :: !(V.Vector Int)    -- Column indices for each value
-    , crsRowPointers :: !(V.Vector Int)   -- Start index of each row in values array
-    , crsNumRows :: !Int                  -- Number of rows
-    , crsNumCols :: !Int                  -- Number of columns
-    } deriving (Show)
+    { crsValues :: !(U.Vector Double) -- Non-zero values (unboxed)
+    , crsColIndices :: !(U.Vector Int) -- Column indices for each value (unboxed)
+    , crsRowPointers :: !(U.Vector Int) -- Start index of each row in values array (unboxed)
+    , crsNumRows :: !Int -- Number of rows
+    , crsNumCols :: !Int -- Number of columns
+    }
+    deriving (Show)
 
--- | Convert sparse triplets to CRS format
+-- | Convert sparse triplets to CRS format with optimized unboxed construction
 buildCRSMatrix :: [(Int, Int, Double)] -> Int -> Int -> CRSMatrix
-buildCRSMatrix triplets nRows nCols = 
-    let -- Sort triplets by row first, then by column
+buildCRSMatrix triplets nRows nCols =
+    let
+        -- Sort triplets by row first, then by column for optimal access pattern
         sortedTriplets = sortOn (\(i, j, _) -> (i, j)) triplets
-        -- Extract components
-        (rows, cols, vals) = unzip3 sortedTriplets
+        nnz = length sortedTriplets
         
-        -- Build row pointers array: rowPtrs[i] = start index of row i in vals array
-        rowPtrs = V.create $ do
-            ptrs <- MV.new (nRows + 1)
-            MV.set ptrs 0  -- Initialize all to 0
-            
-            -- Count elements per row first
-            rowCounts <- MV.new nRows
-            MV.set rowCounts 0
-            forM_ rows $ \row -> do
-                count <- MV.read rowCounts row
-                MV.write rowCounts row (count + 1)
-            
-            -- Build cumulative row pointers
-            MV.write ptrs 0 0
-            forM_ [1..nRows] $ \i -> do
-                prevPtr <- MV.read ptrs (i-1)
-                rowCount <- MV.read rowCounts (i-1)
-                MV.write ptrs i (prevPtr + rowCount)
-            
-            return ptrs
-            
-    in CRSMatrix
-        { crsValues = V.fromList vals
-        , crsColIndices = V.fromList cols
-        , crsRowPointers = rowPtrs
-        , crsNumRows = nRows
-        , crsNumCols = nCols
-        }
+        -- Extract components efficiently
+        (rows, cols, vals) = unzip3 sortedTriplets
 
--- | Efficient sparse matrix-vector multiplication: y = A * x
-sparseMatVec :: CRSMatrix -> Vector Double -> Vector Double
+        -- Build row pointers with single-pass algorithm using unboxed vectors
+        rowPtrs = U.create $ do
+            -- Pre-allocate exactly the size we need
+            ptrs <- MU.new (nRows + 1)
+            
+            -- Initialize all pointers to 0
+            forM_ [0 .. nRows] $ \i -> MU.write ptrs i 0
+
+            -- Count elements per row in single pass
+            forM_ rows $ \row -> do
+                count <- MU.read ptrs (row + 1)
+                MU.write ptrs (row + 1) (count + 1)
+
+            -- Convert counts to cumulative pointers
+            forM_ [1 .. nRows] $ \i -> do
+                prevCount <- MU.read ptrs (i - 1)
+                currentCount <- MU.read ptrs i
+                MU.write ptrs i (prevCount + currentCount)
+
+            return ptrs
+     in
+        CRSMatrix
+            { crsValues = U.fromList vals
+            , crsColIndices = U.fromList cols
+            , crsRowPointers = rowPtrs
+            , crsNumRows = nRows
+            , crsNumCols = nCols
+            }
+
+-- | Optimized sparse matrix-vector multiplication: y = A * x
+sparseMatVec :: CRSMatrix -> Vector -> Vector
 sparseMatVec crs x =
     let n = crsNumRows crs
-        xVec = V.fromList (toList x)
-    in fromList $ V.toList $ V.create $ do
-        result <- MV.new n
-        MV.set result 0.0  -- Initialize to zero
-        
-        forM_ [0..n-1] $ \i -> do
-            let rowStart = crsRowPointers crs V.! i
-            let rowEnd = crsRowPointers crs V.! (i + 1)
+        resultUnboxed = U.create $ do
+            result <- MU.new n
+            -- Initialize result to zero
+            forM_ [0 .. n - 1] $ \i -> MU.write result i 0.0
             
-            -- Compute dot product for row i
-            let rowSum = sum [ (crsValues crs V.! k) * (xVec V.! (crsColIndices crs V.! k))
-                             | k <- [rowStart..rowEnd-1] ]
-            MV.write result i rowSum
+            -- Compute matrix-vector product row by row
+            forM_ [0 .. n - 1] $ \i -> do
+                let rowStart = crsRowPointers crs U.! i
+                let rowEnd = crsRowPointers crs U.! (i + 1)
+                
+                -- Compute dot product for row i
+                let computeRowSum acc k
+                        | k >= rowEnd = acc
+                        | otherwise = 
+                            let val = crsValues crs U.! k
+                                colIdx = crsColIndices crs U.! k
+                                xVal = x U.! colIdx
+                            in computeRowSum (acc + val * xVal) (k + 1)
+                
+                let rowSum = computeRowSum 0.0 rowStart
+                MU.write result i rowSum
             
-        return result
+            return result
+     in resultUnboxed
 
 -- | Extract diagonal elements for preconditioning
-extractDiagonal :: CRSMatrix -> Vector Double
-extractDiagonal crs = 
+extractDiagonal :: CRSMatrix -> Vector
+extractDiagonal crs =
     let n = crsNumRows crs
-    in fromList $ map getDiagElement [0..n-1]
+        diagUnboxed = U.generate n getDiagElement
+     in diagUnboxed
   where
     getDiagElement i =
-        let rowStart = crsRowPointers crs V.! i
-            rowEnd = crsRowPointers crs V.! (i + 1)
+        let rowStart = crsRowPointers crs U.! i
+            rowEnd = crsRowPointers crs U.! (i + 1)
             findDiag k
-                | k >= rowEnd = 1.0  -- Default to 1.0 if no diagonal found
-                | (crsColIndices crs V.! k) == i = crsValues crs V.! k
+                | k >= rowEnd = 1.0 -- Default to 1.0 if no diagonal found
+                | (crsColIndices crs U.! k) == i = crsValues crs U.! k
                 | otherwise = findDiag (k + 1)
-        in findDiag rowStart
+         in findDiag rowStart
 
--- | Apply diagonal preconditioning: x_new = D^(-1) * x
-applyDiagonalPreconditioning :: Vector Double -> Vector Double -> Vector Double
-applyDiagonalPreconditioning diag x = 
-    let diagInv = cmap (\d -> if abs d > 1e-14 then 1.0/d else 1.0) diag
-    in diagInv * x
-
--- | BiCGSTAB solver with diagonal preconditioning for sparse linear systems Ax = b
--- More efficient than Gauss-Seidel, suitable for non-symmetric matrices
-solveBiCGSTAB :: CRSMatrix -> Vector Double -> Vector Double -> Double -> Int -> Either String (Vector Double)
+{- | Clean BiCGSTAB implementation following Wikipedia algorithm exactly
+Solves Ax = b for sparse matrices using stabilized biconjugate gradient method
+-}
+solveBiCGSTAB :: CRSMatrix -> Vector -> Vector -> Double -> Int -> Either String Vector
 solveBiCGSTAB a b x0 tol maxIter =
     let n = crsNumRows a
-        -- Extract diagonal for preconditioning
-        diag = extractDiagonal a
-        _ = trace ("BiCGSTAB: Starting solver for " ++ show n ++ "x" ++ show n ++ " system") ()
+        b_norm = norm2 b
+        rel_tol = tol * max 1.0 b_norm
         
-        -- Initial guess and residual
-        r0 = b - sparseMatVec a x0
-        r0Hat = r0  -- Arbitrary vector, we choose r0Hat = r0
+        -- Wikipedia Algorithm Implementation:
+        -- Step 1: r0 = b - A*x0  
+        r0 = vectorSub b (sparseMatVec a x0)
+        r0_norm = norm2 r0
         
-        -- BiCGSTAB iteration with progress tracking
-        bicgstabIter x r v p rho alpha omega s t iter
-            | iter >= maxIter = 
-                let _ = trace ("BiCGSTAB: Failed to converge in " ++ show maxIter ++ " iterations, residual=" ++ show (norm_2 r)) ()
-                in Left $ "BiCGSTAB failed to converge in " ++ show maxIter ++ " iterations"
-            | norm_2 r < tol = 
-                let _ = trace ("BiCGSTAB: Converged in " ++ show iter ++ " iterations, residual=" ++ show (norm_2 r)) ()
-                in Right x  -- Converged!
+        _ = trace ("BiCGSTAB: Starting for " ++ show n ++ "x" ++ show n ++ " system, target=" ++ show rel_tol) ()
+        
+        -- Step 2: Choose r̂0 = r0 (standard choice)
+        r_hat_0 = r0
+        
+        -- Step 3: ρ0 = (r̂0, r0)
+        rho_0 = dot r_hat_0 r0
+        
+        -- Step 4: p0 = r0  
+        p_0 = r0
+        
+        -- BiCGSTAB iteration
+        bicgstabIter !iter !x !r !rho_prev !p
+            | iter >= maxIter = Left $ "BiCGSTAB: Failed to converge in " ++ show maxIter ++ " iterations"
+            | norm2 r <= rel_tol = 
+                let _ = trace ("BiCGSTAB: Converged in " ++ show iter ++ " iterations") () in Right x
             | otherwise =
-                let -- Progress reporting every 10 iterations
-                    _ = if iter `mod` 10 == 0 
-                        then trace ("BiCGSTAB: iter " ++ show iter ++ ", residual=" ++ show (norm_2 r)) ()
-                        else ()
-                        
-                    -- Compute rho_i = <r0Hat, r_i>
-                    rhoNew = r0Hat <.> r
+                let
+                    -- Step 1: v = A * p(i-1)
+                    v = sparseMatVec a p
                     
-                    -- Check for breakdown
-                    _ = if abs rhoNew < 1e-14 then error "BiCGSTAB breakdown: rho too small" else ()
-                    
-                    -- Update p
-                    beta = (rhoNew / rho) * (alpha / omega)
-                    pNew = r + scale beta (p - scale omega v)
-                    
-                    -- Compute v = A * p
-                    vNew = sparseMatVec a pNew
-                    
-                    -- Compute alpha
-                    alphaNew = rhoNew / (r0Hat <.> vNew)
-                    
-                    -- Update s and check for convergence
-                    sNew = r - scale alphaNew vNew
-                    
-                in if norm_2 sNew < tol
-                   then Right (x + scale alphaNew pNew)  -- Early convergence
-                   else 
-                       let -- Compute t = A * s
-                           tNew = sparseMatVec a sNew
-                           
-                           -- Compute omega
-                           omegaNew = (tNew <.> sNew) / (tNew <.> tNew)
-                           
-                           -- Update solution and residual
-                           xNew = x + scale alphaNew pNew + scale omegaNew sNew
-                           rNew = sNew - scale omegaNew tNew
-                           
-                       in bicgstabIter xNew rNew vNew pNew rhoNew alphaNew omegaNew sNew tNew (iter + 1)
-        
-    in if norm_2 r0 < tol
-       then Right x0  -- Already converged
-       else bicgstabIter x0 r0 (fromList $ replicate n 0) r0 1.0 1.0 1.0 
-                         (fromList $ replicate n 0) (fromList $ replicate n 0) 0
+                    -- Step 2: α = ρ(i-1) / (r̂0, v)
+                    r_hat_dot_v = dot r_hat_0 v
+                 in if abs r_hat_dot_v < 1e-14
+                       then Left "BiCGSTAB: Breakdown in alpha computation"
+                       else
+                           let
+                               alpha = rho_prev / r_hat_dot_v
+                               
+                               -- Step 3: h = x(i-1) + α * p(i-1)
+                               h = vectorAdd x (scale alpha p)
+                               
+                               -- Step 4: s = r(i-1) - α * v
+                               s = vectorSub r (scale alpha v)
+                               s_norm = norm2 s
+                               
+                               -- Step 5: Check intermediate convergence
+                            in if s_norm <= rel_tol
+                                  then Right h
+                                  else
+                                      let
+                                          -- Step 6: t = A * s
+                                          t = sparseMatVec a s
+                                          
+                                          -- Step 7: ω = (t, s) / (t, t)
+                                          t_dot_t = dot t t
+                                       in if abs t_dot_t < 1e-14
+                                             then Left "BiCGSTAB: Breakdown in omega computation"
+                                             else
+                                                 let
+                                                     omega = dot t s / t_dot_t
+                                                     
+                                                     -- Step 8: x(i) = h + ω * s
+                                                     x_new = vectorAdd h (scale omega s)
+                                                     
+                                                     -- Step 9: r(i) = s - ω * t
+                                                     r_new = vectorSub s (scale omega t)
+                                                     
+                                                     -- Step 11: ρ(i) = (r̂0, r(i))
+                                                     rho_new = dot r_hat_0 r_new
+                                                  in if abs rho_new < 1e-14
+                                                        then Left "BiCGSTAB: Breakdown in rho computation"
+                                                        else
+                                                            let
+                                                                -- Step 12: β = (ρ(i) / ρ(i-1)) * (α / ω)
+                                                                beta = (rho_new / rho_prev) * (alpha / omega)
+                                                                
+                                                                -- Step 13: p(i) = r(i) + β * (p(i-1) - ω * v)
+                                                                p_new = vectorAdd r_new (scale beta (vectorSub p (scale omega v)))
+                                                             in bicgstabIter (iter + 1) x_new r_new rho_new p_new
 
--- | Matrix-based inventory calculation using sparse approach
--- Uses pre-built sparse triplets, then solves: (I - A)^-1 * f
--- Where: I = identity, A = technosphere matrix, f = demand vector
+     in if r0_norm <= rel_tol
+           then Right x0
+           else if abs rho_0 < 1e-14 
+                   then Left "BiCGSTAB: Initial breakdown"
+                   else bicgstabIter 1 x0 r0 rho_0 p_0
+
+-- | Solve linear system (I - A) * x = b using BiCGSTAB
+solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector -> Vector
+solveSparseLinearSystem techTriples n demandVec =
+    let _ = trace ("SPARSE SOLVER: Building " ++ show n ++ "x" ++ show n ++ " CRS system matrix") ()
+
+        -- Build (I - A) system from sparse triplets
+        -- Add identity matrix: I[i,i] = 1.0
+        identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
+        -- Subtract technosphere: (I - A)[i,j] = I[i,j] - A[i,j]
+        negTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
+        allTriples = identityTriples ++ negTechTriples
+
+        _ = trace ("SPARSE SOLVER: Converting to CRS matrix format...") ()
+        systemCRS = buildCRSMatrix allTriples n n
+        
+        _ = trace ("SPARSE SOLVER: Starting BiCGSTAB solve...") ()
+        tolerance = 1e-8
+        maxIterations = min 2000 (3 * n)
+        initialGuess = fromList $ replicate n 0.0
+        
+     in case solveBiCGSTAB systemCRS demandVec initialGuess tolerance maxIterations of
+           Right solution -> 
+               let _ = trace ("SPARSE SOLVER: BiCGSTAB completed successfully") ()
+                in solution
+           Left errorMsg -> 
+               let _ = trace ("SPARSE SOLVER ERROR: " ++ errorMsg) ()
+                in error $ "BiCGSTAB solver failed: " ++ errorMsg
+
+-- | Efficient sparse matrix multiplication: result = A * vector
+applySparseMatrix :: [(Int, Int, Double)] -> Int -> Vector -> Vector
+applySparseMatrix sparseTriples nRows inputVec =
+    let crs = buildCRSMatrix sparseTriples nRows nRows
+     in sparseMatVec crs inputVec
+
+{- | Matrix-based inventory calculation using sparse approach
+Uses pre-built sparse triplets, then solves: (I - A)^-1 * f
+Where: I = identity, A = technosphere matrix, f = demand vector
+-}
 computeInventoryMatrix :: Database -> UUID -> M.Map UUID Double
-computeInventoryMatrix db rootUUID = 
+computeInventoryMatrix db rootUUID =
     let activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
-        
+
         _ = trace ("=== MATRIX INVENTORY CALCULATION START ===") ()
         _ = trace ("Sparse matrix calculation for " ++ show activityCount ++ " activities, " ++ show bioFlowCount ++ " biosphere flows") ()
-        
+
         -- Use pre-built sparse coordinate lists from database
         _ = trace ("Extracting pre-built sparse matrices from database...") ()
         techTriples = dbTechnosphereTriples db
         bioTriples = dbBiosphereTriples db
-        activityIndex = dbActivityIndex db  
+        activityIndex = dbActivityIndex db
         bioFlowUUIDs = dbBiosphereFlows db
-        
+
         _ = trace ("Tech matrix has " ++ show (length techTriples) ++ " non-zero elements") ()
         _ = trace ("Bio matrix has " ++ show (length bioTriples) ++ " non-zero elements") ()
-        
+
         -- Build demand vector for root activity
         _ = trace ("Building demand vector for root activity...") ()
         demandVec = buildDemandVectorFromIndex activityIndex rootUUID
-        
+
         -- Solve sparse LCA equation: (I - A) * supply = demand
         _ = trace ("Starting sparse linear system solving...") ()
         supplyVec = solveSparseLinearSystem techTriples activityCount demandVec
-        
+
         -- Calculate inventory using sparse biosphere matrix: g = B * supply
         _ = trace ("Applying biosphere matrix multiplication...") ()
         inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
-        
+
         _ = trace ("Converting result to Map format...") ()
         result = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
         _ = trace ("=== MATRIX INVENTORY CALCULATION COMPLETE ===") ()
-        
-    in result
+     in result
 
--- | Solve sparse linear system (I - A) * x = b 
--- Uses dense solving for small matrices, efficient sparse BiCGSTAB for large matrices
-solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector Double -> Vector Double
-solveSparseLinearSystem techTriples n demandVec =
-    let -- Build (I - A) system from sparse triplets
-        -- Add identity matrix: I[i,i] = 1.0
-        identityTriples = [(i, i, 1.0) | i <- [0..n-1]]
-        -- Subtract technosphere: (I - A)[i,j] = I[i,j] - A[i,j]
-        negTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
-        allTriples = identityTriples ++ negTechTriples
-        
-    in if n <= 1000  -- Conservative threshold - sparse solving is still challenging for very large systems
-       then -- Small matrices: use dense solving (fast and stable)
-           let systemMatrix = buildMatrixFromTriples n n allTriples
-               supplyVec = systemMatrix <\> demandVec
-           in supplyVec
-       else -- Large matrices: use efficient sparse BiCGSTAB solver
-           let _ = trace ("Building CRS matrix for " ++ show n ++ " x " ++ show n ++ " system with " ++ show (length allTriples) ++ " non-zeros") ()
-               -- Convert to CRS format for efficient operations
-               systemCRS = buildCRSMatrix allTriples n n
-               _ = trace ("CRS matrix built, starting BiCGSTAB solver") ()
-               -- Better initial guess: start with zero vector
-               initialGuess = fromList (replicate n 0.0)
-               -- Solver parameters
-               maxIter = 100  -- Reduce max iterations for faster testing
-               tolerance = 1e-8  -- Slightly relaxed tolerance
-               
-           in case solveBiCGSTAB systemCRS demandVec initialGuess tolerance maxIter of
-                Left errorMsg -> 
-                    let _ = trace ("BiCGSTAB solver error: " ++ errorMsg ++ ", falling back to dense solver") ()
-                        systemMatrix = buildMatrixFromTriples n n allTriples
-                    in systemMatrix <\> demandVec  -- Fallback to dense
-                Right solution -> solution
-
--- | Efficient sparse matrix multiplication using CRS format: result = A * vector
-applySparseMatrix :: [(Int, Int, Double)] -> Int -> Vector Double -> Vector Double  
-applySparseMatrix sparseTriples nRows inputVec =
-    let -- Convert to CRS format for efficient multiplication
-        crs = buildCRSMatrix sparseTriples nRows nRows
-    in sparseMatVec crs inputVec
-
--- | Build dense matrix from sparse triplets (helper function)
-buildMatrixFromTriples :: Int -> Int -> [(Int, Int, Double)] -> Matrix Double
-buildMatrixFromTriples nRows nCols triplets =
-    let elemMap = M.fromList [((i, j), val) | (i, j, val) <- triplets]
-        -- Convert to row-major list format for hmatrix
-        elements = [ M.findWithDefault 0.0 (i, j) elemMap | i <- [0..nRows-1], j <- [0..nCols-1] ]
-    in (nRows><nCols) elements
-
-
-
--- | Build final demand vector f using pre-built activity index
--- f[i] = external demand for product from activity i  
-buildDemandVectorFromIndex :: M.Map UUID Int -> UUID -> Vector Double
+{- | Build final demand vector f using pre-built activity index
+f[i] = external demand for product from activity i
+-}
+buildDemandVectorFromIndex :: M.Map UUID Int -> UUID -> Vector
 buildDemandVectorFromIndex activityIndex rootUUID =
     let n = M.size activityIndex
         rootIndex = fromMaybe 0 (M.lookup rootUUID activityIndex)
-    in fromList [ if i == rootIndex then 1.0 else 0.0 | i <- [0..n-1] ]
+     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
 
--- | Build final demand vector f (legacy function)
--- f[i] = external demand for product from activity i
-buildDemandVector :: ActivityDB -> [UUID] -> UUID -> Vector Double
+{- | Build final demand vector f (legacy function)
+f[i] = external demand for product from activity i
+-}
+buildDemandVector :: ActivityDB -> [UUID] -> UUID -> Vector
 buildDemandVector activities actUUIDs rootUUID =
     let n = length actUUIDs
-        indexMap = M.fromList $ zip actUUIDs [0..]
+        indexMap = M.fromList $ zip actUUIDs [0 ..]
         rootIndex = fromMaybe 0 (M.lookup rootUUID indexMap)
-    in fromList [ if i == rootIndex then 1.0 else 0.0 | i <- [0..n-1] ]
-
--- | Get all unique biosphere flows from entire database
-getAllBiosphereFlowsFromDB :: Database -> [UUID]
-getAllBiosphereFlowsFromDB db = 
-    let bioFlows = S.fromList 
-            [ exchangeFlowId ex 
-            | activity <- M.elems (dbActivities db)
-            , ex <- exchanges activity
-            , isBiosphereExchange ex
-            ]
-    in S.toList bioFlows
-
--- | Get all unique biosphere flows from activities (legacy function)
-getAllBiosphereFlows :: ActivityDB -> [UUID]
-getAllBiosphereFlows activities = 
-    let bioFlows = S.fromList 
-            [ exchangeFlowId ex 
-            | activity <- M.elems activities
-            , ex <- exchanges activity
-            , isBiosphereExchange ex
-            ]
-    in S.toList bioFlows
-
--- | Check if exchange is technosphere input (not reference product)
-isTechnosphereInput :: FlowDB -> Exchange -> Bool  
-isTechnosphereInput _ ex =
-    case ex of
-        TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
-        BiosphereExchange _ _ _ _ -> False
+     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]

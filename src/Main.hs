@@ -214,20 +214,42 @@ main = do
 executeQuery :: Database -> String -> IO ()
 executeQuery db queryStr = do
     hPutStrLn stderr $ "Executing query: " ++ queryStr
+    hPutStrLn stderr $ "MAIN: Starting parseApiPath"
     let endpoint = parseApiPath queryStr
+    hPutStrLn stderr $ "MAIN: parseApiPath completed, matching endpoint"
+    
     case endpoint of
-        ActivityInfo uuid ->
+        ActivityInfo uuid -> do
+            hPutStrLn stderr $ "MAIN: ActivityInfo endpoint, calling getActivityInfo"
             case ACV.Service.getActivityInfo db uuid of
                 Left err -> hPutStrLn stderr $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
-        ActivityFlows uuid ->
+        ActivityFlows uuid -> do
+            hPutStrLn stderr $ "MAIN: ActivityFlows endpoint, calling getActivityFlows"
             case ACV.Service.getActivityFlows db uuid of
                 Left err -> hPutStrLn stderr $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
-        ActivityInventory uuid ->
-            case ACV.Service.getActivityInventory db uuid of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
-                Right result -> BSL.putStrLn $ encode result
+        ActivityInventory uuid -> do
+            hPutStrLn stderr $ "MAIN: ActivityInventory endpoint, calling getActivityInventory"
+            hPutStrLn stderr $ "MAIN: UUID received: " ++ T.unpack uuid
+            hPutStrLn stderr $ "MAIN: Database activity count: " ++ show (dbActivityCount db)
+            hPutStrLn stderr $ "MAIN: About to evaluate ACV.Service.getActivityInventory"
+            hPutStrLn stderr $ "MAIN: Evaluating function pointer..."
+            let func = ACV.Service.getActivityInventory
+            hPutStrLn stderr $ "MAIN: Function pointer evaluated, calling with arguments..."
+            let serviceResult = func db uuid
+            hPutStrLn stderr $ "MAIN: Service call completed, evaluating result"
+            hPutStrLn stderr $ "MAIN: Forcing evaluation of serviceResult with seq"
+            serviceResult `seq` hPutStrLn stderr $ "MAIN: serviceResult evaluation completed"
+            case serviceResult of
+                Left err -> do
+                    hPutStrLn stderr $ "MAIN: Service returned error"
+                    hPutStrLn stderr $ "Error: " ++ show err
+                Right result -> do
+                    hPutStrLn stderr $ "MAIN: Service returned success, starting JSON encoding"
+                    let jsonResult = encode result
+                    hPutStrLn stderr $ "MAIN: JSON encoding completed, result size: " ++ show (BSL.length jsonResult) ++ " bytes"
+                    BSL.putStrLn jsonResult
         ActivityTree uuid ->
             case ACV.Service.getActivityTree db uuid of
                 Left err -> hPutStrLn stderr $ "Error: " ++ show err
@@ -313,6 +335,7 @@ parseParams params =
     splitBy c str = case break (== c) str of
         (prefix, []) -> [prefix]
         (prefix, _ : suffix) -> prefix : splitBy c suffix
+
 
 -- Helper function
 isPrefixOf :: String -> String -> Bool

@@ -96,13 +96,14 @@ loadAllSpoldsWithFlows dir = do
         hPutStrLn stderr $ "Final: " ++ show (M.size finalProcMap) ++ " activities, " ++ show (M.size finalFlowMap) ++ " flows, " ++ show (M.size finalUnitMap) ++ " units"
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
-    -- Activity one chunk: all files in chunk processed in parallel
+    -- Activity one chunk: files processed in controlled parallel batches
     activityChunkSimple :: [FilePath] -> IO (ActivityDB, FlowDB, UnitDB)
     activityChunkSimple chunk = do
         hPutStrLn stderr $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
 
-        -- All files in chunk processed in parallel
-        chunkResults <- mapConcurrently streamParseActivityAndFlowsFromFile chunk
+        -- Process files in smaller parallel batches to avoid thread/handle exhaustion
+        let maxConcurrency = 4  -- Conservative limit: 1x CPU cores
+        chunkResults <- processWithLimitedConcurrency maxConcurrency chunk
         let (!procs, flowLists, unitLists) = unzip3 chunkResults
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
@@ -113,6 +114,15 @@ loadAllSpoldsWithFlows dir = do
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
         return (procMap, flowMap, unitMap)
+
+    -- Process files with limited concurrency to prevent resource exhaustion
+    processWithLimitedConcurrency :: Int -> [FilePath] -> IO [(Activity, [Flow], [Unit])]
+    processWithLimitedConcurrency maxConcur files = do
+        let batches = chunksOf maxConcur files
+        results <- mapM processBatch batches
+        return $ concat results
+      where
+        processBatch batch = mapConcurrently streamParseActivityAndFlowsFromFile batch
 
     -- Utility function to split list into chunks
     chunksOf :: Int -> [a] -> [[a]]

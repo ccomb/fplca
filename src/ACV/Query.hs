@@ -14,7 +14,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Debug.Trace (trace)
 import GHC.Generics (Generic)
-import Numeric.LinearAlgebra
 
 
 -- | Construction des index à partir d'une base de données simple (parallélisée)
