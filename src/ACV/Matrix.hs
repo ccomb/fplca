@@ -243,8 +243,18 @@ solveBiCGSTAB a b x0 tol maxIter =
 zeroVector :: Int -> Vector
 zeroVector n = U.replicate n 0.0
 
-{- | BiCGSTAB(l) : Sleijpen & Fokkema (1993).
-     l >= 1; l=1 reduces to classic BiCGSTAB.
+-- already present:
+-- extractDiagonal :: CRSMatrix -> Vector
+
+invDiag :: CRSMatrix -> Vector
+invDiag a = U.map (\d -> if abs d < 1e-30 then 1.0 else 1.0 / d) (extractDiagonal a)
+
+-- apply left preconditioner: z = M^{-1} r, with M = diag(A)
+applyJacobi :: Vector -> Vector -> Vector
+applyJacobi invD v = U.zipWith (*) invD v
+
+{- | Preconditioned BiCGSTAB(l) with Jacobi (left) and residual replacement.
+     l >= 1 (l=1 ≡ BiCGSTAB). Based on Sleijpen & Fokkema (1993).
 -}
 solveBiCGSTABL :: CRSMatrix -> Vector -> Vector -> Double -> Int -> Int -> Either String Vector
 solveBiCGSTABL a b x0 tol maxIter lIn =
@@ -253,32 +263,41 @@ solveBiCGSTABL a b x0 tol maxIter lIn =
         bNorm = norm2 b
         relTol = tol * max 1.0 bNorm
 
-        -- initial residual and shadow residual
-        r0 = vectorSub b (sparseMatVec a x0)
+        -- Jacobi left preconditioner
+        invD = invDiag a
+        mInv = applyJacobi invD
+
+        -- A~ v = M^{-1} (A v)
+        amat v = mInv (sparseMatVec a v)
+
+        -- true residual (unpreconditioned)
+        trueRes x = vectorSub b (sparseMatVec a x)
+
+        -- initial residual (preconditioned)
+        r0_true = trueRes x0
+        r0 = mInv r0_true
         rhat = r0
 
-        -- BiCGSTAB(l) state (classic initialisation)
         alpha0 = 1.0
         omega0 = 1.0
         rho0 = 1.0
         v0 = zeroVector n
         p0 = zeroVector n
 
-        -- one MR(1) step (returns x', r', omega, stop?)
+        -- one MR(1) step on preconditioned operator
         mrStep :: Vector -> Vector -> (Vector, Vector, Double, Bool)
         mrStep xAcc sPrev =
-            let t = sparseMatVec a sPrev
+            let t = amat sPrev -- t = A~ s
                 tDotT = dot t t
              in if abs tDotT < 1e-30
-                    then (xAcc, sPrev, 0, True) -- breakdown; return as-is
+                    then (xAcc, sPrev, 0, True)
                     else
                         let omega = (dot t sPrev) / tDotT
                             xAcc' = vectorAdd xAcc (scale omega sPrev)
                             r' = vectorSub sPrev (scale omega t)
-                            stop = norm2 r' <= relTol
+                            stop = norm2 (trueRes xAcc') <= relTol
                          in (xAcc', r', omega, stop)
 
-        -- run up to l MR steps starting from s0, updating x
         mrLoop :: Int -> Vector -> Vector -> (Vector, Vector, Double) -- (x', r', lastOmega)
         mrLoop i xAcc sPrev
             | i <= 0 = (xAcc, sPrev, 1.0)
@@ -288,39 +307,57 @@ solveBiCGSTABL a b x0 tol maxIter lIn =
                         then (xAcc1, r1, omega1)
                         else mrLoop (i - 1) xAcc1 r1
 
-        go :: Int -> Vector -> Vector -> Vector -> Double -> Double -> Double -> Vector -> Either String Vector
-        go !k x r p rhoPrev alphaPrev omegaPrev vPrev
+        -- residual replacement: recompute true residual, re-precondition, reset shadow & search dir
+        residualReplace :: Vector -> (Vector, Vector, Double, Double, Vector, Vector)
+        residualReplace x =
+            let r_true = trueRes x
+                r_pre = mInv r_true
+             in (r_pre, r_pre, 1.0, 1.0, zeroVector n, zeroVector n) -- r, rhat, rhoPrev, omegaPrev, p, v
+        go :: Int -> Int -> Vector -> Vector -> Vector -> Double -> Double -> Double -> Vector -> Either String Vector
+        go !k !sinceRR x r p rhoPrev alphaPrev omegaPrev vPrev
             | k > maxIter = Left $ "BiCGSTAB(" ++ show l ++ "): no convergence in " ++ show maxIter ++ " iterations"
-            | norm2 r <= relTol =
-                Right x
+            | norm2 (trueRes x) <= relTol = Right x
             | otherwise =
                 let rho = dot rhat r
                  in if abs rho < 1e-30
-                        then Left "BiCGSTAB(l): breakdown (rho ~ 0)"
+                        then
+                            -- hard breakdown: do residual replacement and continue
+                            let (r1, rhat1, rhoP, omegaP, p1, v1) = residualReplace x
+                             in go (k + 1) 0 x r1 p1 rhoP 1.0 omegaP v1
                         else
                             let beta = (rho / rhoPrev) * (alphaPrev / omegaPrev)
                                 p' = vectorAdd r (scale beta (vectorSub p (scale omegaPrev vPrev)))
-                                v = sparseMatVec a p'
+                                v = amat p'
                                 rhatDotV = dot rhat v
                              in if abs rhatDotV < 1e-30
-                                    then Left "BiCGSTAB(l): breakdown (rhat·v ~ 0)"
+                                    then
+                                        -- soft breakdown (your error): swap shadow & restart via residual replacement
+                                        let (r1, rhat1, rhoP, omegaP, p1, v1) = residualReplace x
+                                         in go (k + 1) 0 x r1 p1 rhoP 1.0 omegaP v1
                                     else
                                         let alpha = rho / rhatDotV
-                                            -- x_h = x + alpha p'
                                             xh = vectorAdd x (scale alpha p')
-                                            -- s0 = r - alpha v
                                             s0 = vectorSub r (scale alpha v)
-                                         in if norm2 s0 <= relTol
+                                         in if norm2 (trueRes xh) <= relTol || norm2 s0 <= relTol
                                                 then Right xh
                                                 else
-                                                    -- l minimal residual smoothing steps on s0
                                                     let (xAfter, rNew, omegaLast) = mrLoop l xh s0
-                                                     in if omegaLast == 0
-                                                            then Left "BiCGSTAB(l): breakdown in omega (t·t ~ 0)"
-                                                            else go (k + 1) xAfter rNew p' rho alpha omegaLast v
-     in if norm2 r0 <= relTol
+                                                        sinceRR' = sinceRR + 1
+                                                        -- periodic residual replacement to prevent drift (every 50 outer steps)
+                                                        (xAfter2, rUse, rhatUse, rhoUse, omegaUse, pUse, vUse, sinceRR2)
+                                                            | sinceRR' >= 10 =
+                                                                let (r2, rhat2, rhoP2, omegaP2, p2, v2) = residualReplace xAfter
+                                                                 in (xAfter, r2, rhat2, rhoP2, omegaP2, p2, v2, 0)
+                                                            | otherwise = (xAfter, rNew, rhat, rho, omegaLast, p', v, sinceRR')
+                                                     in if abs omegaUse < 1e-30
+                                                            then
+                                                                let (r3, rhat3, rhoP3, omegaP3, p3, v3) = residualReplace xAfter2
+                                                                 in go (k + 1) 0 xAfter2 r3 p3 rhoP3 1.0 omegaP3 v3
+                                                            else
+                                                                go (k + 1) sinceRR2 xAfter2 rUse pUse rhoUse alpha omegaUse vUse
+     in if norm2 r0_true <= relTol
             then Right x0
-            else go 1 x0 r0 p0 rho0 alpha0 omega0 v0
+            else go 1 0 x0 r0 p0 rho0 alpha0 omega0 v0
 
 -- | Solve linear system (I - A) * x = b using BiCGSTAB
 solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector -> Vector
@@ -339,7 +376,7 @@ solveSparseLinearSystem techTriples n demandVec =
 
         _ = trace ("SPARSE SOLVER: Starting BiCGSTAB solve...") ()
         tolerance = 1e-8
-        maxIterations = min 3000 (3 * n)
+        maxIterations = min 2000 (3 * n)
         initialGuess = fromList $ replicate n 0.0
         lDegree = 4 -- try 2 or 4
      in case solveBiCGSTABL systemCRS demandVec initialGuess tolerance maxIterations lDegree of
