@@ -16,6 +16,15 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import Debug.Trace (trace)
+import System.IO (hPutStrLn, hFlush, stderr)
+import System.IO.Unsafe (unsafePerformIO)
+
+-- | Immediate trace with stderr flush - ensures output appears immediately
+traceFlush :: String -> a -> a
+traceFlush msg x = unsafePerformIO $ do
+    hPutStrLn stderr msg
+    hFlush stderr
+    return x
 
 -- | Domain service errors
 data ServiceError
@@ -133,9 +142,10 @@ isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> Either ServiceError Value
 getActivityInventory db uuid = 
-    let _ = trace ("SERVICE: getActivityInventory ENTRY POINT - function called with UUID: " ++ T.unpack uuid) ()
-        _ = trace ("SERVICE: Testing UUID validation only") ()
-    in case validateUUID uuid of
+    traceFlush ("🎯🎯🎯 SERVICE.getActivityInventory ENTRY CONFIRMED 🎯🎯🎯") $
+    traceFlush ("SERVICE: getActivityInventory ENTRY POINT - function called with UUID: " ++ T.unpack uuid) $
+    traceFlush ("SERVICE: Testing UUID validation only") $
+    case validateUUID uuid of
         Left err -> 
             let _ = trace ("SERVICE: UUID validation failed") ()
             in Left err
@@ -147,13 +157,13 @@ getActivityInventory db uuid =
                     let _ = trace ("SERVICE: Activity not found in database") ()
                     in Left $ ActivityNotFound validUuid
                 Just activity ->
-                    let _ = trace ("SERVICE: Activity found in database, starting matrix computation") ()
+                    let _ = traceFlush ("SERVICE: Activity found in database, starting matrix computation") ()
                         !inventory = computeInventoryMatrix db validUuid
-                        _ = trace ("SERVICE: Matrix computation completed successfully") ()
-                        _ = trace ("SERVICE: Inventory size: " ++ show (M.size inventory)) ()
-                        _ = trace ("SERVICE: Converting to export format...") ()
+                        _ = traceFlush ("SERVICE: Matrix computation completed successfully") ()
+                        _ = traceFlush ("SERVICE: Inventory size: " ++ show (M.size inventory)) ()
+                        _ = traceFlush ("SERVICE: Converting to export format...") ()
                         !inventoryExport = convertToInventoryExport db activity inventory 35
-                        _ = trace ("SERVICE: Export format conversion completed") ()
+                        _ = traceFlush ("SERVICE: Export format conversion completed") ()
                     in Right $ toJSON inventoryExport
 
 -- | Simple stats tracking for tree processing

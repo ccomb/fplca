@@ -23,9 +23,18 @@ import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
 import Debug.Trace (trace)
 import System.Random (mkStdGen, randomRs)
+import System.IO (hPutStrLn, hFlush, stderr)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
+
+-- | Immediate trace with stderr flush - ensures output appears immediately
+traceFlush :: String -> a -> a
+traceFlush msg x = unsafePerformIO $ do
+    hPutStrLn stderr msg
+    hFlush stderr
+    return x
 
 -- Vector operations
 norm2 :: Vector -> Double
@@ -239,6 +248,22 @@ solveBiCGSTAB a b x0 tol maxIter =
                     then Left "BiCGSTAB: Initial breakdown"
                     else bicgstabIter 1 x0 r0 rho_0 p_0
 
+-- Count near-zero diagonals and basic scale stats
+diagHealth :: CRSMatrix -> (Int, Double, Double)
+diagHealth a =
+    let d = extractDiagonal a
+        eps = 1e-14
+        nz = U.length (U.filter (\x -> abs x < eps) d)
+     in (nz, U.minimum d, U.maximum d)
+
+-- Row 1-norms (to catch very unbalanced rows)
+rowNorm1s :: CRSMatrix -> U.Vector Double
+rowNorm1s crs =
+    U.generate (crsNumRows crs) $ \i ->
+        let s = crsRowPointers crs U.! i
+            e = crsRowPointers crs U.! (i + 1)
+         in U.sum $ U.map abs $ U.slice s (e - s) (crsValues crs)
+
 -- helper: zero vector
 zeroVector :: Int -> Vector
 zeroVector n = U.replicate n 0.0
@@ -258,10 +283,12 @@ applyJacobi invD v = U.zipWith (*) invD v
 -}
 solveBiCGSTABL :: CRSMatrix -> Vector -> Vector -> Double -> Int -> Int -> Either String Vector
 solveBiCGSTABL a b x0 tol maxIter lIn =
-    let n = crsNumRows a
+    let _ = traceFlush ("⚡⚡⚡ BICGSTAB(ℓ) FUNCTION ENTRY CONFIRMED ⚡⚡⚡") ()
+        n = crsNumRows a
         l = max 1 lIn
         bNorm = norm2 b
         relTol = tol * max 1.0 bNorm
+        _ = traceFlush ("⚡ BiCGSTAB(ℓ) parameters: n=" ++ show n ++ ", l=" ++ show l ++ ", tol=" ++ show tol ++ " ⚡") ()
 
         -- Jacobi left preconditioner
         invD = invDiag a
@@ -362,23 +389,49 @@ solveBiCGSTABL a b x0 tol maxIter lIn =
 -- | Solve linear system (I - A) * x = b using BiCGSTAB
 solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector -> Vector
 solveSparseLinearSystem techTriples n demandVec =
-    let _ = trace ("SPARSE SOLVER: Building " ++ show n ++ "x" ++ show n ++ " CRS system matrix") ()
+    let _ = traceFlush ("🔧🔧🔧 SPARSE SOLVER FUNCTION ENTRY 🔧🔧🔧") ()
+        _ = traceFlush ("SPARSE SOLVER: Building " ++ show n ++ "x" ++ show n ++ " CRS system matrix") ()
 
         -- Build (I - A) system from sparse triplets
         -- Add identity matrix: I[i,i] = 1.0
         identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
         -- Subtract technosphere: (I - A)[i,j] = I[i,j] - A[i,j]
         negTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
-        allTriples = identityTriples ++ negTechTriples
+        -- add small positive shift to the diagonal (stabilizer)
+        shift = 1e-12
+        shiftedIdentity = [(i, i, shift) | i <- [0 .. n - 1]]
+        allTriples = identityTriples ++ shiftedIdentity ++ negTechTriples
+        -- allTriples = identityTriples ++ negTechTriples
 
         _ = trace ("SPARSE SOLVER: Converting to CRS matrix format...") ()
         systemCRS = buildCRSMatrix allTriples n n
+        (nZeroDiag, dmin, dmax) = diagHealth systemCRS
+        rn = rowNorm1s systemCRS
+        rmin = U.minimum rn
+        rmax = U.maximum rn
+        _ = traceFlush ("🔍🔍🔍 USER'S BICGSTAB(ℓ) DIAGNOSTIC START 🔍🔍🔍") ()
+        _ = traceFlush
+                ( "M diag: zeros≈"
+                    ++ show nZeroDiag
+                    ++ ", min="
+                    ++ show dmin
+                    ++ ", max="
+                    ++ show dmax
+                    ++ " | row-1norm min="
+                    ++ show rmin
+                    ++ ", max="
+                    ++ show rmax
+                )
+                ()
+        _ = traceFlush ("🔍🔍🔍 USER'S BICGSTAB(ℓ) DIAGNOSTIC END 🔍🔍🔍") ()
 
         _ = trace ("SPARSE SOLVER: Starting BiCGSTAB solve...") ()
         tolerance = 1e-8
         maxIterations = min 2000 (3 * n)
         initialGuess = fromList $ replicate n 0.0
         lDegree = 4 -- try 2 or 4
+        _ = traceFlush ("💎💎💎 CALLING USER'S solveBiCGSTABL WITH PARAMETERS 💎💎💎") ()
+        _ = traceFlush ("💎 tolerance=" ++ show tolerance ++ ", maxIter=" ++ show maxIterations ++ ", lDegree=" ++ show lDegree ++ " 💎") ()
      in case solveBiCGSTABL systemCRS demandVec initialGuess tolerance maxIterations lDegree of
             Right solution ->
                 let _ = trace ("SPARSE SOLVER: BiCGSTAB completed successfully") ()
@@ -399,29 +452,32 @@ Where: I = identity, A = technosphere matrix, f = demand vector
 -}
 computeInventoryMatrix :: Database -> UUID -> M.Map UUID Double
 computeInventoryMatrix db rootUUID =
+    traceFlush ("🚀🚀🚀 MATRIX COMPUTATION ENTRY POINT REACHED 🚀🚀🚀") $
+    traceFlush ("=== MATRIX INVENTORY CALCULATION START ===") $
     let activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
-
-        _ = trace ("=== MATRIX INVENTORY CALCULATION START ===") ()
-        _ = trace ("Sparse matrix calculation for " ++ show activityCount ++ " activities, " ++ show bioFlowCount ++ " biosphere flows") ()
+        _ = traceFlush ("Sparse matrix calculation for " ++ show activityCount ++ " activities, " ++ show bioFlowCount ++ " biosphere flows") ()
 
         -- Use pre-built sparse coordinate lists from database
-        _ = trace ("Extracting pre-built sparse matrices from database...") ()
+        _ = traceFlush ("Extracting pre-built sparse matrices from database...") ()
         techTriples = dbTechnosphereTriples db
         bioTriples = dbBiosphereTriples db
         activityIndex = dbActivityIndex db
         bioFlowUUIDs = dbBiosphereFlows db
-
-        _ = trace ("Tech matrix has " ++ show (length techTriples) ++ " non-zero elements") ()
-        _ = trace ("Bio matrix has " ++ show (length bioTriples) ++ " non-zero elements") ()
+        
+        _ = traceFlush ("Matrix data extracted successfully") ()
+        _ = traceFlush ("Tech matrix has " ++ show (length techTriples) ++ " non-zero elements") ()
+        _ = traceFlush ("Bio matrix has " ++ show (length bioTriples) ++ " non-zero elements") ()
 
         -- Build demand vector for root activity
-        _ = trace ("Building demand vector for root activity...") ()
+        _ = traceFlush ("Building demand vector for root activity...") ()
         demandVec = buildDemandVectorFromIndex activityIndex rootUUID
 
         -- Solve sparse LCA equation: (I - A) * supply = demand
-        _ = trace ("Starting sparse linear system solving...") ()
+        _ = traceFlush ("Starting sparse linear system solving...") ()
+        _ = traceFlush ("About to call solveSparseLinearSystem with " ++ show (length techTriples) ++ " tech triples") ()
         supplyVec = solveSparseLinearSystem techTriples activityCount demandVec
+        _ = traceFlush ("solveSparseLinearSystem completed") ()
 
         -- Calculate inventory using sparse biosphere matrix: g = B * supply
         _ = trace ("Applying biosphere matrix multiplication...") ()

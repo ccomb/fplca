@@ -237,16 +237,18 @@ executeQuery db queryStr = do
             hPutStrLn stderr $ "MAIN: Evaluating function pointer..."
             let func = ACV.Service.getActivityInventory
             hPutStrLn stderr $ "MAIN: Function pointer evaluated, calling with arguments..."
+            hPutStrLn stderr $ "MAIN: About to call service function"
             let serviceResult = func db uuid
-            hPutStrLn stderr $ "MAIN: Service call completed, evaluating result"
-            hPutStrLn stderr $ "MAIN: Forcing evaluation of serviceResult with seq"
-            serviceResult `seq` hPutStrLn stderr $ "MAIN: serviceResult evaluation completed"
+            hPutStrLn stderr $ "MAIN: Service function called, result is lazy thunk"
+            hPutStrLn stderr $ "MAIN: About to force evaluation with seq"
             case serviceResult of
                 Left err -> do
                     hPutStrLn stderr $ "MAIN: Service returned error"
                     hPutStrLn stderr $ "Error: " ++ show err
                 Right result -> do
-                    hPutStrLn stderr $ "MAIN: Service returned success, starting JSON encoding"
+                    hPutStrLn stderr $ "MAIN: Service returned success, evaluating result"
+                    result `seq` hPutStrLn stderr $ "MAIN: Result evaluation completed"
+                    hPutStrLn stderr $ "MAIN: Starting JSON encoding"
                     let jsonResult = encode result
                     hPutStrLn stderr $ "MAIN: JSON encoding completed, result size: " ++ show (BSL.length jsonResult) ++ " bytes"
                     BSL.putStrLn jsonResult
