@@ -85,7 +85,8 @@ computeActivityInventory db uuid = do
 convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
 convertToInventoryExport db rootActivity inventory calculationDepth =
     let _ = trace ("EXPORT: Starting conversion with " ++ show (M.size inventory) ++ " inventory flows") ()
-        inventoryList = take 10 $ M.toList inventory  -- Limit inventory to first 10 items
+        -- Include all flows from inventory calculation (no filtering)
+        inventoryList = M.toList inventory
         _ = trace ("EXPORT: Limited inventory to " ++ show (length inventoryList) ++ " items") ()
         
         !flowDetails = 
