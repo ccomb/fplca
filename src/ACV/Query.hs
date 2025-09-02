@@ -15,7 +15,6 @@ import qualified Data.Text as T
 import Debug.Trace (trace)
 import GHC.Generics (Generic)
 
-
 -- | Construction des index à partir d'une base de données simple (parallélisée)
 buildIndexes :: ActivityDB -> FlowDB -> Indexes
 buildIndexes procDB flowDB =
@@ -51,7 +50,7 @@ buildIndexes procDB flowDB =
             }
 
 -- | Build complete database with pre-computed sparse matrices (Brightway approach)
-buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database  
+buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database
 buildDatabaseWithMatrices activityDB flowDB unitDB =
     let _ = trace ("=== BUILDING DATABASE WITH MATRICES ===") ()
         indexes = buildIndexes activityDB flowDB
@@ -60,79 +59,78 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         allActivities = activityDB
         activityUUIDs = M.keys allActivities
         activityCount = length activityUUIDs
-        activityIndex = M.fromList $ zip activityUUIDs [0..]
+        activityIndex = M.fromList $ zip activityUUIDs [0 ..]
         _ = trace ("Activity index built: " ++ show activityCount ++ " activities") ()
-        
+
         -- Build technosphere sparse triplets (optimized with strict evaluation)
         _ = trace ("Building technosphere matrix triplets...") ()
-        !techTriples = 
+        !techTriples =
             let buildTechTriple j consumerActivity ex
                     | not (isTechnosphereExchange ex) = []
-                    | exchangeIsReference ex = 
-                        let value = exchangeAmount ex
-                        in if abs value > 1e-15 then [(j, j, value)] else []
+                    | exchangeIsReference ex = [] -- Skip reference products - do not add to A matrix
                     | otherwise =
                         case exchangeActivityLinkId ex of
-                            Just inputActivityUUID -> 
+                            Just inputActivityUUID ->
                                 case M.lookup inputActivityUUID activityIndex of
-                                    Just producerIdx -> 
-                                        let value = -(exchangeAmount ex)
-                                        in if abs value > 1e-15 then [(producerIdx, j, value)] else []
+                                    Just producerIdx ->
+                                        let value = exchangeAmount ex -- Positive: A(i,j) = amount of product i required by activity j
+                                         in if abs value > 1e-15 then [(producerIdx, j, value)] else []
                                     Nothing -> []
                             Nothing -> []
-                buildActivityTriplets (j, consumerActivity) = 
+                buildActivityTriplets (j, consumerActivity) =
                     concatMap (buildTechTriple j consumerActivity) (exchanges consumerActivity)
-                !result = concatMap buildActivityTriplets (zip [0..] (M.elems allActivities))
+                !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
                 _ = trace ("Technosphere matrix: " ++ show (length result) ++ " non-zero entries") ()
-            in result
-        
+             in result
+
         -- Build biosphere sparse triplets (optimized with strict evaluation)
         _ = trace ("Building biosphere flow index...") ()
-        !bioFlowUUIDs = S.toList $ S.fromList 
-                      [ exchangeFlowId ex 
-                      | activity <- M.elems allActivities
-                      , ex <- exchanges activity
-                      , isBiosphereExchange ex
-                      ]
+        !bioFlowUUIDs =
+            S.toList $
+                S.fromList
+                    [ exchangeFlowId ex
+                    | activity <- M.elems allActivities
+                    , ex <- exchanges activity
+                    , isBiosphereExchange ex
+                    ]
         !bioFlowCount = length bioFlowUUIDs
-        !bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0..]
+        !bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0 ..]
         _ = trace ("Biosphere index built: " ++ show bioFlowCount ++ " flows") ()
-        
+
         _ = trace ("Building biosphere matrix triplets...") ()
-        !bioTriples = 
+        !bioTriples =
             let buildBioTriple j activity ex
                     | not (isBiosphereExchange ex) = []
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
-                            Just i -> 
-                                let amount = if exchangeIsInput ex 
-                                           then -(exchangeAmount ex)  -- Resource consumption (negative)
-                                           else exchangeAmount ex     -- Emission (positive)
-                                in if abs amount > 1e-15 then [(i, j, amount)] else []
+                            Just i ->
+                                let amount =
+                                        if exchangeIsInput ex
+                                            then -(exchangeAmount ex) -- Resource consumption (negative)
+                                            else exchangeAmount ex -- Emission (positive)
+                                 in if abs amount > 1e-15 then [(i, j, amount)] else []
                             Nothing -> []
-                buildActivityBioTriplets (j, activity) = 
+                buildActivityBioTriplets (j, activity) =
                     concatMap (buildBioTriple j activity) (exchanges activity)
-                !result = concatMap buildActivityBioTriplets (zip [0..] (M.elems allActivities))
+                !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))
                 _ = trace ("Biosphere matrix: " ++ show (length result) ++ " non-zero entries") ()
-            in result
-        
+             in result
+
         -- Force evaluation of matrix contents to ensure they're built now, not lazily later
         _ = techTriples `seq` bioTriples `seq` trace ("=== DATABASE WITH MATRICES BUILT SUCCESSFULLY ===") ()
         _ = trace ("Final matrix stats: " ++ show (length techTriples) ++ " tech entries, " ++ show (length bioTriples) ++ " bio entries") ()
-        
-    in Database 
-        { dbActivities = activityDB
-        , dbFlows = flowDB
-        , dbUnits = unitDB  
-        , dbIndexes = indexes
-        , dbTechnosphereTriples = techTriples
-        , dbBiosphereTriples = bioTriples
-        , dbActivityIndex = activityIndex
-        , dbBiosphereFlows = bioFlowUUIDs
-        , dbActivityCount = activityCount
-        , dbBiosphereCount = bioFlowCount
-        }
-
+     in Database
+            { dbActivities = activityDB
+            , dbFlows = flowDB
+            , dbUnits = unitDB
+            , dbIndexes = indexes
+            , dbTechnosphereTriples = techTriples
+            , dbBiosphereTriples = bioTriples
+            , dbActivityIndex = activityIndex
+            , dbBiosphereFlows = bioFlowUUIDs
+            , dbActivityCount = activityCount
+            , dbBiosphereCount = bioFlowCount
+            }
 
 -- | Construction de l'index par nom (insensible à la casse)
 buildNameIndex :: ActivityDB -> NameIndex
@@ -235,11 +233,11 @@ buildActivityOutputIndex procDB =
 
 -- | Requêtes utilisant les index
 
-
 -- | Recherche d'activités par champs spécifiques
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam =
-    let -- Get candidate UUIDs using indexes for faster filtering
+    let
+        -- Get candidate UUIDs using indexes for faster filtering
         candidateUUIDs = case (nameParam, geoParam, productParam) of
             -- If we have a name parameter, use the name index for initial filtering
             (Just name, _, _) -> getCandidatesFromNameIndex db name
@@ -249,36 +247,40 @@ findActivitiesByFields db nameParam geoParam productParam =
             (Nothing, Nothing, Just _) -> M.keys (dbActivities db) -- Fall back to all activities
             -- If no parameters, return all activities
             (Nothing, Nothing, Nothing) -> M.keys (dbActivities db)
-        
+
         -- Filter the candidates with the full criteria
-        filteredActivities = [ activity
-                             | uuid <- candidateUUIDs
-                             , Just activity <- [M.lookup uuid (dbActivities db)]
-                             , matchesActivityFields db nameParam geoParam productParam activity
-                             ]
-    in filteredActivities
+        filteredActivities =
+            [ activity
+            | uuid <- candidateUUIDs
+            , Just activity <- [M.lookup uuid (dbActivities db)]
+            , matchesActivityFields db nameParam geoParam productParam activity
+            ]
+     in
+        filteredActivities
 
 -- | Get candidate activity UUIDs from name index using fuzzy matching
 getCandidatesFromNameIndex :: Database -> Text -> [UUID]
 getCandidatesFromNameIndex db searchName =
     let nameIndex = idxByName (dbIndexes db)
         lowerSearch = T.toLower searchName
-        matchingEntries = [ uuids 
-                          | (indexedName, uuids) <- M.toList nameIndex
-                          , lowerSearch `T.isInfixOf` indexedName  -- Note: indexedName is already lowercase from buildNameIndex
-                          ]
-    in concat matchingEntries
+        matchingEntries =
+            [ uuids
+            | (indexedName, uuids) <- M.toList nameIndex
+            , lowerSearch `T.isInfixOf` indexedName -- Note: indexedName is already lowercase from buildNameIndex
+            ]
+     in concat matchingEntries
 
 -- | Get candidate activity UUIDs from location index
 getCandidatesFromLocationIndex :: Database -> Text -> [UUID]
 getCandidatesFromLocationIndex db searchLocation =
     let locationIndex = idxByLocation (dbIndexes db)
         lowerSearch = T.toLower searchLocation
-        matchingEntries = [ uuids
-                          | (indexedLocation, uuids) <- M.toList locationIndex
-                          , lowerSearch `T.isInfixOf` T.toLower indexedLocation
-                          ]
-    in concat matchingEntries
+        matchingEntries =
+            [ uuids
+            | (indexedLocation, uuids) <- M.toList locationIndex
+            , lowerSearch `T.isInfixOf` T.toLower indexedLocation
+            ]
+     in concat matchingEntries
 
 -- | Matching par champs spécifiques d'activité
 matchesActivityFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Activity -> Bool
@@ -310,10 +312,6 @@ matchesActivityFields db nameParam geoParam productParam activity =
                  in matchesProduct
      in nameMatch && geoMatch && productMatch
 
-
-
-
-
 -- | Recherche de flux par type (Technosphere ou Biosphere)
 findFlowsByType :: Database -> FlowType -> [Flow]
 findFlowsByType db ftype =
@@ -323,11 +321,6 @@ findFlowsByType db ftype =
 
 -- | ===== REQUÊTES AU NIVEAU ÉCHANGE =====
 
-
-
-
-
-
 -- | Trouve tous les produits de référence de la base de données
 findAllReferenceProducts :: Database -> [(Activity, Flow, Exchange)]
 findAllReferenceProducts db =
@@ -336,8 +329,6 @@ findAllReferenceProducts db =
     , Just proc <- [M.lookup procUUID (dbActivities db)]
     , Just flow <- [M.lookup flowUUID (dbFlows db)]
     ]
-
-
 
 -- | Statistiques de la base de données
 data DatabaseStats = DatabaseStats
@@ -374,8 +365,6 @@ getDatabaseStats db =
 
 -- | Fonctions utilitaires pour les requêtes complexes
 
-
-
 {- | Recherche de flux par synonymes et nom (fuzzy search)
 | Trouve tous les flux qui correspondent au texte de recherche (substring dans le nom ou synonymes)
 -}
@@ -396,23 +385,26 @@ getCandidatesFromFlowSearch db searchText =
     let lowerSearch = T.toLower searchText
         categoryIndex = idxFlowByCategory (dbIndexes db)
         -- Get flows from categories that match the search text
-        categoryMatches = [ uuids
-                          | (category, uuids) <- M.toList categoryIndex
-                          , T.isInfixOf lowerSearch (T.toLower category)
-                          ]
+        categoryMatches =
+            [ uuids
+            | (category, uuids) <- M.toList categoryIndex
+            , T.isInfixOf lowerSearch (T.toLower category)
+            ]
         categoryUUIDs = concat categoryMatches
-        
+
         -- For name matching, use a more efficient approach
         -- Check if we can find exact matches first, then fallback to partial matching
         flowsDB = dbFlows db
-        nameMatches = if length categoryUUIDs < 100 then -- Only do expensive name search if category search was restrictive
-                        [ flowId flow
-                        | flow <- M.elems flowsDB
-                        , T.isInfixOf lowerSearch (T.toLower (flowName flow))
-                        ]
-                      else
-                        [] -- Skip name matching if we already have many category matches
-        
+        nameMatches =
+            if length categoryUUIDs < 100 -- Only do expensive name search if category search was restrictive
+                then
+                    [ flowId flow
+                    | flow <- M.elems flowsDB
+                    , T.isInfixOf lowerSearch (T.toLower (flowName flow))
+                    ]
+                else
+                    [] -- Skip name matching if we already have many category matches
+
         -- Combine and deduplicate
         allCandidates = S.toList $ S.fromList (categoryUUIDs ++ nameMatches)
      in allCandidates
@@ -436,7 +428,6 @@ matchesFlowFuzzy searchTerms flow =
                 -- Substring in any synonym
                 any (term `T.isInfixOf`) lowerSynonyms
      in all matchesTerm searchTerms
-
 
 -- | Recherche de flux par synonyme dans une langue spécifique (fuzzy search)
 findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
