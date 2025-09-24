@@ -14,6 +14,15 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Debug.Trace (trace)
 import GHC.Generics (Generic)
+import System.IO.Unsafe (unsafePerformIO)
+import System.IO (hFlush, stdout)
+
+-- Local traceFlush definition to avoid circular imports
+traceFlush :: String -> a -> a
+traceFlush msg x = unsafePerformIO $ do
+    putStrLn msg
+    hFlush stdout
+    return x
 
 -- | Construction des index à partir d'une base de données simple (parallélisée)
 buildIndexes :: ActivityDB -> FlowDB -> Indexes
@@ -60,7 +69,11 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         activityUUIDs = M.keys allActivities
         activityCount = length activityUUIDs
         activityIndex = M.fromList $ zip activityUUIDs [0 ..]
-        _ = trace ("Activity index built: " ++ show activityCount ++ " activities") ()
+        !_ = trace ("Activity index built: " ++ show activityCount ++ " activities") ()
+        !debugMapping = unlines [show uuid ++ " -> " ++ show idx | (uuid, idx) <- M.toList activityIndex]
+        !_ = trace ("=== ACTIVITY INDEX DEBUG ===") ()
+        !_ = trace ("Activity UUID to Index mapping:") ()
+        !_ = trace debugMapping ()
 
         -- Build technosphere sparse triplets (optimized with strict evaluation)
         _ = trace ("Building technosphere matrix triplets...") ()

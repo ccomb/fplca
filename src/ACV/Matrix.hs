@@ -77,7 +77,7 @@ buildPetscMatrixData triplets n =
      in
         V.fromList petscTriplets
 
--- | Solve linear system (I - A) * x = b using PETSc direct solver
+-- | Solve linear system (I - A) * x = b using PETSc MUMPS direct solver
 solveSparseLinearSystemPETSc :: [(Int, Int, Double)] -> Int -> Vector -> Vector
 solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
     -- Build (I - A) system from sparse triplets
@@ -85,16 +85,19 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
     let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
     -- Subtract technosphere: (I - A)[i,j] = I[i,j] - A[i,j]
     let systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
-    -- No artificial diagonal shift - let the solver handle numerical issues properly
     let allTriples = identityTriples ++ systemTechTriples
 
     -- Aggregate duplicate entries for proper matrix assembly
     let aggregatedTriples = aggregateMatrixEntries allTriples
 
+    let !_ = traceFlush ("Starting PETSc direct solve for " ++ show n ++ " activities...") ()
+
     -- Convert to PETSc format
     let matrixData = buildPetscMatrixData aggregatedTriples n
     let rhsData = V.fromList $ map realToFrac $ toList demandVec
     let nzPattern = ConstNZPR (fromIntegral $ length aggregatedTriples, fromIntegral $ length aggregatedTriples)
+
+    let !_ = traceFlush ("Starting PETSc direct solve for " ++ show n ++ " activities...") ()
 
     -- Use PETSc within the context
     result <- withPetsc0 $ do
@@ -105,14 +108,17 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
                 let (_, _, _, matMutable) = fromPetscMatrix mat
                 startTime <- getCurrentTime
 
-                withKspSetupSolveAlloc comm KspRichardson matMutable matMutable rhs $ \ksp solution -> do
+                -- Use KspCg + MUMPS for exact direct solving - KspPreonly has numerical instability
+                withKspSetupSolveAlloc comm KspCg matMutable matMutable False rhs $ \ksp solution -> do
                     endTime <- getCurrentTime
                     let solveTime = realToFrac $ diffUTCTime endTime startTime
+                    let !_ = traceFlush ("MUMPS direct solve completed in " ++ show solveTime ++ " seconds") ()
 
                     -- Extract solution as list
                     solutionData <- vecGetVS solution
                     let solutionList = VS.toList solutionData
-                    return $ map realToFrac solutionList
+                    let solutionResult = map realToFrac solutionList
+                    return solutionResult
 
     return $ fromList result
 
