@@ -61,6 +61,7 @@ executable acv-cli
                      , ACV.Inventory
                      , ACV.Matrix
                      , ACV.PEF
+                     , ACV.Progress
                      , ACV.Query
                      , ACV.API
                      , ACV.Service
