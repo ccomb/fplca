@@ -39,11 +39,12 @@ import Data.Hashable (hash)
 import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Time (diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 import System.IO.Unsafe (unsafePerformIO)
+import Text.Printf (printf)
 
 {-|
 Cache format version - increment when data structures change.
@@ -143,26 +144,56 @@ loadAllSpoldsWithFlows dir = do
   where
     optimalChunkSize = 500 -- Sweet spot for memory vs parallelism
 
+    -- Helper function for unzipping 5-tuples
+    unzip5 :: [(a, b, c, d, e)] -> ([a], [b], [c], [d], [e])
+    unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a:as, b:bs, c:cs, d:ds, e:es)) ([], [], [], [], [])
+
     -- Simple chunking without complex nested batching
     loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
     loadWithSimpleChunks allFiles = do
         let chunks = chunksOf optimalChunkSize allFiles
         reportProgress Info $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each with controlled parallelism"
 
-        -- Process chunks sequentially, files within each chunk in parallel
-        results <- mapM activityChunkSimple chunks
-        let (procMaps, flowMaps, unitMaps) = unzip3 results
+        -- Process chunks sequentially with detailed progress reporting
+        startTime <- getCurrentTime
+        results <- mapM (activityChunkWithProgress startTime (length chunks)) (zip [1..] chunks)
+        let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
         let !finalUnitMap = M.unions unitMaps
 
-        reportProgress Info $ "Parsing completed: " ++ show (M.size finalProcMap) ++ " activities, " ++ show (M.size finalFlowMap) ++ " flows, " ++ show (M.size finalUnitMap) ++ " units"
+        endTime <- getCurrentTime
+        let totalDuration = realToFrac $ diffUTCTime endTime startTime
+        let totalFiles = length allFiles
+        let avgFilesPerSec = fromIntegral totalFiles / totalDuration
+        let totalRawFlows = sum rawFlowCounts
+        let totalRawUnits = sum rawUnitCounts
+        let flowDeduplication = if totalRawFlows > 0 then 100.0 * (1.0 - fromIntegral (M.size finalFlowMap) / fromIntegral totalRawFlows) else 0.0 :: Double
+        let unitDeduplication = if totalRawUnits > 0 then 100.0 * (1.0 - fromIntegral (M.size finalUnitMap) / fromIntegral totalRawUnits) else 0.0 :: Double
+
+        reportProgress Info $ printf "Parsing completed (%s, %.1f files/sec):" (formatDuration totalDuration) avgFilesPerSec
+        reportProgress Info $ printf "  Activities: %d processes" (M.size finalProcMap)
+        reportProgress Info $ printf "  Flows: %d unique (%.1f%% deduplication from %d raw)"
+            (M.size finalFlowMap) flowDeduplication totalRawFlows
+        reportProgress Info $ printf "  Units: %d unique (%.1f%% deduplication from %d raw)"
+            (M.size finalUnitMap) unitDeduplication totalRawUnits
+        reportMemoryUsage "Final parsing memory usage"
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
-    -- Process one chunk with controlled parallelism
-    activityChunkSimple :: [FilePath] -> IO (ActivityDB, FlowDB, UnitDB)
-    activityChunkSimple chunk = do
-        reportProgress Info $ "Processing chunk of " ++ show (length chunk) ++ " files in parallel"
+    -- Process one chunk with progress reporting
+    activityChunkWithProgress :: UTCTime -> Int -> (Int, [FilePath]) -> IO (ActivityDB, FlowDB, UnitDB, Int, Int)
+    activityChunkWithProgress startTime totalChunks (chunkNum, chunk) = do
+        chunkStartTime <- getCurrentTime
+        let elapsedTime = realToFrac $ diffUTCTime chunkStartTime startTime
+        let progressPercent = round (100.0 * fromIntegral (chunkNum - 1) / fromIntegral totalChunks :: Double) :: Int
+        let avgChunkTime = if chunkNum > 1 then elapsedTime / fromIntegral (chunkNum - 1) else 0
+        let etaSeconds = avgChunkTime * fromIntegral (totalChunks - chunkNum + 1)
+
+        reportProgress Info $ printf "Processing chunk %d/%d (%d%%) - %d files [ETA: %s]"
+            chunkNum totalChunks progressPercent (length chunk) (formatDuration etaSeconds)
+
+        -- Report memory usage for large chunks
+        when (chunkNum `mod` 5 == 1) $ reportMemoryUsage $ "Chunk " ++ show chunkNum ++ " memory check"
 
         -- Process files in smaller parallel batches to avoid thread/handle exhaustion
         let maxConcurrency = 4  -- Conservative limit: 1x CPU cores
@@ -176,7 +207,15 @@ loadAllSpoldsWithFlows dir = do
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
-        return (procMap, flowMap, unitMap)
+        chunkEndTime <- getCurrentTime
+        let chunkDuration = realToFrac $ diffUTCTime chunkEndTime chunkStartTime
+        let filesPerSec = fromIntegral (length chunk) / chunkDuration
+        let rawFlowCount = length allFlows
+        let rawUnitCount = length allUnits
+        reportProgress Info $ printf "Chunk %d completed: %d activities, %d flows (%s, %.1f files/sec)"
+            chunkNum (M.size procMap) (M.size flowMap) (formatDuration chunkDuration) filesPerSec
+
+        return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
 
     -- Process files with limited concurrency to prevent resource exhaustion
     processWithLimitedConcurrency :: Int -> [FilePath] -> IO [(Activity, [Flow], [Unit])]
