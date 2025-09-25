@@ -90,7 +90,7 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
     -- Aggregate duplicate entries for proper matrix assembly
     let aggregatedTriples = aggregateMatrixEntries allTriples
 
-    let !_ = traceFlush ("Starting PETSc direct solve for " ++ show n ++ " activities...") ()
+    let !_ = traceFlush ("Matrix construction completed. Starting PETSc direct solve for " ++ show n ++ " activities...") ()
 
     -- Convert to PETSc format
     let matrixData = buildPetscMatrixData aggregatedTriples n
@@ -108,8 +108,8 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
                 let (_, _, _, matMutable) = fromPetscMatrix mat
                 startTime <- getCurrentTime
 
-                -- Use KspCg + MUMPS for exact direct solving - KspPreonly has numerical instability
-                withKspSetupSolveAlloc comm KspCg matMutable matMutable False rhs $ \ksp solution -> do
+                -- Use PETSC_OPTIONS for solver configuration (supports MUMPS, SuperLU, etc.)
+                withKspSetupSolveAllocFromOptions comm matMutable matMutable False rhs $ \ksp solution -> do
                     endTime <- getCurrentTime
                     let solveTime = realToFrac $ diffUTCTime endTime startTime
                     let !_ = traceFlush ("MUMPS direct solve completed in " ++ show solveTime ++ " seconds") ()
