@@ -28,6 +28,7 @@ module ACV.Query where
 
 import ACV.Progress
 import ACV.Types
+import ACV.UnitConversion (normalizeExchangeAmount)
 import Control.Parallel.Strategies
 import Data.List (sortOn)
 import qualified Data.Map as M
@@ -96,7 +97,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                             Just inputActivityUUID ->
                                 case M.lookup inputActivityUUID activityIndex of
                                     Just producerIdx ->
-                                        let value = exchangeAmount ex -- Positive: A(i,j) = amount of product i required by activity j
+                                        let unitName = getUnitNameForExchange unitDB ex
+                                            (normalizedValue, _) = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                            value = normalizedValue -- Positive: A(i,j) = amount of product i required by activity j
                                          in if abs value > 1e-15 then [(producerIdx, j, value)] else []
                                     Nothing -> []
                             Nothing -> []
@@ -127,10 +130,12 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
-                                let amount =
+                                let unitName = getUnitNameForExchange unitDB ex
+                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                    amount =
                                         if exchangeIsInput ex
-                                            then -(exchangeAmount ex) -- Resource consumption (negative)
-                                            else exchangeAmount ex -- Emission (positive)
+                                            then -normalizedAmount -- Resource consumption (negative)
+                                            else normalizedAmount -- Emission (positive)
                                  in if abs amount > 1e-15 then [(i, j, amount)] else []
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
