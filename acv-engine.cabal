@@ -18,6 +18,10 @@ executable acv-cli
   hs-source-dirs:      src
   -- for weeder: -fwrite-ide-info -hiedir=.hie
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  -- Use environment variables for PETSc/SLEPc paths
+  -- Set PETSC_DIR and SLEPC_DIR before building:
+  -- export PETSC_DIR=/path/to/petsc
+  -- export SLEPC_DIR=/path/to/slepc
   build-depends:       base >=4.14 && <5
                      , optparse-applicative
                      , text
@@ -39,6 +43,7 @@ executable acv-cli
                      , aeson
                      , wai
                      , wai-cors
+                     , wai-app-static
                      , binary
                      , time
                      , hashable
@@ -49,6 +54,7 @@ executable acv-cli
                      , vector 
                      , containers
                      , random
+                     , petsc-hs
 
   other-modules:     ACV.Types
                      , ACV.Types.API
@@ -56,6 +62,7 @@ executable acv-cli
                      , ACV.Inventory
                      , ACV.Matrix
                      , ACV.PEF
+                     , ACV.Progress
                      , ACV.Query
                      , ACV.API
                      , ACV.Service
@@ -66,6 +73,16 @@ executable acv-cli
                      , EcoSpold.Loader
                      , ILCD.Parser
   default-language:    Haskell2010
+
+--executable test-mumps
+--  main-is:             test_mumps.hs
+--  hs-source-dirs:      .
+--  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+--  build-depends:       base >=4.14 && <5
+--                     , petsc-hs
+--                     , vector
+--                     , time
+--  default-language:    Haskell2010
 
 test-suite acv-tests
   type:                exitcode-stdio-1.0

@@ -124,7 +124,9 @@ acvServer db =
     -- Activity tree export for visualization (fixed depth=3)
     getActivityTree :: Text -> Handler TreeExport
     getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
-        let maxDepth = 2 -- Fixed depth for testing synthetic data
+        -- Fixed depth for API security - prevents DOS attacks via deep tree requests
+        -- Use CLI --tree-depth option for configurable depth in controlled environments
+        let maxDepth = 3
         let loopAwareTree = buildLoopAwareTree db uuid maxDepth
         return $ ACV.Service.convertToTreeExport db uuid maxDepth loopAwareTree
 

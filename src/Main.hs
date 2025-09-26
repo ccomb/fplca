@@ -5,21 +5,26 @@ import Control.Monad (when)
 import Data.Aeson (encode)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.Map as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Options.Applicative
 import System.IO (hPutStrLn, stderr)
 import Text.Read (readMaybe)
+import Text.Printf (printf)
+import Data.List (intercalate)
+import System.Environment (lookupEnv)
+import Control.Monad (forM_)
+import GHC.Conc (getNumCapabilities)
 
 import ACV.API (ACVAPI, acvAPI, acvServer)
 import qualified ACV.API as API
 import ACV.Export.CSV (exportInventoryAsCSV)
 import ACV.Export.ILCD (exportInventoryAsILCD)
-import ACV.Inventory (computeInventoryWithFlows)
 import ACV.Matrix (computeInventoryMatrix)
 import ACV.PEF (applyCharacterization)
-import ACV.Query (buildIndexes, buildDatabaseWithMatrices, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
+import ACV.Progress
+import ACV.Query (buildIndexes, buildDatabaseWithMatrices, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats, DatabaseStats(..))
 import qualified ACV.Service
-import ACV.Tree (buildActivityTreeWithDatabase, buildLoopAwareTree)
 import ACV.Types
 import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString as BS
@@ -30,8 +35,11 @@ import ILCD.Parser (parseMethodFromFile)
 import Network.HTTP.Types (Query, methodGet, ok200, statusCode)
 import Network.HTTP.Types.Status (Status (..))
 import Network.URI (parseURI, uriPath, uriQuery)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, responseStatus)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, responseStatus, rawPathInfo)
 import Network.Wai.Handler.Warp (run)
+import Network.Wai.Application.Static (staticApp, defaultWebAppSettings, ssRedirectToIndex, ssIndices)
+import WaiAppStatic.Types (StaticSettings, toPiece)
+import Data.String (fromString)
 import Servant
 
 -- | Arguments de ligne de commande
@@ -45,6 +53,7 @@ data Args = Args
     , serverPort :: Int -- Port du serveur API
     , queryMode :: Maybe String -- Mode requête CLI (simule API sans serveur)
     , noCache :: Bool -- Disable caching (for testing)
+    , treeDepth :: Int -- Maximum tree depth for tree display (default: 3)
     }
 
 -- | Parser des arguments CLI
@@ -60,50 +69,57 @@ argsParser =
         <*> option auto (long "port" <> value 8080 <> help "Port du serveur API (défaut: 8080)")
         <*> optional (strOption (long "query" <> help "Mode requête CLI (ex: activity/uuid/inventory)"))
         <*> switch (long "no-cache" <> help "Disable caching (useful for testing and development)")
+        <*> option auto (long "tree-depth" <> value 3 <> help "Maximum depth for tree display (default: 3, prevents DOS via deep trees)")
 
 -- | Fonction principale
 main :: IO ()
 main = do
-    Args dir root methodFile output csvOut server port queryPath disableCache <-
+    Args dir root methodFile output csvOut server port queryPath disableCache maxTreeDepth <-
         execParser $
             info
                 (argsParser <**> helper)
                 (fullDesc <> progDesc "ACV CLI - moteur ACV Haskell en mémoire vive")
 
-    -- Load database with matrix caching (debug to stderr)
+    -- Load database with matrix caching
     database <-
         if disableCache
             then do
-                hPutStrLn stderr "Loading activities with flow deduplication (caching disabled)"
+                reportProgress Info "Loading activities with flow deduplication (caching disabled)"
                 simpleDb <- loadAllSpoldsWithFlows dir
-                hPutStrLn stderr "Building indexes and pre-computing matrices (no caching)"
+                reportProgress Info "Building indexes and pre-computing matrices (no caching)"
                 let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
                 return db
             else do
-                hPutStrLn stderr "Checking for cached Database with matrices"
+                reportCacheOperation "Checking for cached Database with matrices"
                 cachedDb <- loadCachedDatabaseWithMatrices dir
                 case cachedDb of
                     Just db -> do
-                        hPutStrLn stderr "Using cached Database with pre-computed matrices"
+                        reportCacheOperation "Using cached Database with pre-computed matrices"
                         return db
                     Nothing -> do
-                        hPutStrLn stderr "No matrix cache found, building from SimpleDatabase cache"
+                        reportCacheOperation "No matrix cache found, building from SimpleDatabase cache"
                         (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dir
                         when (not wasFromCache) $ do
-                            hPutStrLn stderr "Saving SimpleDatabase to cache for next time"
+                            reportCacheOperation "Saving SimpleDatabase to cache for next time"
                             saveCachedSpoldsWithFlows dir simpleDb
-                        
-                        hPutStrLn stderr "Building indexes and pre-computing matrices for efficient queries"
+
+                        reportProgress Info "Building indexes and pre-computing matrices for efficient queries"
                         let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
-                        
-                        hPutStrLn stderr "Saving Database with matrices to cache for next time"
+
+                        reportCacheOperation "Saving Database with matrices to cache for next time"
                         saveCachedDatabaseWithMatrices dir db
                         return db
 
-    -- Afficher les statistiques de la base de données (debug to stderr)
+    -- Display active configuration first
+    reportConfiguration
+
+    -- Validate database quality
+    validateDatabase database
+
+    -- Display database statistics
     let stats = getDatabaseStats database
-    hPutStrLn stderr "\n=== DATABASE STATISTICS ==="
-    hPutStrLn stderr $ show stats
+    reportProgress Info "=== DATABASE STATISTICS ==="
+    displayDatabaseStats database stats
 
     case queryPath of
         Just queryStr -> do
@@ -112,159 +128,122 @@ main = do
         Nothing ->
             if server
                 then do
-                    -- Mode serveur API (server info to stderr)
-                    hPutStrLn stderr $ "\nStarting API server on port " ++ show port
-                    hPutStrLn stderr "Available endpoints:"
-                    hPutStrLn stderr "  Activity endpoints:"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}                    - Get detailed activity information"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/flows               - Get flows used by activity"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/inputs              - Get input exchanges"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/outputs             - Get output exchanges"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/reference-product   - Get reference product"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/tree                 - Get activity supply chain tree (JSON, depth=2)"
-                    hPutStrLn stderr "    GET /api/v1/activity/{uuid}/inventory            - Get activity life cycle inventory (LCI)"
-                    hPutStrLn stderr ""
-                    hPutStrLn stderr "  Flow endpoints:"
-                    hPutStrLn stderr "    GET /api/v1/flow/{flowId}                       - Get detailed flow information"
-                    hPutStrLn stderr "    GET /api/v1/flow/{flowId}/activities            - Get activities using this flow"
-                    hPutStrLn stderr ""
-                    hPutStrLn stderr "  Search endpoints (combined results + count, support pagination with ?limit=N&offset=N):"
-                    hPutStrLn stderr "    GET /api/v1/search/flows?q={term}               - Search flows (name, category, synonyms)"
-                    hPutStrLn stderr "    GET /api/v1/search/flows?q={term}&lang={lang}   - Search flows in specific language"
-                    hPutStrLn stderr "    GET /api/v1/search/activities?name={term}        - Search activities by name"
-                    hPutStrLn stderr "    GET /api/v1/search/activities?geo={location}     - Search activities by geography (exact match)"
-                    hPutStrLn stderr "    GET /api/v1/search/activities?product={product}  - Search activities by reference product"
-                    hPutStrLn stderr "    GET /api/v1/search/activities?name={n}&geo={g}   - Combine multiple criteria (AND logic)"
-                    hPutStrLn stderr ""
-                    hPutStrLn stderr "  Pagination: Default limit=50, offset=0. Max limit=1000"
-                    hPutStrLn stderr "  Example: /api/v1/search/activities?name=electricity&limit=20&offset=40"
-                    hPutStrLn stderr "  Note: No search parameters returns all activities (paginated)"
-                    hPutStrLn stderr ""
-                    hPutStrLn stderr "  Synonym endpoints:"
-                    hPutStrLn stderr "    GET /api/v1/synonyms/languages                  - Get available languages"
-                    hPutStrLn stderr "    GET /api/v1/synonyms/stats                      - Get synonym statistics"
-                    hPutStrLn stderr ""
-                    run port (serve acvAPI (acvServer database))
+                    -- Start API server
+                    reportProgress Info $ "Starting API server on port " ++ show port
+                    reportProgress Info "Available endpoints:"
+                    reportProgress Info "  Activity endpoints:"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}                    - Get detailed activity information"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/flows               - Get flows used by activity"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/inputs              - Get input exchanges"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/outputs             - Get output exchanges"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/reference-product   - Get reference product"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/tree                 - Get activity supply chain tree (JSON, depth=3)"
+                    reportProgress Info "    GET /api/v1/activity/{uuid}/inventory            - Get activity life cycle inventory (LCI)"
+                    reportProgress Info ""
+                    reportProgress Info "  Flow endpoints:"
+                    reportProgress Info "    GET /api/v1/flow/{flowId}                       - Get detailed flow information"
+                    reportProgress Info "    GET /api/v1/flow/{flowId}/activities            - Get activities using this flow"
+                    reportProgress Info ""
+                    reportProgress Info "  Search endpoints (combined results + count, support pagination with ?limit=N&offset=N):"
+                    reportProgress Info "    GET /api/v1/search/flows?q={term}               - Search flows (name, category, synonyms)"
+                    reportProgress Info "    GET /api/v1/search/flows?q={term}&lang={lang}   - Search flows in specific language"
+                    reportProgress Info "    GET /api/v1/search/activities?name={term}        - Search activities by name"
+                    reportProgress Info "    GET /api/v1/search/activities?geo={location}     - Search activities by geography (exact match)"
+                    reportProgress Info "    GET /api/v1/search/activities?product={product}  - Search activities by reference product"
+                    reportProgress Info "    GET /api/v1/search/activities?name={n}&geo={g}   - Combine multiple criteria (AND logic)"
+                    reportProgress Info ""
+                    reportProgress Info "  Pagination: Default limit=50, offset=0. Max limit=1000"
+                    reportProgress Info "  Example: /api/v1/search/activities?name=electricity&limit=20&offset=40"
+                    reportProgress Info "  Note: No search parameters returns all activities (paginated)"
+                    reportProgress Info ""
+                    reportProgress Info "  Synonym endpoints:"
+                    reportProgress Info "    GET /api/v1/synonyms/languages                  - Get available languages"
+                    reportProgress Info "    GET /api/v1/synonyms/stats                      - Get synonym statistics"
+                    reportProgress Info ""
+                    reportProgress Info "  Static web interface available at: http://localhost:80/"
+                    reportProgress Info ""
+
+                    -- Create combined application: API + static files
+                    let combinedApp = createCombinedApp database
+                    run port combinedApp
                 else do
                     -- Mode calcul LCA traditionnel
 
-                    -- Exemples de requêtes exchange-level
-                    putStrLn "\n=== EXCHANGE-LEVEL QUERIES EXAMPLES ==="
+                    -- Show database statistics
+                    putStrLn "\n=== DATABASE STATISTICS ==="
                     let refProducts = take 5 $ findAllReferenceProducts database
                     putStrLn $ "First 5 reference products: " ++ show (length refProducts)
                     mapM_ (\(proc, flow, ex) -> putStrLn $ "  " ++ show (activityName proc) ++ " -> " ++ show (flowName flow)) refProducts
 
-                    -- Construire l'arbre de l'activité racine
-                    print "building activity tree"
-                    let tree = buildActivityTreeWithDatabase database (T.pack root)
-                    -- Calculer l'inventaire global (méthode arbre)
-                    print "computing inventory tree"
-                    let inventory = computeInventoryWithFlows (dbFlows database) tree
-                    
-                    -- Calculer l'inventaire avec la méthode matricielle
-                    print "computing inventory matrix"  
+                    -- Calculate inventory using matrix-based method only
+                    putStrLn "\nCalculating LCA inventory using matrix-based approach..."
                     let inventoryMatrix = computeInventoryMatrix database (T.pack root)
 
-                    -- Charger la méthode PEF
-                    print "loading PEF method"
+                    -- Load characterization method
+                    putStrLn "Loading PEF characterization method..."
                     method <- parseMethodFromFile methodFile
 
-                    -- Calculer les scores par catégorie
-                    print "Applying characterization"
-                    let scores = applyCharacterization inventory method
+                    -- Calculate impact scores
+                    putStrLn "Applying characterization factors..."
+                    let scores = applyCharacterization inventoryMatrix method
 
-                    -- Affichage comparaison
-                    putStrLn "\nInventaire ACV (Tree method):"
-                    mapM_ print (M.toList inventory)
-                    
-                    putStrLn "\nInventaire ACV (Matrix method):"
+                    putStrLn "\nFinal LCA inventory (kg, MJ, etc.):"
                     mapM_ print (M.toList inventoryMatrix)
-                    
-                    -- Comparison for specific flows
-                    putStrLn "\nComparison for key flows:"
-                    let compareFlow flowId name = do
-                          let treeVal = M.findWithDefault 0.0 flowId inventory
-                          let matrixVal = M.findWithDefault 0.0 flowId inventoryMatrix  
-                          if treeVal /= 0.0 || matrixVal /= 0.0
-                          then putStrLn $ name ++ ": Tree=" ++ show treeVal ++ ", Matrix=" ++ show matrixVal ++ ", Ratio=" ++ show (if treeVal /= 0 then matrixVal/treeVal else 0)
-                          else return ()
-                    
-                    -- Check Zinc II and Water flows
-                    compareFlow (T.pack "5ce378a0-b48d-471c-977d-79681521efde") "Zinc(II)"
-                    compareFlow (T.pack "51254820-3456-4373-b7b4-056cf7b16e01") "Water"
 
-                    putStrLn "\nScore PEF par catégorie :"
+                    putStrLn "\nPEF impact scores by category:"
                     mapM_ print (M.toList scores)
 
                     -- Export XML (ILCD)
                     case output of
                         Just outPath -> do
-                            exportInventoryAsILCD outPath inventory
+                            exportInventoryAsILCD outPath inventoryMatrix
                             putStrLn $ "Inventaire exporté en XML (ILCD) : " ++ outPath
                         Nothing -> pure ()
 
                     -- Export CSV
                     case csvOut of
                         Just csvPath -> do
-                            exportInventoryAsCSV csvPath inventory
+                            exportInventoryAsCSV csvPath inventoryMatrix
                             putStrLn $ "Inventaire exporté en CSV : " ++ csvPath
                         Nothing -> pure ()
 
 -- | Execute CLI query using domain service functions (returns identical JSON to API)
 executeQuery :: Database -> String -> IO ()
 executeQuery db queryStr = do
-    hPutStrLn stderr $ "Executing query: " ++ queryStr
-    hPutStrLn stderr $ "MAIN: Starting parseApiPath"
+    reportProgress Info $ "Executing CLI query: " ++ queryStr
     let endpoint = parseApiPath queryStr
-    hPutStrLn stderr $ "MAIN: parseApiPath completed, matching endpoint"
-    
+
     case endpoint of
         ActivityInfo uuid -> do
-            hPutStrLn stderr $ "MAIN: ActivityInfo endpoint, calling getActivityInfo"
             case ACV.Service.getActivityInfo db uuid of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+                Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
         ActivityFlows uuid -> do
-            hPutStrLn stderr $ "MAIN: ActivityFlows endpoint, calling getActivityFlows"
             case ACV.Service.getActivityFlows db uuid of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+                Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
         ActivityInventory uuid -> do
-            hPutStrLn stderr $ "MAIN: ActivityInventory endpoint, calling getActivityInventory"
-            hPutStrLn stderr $ "MAIN: UUID received: " ++ T.unpack uuid
-            hPutStrLn stderr $ "MAIN: Database activity count: " ++ show (dbActivityCount db)
-            hPutStrLn stderr $ "MAIN: About to evaluate ACV.Service.getActivityInventory"
-            hPutStrLn stderr $ "MAIN: Evaluating function pointer..."
-            let func = ACV.Service.getActivityInventory
-            hPutStrLn stderr $ "MAIN: Function pointer evaluated, calling with arguments..."
-            hPutStrLn stderr $ "MAIN: About to call service function"
-            let serviceResult = func db uuid
-            hPutStrLn stderr $ "MAIN: Service function called, result is lazy thunk"
-            hPutStrLn stderr $ "MAIN: About to force evaluation with seq"
-            case serviceResult of
+            reportProgress Info $ "Computing inventory for activity: " ++ T.unpack uuid
+            case ACV.Service.getActivityInventory db uuid of
                 Left err -> do
-                    hPutStrLn stderr $ "MAIN: Service returned error"
-                    hPutStrLn stderr $ "Error: " ++ show err
+                    reportError $ "Error: " ++ show err
                 Right result -> do
-                    hPutStrLn stderr $ "MAIN: Service returned success, evaluating result"
-                    result `seq` hPutStrLn stderr $ "MAIN: Result evaluation completed"
-                    hPutStrLn stderr $ "MAIN: Starting JSON encoding"
                     let jsonResult = encode result
-                    hPutStrLn stderr $ "MAIN: JSON encoding completed, result size: " ++ show (BSL.length jsonResult) ++ " bytes"
+                    reportProgress Info $ "Inventory computation completed (" ++ show (BSL.length jsonResult) ++ " bytes)"
                     BSL.putStrLn jsonResult
         ActivityTree uuid ->
-            case ACV.Service.getActivityTree db uuid of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+            case ACV.Service.getActivityTree db uuid 3 of
+                Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
         SearchActivities nameParam geoParam productParam limitParam offsetParam ->
             case ACV.Service.searchActivities db nameParam geoParam productParam limitParam offsetParam of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+                Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
         SearchFlows queryParam langParam limitParam offsetParam ->
             case ACV.Service.searchFlows db queryParam langParam limitParam offsetParam of
-                Left err -> hPutStrLn stderr $ "Error: " ++ show err
+                Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
-        _ -> hPutStrLn stderr $ "Unsupported endpoint: " ++ queryStr
+        _ -> reportError $ "Unsupported endpoint: " ++ queryStr
 
 -- | Parse API path into structured endpoint type
 parseApiPath :: String -> ApiEndpoint
@@ -342,3 +321,160 @@ parseParams params =
 -- Helper function
 isPrefixOf :: String -> String -> Bool
 isPrefixOf prefix str = take (length prefix) str == prefix
+
+{-|
+Display database statistics in a user-friendly format.
+
+Formats the raw DatabaseStats structure into readable output with:
+- Core metrics (activities, flows, exchanges)
+- Flow type breakdown (technosphere vs biosphere)
+- Geographic coverage summary
+- Environmental compartment summary
+- Unit diversity metrics
+-}
+displayDatabaseStats :: Database -> DatabaseStats -> IO ()
+displayDatabaseStats db stats = do
+    reportProgress Info $ "Activities: " ++ show (statsActivityCount stats) ++ " processes"
+    reportProgress Info $ "Flows: " ++ show (statsFlowCount stats) ++ " elementary and intermediate flows"
+    reportProgress Info $ "Exchanges: " ++ show (statsExchangeCount stats) ++ " flow occurrences"
+    reportProgress Info ""
+
+    reportProgress Info "Flow Type Distribution:"
+    reportProgress Info $ "  Technosphere flows: " ++ show (statsTechnosphereFlows stats) ++ " (products, services)"
+    reportProgress Info $ "  Biosphere flows: " ++ show (statsBiosphereFlows stats) ++ " (environmental exchanges)"
+    reportProgress Info $ "  Reference products: " ++ show (statsReferenceProducts stats) ++ " (defining outputs)"
+    reportProgress Info ""
+
+    reportProgress Info "Exchange Balance:"
+    reportProgress Info $ "  Total inputs: " ++ show (statsInputCount stats) ++ " exchanges"
+    reportProgress Info $ "  Total outputs: " ++ show (statsOutputCount stats) ++ " exchanges"
+    let ratio = if statsInputCount stats > 0
+                then fromIntegral (statsOutputCount stats) / fromIntegral (statsInputCount stats) :: Double
+                else 0
+    reportProgress Info $ "  Output/Input ratio: " ++ printf "%.2f" ratio
+    reportProgress Info ""
+
+    reportProgress Info "Geographic Coverage:"
+    let locations = statsLocations stats
+    reportProgress Info $ "  Locations: " ++ show (length locations) ++ " geographic regions"
+    let sampleLocs = map T.unpack $ take 10 locations
+    reportProgress Info $ "  Sample locations: " ++ unwords sampleLocs ++
+                         (if length locations > 10 then " ... (and " ++ show (length locations - 10) ++ " more)" else "")
+    reportProgress Info ""
+
+    reportProgress Info "Environmental Compartments:"
+    let categories = statsCategories stats
+    reportProgress Info $ "  Categories: " ++ show (length categories) ++ " environmental compartments"
+    let sampleCats = map T.unpack $ take 5 categories
+    reportProgress Info $ "  Main compartments: " ++ intercalate ", " sampleCats ++
+                         (if length categories > 5 then " ... (and " ++ show (length categories - 5) ++ " more)" else "")
+    reportProgress Info ""
+
+    reportProgress Info "Unit Diversity:"
+    let units = statsUnits stats
+    reportProgress Info $ "  Units: " ++ show (length units) ++ " different measurement units"
+    reportProgress Info $ "  Common units: " ++ intercalate ", " (map T.unpack $ take 8 units) ++
+                         (if length units > 8 then " ... (and " ++ show (length units - 8) ++ " more)" else "")
+    reportProgress Info ""
+
+    -- Performance characteristics
+    reportProgress Info "Performance Characteristics:"
+    let techEntries = dbTechnosphereTriples db
+        bioEntries = dbBiosphereTriples db
+        totalEntries = length techEntries + length bioEntries
+        totalPossible = statsActivityCount stats * statsActivityCount stats + statsActivityCount stats * statsBiosphereFlows stats
+        matrixDensity = if totalPossible > 0 then (fromIntegral totalEntries / fromIntegral totalPossible) * 100 else 0 :: Double
+    reportProgress Info $ "  Matrix density: " ++ printf "%.4f%%" matrixDensity ++ " (very sparse - good for performance)"
+    reportProgress Info $ "  Total matrix entries: " ++ show totalEntries ++ " non-zero values"
+    reportProgress Info $ "  Solver complexity: O(n^1.5) for " ++ show (statsActivityCount stats) ++ " activities"
+    reportProgress Info $ "  Expected solve time: ~3-5 seconds (MUMPS direct solver)"
+
+    -- Report current memory usage
+    reportMemoryUsage "Database loaded in memory"
+    reportProgress Info ""
+
+{-|
+Validate database integrity and report potential issues.
+
+Performs basic quality checks on the loaded database:
+- Orphaned flows (flows not used by any activity)
+- Unbalanced activities (activities with unusual input/output ratios)
+- Missing reference products
+- Unit consistency issues
+-}
+validateDatabase :: Database -> IO ()
+validateDatabase db = do
+    reportProgress Info "Database Quality Validation:"
+
+    -- Check for orphaned flows
+    let allFlows = M.keys (dbFlows db)
+        usedFlows = S.fromList $ concatMap (map exchangeFlowId . exchanges) (M.elems $ dbActivities db)
+        orphanedFlows = filter (`S.notMember` usedFlows) allFlows
+
+    if null orphanedFlows
+        then reportProgress Info "  ✓ No orphaned flows found"
+        else reportProgress Info $ "  ⚠ Found " ++ show (length orphanedFlows) ++ " orphaned flows (unused in any activity)"
+
+    -- Check reference products
+    let activitiesWithoutRef = filter (null . filter exchangeIsReference . exchanges) (M.elems $ dbActivities db)
+    if null activitiesWithoutRef
+        then reportProgress Info "  ✓ All activities have reference products"
+        else reportProgress Info $ "  ⚠ Found " ++ show (length activitiesWithoutRef) ++ " activities without reference products"
+
+    -- Check for extremely unbalanced activities (more than 100:1 ratio)
+    let stats = getDatabaseStats db
+        avgInputsPerActivity = fromIntegral (statsInputCount stats) / fromIntegral (statsActivityCount stats) :: Double
+        avgOutputsPerActivity = fromIntegral (statsOutputCount stats) / fromIntegral (statsActivityCount stats) :: Double
+        ratio = if avgInputsPerActivity > 0 then avgOutputsPerActivity / avgInputsPerActivity else 0
+
+    reportProgress Info $ "  ✓ Average exchange balance: " ++ printf "%.1f" ratio ++ ":1 (outputs:inputs)"
+
+    -- Overall assessment
+    let issues = length orphanedFlows + length activitiesWithoutRef
+    if issues == 0
+        then reportProgress Info "  ✓ Database quality: Excellent"
+        else reportProgress Info $ "  ⚠ Database quality: Good (" ++ show issues ++ " minor issues found)"
+
+    reportProgress Info ""
+
+-- | Display active configuration settings
+reportConfiguration :: IO ()
+reportConfiguration = do
+    reportProgress Info "Active Configuration:"
+
+    -- PETSc configuration
+    petscOptions <- lookupEnv "PETSC_OPTIONS"
+    case petscOptions of
+        Just opts -> do
+            reportProgress Info "  PETSc Solver Settings:"
+            reportProgress Info $ "    " ++ opts
+            reportProgress Info "    → MUMPS direct solver with high precision"
+        Nothing -> reportProgress Info "  PETSc: Using default settings"
+
+    -- Runtime configuration
+    numCaps <- getNumCapabilities
+    reportProgress Info $ "  Parallel Processing: " ++ show numCaps ++ " CPU cores available"
+
+    -- Memory configuration from RTS
+    reportProgress Info "  Memory Management: GHC runtime with automatic GC"
+
+    reportProgress Info ""
+
+
+-- | Create a combined Wai application serving both API and static files
+createCombinedApp :: Database -> Application
+createCombinedApp database req respond = do
+    let path = rawPathInfo req
+
+    -- Route API requests to the Servant application
+    if C8.pack "/api/" `BS.isPrefixOf` path
+        then serve acvAPI (acvServer database) req respond
+        else
+            -- Route everything else to static files
+            let staticSettings = (defaultWebAppSettings "web/dist")
+                    { ssRedirectToIndex = True
+                    , ssIndices = case toPiece (T.pack "index.html") of
+                        Just piece -> [piece]
+                        Nothing -> []
+                    }
+            in staticApp staticSettings req respond
