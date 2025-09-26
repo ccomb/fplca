@@ -35,8 +35,11 @@ import ILCD.Parser (parseMethodFromFile)
 import Network.HTTP.Types (Query, methodGet, ok200, statusCode)
 import Network.HTTP.Types.Status (Status (..))
 import Network.URI (parseURI, uriPath, uriQuery)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, responseStatus)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, responseStatus, rawPathInfo)
 import Network.Wai.Handler.Warp (run)
+import Network.Wai.Application.Static (staticApp, defaultWebAppSettings, ssRedirectToIndex, ssIndices)
+import WaiAppStatic.Types (StaticSettings, toPiece)
+import Data.String (fromString)
 import Servant
 
 -- | Arguments de ligne de commande
@@ -157,7 +160,12 @@ main = do
                     reportProgress Info "    GET /api/v1/synonyms/languages                  - Get available languages"
                     reportProgress Info "    GET /api/v1/synonyms/stats                      - Get synonym statistics"
                     reportProgress Info ""
-                    run port (serve acvAPI (acvServer database))
+                    reportProgress Info "  Static web interface available at: http://localhost:80/"
+                    reportProgress Info ""
+
+                    -- Create combined application: API + static files
+                    let combinedApp = createCombinedApp database
+                    run port combinedApp
                 else do
                     -- Mode calcul LCA traditionnel
 
@@ -451,3 +459,22 @@ reportConfiguration = do
     reportProgress Info "  Memory Management: GHC runtime with automatic GC"
 
     reportProgress Info ""
+
+
+-- | Create a combined Wai application serving both API and static files
+createCombinedApp :: Database -> Application
+createCombinedApp database req respond = do
+    let path = rawPathInfo req
+
+    -- Route API requests to the Servant application
+    if C8.pack "/api/" `BS.isPrefixOf` path
+        then serve acvAPI (acvServer database) req respond
+        else
+            -- Route everything else to static files
+            let staticSettings = (defaultWebAppSettings "web/dist")
+                    { ssRedirectToIndex = True
+                    , ssIndices = case toPiece (T.pack "index.html") of
+                        Just piece -> [piece]
+                        Nothing -> []
+                    }
+            in staticApp staticSettings req respond

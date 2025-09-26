@@ -43,6 +43,7 @@ executable acv-cli
                      , aeson
                      , wai
                      , wai-cors
+                     , wai-app-static
                      , binary
                      , time
                      , hashable
