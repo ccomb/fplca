@@ -73,8 +73,8 @@ withValidatedFlow db uuid action = do
                 Just flow -> action flow
 
 -- | API server implementation with multiple focused endpoints
-acvServer :: Database -> Server ACVAPI
-acvServer db =
+acvServer :: Database -> Int -> Server ACVAPI
+acvServer db maxTreeDepth =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -121,14 +121,13 @@ acvServer db =
             Nothing -> throwError err404{errBody = "No reference product found"}
             Just refProduct -> return refProduct
 
-    -- Activity tree export for visualization (fixed depth=3)
+    -- Activity tree export for visualization (configurable depth)
     getActivityTree :: Text -> Handler TreeExport
     getActivityTree uuid = withValidatedActivity db uuid $ \_ -> do
-        -- Fixed depth for API security - prevents DOS attacks via deep tree requests
-        -- Use CLI --tree-depth option for configurable depth in controlled environments
-        let maxDepth = 3
-        let loopAwareTree = buildLoopAwareTree db uuid maxDepth
-        return $ ACV.Service.convertToTreeExport db uuid maxDepth loopAwareTree
+        -- Use CLI --tree-depth option for configurable depth
+        -- Default depth limit prevents DOS attacks via deep tree requests
+        let loopAwareTree = buildLoopAwareTree db uuid maxTreeDepth
+        return $ ACV.Service.convertToTreeExport db uuid maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport

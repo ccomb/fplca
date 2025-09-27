@@ -3,3 +3,6 @@ dist-newstyle
 *.cache.*.bin
 weeder.toml
 .hie
+web/dist/
+web/elm-stuff/
+

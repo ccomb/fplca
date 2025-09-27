@@ -1,20 +1,20 @@
 {-# LANGUAGE BangPatterns #-}
+
 module Main where
 
-import Control.Monad (when)
+import Control.Monad (forM_, when)
 import Data.Aeson (encode)
 import qualified Data.ByteString.Lazy.Char8 as BSL
+import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Options.Applicative
-import System.IO (hPutStrLn, stderr)
-import Text.Read (readMaybe)
-import Text.Printf (printf)
-import Data.List (intercalate)
-import System.Environment (lookupEnv)
-import Control.Monad (forM_)
 import GHC.Conc (getNumCapabilities)
+import Options.Applicative
+import System.Environment (lookupEnv)
+import System.IO (hPutStrLn, stderr)
+import Text.Printf (printf)
+import Text.Read (readMaybe)
 
 import ACV.API (ACVAPI, acvAPI, acvServer)
 import qualified ACV.API as API
@@ -23,24 +23,24 @@ import ACV.Export.ILCD (exportInventoryAsILCD)
 import ACV.Matrix (computeInventoryMatrix)
 import ACV.PEF (applyCharacterization)
 import ACV.Progress
-import ACV.Query (buildIndexes, buildDatabaseWithMatrices, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats, DatabaseStats(..))
+import ACV.Query (DatabaseStats (..), buildDatabaseWithMatrices, buildIndexes, findActivitiesByFields, findAllReferenceProducts, findFlowsBySynonym, findFlowsByType, getDatabaseStats)
 import qualified ACV.Service
 import ACV.Types
 import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.IORef (newIORef, readIORef, writeIORef)
-import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
+import Data.String (fromString)
+import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, loadCachedSpoldsWithFlows, saveCachedDatabaseWithMatrices, saveCachedSpoldsWithFlows)
 import ILCD.Parser (parseMethodFromFile)
 import Network.HTTP.Types (Query, methodGet, ok200, statusCode)
 import Network.HTTP.Types.Status (Status (..))
 import Network.URI (parseURI, uriPath, uriQuery)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, responseStatus, rawPathInfo)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus)
+import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run)
-import Network.Wai.Application.Static (staticApp, defaultWebAppSettings, ssRedirectToIndex, ssIndices)
-import WaiAppStatic.Types (StaticSettings, toPiece)
-import Data.String (fromString)
 import Servant
+import WaiAppStatic.Types (StaticSettings, toPiece)
 
 -- | Arguments de ligne de commande
 data Args = Args
@@ -69,7 +69,7 @@ argsParser =
         <*> option auto (long "port" <> value 8080 <> help "Port du serveur API (défaut: 8080)")
         <*> optional (strOption (long "query" <> help "Mode requête CLI (ex: activity/uuid/inventory)"))
         <*> switch (long "no-cache" <> help "Disable caching (useful for testing and development)")
-        <*> option auto (long "tree-depth" <> value 3 <> help "Maximum depth for tree display (default: 3, prevents DOS via deep trees)")
+        <*> option auto (long "tree-depth" <> value 2 <> help "Maximum depth for tree display (default: 2, prevents DOS via deep trees)")
 
 -- | Fonction principale
 main :: IO ()
@@ -124,7 +124,7 @@ main = do
     case queryPath of
         Just queryStr -> do
             -- Mode requête CLI - simule les appels API sans serveur
-            executeQuery database queryStr
+            executeQuery database queryStr maxTreeDepth
         Nothing ->
             if server
                 then do
@@ -164,7 +164,7 @@ main = do
                     reportProgress Info ""
 
                     -- Create combined application: API + static files
-                    let combinedApp = createCombinedApp database
+                    let combinedApp = createCombinedApp database maxTreeDepth
                     run port combinedApp
                 else do
                     -- Mode calcul LCA traditionnel
@@ -208,8 +208,8 @@ main = do
                         Nothing -> pure ()
 
 -- | Execute CLI query using domain service functions (returns identical JSON to API)
-executeQuery :: Database -> String -> IO ()
-executeQuery db queryStr = do
+executeQuery :: Database -> String -> Int -> IO ()
+executeQuery db queryStr maxTreeDepth = do
     reportProgress Info $ "Executing CLI query: " ++ queryStr
     let endpoint = parseApiPath queryStr
 
@@ -232,7 +232,7 @@ executeQuery db queryStr = do
                     reportProgress Info $ "Inventory computation completed (" ++ show (BSL.length jsonResult) ++ " bytes)"
                     BSL.putStrLn jsonResult
         ActivityTree uuid ->
-            case ACV.Service.getActivityTree db uuid 3 of
+            case ACV.Service.getActivityTree db uuid maxTreeDepth of
                 Left err -> reportError $ "Error: " ++ show err
                 Right result -> BSL.putStrLn $ encode result
         SearchActivities nameParam geoParam productParam limitParam offsetParam ->
@@ -317,12 +317,11 @@ parseParams params =
         (prefix, []) -> [prefix]
         (prefix, _ : suffix) -> prefix : splitBy c suffix
 
-
 -- Helper function
 isPrefixOf :: String -> String -> Bool
 isPrefixOf prefix str = take (length prefix) str == prefix
 
-{-|
+{- |
 Display database statistics in a user-friendly format.
 
 Formats the raw DatabaseStats structure into readable output with:
@@ -348,7 +347,8 @@ displayDatabaseStats db stats = do
     reportProgress Info "Exchange Balance:"
     reportProgress Info $ "  Total inputs: " ++ show (statsInputCount stats) ++ " exchanges"
     reportProgress Info $ "  Total outputs: " ++ show (statsOutputCount stats) ++ " exchanges"
-    let ratio = if statsInputCount stats > 0
+    let ratio =
+            if statsInputCount stats > 0
                 then fromIntegral (statsOutputCount stats) / fromIntegral (statsInputCount stats) :: Double
                 else 0
     reportProgress Info $ "  Output/Input ratio: " ++ printf "%.2f" ratio
@@ -358,23 +358,29 @@ displayDatabaseStats db stats = do
     let locations = statsLocations stats
     reportProgress Info $ "  Locations: " ++ show (length locations) ++ " geographic regions"
     let sampleLocs = map T.unpack $ take 10 locations
-    reportProgress Info $ "  Sample locations: " ++ unwords sampleLocs ++
-                         (if length locations > 10 then " ... (and " ++ show (length locations - 10) ++ " more)" else "")
+    reportProgress Info $
+        "  Sample locations: "
+            ++ unwords sampleLocs
+            ++ (if length locations > 10 then " ... (and " ++ show (length locations - 10) ++ " more)" else "")
     reportProgress Info ""
 
     reportProgress Info "Environmental Compartments:"
     let categories = statsCategories stats
     reportProgress Info $ "  Categories: " ++ show (length categories) ++ " environmental compartments"
     let sampleCats = map T.unpack $ take 5 categories
-    reportProgress Info $ "  Main compartments: " ++ intercalate ", " sampleCats ++
-                         (if length categories > 5 then " ... (and " ++ show (length categories - 5) ++ " more)" else "")
+    reportProgress Info $
+        "  Main compartments: "
+            ++ intercalate ", " sampleCats
+            ++ (if length categories > 5 then " ... (and " ++ show (length categories - 5) ++ " more)" else "")
     reportProgress Info ""
 
     reportProgress Info "Unit Diversity:"
     let units = statsUnits stats
     reportProgress Info $ "  Units: " ++ show (length units) ++ " different measurement units"
-    reportProgress Info $ "  Common units: " ++ intercalate ", " (map T.unpack $ take 8 units) ++
-                         (if length units > 8 then " ... (and " ++ show (length units - 8) ++ " more)" else "")
+    reportProgress Info $
+        "  Common units: "
+            ++ intercalate ", " (map T.unpack $ take 8 units)
+            ++ (if length units > 8 then " ... (and " ++ show (length units - 8) ++ " more)" else "")
     reportProgress Info ""
 
     -- Performance characteristics
@@ -393,7 +399,7 @@ displayDatabaseStats db stats = do
     reportMemoryUsage "Database loaded in memory"
     reportProgress Info ""
 
-{-|
+{- |
 Validate database integrity and report potential issues.
 
 Performs basic quality checks on the loaded database:
@@ -460,21 +466,21 @@ reportConfiguration = do
 
     reportProgress Info ""
 
-
 -- | Create a combined Wai application serving both API and static files
-createCombinedApp :: Database -> Application
-createCombinedApp database req respond = do
+createCombinedApp :: Database -> Int -> Application
+createCombinedApp database maxTreeDepth req respond = do
     let path = rawPathInfo req
 
     -- Route API requests to the Servant application
     if C8.pack "/api/" `BS.isPrefixOf` path
-        then serve acvAPI (acvServer database) req respond
+        then serve acvAPI (acvServer database maxTreeDepth) req respond
         else
             -- Route everything else to static files
-            let staticSettings = (defaultWebAppSettings "web/dist")
-                    { ssRedirectToIndex = True
-                    , ssIndices = case toPiece (T.pack "index.html") of
-                        Just piece -> [piece]
-                        Nothing -> []
-                    }
-            in staticApp staticSettings req respond
+            let staticSettings =
+                    (defaultWebAppSettings "web/dist")
+                        { ssRedirectToIndex = True
+                        , ssIndices = case toPiece (T.pack "index.html") of
+                            Just piece -> [piece]
+                            Nothing -> []
+                        }
+             in staticApp staticSettings req respond
