@@ -40,7 +40,7 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         initialActivityId =
-            "e9cf1c28-984f-5d12-a42c-4314d5ea0024"
+            "cfc47a90-26ad-5e47-87d6-16e89be827b1"
     in
     ( { currentTree = Nothing
       , currentActivityId = initialActivityId
@@ -143,7 +143,7 @@ view model =
                 ]
             ]
         , -- Navigation bar
-          div [ class "section" ]
+          div []
             [ div [ class "level" ]
                 [ div [ class "level-left" ]
                     [ div [ class "level-item" ]
@@ -179,7 +179,7 @@ view model =
                 ]
             ]
         , -- Main content
-          div [ class "section" ]
+          div []
             [ case ( model.loading, model.error, model.currentTree ) of
                 ( True, _, _ ) ->
                     div [ class "has-text-centered" ]
@@ -260,4 +260,3 @@ httpErrorToString error =
 
         Http.BadBody body ->
             "Bad body: " ++ body
-
