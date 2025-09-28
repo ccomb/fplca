@@ -41,6 +41,7 @@ executable acv-cli
                      , servant
                      , warp
                      , aeson
+                     , aeson-pretty
                      , wai
                      , wai-cors
                      , wai-app-static
@@ -69,6 +70,10 @@ executable acv-cli
                      , ACV.UnitConversion
                      , ACV.Export.CSV
                      , ACV.Export.ILCD
+                     , ACV.CLI.Types
+                     , ACV.CLI.Parser
+                     , ACV.CLI.Format
+                     , ACV.CLI.Command
                      , EcoSpold.Parser
                      , EcoSpold.Loader
                      , ILCD.Parser

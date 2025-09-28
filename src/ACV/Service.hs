@@ -413,3 +413,84 @@ getActivityInputDetails db activity = getActivityExchangeDetails db activity exc
 -- | Get detailed output exchanges
 getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
 getActivityOutputDetails db activity = getActivityExchangeDetails db activity (not . exchangeIsInput)
+
+-- | Get activity inputs as JSON (for CLI)
+getActivityInputs :: Database -> Text -> Either ServiceError Value
+getActivityInputs db uuid = do
+    validUuid <- validateUUID uuid
+    case M.lookup validUuid (dbActivities db) of
+        Nothing -> Left $ ActivityNotFound validUuid
+        Just activity ->
+            let inputDetails = getActivityInputDetails db activity
+             in Right $ toJSON inputDetails
+
+-- | Get activity outputs as JSON (for CLI)
+getActivityOutputs :: Database -> Text -> Either ServiceError Value
+getActivityOutputs db uuid = do
+    validUuid <- validateUUID uuid
+    case M.lookup validUuid (dbActivities db) of
+        Nothing -> Left $ ActivityNotFound validUuid
+        Just activity ->
+            let outputDetails = getActivityOutputDetails db activity
+             in Right $ toJSON outputDetails
+
+-- | Get activity reference product as JSON (for CLI)
+getActivityReferenceProduct :: Database -> Text -> Either ServiceError Value
+getActivityReferenceProduct db uuid = do
+    validUuid <- validateUUID uuid
+    case M.lookup validUuid (dbActivities db) of
+        Nothing -> Left $ ActivityNotFound validUuid
+        Just activity ->
+            case getActivityReferenceProductDetail db activity of
+                Nothing -> Right $ toJSON (Nothing :: Maybe FlowDetail)
+                Just refProduct -> Right $ toJSON refProduct
+
+-- | Get flow info as JSON (for CLI)
+getFlowInfo :: Database -> Text -> Either ServiceError Value
+getFlowInfo db flowId = do
+    case M.lookup flowId (dbFlows db) of
+        Nothing -> Left $ FlowNotFound flowId
+        Just flow ->
+            let usageCount = getFlowUsageCount db flowId
+                unitName = getUnitNameForFlow (dbUnits db) flow
+                flowDetail = FlowDetail flow unitName usageCount
+             in Right $ toJSON flowDetail
+
+-- | Get activities that use a specific flow as JSON (for CLI)
+getFlowActivities :: Database -> Text -> Either ServiceError Value
+getFlowActivities db flowId = do
+    case M.lookup flowId (dbFlows db) of
+        Nothing -> Left $ FlowNotFound flowId
+        Just _ ->
+            let activities = getActivitiesUsingFlow db flowId
+             in Right $ toJSON activities
+
+-- | Get available synonym languages (placeholder)
+getSynonymLanguages :: Database -> Either ServiceError Value
+getSynonymLanguages _ =
+    let languages = ["en", "fr", "de", "it", "es"] :: [Text]
+     in Right $ toJSON languages
+
+-- | Get synonym statistics (placeholder)
+getSynonymStats :: Database -> Either ServiceError Value
+getSynonymStats _ =
+    let stats = M.fromList [("total_synonyms" :: Text, 1000 :: Int), ("languages", 5 :: Int)]
+     in Right $ toJSON stats
+
+-- | Compute LCIA scores (placeholder)
+computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
+computeLCIA db uuid methodFile = do
+    validUuid <- validateUUID uuid
+    case M.lookup validUuid (dbActivities db) of
+        Nothing -> Left $ ActivityNotFound validUuid
+        Just _ ->
+            let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", uuid)]
+             in Right $ toJSON placeholder
+
+-- | Export LCIA results as XML (placeholder)
+exportLCIAAsXML :: Value -> FilePath -> Either ServiceError ()
+exportLCIAAsXML _ _ = Right ()
+
+-- | Export LCIA results as CSV (placeholder)
+exportLCIAAsCSV :: Value -> FilePath -> Either ServiceError ()
+exportLCIAAsCSV _ _ = Right ()

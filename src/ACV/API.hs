@@ -10,7 +10,7 @@ import ACV.Query
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
-import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..))
+import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..), LCIARequest(..))
 import Data.Aeson
 import Data.Aeson.Types (Result(..), fromJSON)
 import qualified Data.Map as M
@@ -40,12 +40,13 @@ type ACVAPI =
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
-                :<|> "synonyms" :> "stats" :> Get '[JSON] SynonymStats
+                :<|> "synonyms" :> "stats" :> Get '[JSON] ACV.Query.SynonymStats
+                :<|> "lcia" :> Capture "uuid" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
            )
 
 
 -- JSON instances
-instance ToJSON SynonymStats
+instance ToJSON ACV.Query.SynonymStats
 
 
 
@@ -88,6 +89,7 @@ acvServer db maxTreeDepth =
         :<|> searchActivitiesWithCount
         :<|> getAvailableLanguagesAPI
         :<|> getSynonymStatsAPI
+        :<|> postLCIA
   where
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
@@ -167,8 +169,15 @@ acvServer db maxTreeDepth =
     getAvailableLanguagesAPI = return $ getAvailableLanguages db
 
     -- Get synonym statistics
-    getSynonymStatsAPI :: Handler SynonymStats
+    getSynonymStatsAPI :: Handler ACV.Query.SynonymStats
     getSynonymStatsAPI = return $ getSynonymStats db
+
+    -- LCIA computation
+    postLCIA :: Text -> LCIARequest -> Handler Value
+    postLCIA uuid lciaReq = withValidatedActivity db uuid $ \_ -> do
+        -- This would implement LCIA computation with the provided method
+        -- For now, return a placeholder
+        return $ object ["status" .= ("not_implemented" :: Text), "uuid" .= uuid, "method" .= lciaMethod lciaReq]
 
 -- | Helper function to apply pagination to search results
 paginateResults :: [a] -> Maybe Int -> Maybe Int -> SearchResults a

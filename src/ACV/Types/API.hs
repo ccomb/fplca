@@ -104,7 +104,7 @@ data ExportNode = ExportNode
     deriving (Generic)
 
 data NodeType = ActivityNode | LoopNode
-    deriving (Eq, Generic)
+    deriving (Eq, Show, Generic)
 
 data TreeEdge = TreeEdge
     { teFrom :: UUID
@@ -133,7 +133,23 @@ data FlowSummary = FlowSummary
 
 -- | Role of a flow in a specific activity context
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
-    deriving (Generic)
+    deriving (Show, Generic)
+
+-- | Synonym system statistics
+data SynonymStats = SynonymStats
+    { ssLanguageCount :: Int
+    , ssTotalSynonyms :: Int
+    , ssFlowsCovered :: Int
+    , ssActivitiesCovered :: Int
+    }
+    deriving (Show, Generic)
+
+-- | LCIA computation request
+data LCIARequest = LCIARequest
+    { lciaMethod :: Text -- Method file path or content
+    , lciaFormat :: Maybe Text -- Optional format specification
+    }
+    deriving (Show, Generic)
 
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
@@ -227,6 +243,7 @@ instance ToJSON NodeType
 instance ToJSON TreeEdge
 instance ToJSON FlowInfo
 instance ToJSON FlowRole
+instance ToJSON SynonymStats
 instance ToJSON ExchangeWithUnit
 instance ToJSON ActivityForAPI
 instance ToJSON ActivityInfo
@@ -248,3 +265,4 @@ instance FromJSON ActivityMetadata
 instance FromJSON ActivityLinks
 instance FromJSON ActivityStats
 instance FromJSON ExchangeWithUnit
+instance FromJSON LCIARequest
