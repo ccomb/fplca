@@ -60,8 +60,6 @@ commandParser = subparser
  <> OA.command "flow" (info (flowParser <**> helper) (progDesc "Query flow information"))
  <> OA.command "activities" (info (searchActivitiesParser <**> helper) (progDesc "Search activities"))
  <> OA.command "flows" (info (searchFlowsParser <**> helper) (progDesc "Search flows"))
- <> OA.command "synonym-languages" (info (pure SynonymLanguages) (progDesc "List available languages"))
- <> OA.command "synonym-stats" (info (pure SynonymStats) (progDesc "Show synonym statistics"))
  <> OA.command "lcia" (info (lciaParser <**> helper) (progDesc "Compute LCIA scores with characterization method"))
   )
 

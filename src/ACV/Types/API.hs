@@ -28,12 +28,13 @@ data ActivitySummary = ActivitySummary
     }
     deriving (Generic)
 
--- | Minimal flow information for search results
+-- | Enhanced flow information for search results (now includes synonyms)
 data FlowSearchResult = FlowSearchResult
     { fsrId :: UUID
     , fsrName :: Text
     , fsrCategory :: Text
     , fsrUnitName :: Text
+    , fsrSynonyms :: M.Map Text [Text]  -- Synonyms by language (converted from Set to List for JSON)
     }
     deriving (Generic)
 
@@ -135,14 +136,7 @@ data FlowSummary = FlowSummary
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
     deriving (Show, Generic)
 
--- | Synonym system statistics
-data SynonymStats = SynonymStats
-    { ssLanguageCount :: Int
-    , ssTotalSynonyms :: Int
-    , ssFlowsCovered :: Int
-    , ssActivitiesCovered :: Int
-    }
-    deriving (Show, Generic)
+-- Synonym types removed - synonyms are now included directly in flow responses
 
 -- | LCIA computation request
 data LCIARequest = LCIARequest
@@ -243,7 +237,6 @@ instance ToJSON NodeType
 instance ToJSON TreeEdge
 instance ToJSON FlowInfo
 instance ToJSON FlowRole
-instance ToJSON SynonymStats
 instance ToJSON ExchangeWithUnit
 instance ToJSON ActivityForAPI
 instance ToJSON ActivityInfo

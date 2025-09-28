@@ -5,4 +5,4 @@ weeder.toml
 .hie
 web/dist/
 web/elm-stuff/
-
+.aicodeprep-gui

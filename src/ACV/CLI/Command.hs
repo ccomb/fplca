@@ -7,7 +7,6 @@ import ACV.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLICon
 import ACV.Progress
 import qualified ACV.Service
 import ACV.Types (Database)
-import ACV.Types.API hiding (SynonymStats)
 import Control.Monad (when)
 import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString.Lazy.Char8 as BSL
@@ -82,12 +81,7 @@ executeCommand (CLIConfig globalOpts cmd) database = do
     SearchFlows opts ->
       executeSearchFlowsCommand outputFormat database opts
 
-    -- Synonym commands (now top-level)
-    SynonymLanguages ->
-      executeSynonymLanguagesCommand outputFormat database
-
-    SynonymStats ->
-      executeSynonymStatsCommand outputFormat database
+    -- No synonyms command - synonyms are included in flow responses
 
     -- LCIA computation
     LCIA uuid lciaOpts ->
@@ -220,6 +214,7 @@ executeLCIACommand fmt database uuid opts = do
             Left err -> ACV.Progress.reportError $ "CSV export failed: " ++ show err
             Right _ -> reportProgress Info $ "Results exported to CSV: " ++ csvPath
         Nothing -> return ()
+
 
 -- | Output result in the specified format
 outputResult :: OutputFormat -> Value -> IO ()

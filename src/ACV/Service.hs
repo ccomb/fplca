@@ -274,7 +274,7 @@ searchFlows db (Just query) langParam limitParam offsetParam =
         total = length allResults
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
-        flowResults = map (\flow -> FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow)) pagedResults
+        flowResults = map (\flow -> FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow))) pagedResults
      in Right $ toJSON $ SearchResults flowResults total offset limit hasMore
 
 -- | Search activities (returns same format as API)

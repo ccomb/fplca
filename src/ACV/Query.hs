@@ -653,3 +653,5 @@ getSynonymStats db =
             , ssLanguageStats = languageStats
             , ssTotalSynonyms = totalSynonyms
             }
+
+-- Comprehensive synonym function removed - synonyms now included directly in flow responses

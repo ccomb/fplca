@@ -148,7 +148,8 @@ formatFlowSearchResultCSV result =
   T.unpack (fsrId result) ++ "," ++
   escapeCSV (fsrName result) ++ "," ++
   T.unpack (fsrCategory result) ++ "," ++
-  T.unpack (fsrUnitName result)
+  T.unpack (fsrUnitName result) ++ "," ++
+  "\"" ++ show (fsrSynonyms result) ++ "\""  -- JSON-encoded synonyms in CSV
 
 -- | Format FlowSummaries as CSV
 formatFlowSummariesCSV :: [FlowSummary] -> String

@@ -39,8 +39,6 @@ type ACVAPI =
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
-                :<|> "synonyms" :> "languages" :> Get '[JSON] [Text]
-                :<|> "synonyms" :> "stats" :> Get '[JSON] ACV.Query.SynonymStats
                 :<|> "lcia" :> Capture "uuid" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
            )
 
@@ -87,8 +85,6 @@ acvServer db maxTreeDepth =
         :<|> getFlowActivities
         :<|> searchFlows
         :<|> searchActivitiesWithCount
-        :<|> getAvailableLanguagesAPI
-        :<|> getSynonymStatsAPI
         :<|> postLCIA
   where
     -- Core activity endpoint - streamlined data
@@ -164,14 +160,6 @@ acvServer db maxTreeDepth =
         return $ paginateResults activitySummaries limitParam offsetParam
 
 
-    -- Get available languages
-    getAvailableLanguagesAPI :: Handler [Text]
-    getAvailableLanguagesAPI = return $ getAvailableLanguages db
-
-    -- Get synonym statistics
-    getSynonymStatsAPI :: Handler ACV.Query.SynonymStats
-    getSynonymStatsAPI = return $ getSynonymStats db
-
     -- LCIA computation
     postLCIA :: Text -> LCIARequest -> Handler Value
     postLCIA uuid lciaReq = withValidatedActivity db uuid $ \_ -> do
@@ -196,7 +184,7 @@ searchFlowsInternal db (Just query) langParam limitParam offsetParam = do
     let flows = case langParam of
             Nothing -> findFlowsBySynonym db query
             Just lang -> findFlowsBySynonymInLanguage db lang query
-        flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) | flow <- flows]
+        flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
     return $ paginateResults flowSearchResults limitParam offsetParam
 
 -- | Proxy for the API

@@ -44,9 +44,7 @@ data Command =
     -- Search commands promoted to top-level
   | SearchActivities SearchActivitiesOptions   -- Search activities
   | SearchFlows SearchFlowsOptions             -- Search flows
-    -- Other commands
-  | SynonymLanguages                       -- Available languages
-  | SynonymStats                          -- Synonym statistics
+    -- No separate synonyms command - synonyms are included in flow responses
   | LCIA Text LCIAOptions                 -- LCIA computation
   deriving (Eq, Show, Generic)
 
