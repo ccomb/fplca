@@ -29,6 +29,12 @@ globalOptionsParser = do
    <> help "Output format: json|csv|table|pretty (default depends on command)"
     )
 
+  jsonPath <- optional $ (T.pack <$> strOption
+    ( long "jsonpath"
+   <> metavar "PATH"
+   <> help "JSONPath for CSV extraction (required with --format csv). Examples: 'srResults', 'piActivity.pfaExchanges'"
+    ))
+
   treeDepth <- option auto
     ( long "tree-depth"
    <> value 2

@@ -18,6 +18,7 @@ data OutputFormat =
 data GlobalOptions = GlobalOptions
   { dataDir :: Maybe FilePath     -- Data directory (--data), overrides env and default
   , format :: Maybe OutputFormat  -- Output format (--format)
+  , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)
   , treeDepth :: Int             -- Maximum tree depth (--tree-depth)
   , noCache :: Bool              -- Disable caching (--no-cache)
   } deriving (Eq, Show, Generic)
@@ -27,6 +28,7 @@ defaultGlobalOptions :: GlobalOptions
 defaultGlobalOptions = GlobalOptions
   { dataDir = Nothing
   , format = Nothing
+  , jsonPath = Nothing
   , treeDepth = 2
   , noCache = False
   }

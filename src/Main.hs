@@ -2,7 +2,7 @@
 
 module Main where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, unless)
 import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -10,6 +10,7 @@ import qualified Data.Text as T
 import GHC.Conc (getNumCapabilities)
 import Options.Applicative
 import System.Environment (lookupEnv)
+import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
@@ -40,6 +41,9 @@ main :: IO ()
 main = do
   -- Parse CLI arguments using new parser
   cliConfig <- execParser cliParserInfo
+
+  -- Validate CLI configuration
+  validateCLIConfig cliConfig
 
   -- Resolve data directory with priority: --data > $DATADIR > current directory
   dataDirectory <- resolveDataDirectory (globalOptions cliConfig)
@@ -254,3 +258,21 @@ createCombinedApp database maxTreeDepth req respond = do
                   Nothing -> []
               }
        in staticApp staticSettings req respond
+
+-- | Validate CLI configuration for consistency
+validateCLIConfig :: CLIConfig -> IO ()
+validateCLIConfig (CLIConfig globalOpts _) = do
+  -- CSV format requires jsonPath
+  case (format globalOpts, jsonPath globalOpts) of
+    (Just CSV, Nothing) -> do
+      hPutStrLn stderr "--format csv requires --jsonpath. Use --jsonpath to specify which data to extract"
+      hPutStrLn stderr "Examples:"
+      hPutStrLn stderr "  --jsonpath 'srResults' (for search results)"
+      hPutStrLn stderr "  --jsonpath 'piActivity.pfaExchanges' (for activity exchanges)"
+      hPutStrLn stderr "  --jsonpath 'teEdges' (for tree edges)"
+      hPutStrLn stderr "  --jsonpath 'ieFlows' (for inventory flows)"
+      exitFailure
+    (Just fmt, Just _) | fmt /= CSV -> do
+      hPutStrLn stderr "--jsonpath can only be used with --format csv"
+      exitFailure
+    _ -> pure ()

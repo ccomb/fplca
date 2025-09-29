@@ -10,6 +10,7 @@ import ACV.Types (Database)
 import Control.Monad (when)
 import Data.Aeson (Value, toJSON)
 import qualified Data.ByteString.Lazy.Char8 as BSL
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Network.Wai.Handler.Warp (run)
@@ -48,6 +49,7 @@ resolveOutputFormat globalOpts cmd = case format globalOpts of
 executeCommand :: CLIConfig -> Database -> IO ()
 executeCommand (CLIConfig globalOpts cmd) database = do
   let outputFormat = resolveOutputFormat globalOpts cmd
+      jsonPathOpt = jsonPath globalOpts
 
   case cmd of
     -- Server mode - start web server
@@ -57,137 +59,124 @@ executeCommand (CLIConfig globalOpts cmd) database = do
 
     -- Core resource queries
     Activity uuid ->
-      executeActivityCommand outputFormat database uuid
+      executeActivityCommand outputFormat jsonPathOpt database uuid
 
     -- Tree and inventory (now top-level)
     Tree uuid treeOpts -> do
       let depth = maybe (treeDepth globalOpts) id (treeDepthOverride treeOpts)
-      executeActivityTreeCommand outputFormat database uuid depth
+      executeActivityTreeCommand outputFormat jsonPathOpt database uuid depth
 
     Inventory uuid ->
-      executeActivityInventoryCommand outputFormat database uuid
+      executeActivityInventoryCommand outputFormat jsonPathOpt database uuid
 
     -- Flow commands
     Flow flowId Nothing ->
-      executeFlowCommand outputFormat database flowId
+      executeFlowCommand outputFormat jsonPathOpt database flowId
 
     Flow flowId (Just FlowActivities) ->
-      executeFlowActivitiesCommand outputFormat database flowId
+      executeFlowActivitiesCommand outputFormat jsonPathOpt database flowId
 
     -- Search commands (now top-level)
     SearchActivities opts ->
-      executeSearchActivitiesCommand outputFormat database opts
+      executeSearchActivitiesCommand outputFormat jsonPathOpt database opts
 
     SearchFlows opts ->
-      executeSearchFlowsCommand outputFormat database opts
+      executeSearchFlowsCommand outputFormat jsonPathOpt database opts
 
     -- No synonyms command - synonyms are included in flow responses
 
     -- LCIA computation
     LCIA uuid lciaOpts ->
-      executeLCIACommand outputFormat database uuid lciaOpts
+      executeLCIACommand outputFormat jsonPathOpt database uuid lciaOpts
 
 -- | Execute activity info command
-executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityCommand fmt database uuid = do
+executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityInfo database uuid of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity flows command
-executeActivityFlowsCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityFlowsCommand fmt database uuid = do
+executeActivityFlowsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityFlowsCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityFlows database uuid of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity inputs command
-executeActivityInputsCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityInputsCommand fmt database uuid = do
+executeActivityInputsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityInputsCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityInputs database uuid of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity outputs command
-executeActivityOutputsCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityOutputsCommand fmt database uuid = do
+executeActivityOutputsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityOutputsCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityOutputs database uuid of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity reference product command
-executeActivityReferenceProductCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityReferenceProductCommand fmt database uuid = do
+executeActivityReferenceProductCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityReferenceProductCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityReferenceProduct database uuid of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity tree command
-executeActivityTreeCommand :: OutputFormat -> Database -> T.Text -> Int -> IO ()
-executeActivityTreeCommand fmt database uuid depth = do
+executeActivityTreeCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> Int -> IO ()
+executeActivityTreeCommand fmt jsonPathOpt database uuid depth = do
   case ACV.Service.getActivityTree database uuid depth of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity inventory command
-executeActivityInventoryCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeActivityInventoryCommand fmt database uuid = do
+executeActivityInventoryCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeActivityInventoryCommand fmt jsonPathOpt database uuid = do
   reportProgress Info $ "Computing inventory for activity: " ++ T.unpack uuid
   case ACV.Service.getActivityInventory database uuid of
     Left err -> reportServiceError err
     Right result -> do
       reportProgress Info "Inventory computation completed"
-      outputResult fmt result
+      outputResult fmt jsonPathOpt result
 
 -- | Execute flow info command
-executeFlowCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeFlowCommand fmt database flowId = do
+executeFlowCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeFlowCommand fmt jsonPathOpt database flowId = do
   case ACV.Service.getFlowInfo database flowId of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute flow activities command
-executeFlowActivitiesCommand :: OutputFormat -> Database -> T.Text -> IO ()
-executeFlowActivitiesCommand fmt database flowId = do
+executeFlowActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
+executeFlowActivitiesCommand fmt jsonPathOpt database flowId = do
   case ACV.Service.getFlowActivities database flowId of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute search activities command
-executeSearchActivitiesCommand :: OutputFormat -> Database -> SearchActivitiesOptions -> IO ()
-executeSearchActivitiesCommand fmt database opts = do
+executeSearchActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> SearchActivitiesOptions -> IO ()
+executeSearchActivitiesCommand fmt jsonPathOpt database opts = do
   case ACV.Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
          (searchLimit opts) (searchOffset opts) of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute search flows command
-executeSearchFlowsCommand :: OutputFormat -> Database -> SearchFlowsOptions -> IO ()
-executeSearchFlowsCommand fmt database opts = do
+executeSearchFlowsCommand :: OutputFormat -> Maybe Text -> Database -> SearchFlowsOptions -> IO ()
+executeSearchFlowsCommand fmt jsonPathOpt database opts = do
   case ACV.Service.searchFlows database
          (searchQuery opts) (searchLang opts)
          (searchFlowsLimit opts) (searchFlowsOffset opts) of
     Left err -> reportServiceError err
-    Right result -> outputResult fmt result
+    Right result -> outputResult fmt jsonPathOpt result
 
--- | Execute synonym languages command
-executeSynonymLanguagesCommand :: OutputFormat -> Database -> IO ()
-executeSynonymLanguagesCommand fmt database = do
-  case ACV.Service.getSynonymLanguages database of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt result
-
--- | Execute synonym stats command
-executeSynonymStatsCommand :: OutputFormat -> Database -> IO ()
-executeSynonymStatsCommand fmt database = do
-  case ACV.Service.getSynonymStats database of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt result
 
 -- | Execute LCIA command with method file
-executeLCIACommand :: OutputFormat -> Database -> T.Text -> LCIAOptions -> IO ()
-executeLCIACommand fmt database uuid opts = do
+executeLCIACommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> LCIAOptions -> IO ()
+executeLCIACommand fmt jsonPathOpt database uuid opts = do
   reportProgress Info $ "Computing LCIA for activity: " ++ T.unpack uuid
   reportProgress Info $ "Using method file: " ++ ACV.CLI.Types.lciaMethod opts
 
@@ -197,7 +186,7 @@ executeLCIACommand fmt database uuid opts = do
       reportProgress Info "LCIA computation completed"
 
       -- Output to console in requested format
-      outputResult fmt result
+      outputResult fmt jsonPathOpt result
 
       -- Export to XML if requested
       case lciaOutput opts of
@@ -217,9 +206,9 @@ executeLCIACommand fmt database uuid opts = do
 
 
 -- | Output result in the specified format
-outputResult :: OutputFormat -> Value -> IO ()
-outputResult fmt result = do
-  BSL.putStrLn $ formatOutput fmt result
+outputResult :: OutputFormat -> Maybe Text -> Value -> IO ()
+outputResult fmt jsonPathOpt result = do
+  BSL.putStrLn $ formatOutputWithPath fmt jsonPathOpt result
 
 -- | Report service errors to stderr and exit
 reportServiceError :: ACV.Service.ServiceError -> IO ()
