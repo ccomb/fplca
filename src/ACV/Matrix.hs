@@ -62,6 +62,7 @@ import Numerical.PETSc.Internal
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
 
+
 -- | Aggregate duplicate matrix entries by summing values for same (i,j) coordinates
 aggregateMatrixEntries :: [(Int, Int, Double)] -> [(Int, Int, Double)]
 aggregateMatrixEntries entries =
