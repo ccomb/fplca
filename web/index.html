@@ -53,6 +53,121 @@
         #arrowhead {
             fill: #666;
         }
+
+        /* Main layout */
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Left Menu */
+        .left-menu {
+            width: 250px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+
+        .menu-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            text-align: center;
+        }
+
+        .menu-items {
+            padding: 1rem 0;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+        }
+
+        .menu-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            text-decoration: none;
+        }
+
+        .menu-item.is-active {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border-right: 3px solid white;
+        }
+
+        .menu-item .icon {
+            margin-right: 0.75rem;
+            width: 1.25rem;
+        }
+
+        .menu-label {
+            font-weight: 500;
+            font-size: 0.95rem;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            overflow-x: auto;
+            background: #f8f9fa;
+        }
+
+        /* Activities Page */
+        .activities-page {
+            min-height: 100vh;
+        }
+
+        .activities-page .section:first-child {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-bottom: 0;
+        }
+
+        .activities-page .title,
+        .activities-page .subtitle {
+            color: white;
+        }
+
+        .activities-page .subtitle {
+            opacity: 0.9;
+        }
+
+        /* Activity Cards */
+        .card.is-clickable {
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .card.is-clickable:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        /* Graph Page */
+        .graph-page {
+            min-height: 100vh;
+        }
+
+        /* Tree visualization enhancements */
+        .node-circle {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .node-circle:hover {
+            stroke-width: 3px;
+            filter: brightness(1.1);
+        }
     </style>
 </head>
 <body>

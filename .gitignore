@@ -6,3 +6,4 @@ weeder.toml
 web/dist/
 web/elm-stuff/
 .aicodeprep-gui
+web/main.js

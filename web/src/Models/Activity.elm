@@ -5,12 +5,16 @@ module Models.Activity exposing
     , FlowInfo
     , NodeType(..)
     , TreeMetadata
+    , ActivitySummary
+    , SearchResults
     , activityTreeDecoder
     , activityNodeDecoder
     , activityEdgeDecoder
     , flowInfoDecoder
     , nodeTypeDecoder
     , treeMetadataDecoder
+    , activitySummaryDecoder
+    , searchResultsDecoder
     )
 
 import Dict exposing (Dict)
@@ -69,6 +73,21 @@ type alias FlowInfo =
     , category : String
     }
 
+
+type alias ActivitySummary =
+    { id : String
+    , name : String
+    , location : String
+    }
+
+
+type alias SearchResults a =
+    { results : List a
+    , totalCount : Int
+    , offset : Int
+    , limit : Int
+    , hasMore : Bool
+    }
 
 
 -- JSON Decoders
@@ -141,3 +160,21 @@ flowInfoDecoder =
         |> required "fiId" Decode.string
         |> required "fiName" Decode.string
         |> required "fiCategory" Decode.string
+
+
+activitySummaryDecoder : Decoder ActivitySummary
+activitySummaryDecoder =
+    Decode.succeed ActivitySummary
+        |> required "prsId" Decode.string
+        |> required "prsName" Decode.string
+        |> required "prsLocation" Decode.string
+
+
+searchResultsDecoder : Decoder a -> Decoder (SearchResults a)
+searchResultsDecoder itemDecoder =
+    Decode.succeed SearchResults
+        |> required "srResults" (Decode.list itemDecoder)
+        |> required "srTotal" Decode.int
+        |> required "srOffset" Decode.int
+        |> required "srLimit" Decode.int
+        |> required "srHasMore" Decode.bool

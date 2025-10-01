@@ -6,8 +6,12 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityTree, activityTreeDecoder)
+import Url.Builder
+import Models.Activity exposing (ActivityTree, ActivitySummary, SearchResults, activityTreeDecoder, activitySummaryDecoder, searchResultsDecoder)
+import Models.Page exposing (Page(..))
 import Views.TreeView as TreeView
+import Views.LeftMenu as LeftMenu
+import Views.ActivitiesView as ActivitiesView
 
 
 main : Program () Model Msg
@@ -21,11 +25,16 @@ main =
 
 
 type alias Model =
-    { currentTree : Maybe ActivityTree
+    { currentPage : Page
+    , currentTree : Maybe ActivityTree
     , currentActivityId : String
     , loading : Bool
     , error : Maybe String
     , navigationHistory : List String
+    , activitiesSearchQuery : String
+    , searchResults : Maybe (SearchResults ActivitySummary)
+    , searchLoading : Bool
+    , hoveredNode : Maybe String
     }
 
 
@@ -34,6 +43,12 @@ type Msg
     | ActivityLoaded (Result Http.Error ActivityTree)
     | NavigateToParent
     | NodeClicked String
+    | NavigateToPage Page
+    | UpdateSearchQuery String
+    | SearchActivities String
+    | ActivitiesSearchResults (Result Http.Error (SearchResults ActivitySummary))
+    | SelectActivity String
+    | NodeHovered (Maybe String)
 
 
 init : () -> ( Model, Cmd Msg )
@@ -42,11 +57,16 @@ init _ =
         initialActivityId =
             "cfc47a90-26ad-5e47-87d6-16e89be827b1"
     in
-    ( { currentTree = Nothing
+    ( { currentPage = GraphPage
+      , currentTree = Nothing
       , currentActivityId = initialActivityId
       , loading = True
       , error = Nothing
       , navigationHistory = []
+      , activitiesSearchQuery = ""
+      , searchResults = Nothing
+      , searchLoading = False
+      , hoveredNode = Nothing
       }
     , loadActivityTree initialActivityId
     )
@@ -125,6 +145,52 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        NavigateToPage page ->
+            ( { model | currentPage = page }, Cmd.none )
+
+        UpdateSearchQuery query ->
+            ( { model | activitiesSearchQuery = query }
+            , if String.length query >= 2 then
+                searchActivities query
+              else
+                Cmd.none
+            )
+
+        SearchActivities query ->
+            ( { model | searchLoading = True, error = Nothing }
+            , searchActivities query
+            )
+
+        ActivitiesSearchResults (Ok results) ->
+            ( { model
+                | searchResults = Just results
+                , searchLoading = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        ActivitiesSearchResults (Err error) ->
+            ( { model
+                | searchResults = Nothing
+                , searchLoading = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        SelectActivity activityId ->
+            ( { model
+                | currentActivityId = activityId
+                , currentPage = GraphPage
+                , navigationHistory = model.currentActivityId :: model.navigationHistory
+              }
+            , loadActivityTree activityId
+            )
+
+        NodeHovered nodeId ->
+            ( { model | hoveredNode = nodeId }, Cmd.none )
+
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
@@ -133,89 +199,131 @@ subscriptions _ =
 
 view : Model -> Html Msg
 view model =
-    div [ class "container is-fluid" ]
-        [ -- Header with Bulma styling
+    div [ class "app-container" ]
+        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage)
+        , div [ class "main-content" ]
+            [ case model.currentPage of
+                ActivitiesPage ->
+                    Html.map
+                        (\msg ->
+                            case msg of
+                                ActivitiesView.UpdateSearchQuery query ->
+                                    UpdateSearchQuery query
+
+                                ActivitiesView.SelectActivity activityId ->
+                                    SelectActivity activityId
+                        )
+                        (ActivitiesView.viewActivitiesPage
+                            model.activitiesSearchQuery
+                            model.searchResults
+                            model.searchLoading
+                            model.error
+                        )
+
+                GraphPage ->
+                    viewGraphPage model
+            ]
+        ]
+
+
+viewGraphPage : Model -> Html Msg
+viewGraphPage model =
+    div [ class "graph-page" ]
+        [ -- Header with navigation
           nav [ class "navbar is-light" ]
             [ div [ class "navbar-brand" ]
                 [ div [ class "navbar-item" ]
-                    [ h1 [ class "title is-4" ] [ text "ACV Engine - Activity Tree Navigator" ]
+                    [ h1 [ class "title is-4" ] [ text "Activity Tree Navigator" ]
                     ]
                 ]
             ]
         , -- Navigation bar
-          div []
-            [ div [ class "level" ]
-                [ div [ class "level-left" ]
-                    [ div [ class "level-item" ]
-                        [ button
-                            [ class "button is-primary"
-                            , onClick NavigateToParent
-                            , disabled (not (canNavigateToParent model))
-                            ]
-                            [ span [ class "icon" ] [ i [ class "fas fa-arrow-up" ] [] ]
-                            , span [] [ text "Parent Activity" ]
+          div [ class "section" ]
+            [ div [ class "container" ]
+                [ div [ class "level" ]
+                    [ div [ class "level-left" ]
+                        [ div [ class "level-item" ]
+                            [ button
+                                [ class "button is-primary"
+                                , onClick NavigateToParent
+                                , disabled (not (canNavigateToParent model))
+                                ]
+                                [ span [ class "icon" ] [ i [ class "fas fa-arrow-up" ] [] ]
+                                , span [] [ text "Parent Activity" ]
+                                ]
                             ]
                         ]
-                    ]
-                , div [ class "level-right" ]
-                    [ div [ class "level-item" ]
-                        [ case model.currentTree of
-                            Just tree ->
-                                case Dict.get model.currentActivityId tree.nodes of
-                                    Just currentNode ->
-                                        div [ class "tags has-addons" ]
-                                            [ span [ class "tag is-dark" ] [ text "Current:" ]
-                                            , span [ class "tag is-info" ] [ text currentNode.name ]
-                                            , span [ class "tag is-light" ] [ text currentNode.location ]
-                                            ]
+                    , div [ class "level-right" ]
+                        [ div [ class "level-item" ]
+                            [ case model.currentTree of
+                                Just tree ->
+                                    case Dict.get model.currentActivityId tree.nodes of
+                                        Just currentNode ->
+                                            div [ class "tags has-addons" ]
+                                                [ span [ class "tag is-dark" ] [ text "Current:" ]
+                                                , span [ class "tag is-info" ] [ text currentNode.name ]
+                                                , span [ class "tag is-light" ] [ text currentNode.location ]
+                                                ]
 
-                                    Nothing ->
-                                        span [ class "tag is-warning" ] [ text "Unknown activity" ]
+                                        Nothing ->
+                                            span [ class "tag is-warning" ] [ text "Unknown activity" ]
 
-                            Nothing ->
-                                span [ class "tag is-light" ] [ text "Loading..." ]
+                                Nothing ->
+                                    span [ class "tag is-light" ] [ text "Loading..." ]
+                            ]
                         ]
                     ]
                 ]
             ]
         , -- Main content
-          div []
-            [ case ( model.loading, model.error, model.currentTree ) of
-                ( True, _, _ ) ->
-                    div [ class "has-text-centered" ]
-                        [ div [ class "is-size-3" ] [ text "Loading..." ]
-                        , progress [ class "progress is-primary", attribute "max" "100" ] []
-                        ]
+          div [ class "section" ]
+            [ div [ class "container is-fluid" ]
+                [ case ( model.loading, model.error, model.currentTree ) of
+                    ( True, _, _ ) ->
+                        div [ class "has-text-centered" ]
+                            [ div [ class "is-size-3" ] [ text "Loading..." ]
+                            , progress [ class "progress is-primary", attribute "max" "100" ] []
+                            ]
 
-                ( _, Just error, _ ) ->
-                    div [ class "notification is-danger" ]
-                        [ button [ class "delete", onClick (LoadActivity model.currentActivityId) ] []
-                        , strong [] [ text "Error: " ]
-                        , text error
-                        ]
+                    ( _, Just error, _ ) ->
+                        div [ class "notification is-danger" ]
+                            [ button [ class "delete", onClick (LoadActivity model.currentActivityId) ] []
+                            , strong [] [ text "Error: " ]
+                            , text error
+                            ]
 
-                ( _, _, Just tree ) ->
-                    div []
-                        [ -- Tree statistics
-                          div [ class "notification is-info is-light" ]
-                            [ div [ class "columns" ]
-                                [ div [ class "column" ]
-                                    [ text ("Total nodes: " ++ String.fromInt tree.tree.totalNodes) ]
-                                , div [ class "column" ]
-                                    [ text ("Max depth: " ++ String.fromInt tree.tree.maxDepth) ]
-                                , div [ class "column" ]
-                                    [ text ("Expandable: " ++ String.fromInt tree.tree.expandableNodes) ]
+                    ( _, _, Just tree ) ->
+                        div []
+                            [ -- Tree statistics
+                              div [ class "notification is-info is-light" ]
+                                [ div [ class "columns" ]
+                                    [ div [ class "column" ]
+                                        [ text ("Total nodes: " ++ String.fromInt tree.tree.totalNodes) ]
+                                    , div [ class "column" ]
+                                        [ text ("Max depth: " ++ String.fromInt tree.tree.maxDepth) ]
+                                    , div [ class "column" ]
+                                        [ text ("Expandable: " ++ String.fromInt tree.tree.expandableNodes) ]
+                                    ]
+                                ]
+                            , -- SVG Tree visualization
+                              div [ class "box" ]
+                                [ Html.map
+                                    (\msg ->
+                                        case msg of
+                                            TreeView.NodeClicked nodeId ->
+                                                NodeClicked nodeId
+
+                                            TreeView.NodeHovered maybeNodeId ->
+                                                NodeHovered maybeNodeId
+                                    )
+                                    (TreeView.viewTree tree model.hoveredNode)
                                 ]
                             ]
-                        , -- SVG Tree visualization
-                          div [ class "box" ]
-                            [ Html.map NodeClicked (TreeView.viewTree tree)
-                            ]
-                        ]
 
-                ( _, _, Nothing ) ->
-                    div [ class "has-text-centered" ]
-                        [ text "No data to display" ]
+                    ( _, _, Nothing ) ->
+                        div [ class "has-text-centered" ]
+                            [ text "No data to display" ]
+                ]
             ]
         ]
 
@@ -240,6 +348,18 @@ loadActivityTree activityId =
     Http.get
         { url = "/api/v1/activity/" ++ activityId ++ "/tree"
         , expect = Http.expectJson ActivityLoaded activityTreeDecoder
+        }
+
+
+searchActivities : String -> Cmd Msg
+searchActivities query =
+    Http.get
+        { url = Url.Builder.absolute
+            [ "api", "v1", "search", "activities" ]
+            [ Url.Builder.string "name" query
+            , Url.Builder.int "limit" 20
+            ]
+        , expect = Http.expectJson ActivitiesSearchResults (searchResultsDecoder activitySummaryDecoder)
         }
 
 
