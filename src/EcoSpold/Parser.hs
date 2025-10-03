@@ -10,6 +10,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.FilePath (takeBaseName)
 import Text.XML
 import Text.XML.Cursor
 
@@ -71,13 +72,20 @@ streamParseActivityAndFlowsFromFile path = do
     -- Read and parse with strict evaluation
     doc <- Text.XML.readFile def path
     let !cursor = fromDocument doc
-    let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor
+    -- Extract ProcessId from filename (activity_uuid_product_uuid.spold)
+    let filenameBase = T.pack $ takeBaseName path
+    let !processId = case parseProcessId filenameBase of
+            Just pid -> pid
+            Nothing -> error $ "Invalid filename format for ProcessId: " ++ path ++ " (expected: activity_uuid_product_uuid.spold)"
+    let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor processId
+    -- Apply cut-off strategy
+    let !procWithCutoff = applyCutoffStrategy proc
     -- Force full evaluation before returning
-    proc `seq` flows `seq` units `seq` return (proc, flows, units)
+    procWithCutoff `seq` flows `seq` units `seq` return (procWithCutoff, flows, units)
 
 -- | Optimized version of parseActivityWithFlowsAndUnits with better memory management
-parseActivityWithFlowsAndUnitsOptimized :: Cursor -> (Activity, [Flow], [Unit])
-parseActivityWithFlowsAndUnitsOptimized cursor =
+parseActivityWithFlowsAndUnitsOptimized :: Cursor -> ProcessId -> (Activity, [Flow], [Unit])
+parseActivityWithFlowsAndUnitsOptimized cursor processId =
     let !name =
             headOrFail "Missing <activityName>" $
                 cursor $// element (nsElement "activityName") &/ content
@@ -86,10 +94,6 @@ parseActivityWithFlowsAndUnitsOptimized cursor =
                 headOrFail "Missing geography shortname" $
                     cursor $// element (nsElement "shortname") &/ content
             (x : _) -> x
-        !uuid =
-            headOrFail "Missing activity@id or activity@activityId" $
-                (cursor $// element (nsElement "activity") >=> attribute "id")
-                    <> (cursor $// element (nsElement "activity") >=> attribute "activityId")
 
         -- Activity both types of exchanges
         !interNodes = cursor $// element (nsElement "intermediateExchange")
@@ -111,7 +115,12 @@ parseActivityWithFlowsAndUnitsOptimized cursor =
             [] -> "unit" -- Default fallback
             (unit : _) -> unit
 
-        !activity = Activity uuid name description synonyms classifications location refUnit exchs
+        -- Use XML activity UUID for backward compatibility, store ProcessId separately
+        !xmlActivityUUID =
+            headOrFail "Missing activity@id or activity@activityId" $
+                (cursor $// element (nsElement "activity") >=> attribute "id")
+                    <> (cursor $// element (nsElement "activity") >=> attribute "activityId")
+        !activity = Activity xmlActivityUUID (Just processId) name description synonyms classifications location refUnit exchs
      in (activity, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation
@@ -143,12 +152,18 @@ parseExchangeWithFlowOptimized cur =
         !ftype = Technosphere
 
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
-        !activityLinkId = getAttr cur "activityLinkId"
+        !activityLinkIdText = getAttr cur "activityLinkId"
 
+        -- For now, create ProcessId with same UUID for both activity and product
+        -- TODO: Need to resolve actual product UUID from flow reference
+        !processLinkId =
+            if T.null activityLinkIdText
+                then Nothing
+                else Just $ ProcessId activityLinkIdText activityLinkIdText -- Temporary: use same UUID for both
         !synonyms = parseSynonyms cur
         !flow = Flow fid fname "technosphere" unitId ftype synonyms
         !unit = Unit unitId unitName unitName "" -- Use unitName for both name and symbol, empty comment
-        !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkId
+        !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkIdText processLinkId
      in (exchange, flow, unit)
 
 -- | Optimized elementary exchange parsing
@@ -211,3 +226,68 @@ readIndexSafe :: Text -> Int
 readIndexSafe t = case reads (T.unpack t) of
     [(n, "")] -> n
     _ -> 0 -- Default to 0 if parsing fails
+
+{- | Apply cut-off strategy
+1. Remove zero-amount production exchanges (co-products)
+2. Assign single non-zero product as reference product
+3. Ensure single-output process structure
+-}
+applyCutoffStrategy :: Activity -> Activity
+applyCutoffStrategy activity =
+    let filteredExchanges = removeZeroAmountCoproducts (exchanges activity)
+        updatedActivity = activity{exchanges = filteredExchanges}
+        -- CONSERVATIVE: Only apply single reference assignment if no reference products exist
+        finalActivity =
+            if hasReferenceProduct updatedActivity
+                then updatedActivity -- Keep existing reference products
+                else assignSingleProductAsReference updatedActivity
+     in finalActivity
+
+-- | Check if activity has any reference product
+hasReferenceProduct :: Activity -> Bool
+hasReferenceProduct activity = any exchangeIsReference (exchanges activity)
+
+-- | Remove production exchanges with zero amounts
+removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
+removeZeroAmountCoproducts exs = filter keepExchange exs
+  where
+    keepExchange (TechnosphereExchange _ amount _ False True _ _) = amount /= 0.0 -- Keep non-zero production exchanges
+    keepExchange (TechnosphereExchange _ _ _ _ False _ _) = True -- Keep all non-production technosphere exchanges
+    keepExchange (BiosphereExchange _ _ _ _) = True -- Keep all biosphere exchanges
+    keepExchange _ = True -- Keep everything else
+
+-- | Assign single product as reference product
+assignSingleProductAsReference :: Activity -> Activity
+assignSingleProductAsReference activity =
+    let productionExchanges = [ex | ex <- exchanges activity, isProductionExchange ex]
+        nonZeroProduction = [ex | ex <- productionExchanges, exchangeAmount ex /= 0.0]
+     in case nonZeroProduction of
+            [singleProduct] ->
+                -- Update the single product to be reference product
+                let updatedExchanges = map (updateReferenceProduct singleProduct) (exchanges activity)
+                 in activity{exchanges = updatedExchanges}
+            [] -> activity -- No production exchanges, leave as-is
+            _ -> activity -- Multiple production exchanges, leave as-is (shouldn't happen after cutoff)
+
+-- | Check if exchange is production exchange (output, non-reference)
+isProductionExchange :: Exchange -> Bool
+isProductionExchange (TechnosphereExchange _ _ _ False _ _ _) = True -- Output technosphere = production
+isProductionExchange _ = False
+
+-- | Update reference product flag for the specified exchange
+updateReferenceProduct :: Exchange -> Exchange -> Exchange
+updateReferenceProduct target current
+    | exchangeFlowId target == exchangeFlowId current = markAsReference current
+    | otherwise = unmarkAsReference current
+
+-- | Mark exchange as reference product
+markAsReference :: Exchange -> Exchange
+markAsReference (TechnosphereExchange fid amt uid isInput _ linkId procLink) =
+    TechnosphereExchange fid amt uid isInput True linkId procLink
+markAsReference ex = ex -- No change for biosphere exchanges
+
+-- | Unmark exchange as reference product
+unmarkAsReference :: Exchange -> Exchange
+unmarkAsReference (TechnosphereExchange fid amt uid isInput _ linkId procLink) =
+    TechnosphereExchange fid amt uid isInput False linkId procLink
+unmarkAsReference ex = ex -- No change for biosphere exchanges

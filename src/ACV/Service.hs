@@ -20,6 +20,7 @@ import ACV.Progress
 -- | Domain service errors
 data ServiceError
     = InvalidUUID Text
+    | InvalidProcessId Text
     | ActivityNotFound Text
     | FlowNotFound Text
     deriving (Show)
@@ -30,35 +31,61 @@ validateUUID uuidText
     | Just _ <- UUID.fromText uuidText = Right uuidText
     | otherwise = Left $ InvalidUUID $ "Invalid UUID format: " <> uuidText
 
+-- | Parse ProcessId from text (activity_uuid_product_uuid format)
+parseProcessIdFromText :: Text -> Either ServiceError ProcessId
+parseProcessIdFromText text =
+    case parseProcessId text of
+        Just processId -> Right processId
+        Nothing -> Left $ InvalidProcessId $ "Invalid ProcessId format (expected activity_uuid_product_uuid): " <> text
+
+-- | Find activity by ProcessId by searching through all activities
+findActivityByProcessId :: Database -> ProcessId -> Maybe Activity
+findActivityByProcessId db processId =
+    let allActivities = M.elems (dbActivities db)
+        matchingActivities = filter (\activity -> activityProcessId activity == Just processId) allActivities
+    in case matchingActivities of
+        (activity:_) -> Just activity
+        [] -> Nothing
+
+-- | Resolve query input - either UUID or ProcessId format
+resolveActivityQuery :: Database -> Text -> Either ServiceError Activity
+resolveActivityQuery db queryText
+    -- First try as UUID (backward compatibility)
+    | Right validUuid <- validateUUID queryText =
+        case M.lookup validUuid (dbActivities db) of
+            Just activity -> Right activity
+            Nothing -> Left $ ActivityNotFound queryText
+    -- If not a valid UUID, try as ProcessId
+    | Right processId <- parseProcessIdFromText queryText =
+        case findActivityByProcessId db processId of
+            Just activity -> Right activity
+            Nothing -> Left $ ActivityNotFound queryText
+    -- If neither UUID nor ProcessId format, return error
+    | otherwise = Left $ InvalidUUID $ "Query must be either a valid UUID or ProcessId (activity_uuid_product_uuid): " <> queryText
+
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
-getActivityInfo db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            let activityForAPI = convertActivityForAPI db activity
-                metadata = calculateActivityMetadata db activity
-                stats = calculateActivityStats activity
-                links = generateActivityLinks uuid
-                activityInfo =
-                    ActivityInfo
-                        { piActivity = activityForAPI
-                        , piMetadata = metadata
-                        , piStatistics = stats
-                        , piLinks = links
-                        }
-             in Right $ toJSON activityInfo
+getActivityInfo db queryText = do
+    activity <- resolveActivityQuery db queryText
+    let activityForAPI = convertActivityForAPI db activity
+        metadata = calculateActivityMetadata db activity
+        stats = calculateActivityStats activity
+        links = generateActivityLinks (activityId activity)  -- Use actual activity UUID for links
+        activityInfo =
+            ActivityInfo
+                { piActivity = activityForAPI
+                , piMetadata = metadata
+                , piStatistics = stats
+                , piLinks = links
+                }
+     in Right $ toJSON activityInfo
 
 -- | Core inventory calculation logic using matrix-based LCA calculations
 computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
-computeActivityInventory db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just _ ->
-            let !inventory = computeInventoryMatrix db validUuid
-             in Right inventory
+computeActivityInventory db queryText = do
+    activity <- resolveActivityQuery db queryText
+    let !inventory = computeInventoryMatrix db (activityId activity)
+     in Right inventory
 
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
@@ -224,14 +251,12 @@ convertToTreeExport db rootUUID maxDepth tree =
 
 -- | Get activity tree as rich TreeExport with configurable depth
 getActivityTree :: Database -> Text -> Int -> Either ServiceError Value
-getActivityTree db uuid maxDepth = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just _ ->
-            let loopAwareTree = buildLoopAwareTree db validUuid maxDepth
-                treeExport = convertToTreeExport db validUuid maxDepth loopAwareTree
-             in Right $ toJSON treeExport
+getActivityTree db queryText maxDepth = do
+    activity <- resolveActivityQuery db queryText
+    let activityUuid = activityId activity
+        loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
+        treeExport = convertToTreeExport db activityUuid maxDepth loopAwareTree
+     in Right $ toJSON treeExport
 
 -- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int
@@ -255,13 +280,10 @@ getActivityFlowSummaries db activity =
 
 -- | Get activity flows as JSON (for CLI)
 getActivityFlows :: Database -> Text -> Either ServiceError Value
-getActivityFlows db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            let flowSummaries = getActivityFlowSummaries db activity
-             in Right $ toJSON flowSummaries
+getActivityFlows db queryText = do
+    activity <- resolveActivityQuery db queryText
+    let flowSummaries = getActivityFlowSummaries db activity
+     in Right $ toJSON flowSummaries
 
 -- | Search flows (returns same format as API)
 searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
@@ -344,7 +366,7 @@ convertActivityForAPI db activity =
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             targetActivityInfo = case exchange of
-                TechnosphereExchange _ _ _ _ _ linkId ->
+                TechnosphereExchange _ _ _ _ _ linkId _ ->
                     case M.lookup linkId (dbActivities db) of
                         Just targetActivity -> Just (activityName targetActivity)
                         Nothing -> Nothing
@@ -416,34 +438,25 @@ getActivityOutputDetails db activity = getActivityExchangeDetails db activity (n
 
 -- | Get activity inputs as JSON (for CLI)
 getActivityInputs :: Database -> Text -> Either ServiceError Value
-getActivityInputs db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            let inputDetails = getActivityInputDetails db activity
-             in Right $ toJSON inputDetails
+getActivityInputs db queryText = do
+    activity <- resolveActivityQuery db queryText
+    let inputDetails = getActivityInputDetails db activity
+     in Right $ toJSON inputDetails
 
 -- | Get activity outputs as JSON (for CLI)
 getActivityOutputs :: Database -> Text -> Either ServiceError Value
-getActivityOutputs db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            let outputDetails = getActivityOutputDetails db activity
-             in Right $ toJSON outputDetails
+getActivityOutputs db queryText = do
+    activity <- resolveActivityQuery db queryText
+    let outputDetails = getActivityOutputDetails db activity
+     in Right $ toJSON outputDetails
 
 -- | Get activity reference product as JSON (for CLI)
 getActivityReferenceProduct :: Database -> Text -> Either ServiceError Value
-getActivityReferenceProduct db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            case getActivityReferenceProductDetail db activity of
-                Nothing -> Right $ toJSON (Nothing :: Maybe FlowDetail)
-                Just refProduct -> Right $ toJSON refProduct
+getActivityReferenceProduct db queryText = do
+    activity <- resolveActivityQuery db queryText
+    case getActivityReferenceProductDetail db activity of
+        Nothing -> Right $ toJSON (Nothing :: Maybe FlowDetail)
+        Just refProduct -> Right $ toJSON refProduct
 
 -- | Get flow info as JSON (for CLI)
 getFlowInfo :: Database -> Text -> Either ServiceError Value
@@ -479,13 +492,10 @@ getSynonymStats _ =
 
 -- | Compute LCIA scores (placeholder)
 computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
-computeLCIA db uuid methodFile = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just _ ->
-            let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", uuid)]
-             in Right $ toJSON placeholder
+computeLCIA db queryText methodFile = do
+    activity <- resolveActivityQuery db queryText
+    let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", activityId activity)]
+     in Right $ toJSON placeholder
 
 -- | Export LCIA results as XML (placeholder)
 exportLCIAAsXML :: Value -> FilePath -> Either ServiceError ()

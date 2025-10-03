@@ -87,13 +87,13 @@ serverOptionsParser = do
 -- | Activity command parser (basic info only now)
 activityParser :: Parser Command
 activityParser = do
-  uuid <- argument textReader (metavar "UUID" <> help "Activity UUID")
+  uuid <- argument textReader (metavar "ID" <> help "Activity UUID or ProcessId (activity_uuid_product_uuid format)")
   pure $ Activity uuid
 
 -- | Tree command parser (now top-level)
 treeParser :: Parser Command
 treeParser = do
-  uuid <- argument textReader (metavar "UUID" <> help "Activity UUID for tree generation")
+  uuid <- argument textReader (metavar "ID" <> help "Activity UUID or ProcessId (activity_uuid_product_uuid format) for tree generation")
   depthOverride <- optional $ option auto
     ( long "depth"
    <> metavar "DEPTH"
@@ -104,7 +104,7 @@ treeParser = do
 -- | Inventory command parser (now top-level)
 inventoryParser :: Parser Command
 inventoryParser = do
-  uuid <- argument textReader (metavar "UUID" <> help "Activity UUID for inventory computation")
+  uuid <- argument textReader (metavar "ID" <> help "Activity UUID or ProcessId (activity_uuid_product_uuid format) for inventory computation")
   pure $ Inventory uuid
 
 -- | Flow command parser
@@ -188,7 +188,7 @@ searchFlowsParser = do
 -- | LCIA command parser
 lciaParser :: Parser Command
 lciaParser = do
-  uuid <- argument textReader (metavar "UUID" <> help "Activity UUID for LCIA computation")
+  uuid <- argument textReader (metavar "ID" <> help "Activity UUID or ProcessId (activity_uuid_product_uuid format) for LCIA computation")
   options <- lciaOptionsParser
   pure $ LCIA uuid options
 
@@ -228,9 +228,10 @@ cliParserInfo = info (cliParser <**> helper)
  <> progDesc "ACV Engine - Life Cycle Assessment computation engine"
  <> header "acv-cli - Command-line interface for ACV Engine"
  <> footer "Examples:\n\
-           \  acv-cli --data ./ecoinvent tree uuid --depth 3\n\
+           \  acv-cli --data ./ecoinvent activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n\
+           \  acv-cli --data ./ecoinvent tree activityA_productA --depth 3\n\
            \  acv-cli activities --name electricity --limit 10\n\
-           \  acv-cli inventory uuid --format json\n\
-           \  acv-cli lcia uuid --method pef.xml --csv results.csv\n\
+           \  acv-cli inventory aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa --format json\n\
+           \  acv-cli lcia activityA_productA --method pef.xml --csv results.csv\n\
            \  acv-cli server --port 8080"
   )

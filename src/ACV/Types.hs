@@ -7,6 +7,7 @@ module ACV.Types where
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Binary (Binary)
+import Data.Hashable (Hashable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -16,6 +17,42 @@ import Text.XML (Instruction (instructionData))
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text
+
+-- | Process identifier based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
+-- This ensures each .spold file becomes a distinct process after cut-off allocation
+data ProcessId = ProcessId
+    { activityUUID :: !UUID  -- Activity UUID from filename
+    , productUUID :: !UUID   -- Product UUID from filename
+    }
+    deriving (Eq, Ord, Show, Generic, NFData, Binary, Hashable)
+
+-- | Helper functions for ProcessId
+mkProcessId :: UUID -> UUID -> ProcessId
+mkProcessId = ProcessId
+
+-- | Convert ProcessId to Text representation for display
+processIdToText :: ProcessId -> Text
+processIdToText (ProcessId actUUID prodUUID) = actUUID <> "_" <> prodUUID
+
+-- | Parse ProcessId from filename stem (without extension)
+parseProcessId :: Text -> Maybe ProcessId
+parseProcessId filename = case T.splitOn "_" filename of
+    [actUUID, prodUUID] | not (T.null actUUID) && not (T.null prodUUID) ->
+        Just $ ProcessId actUUID prodUUID
+    _ -> Nothing
+
+-- | Extract activity UUID from ProcessId for backward compatibility
+getActivityUUID :: ProcessId -> UUID
+getActivityUUID (ProcessId actUUID _) = actUUID
+
+-- | Extract product UUID from ProcessId
+getProductUUID :: ProcessId -> UUID
+getProductUUID (ProcessId _ prodUUID) = prodUUID
+
+-- | Create ProcessId from activity UUID (using same UUID for both parts)
+-- Temporary function for backward compatibility
+processIdFromActivityUUID :: UUID -> ProcessId
+processIdFromActivityUUID uuid = ProcessId uuid uuid
 
 -- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
@@ -49,7 +86,8 @@ data Exchange
         , techUnitId :: !UUID -- Unit of measurement
         , techIsInput :: !Bool -- True if input
         , techIsReference :: !Bool -- True if reference product (main output)
-        , techActivityLinkId :: !UUID -- Target activity ID (always present for technosphere)
+        , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
+        , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
@@ -61,32 +99,38 @@ data Exchange
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
-exchangeFlowId (TechnosphereExchange fid _ _ _ _ _) = fid
+exchangeFlowId (TechnosphereExchange fid _ _ _ _ _ _) = fid
 exchangeFlowId (BiosphereExchange fid _ _ _) = fid
 
 exchangeAmount :: Exchange -> Double
-exchangeAmount (TechnosphereExchange _ amt _ _ _ _) = amt
+exchangeAmount (TechnosphereExchange _ amt _ _ _ _ _) = amt
 exchangeAmount (BiosphereExchange _ amt _ _) = amt
 
 exchangeUnitId :: Exchange -> UUID
-exchangeUnitId (TechnosphereExchange _ _ uid _ _ _) = uid
+exchangeUnitId (TechnosphereExchange _ _ uid _ _ _ _) = uid
 exchangeUnitId (BiosphereExchange _ _ uid _) = uid
 
 exchangeIsInput :: Exchange -> Bool
-exchangeIsInput (TechnosphereExchange _ _ _ isInput _ _) = isInput
+exchangeIsInput (TechnosphereExchange _ _ _ isInput _ _ _) = isInput
 exchangeIsInput (BiosphereExchange _ _ _ isInput) = isInput
 
 exchangeIsReference :: Exchange -> Bool
-exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _) = isRef
+exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _) = isRef
 exchangeIsReference (BiosphereExchange _ _ _ _) = False -- Biosphere exchanges are never reference products
 
+-- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
-exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId) = Just linkId
+exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _) = Just linkId
 exchangeActivityLinkId (BiosphereExchange _ _ _ _) = Nothing
+
+-- | Get process link ID (new field)
+exchangeProcessLinkId :: Exchange -> Maybe ProcessId
+exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId) = processLinkId
+exchangeProcessLinkId (BiosphereExchange _ _ _ _) = Nothing
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
-isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _) = True
+isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _) = True
 isTechnosphereExchange (BiosphereExchange _ _ _ _) = False
 
 -- | Check if exchange is biosphere
@@ -121,7 +165,8 @@ getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
 
 -- | Activité ACV de base (activité)
 data Activity = Activity
-    { activityId :: !UUID -- Identifiant unique de l'activité
+    { activityId :: !UUID -- Identifiant unique de l'activité (backward compatibility)
+    , activityProcessId :: !(Maybe ProcessId) -- New ProcessId field for filename-based identification
     , activityName :: !Text -- Nom
     , activityDescription :: ![Text] -- Description générale (generalComment) par paragraphes
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue comme les flux
@@ -149,7 +194,7 @@ type FlowDB = M.Map UUID Flow
 -- | Base de données des unités (dédupliquée)
 type UnitDB = M.Map UUID Unit
 
--- | Base de données des activités
+-- | Base de données des activités (backward compatibility with UUID keys)
 type ActivityDB = M.Map UUID Activity
 
 -- | Index par nom de activité - permet la recherche par nom (insensible à la casse)
@@ -246,7 +291,9 @@ data CF = CF
     }
 
 -- JSON instances for API compatibility
+instance ToJSON ProcessId
 instance ToJSON Exchange
 instance ToJSON FlowType
 
+instance FromJSON ProcessId
 instance FromJSON Exchange

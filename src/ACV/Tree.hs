@@ -17,12 +17,12 @@ type VisitedSet = S.Set UUID
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
 isTechnosphereInput _ ex =
     case ex of
-        TechnosphereExchange _ _ _ isInput isRef _ -> isInput && not isRef
+        TechnosphereExchange _ _ _ isInput isRef _ _ -> isInput && not isRef
         BiosphereExchange _ _ _ _ -> False
 
 -- | Dummy activity to indicate recursion stop
 placeholder :: Activity
-placeholder = Activity "loop-detected" "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
+placeholder = Activity "loop-detected" Nothing "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
 
 -- | Get converted exchange amount ensuring unit compatibility
 -- Converts exchange amount to the target activity's reference unit for proper scaling

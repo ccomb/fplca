@@ -37,7 +37,7 @@ isBiosphereFlow :: FlowDB -> Exchange -> Bool
 isBiosphereFlow _ ex =
     case ex of
         BiosphereExchange _ _ _ _ -> True
-        TechnosphereExchange _ _ _ _ _ _ -> False
+        TechnosphereExchange _ _ _ _ _ _ _ -> False
 
 
 -- | Calcule l'inventaire global à partir d'un arbre LoopAwareTree (avec détection de boucles)
