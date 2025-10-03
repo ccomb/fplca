@@ -35,6 +35,9 @@ module ACV.Matrix (
     computeInventoryMatrix,
     buildDemandVector,
     buildDemandVectorFromIndex,
+    solveSparseLinearSystem,
+    applySparseMatrix,
+    toList,
 ) where
 
 import ACV.Progress

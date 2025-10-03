@@ -213,13 +213,13 @@ data Database = Database
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
-    -- Pre-computed sparse matrices for efficient LCA calculations (Brightway approach)
-    , dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
-    , dbBiosphereTriples :: ![SparseTriple]    -- B matrix: biosphere flows × activities (sparse)
-    , dbActivityIndex :: !(M.Map UUID Int)     -- Activity UUID → matrix index mapping
-    , dbBiosphereFlows :: ![UUID]              -- Ordered list of biosphere flow UUIDs
-    , dbActivityCount :: !Int                  -- Number of activities (matrix dimension)
-    , dbBiosphereCount :: !Int                 -- Number of biosphere flows (matrix dimension)
+    , -- Pre-computed sparse matrices for efficient LCA calculations
+      dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
+    , dbBiosphereTriples :: ![SparseTriple] -- B matrix: biosphere flows × activities (sparse)
+    , dbActivityIndex :: !(M.Map UUID Int) -- Activity UUID → matrix index mapping
+    , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs
+    , dbActivityCount :: !Int -- Number of activities (matrix dimension)
+    , dbBiosphereCount :: !Int -- Number of biosphere flows (matrix dimension)
     }
     deriving (Generic, Binary)
 

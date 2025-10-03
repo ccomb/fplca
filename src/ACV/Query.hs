@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-{-|
+{- |
 Module      : ACV.Query
 Description : Database indexing and sparse matrix construction for LCA calculations
 
@@ -15,7 +15,7 @@ Key responsibilities:
 - Constructing sparse biosphere matrix (B) in coordinate triplet format
 - Database statistics and search functionality
 
-The sparse matrices use Brightway's approach: coordinate triplet lists (i,j,value)
+The sparse matrices use coordinate triplet lists (i,j,value)
 that can be efficiently consumed by PETSc's sparse linear algebra routines.
 
 Performance characteristics:
@@ -23,14 +23,13 @@ Performance characteristics:
 - Memory usage: ~10-50 MB for typical databases
 - Construction time: ~1-5 seconds for full Ecoinvent database
 -}
-
 module ACV.Query where
 
 import ACV.Progress
 import ACV.Types
 import ACV.UnitConversion (normalizeExchangeAmount)
 import Control.Parallel.Strategies
-import Data.List (sortOn)
+import Data.List (find, sortOn)
 import qualified Data.Map as M
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as S
@@ -73,7 +72,7 @@ buildIndexes procDB flowDB =
             , idxOutputsByActivity = outputIdx
             }
 
--- | Build complete database with pre-computed sparse matrices (Brightway approach)
+-- | Build complete database with pre-computed sparse matrices
 buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database
 buildDatabaseWithMatrices activityDB flowDB unitDB =
     let _ = unsafePerformIO $ reportMatrixOperation "Building database with pre-computed sparse matrices"
@@ -91,7 +90,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         !techTriples =
             let buildTechTriple j consumerActivity ex
                     | not (isTechnosphereExchange ex) = []
-                    | exchangeIsReference ex = [] -- Skip reference products - do not add to A matrix
+                    | exchangeIsReference ex = [] -- Skip reference products - normalization approach
                     | otherwise =
                         case exchangeActivityLinkId ex of
                             Just inputActivityUUID ->
@@ -104,7 +103,21 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                     Nothing -> []
                             Nothing -> []
                 buildActivityTriplets (j, consumerActivity) =
-                    concatMap (buildTechTriple j consumerActivity) (exchanges consumerActivity)
+                    let
+                        -- Find reference product amount for normalization
+                        refProductAmount = case find exchangeIsReference (exchanges consumerActivity) of
+                            Just refEx ->
+                                let unitName = getUnitNameForExchange unitDB refEx
+                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                 in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
+                            Nothing -> 1.0 -- No reference product, no scaling needed
+
+                        -- Build triplets with reference product normalization
+                        buildNormalizedTechTriple ex =
+                            let baseTriplets = buildTechTriple j consumerActivity ex
+                             in map (\(i, k, val) -> (i, k, val / refProductAmount)) baseTriplets
+                     in
+                        concatMap buildNormalizedTechTriple (exchanges consumerActivity)
                 !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
                 _ = unsafePerformIO $ reportMatrixOperation ("Technosphere matrix: " ++ show (length result) ++ " non-zero entries")
              in result
@@ -139,7 +152,21 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                  in if abs amount > 1e-15 then [(i, j, amount)] else []
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
-                    concatMap (buildBioTriple j activity) (exchanges activity)
+                    let
+                        -- Find reference product amount for this activity (same as technosphere)
+                        refProductAmount = case find exchangeIsReference (exchanges activity) of
+                            Just refEx ->
+                                let unitName = getUnitNameForExchange unitDB refEx
+                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                 in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
+                            Nothing -> 1.0 -- No reference product, no scaling needed
+
+                        -- Build biosphere triplets with reference product normalization
+                        buildNormalizedBioTriple ex =
+                            let baseTriplets = buildBioTriple j activity ex
+                             in map (\(i, k, val) -> (i, k, val / refProductAmount)) baseTriplets
+                     in
+                        concatMap buildNormalizedBioTriple (exchanges activity)
                 !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))
                 _ = unsafePerformIO $ reportMatrixOperation ("Biosphere matrix: " ++ show (length result) ++ " non-zero entries")
              in result
@@ -160,7 +187,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
             , dbBiosphereCount = bioFlowCount
             }
 
-{-|
+{- |
 Build activity name index for efficient text-based searching.
 
 Creates a mapping from lowercase activity names to lists of activity UUIDs.
@@ -178,7 +205,7 @@ buildNameIndex procDB =
         | proc <- M.elems procDB
         ]
 
-{-|
+{- |
 Build activity location index for geography-based filtering.
 
 Creates a mapping from location codes (e.g., "FR", "GLO", "RER") to
@@ -197,7 +224,7 @@ buildLocationIndex procDB =
         | proc <- M.elems procDB
         ]
 
-{-|
+{- |
 Build activity unit index for unit-based analysis.
 
 Creates a mapping from unit names to lists of activity UUIDs.
@@ -216,7 +243,7 @@ buildActivityUnitIndex procDB =
         | proc <- M.elems procDB
         ]
 
-{-|
+{- |
 Build flow usage index for activity-flow relationships.
 
 Creates a mapping from flow UUIDs to lists of activity UUIDs that use them.
@@ -300,7 +327,7 @@ buildActivityOutputIndex procDB =
 
 -- | Requêtes utilisant les index
 
-{-|
+{- |
 Find activities matching specific field criteria with index optimization.
 
 This function implements an efficient multi-field search strategy:
@@ -393,7 +420,7 @@ matchesActivityFields db nameParam geoParam productParam activity =
                  in matchesProduct
      in nameMatch && geoMatch && productMatch
 
-{-|
+{- |
 Find flows by type (Technosphere or Biosphere) using pre-built index.
 
 This is a fundamental LCA operation for matrix construction:
@@ -412,7 +439,7 @@ findFlowsByType db ftype =
 
 -- | ===== REQUÊTES AU NIVEAU ÉCHANGE =====
 
-{-|
+{- |
 Find all reference products in the database with their producing activities.
 
 Reference products define what each activity produces and are critical for:
@@ -448,7 +475,7 @@ data DatabaseStats = DatabaseStats
     }
     deriving (Show)
 
-{-|
+{- |
 Calculate comprehensive database statistics for monitoring and validation.
 
 Provides key metrics for:
@@ -483,7 +510,7 @@ getDatabaseStats db =
 
 -- | Fonctions utilitaires pour les requêtes complexes
 
-{-|
+{- |
 Search flows by name and synonyms using fuzzy matching.
 
 Implements multi-stage fuzzy search:
@@ -556,7 +583,7 @@ matchesFlowFuzzy searchTerms flow =
                 any (term `T.isInfixOf`) lowerSynonyms
      in all matchesTerm searchTerms
 
-{-|
+{- |
 Search flows by synonyms in a specific language with fuzzy matching.
 
 Similar to findFlowsBySynonym but restricts synonym matching to a specific
@@ -595,7 +622,7 @@ matchesFlowInLanguage searchTerms lang flow =
                 any (term `T.isInfixOf`) lowerSynonyms
      in all matchesTerm searchTerms
 
-{-|
+{- |
 Get all available languages from flow synonyms.
 
 Extracts the complete set of language codes present in the database's
@@ -624,7 +651,7 @@ data SynonymStats = SynonymStats
     }
     deriving (Generic)
 
-{-|
+{- |
 Calculate comprehensive synonym statistics for database analysis.
 
 Provides metrics on synonym coverage and distribution:
