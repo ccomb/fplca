@@ -141,20 +141,20 @@ parseExchangeWithFlowOptimized cur =
         -- Extract inputGroup and outputGroup from child elements
         -- Some datasets keep group flags as attributes, others nest them as child nodes.
         -- Prefer attributes (correct EcoSpold structure) but fall back to elements.
-        !attrInputGroup = getAttr cur "inputGroup"
-        !attrOutputGroup = getAttr cur "outputGroup"
+        !attrInputGroup = T.strip $ getAttr cur "inputGroup"
+        !attrOutputGroup = T.strip $ getAttr cur "outputGroup"
         !inputGroup =
             if not (T.null attrInputGroup)
                 then attrInputGroup
                 else case cur $/ element (nsElement "inputGroup") &/ content of
                     [] -> ""
-                    (x : _) -> x
+                    (x : _) -> T.strip x
         !outputGroup =
             if not (T.null attrOutputGroup)
                 then attrOutputGroup
                 else case cur $/ element (nsElement "outputGroup") &/ content of
                     [] -> ""
-                    (x : _) -> x
+                    (x : _) -> T.strip x
 
         -- Determine type based on input/output groups (mutually exclusive)
         !isInput = inputGroup /= ""
@@ -190,20 +190,20 @@ parseElementaryExchangeWithFlowOptimized cur =
             [] -> "kg"
             (x : _) -> x
 
-        !attrInputGroup = getAttr cur "inputGroup"
-        !attrOutputGroup = getAttr cur "outputGroup"
+        !attrInputGroup = T.strip $ getAttr cur "inputGroup"
+        !attrOutputGroup = T.strip $ getAttr cur "outputGroup"
         !inputGroup =
             if not (T.null attrInputGroup)
                 then attrInputGroup
                 else case cur $/ element (nsElement "inputGroup") &/ content of
                     [] -> ""
-                    (x : _) -> x
+                    (x : _) -> T.strip x
         !outputGroup =
             if not (T.null attrOutputGroup)
                 then attrOutputGroup
                 else case cur $/ element (nsElement "outputGroup") &/ content of
                     [] -> ""
-                    (x : _) -> x
+                    (x : _) -> T.strip x
 
         !isInput = inputGroup /= ""
         !ftype = Biosphere
