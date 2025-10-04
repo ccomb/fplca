@@ -112,10 +112,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                  in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
                             Nothing -> 1.0 -- No reference product, no scaling needed
 
-                        -- Build triplets with reference product normalization
-                        buildNormalizedTechTriple ex =
-                            let baseTriplets = buildTechTriple j consumerActivity ex
-                             in map (\(i, k, val) -> (i, k, val / refProductAmount)) baseTriplets
+                        -- Build triplets - NO reference product normalization needed here
+                        -- (normalization will be done separately in the matrix solver)
+                        buildNormalizedTechTriple ex = buildTechTriple j consumerActivity ex
                      in
                         concatMap buildNormalizedTechTriple (exchanges consumerActivity)
                 !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
@@ -161,10 +160,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                  in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
                             Nothing -> 1.0 -- No reference product, no scaling needed
 
-                        -- Build biosphere triplets with reference product normalization
-                        buildNormalizedBioTriple ex =
-                            let baseTriplets = buildBioTriple j activity ex
-                             in map (\(i, k, val) -> (i, k, val / refProductAmount)) baseTriplets
+                        -- Build biosphere triplets - NO reference product normalization needed here
+                        -- (normalization will be done separately in the matrix solver)
+                        buildNormalizedBioTriple ex = buildBioTriple j activity ex
                      in
                         concatMap buildNormalizedBioTriple (exchanges activity)
                 !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))

@@ -90,7 +90,8 @@ computeActivityInventory db queryText = do
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
 convertToInventoryExport db rootActivity inventory calculationDepth =
-    let -- Include all flows from inventory calculation (no filtering)
+    let
+        -- Include all flows from inventory calculation (no filtering)
         inventoryList = M.toList inventory
 
         !flowDetails =
@@ -130,7 +131,8 @@ convertToInventoryExport db rootActivity inventory calculationDepth =
                 , isResourceQuantity = resourceQuantity
                 , isTopCategories = categoryStats
                 }
-     in InventoryExport metadata flowDetails statistics
+     in
+        InventoryExport metadata flowDetails statistics
 
 -- | Determine if a flow represents resource extraction (negative quantity = extraction from environment)
 isResourceExtraction :: Flow -> Double -> Bool

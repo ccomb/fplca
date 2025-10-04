@@ -78,7 +78,7 @@ streamParseActivityAndFlowsFromFile path = do
             Just pid -> pid
             Nothing -> error $ "Invalid filename format for ProcessId: " ++ path ++ " (expected: activity_uuid_product_uuid.spold)"
     let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor processId
-    -- Apply cut-off strategy
+    -- Apply cut-off strategy (conservative version)
     let !procWithCutoff = applyCutoffStrategy proc
     -- Force full evaluation before returning
     procWithCutoff `seq` flows `seq` units `seq` return (procWithCutoff, flows, units)
