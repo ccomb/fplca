@@ -148,7 +148,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                 let unitName = getUnitNameForExchange unitDB ex
                                     normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                    amount = normalizedAmountValue normalized / denom
+                                    rawAmount = normalizedAmountValue normalized / denom
+                                    amount = if exchangeIsInput ex then -rawAmount else rawAmount
                                  in ([(i, j, amount) | abs amount > 1e-15])
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
