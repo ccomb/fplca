@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="11111111-2222-3333-4444-555555555552" activityNameId="11111111-2222-3333-4444-555555555552" type="1">
+        <activityName xml:lang="en">steel production (mass conversion test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests mass unit conversions: t (output) ↔ kg (inputs) ↔ g (emissions)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Steel in tonnes (reference product) -->
+      <intermediateExchange id="out-1" unitId="unit-t" amount="1.0" intermediateExchangeId="steel-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">steel</name>
+        <unitName xml:lang="en">t</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Iron ore in kg (different mass unit) -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="1600.0" intermediateExchangeId="iron-ore-uuid" activityLinkId="iron-ore-uuid">
+        <name xml:lang="en">iron ore</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Coal in tonnes (same as output unit) -->
+      <intermediateExchange id="in-2" unitId="unit-t" amount="0.5" intermediateExchangeId="coal-uuid" activityLinkId="coal-uuid">
+        <name xml:lang="en">coal</name>
+        <unitName xml:lang="en">t</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE OUTPUT: CO2 in kg (different mass unit) -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="2000.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Particulates in g (smallest mass unit) -->
+      <elementaryExchange id="elem-2" unitId="unit-g" amount="50000.0" elementaryExchangeId="pm10-uuid">
+        <name xml:lang="en">Particulates, > 10 um</name>
+        <unitName xml:lang="en">g</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">urban air close to ground</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE INPUT: Iron ore resource in metric tons -->
+      <elementaryExchange id="elem-3" unitId="unit-mt" amount="1.6" elementaryExchangeId="iron-ore-resource-uuid">
+        <name xml:lang="en">Iron ore resource</name>
+        <unitName xml:lang="en">metric ton</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">in ground</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

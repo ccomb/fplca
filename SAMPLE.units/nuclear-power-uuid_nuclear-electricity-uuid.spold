@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="11111111-2222-3333-4444-555555555551" activityNameId="11111111-2222-3333-4444-555555555551" type="1">
+        <activityName xml:lang="en">nuclear power plant (activity unit test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests activity unit conversions (radioactivity): kBq outputs with mixed unit inputs</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Electricity in MJ (reference product) -->
+      <intermediateExchange id="out-1" unitId="unit-mj" amount="1.0" intermediateExchangeId="nuclear-electricity-uuid" productionVolumeAmount="1000000.0">
+        <name xml:lang="en">electricity, nuclear</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Uranium fuel in kg -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.000001" intermediateExchangeId="uranium-fuel-uuid" activityLinkId="uranium-enrich-uuid">
+        <name xml:lang="en">uranium fuel</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Cooling water in m3 (volume unit) -->
+      <intermediateExchange id="in-2" unitId="unit-m3" amount="2.5" intermediateExchangeId="cooling-water-uuid" activityLinkId="water-treat-uuid">
+        <name xml:lang="en">cooling water</name>
+        <unitName xml:lang="en">m3</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE OUTPUT: Radon-222 in kBq (activity unit - our test case!) -->
+      <elementaryExchange id="elem-1" unitId="unit-kbq" amount="0.000001" elementaryExchangeId="radon-222-uuid">
+        <name xml:lang="en">Radon-222</name>
+        <unitName xml:lang="en">kBq</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Cesium-137 in Bq (activity unit, different scale) -->
+      <elementaryExchange id="elem-2" unitId="unit-bq" amount="50.0" elementaryExchangeId="cesium-137-uuid">
+        <name xml:lang="en">Cesium-137</name>
+        <unitName xml:lang="en">Bq</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Thermal pollution in TJ -->
+      <elementaryExchange id="elem-3" unitId="unit-tj" amount="0.002" elementaryExchangeId="thermal-pollution-uuid">
+        <name xml:lang="en">Waste heat</name>
+        <unitName xml:lang="en">TJ</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">river</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

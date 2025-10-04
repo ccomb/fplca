@@ -1,0 +1,87 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="water-treat-uuid" activityNameId="water-treat-uuid" type="1">
+        <activityName xml:lang="en">water treatment (volume unit test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests volume unit conversions: m³ (output) ↔ l (input) ↔ ml (chemicals)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Treated water in m³ (reference product) -->
+      <intermediateExchange id="out-1" unitId="unit-m3" amount="1.0" intermediateExchangeId="cooling-water-uuid" productionVolumeAmount="10000.0">
+        <name xml:lang="en">cooling water</name>
+        <unitName xml:lang="en">m3</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Raw water in liters (different volume unit) -->
+      <intermediateExchange id="in-1" unitId="unit-l" amount="1100.0" intermediateExchangeId="raw-water-uuid" activityLinkId="water-extract-uuid">
+        <name xml:lang="en">raw water</name>
+        <unitName xml:lang="en">l</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Coagulant in ml (smallest volume unit) -->
+      <intermediateExchange id="in-2" unitId="unit-ml" amount="50.0" intermediateExchangeId="coagulant-uuid" activityLinkId="chemical-prod-uuid">
+        <name xml:lang="en">aluminum sulfate</name>
+        <unitName xml:lang="en">ml</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Pipe length in km (length unit) -->
+      <intermediateExchange id="in-3" unitId="unit-km" amount="0.001" intermediateExchangeId="pipe-uuid" activityLinkId="pipe-prod-uuid">
+        <name xml:lang="en">distribution pipe</name>
+        <unitName xml:lang="en">km</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE INPUT: Water resource in m³ -->
+      <elementaryExchange id="elem-1" unitId="unit-m3" amount="1.05" elementaryExchangeId="freshwater-uuid">
+        <name xml:lang="en">Water, fresh</name>
+        <unitName xml:lang="en">m3</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">in water</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Sludge in dm³ (deciliters, medium volume unit) -->
+      <elementaryExchange id="elem-2" unitId="unit-dm3" amount="5.0" elementaryExchangeId="treatment-sludge-uuid">
+        <name xml:lang="en">Water treatment sludge</name>
+        <unitName xml:lang="en">dm3</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">groundwater</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Area occupied in hectares -->
+      <elementaryExchange id="elem-3" unitId="unit-ha" amount="0.0001" elementaryExchangeId="land-occupation-uuid">
+        <name xml:lang="en">Land occupation, treatment plant</name>
+        <unitName xml:lang="en">ha</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">land</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

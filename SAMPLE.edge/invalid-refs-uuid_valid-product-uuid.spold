@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="invalid-refs-uuid" activityNameId="invalid-refs-uuid" type="1">
+        <activityName xml:lang="en">invalid references test</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests handling of invalid UUIDs and missing activityLinkId references</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Valid reference product -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="valid-product-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">valid product</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Missing activityLinkId (should be handled gracefully) -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.5" intermediateExchangeId="missing-link-uuid">
+        <name xml:lang="en">input with missing activityLinkId</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+        <!-- NO activityLinkId attribute! -->
+      </intermediateExchange>
+
+      <!-- INPUT: Invalid UUID format in activityLinkId -->
+      <intermediateExchange id="in-2" unitId="unit-kg" amount="0.3" intermediateExchangeId="invalid-uuid-input" activityLinkId="not-a-valid-uuid-format">
+        <name xml:lang="en">input with invalid UUID</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Empty activityLinkId -->
+      <intermediateExchange id="in-3" unitId="unit-kg" amount="0.2" intermediateExchangeId="empty-link-uuid" activityLinkId="">
+        <name xml:lang="en">input with empty activityLinkId</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Valid UUID format but references non-existent activity -->
+      <intermediateExchange id="in-4" unitId="unit-kg" amount="0.1" intermediateExchangeId="nonexistent-input-uuid" activityLinkId="99999999-9999-9999-9999-999999999999">
+        <name xml:lang="en">input referencing non-existent activity</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Whitespace in UUID (should be trimmed or error) -->
+      <intermediateExchange id="in-5" unitId="unit-mj" amount="5.0" intermediateExchangeId="whitespace-uuid" activityLinkId="  energy-prod-uuid  ">
+        <name xml:lang="en">input with whitespace in UUID</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- Biosphere output (should always work) -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="1.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

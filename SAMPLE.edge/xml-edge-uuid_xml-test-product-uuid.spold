@@ -1,0 +1,108 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="xml-edge-uuid" activityNameId="xml-edge-uuid" type="1">
+        <activityName xml:lang="en">XML parsing edge cases test</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests XML parsing edge cases: attributes vs child elements, missing elements</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Reference product -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="xml-test-product-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">XML test product</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Uses attribute format for input/output groups (preferred) -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.5" intermediateExchangeId="attr-input-uuid" activityLinkId="attr-prod-uuid" inputGroup="5">
+        <name xml:lang="en">attribute-based input group</name>
+        <unitName xml:lang="en">kg</unitName>
+        <!-- inputGroup as attribute, not child element -->
+      </intermediateExchange>
+
+      <!-- INPUT: Uses child element format for input/output groups (fallback) -->
+      <intermediateExchange id="in-2" unitId="unit-kg" amount="0.3" intermediateExchangeId="elem-input-uuid" activityLinkId="elem-prod-uuid">
+        <name xml:lang="en">element-based input group</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+        <!-- inputGroup as child element -->
+      </intermediateExchange>
+
+      <!-- INPUT: Has BOTH attribute AND child element (attribute should take precedence) -->
+      <intermediateExchange id="in-3" unitId="unit-mj" amount="2.0" intermediateExchangeId="both-input-uuid" activityLinkId="both-prod-uuid" inputGroup="5">
+        <name xml:lang="en">both attribute and element input</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>999</inputGroup>
+        <!-- Should use attribute (5), not child element (999) -->
+      </intermediateExchange>
+
+      <!-- INPUT: Missing name element (should use flowId as fallback) -->
+      <intermediateExchange id="in-4" unitId="unit-kg" amount="0.1" intermediateExchangeId="no-name-input-uuid" activityLinkId="no-name-prod-uuid">
+        <!-- NO <name> element - should use flowId as name -->
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Empty name element -->
+      <intermediateExchange id="in-5" unitId="unit-kg" amount="0.2" intermediateExchangeId="empty-name-uuid" activityLinkId="empty-name-prod-uuid">
+        <name xml:lang="en"></name>
+        <!-- Empty name - should fall back to flowId -->
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Missing unitName element (should use default) -->
+      <intermediateExchange id="in-6" unitId="unit-default" amount="1.5" intermediateExchangeId="no-unit-uuid" activityLinkId="no-unit-prod-uuid">
+        <name xml:lang="en">input with no unit name</name>
+        <!-- NO <unitName> element -->
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- Biosphere output with compartment edge cases -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="1.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <!-- Missing subcompartment - should handle gracefully -->
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- Biosphere input with nested compartment structure -->
+      <elementaryExchange id="elem-2" unitId="unit-m3" amount="0.5" elementaryExchangeId="water-resource-uuid">
+        <name xml:lang="en">Water resource</name>
+        <unitName xml:lang="en">m3</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">in water</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+
+      <!-- Biosphere with missing compartment entirely -->
+      <elementaryExchange id="elem-3" unitId="unit-kg" amount="0.1" elementaryExchangeId="no-compartment-uuid">
+        <name xml:lang="en">Emission with no compartment</name>
+        <unitName xml:lang="en">kg</unitName>
+        <!-- NO <compartment> element - should default to "unspecified" -->
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="cccccccc-cccc-cccc-cccc-cccccccccccc" activityNameId="cccccccc-cccc-cccc-cccc-cccccccccccc" type="1">
+        <activityName xml:lang="en">production of product Y</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Production activity for product Y</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- Output: Product Y (this activity produces it) -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="productY-uuid" productionVolumeAmount="500.0">
+        <name xml:lang="en">product Y</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+      
+      <!-- Input: Product Z from Activity D (amount 0.3) -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.3" intermediateExchangeId="productZ-uuid" activityLinkId="dddddddd-dddd-dddd-dddd-dddddddddddd">
+        <name xml:lang="en">product Z</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+      
+      <!-- Input: Product X from Activity A (loop back - amount 0.2) -->
+      <intermediateExchange id="in-2" unitId="unit-kg" amount="0.2" intermediateExchangeId="productX-uuid" activityLinkId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa">
+        <name xml:lang="en">product X</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

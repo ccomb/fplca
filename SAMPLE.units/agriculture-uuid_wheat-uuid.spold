@@ -1,0 +1,87 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="agriculture-uuid" activityNameId="agriculture-uuid" type="1">
+        <activityName xml:lang="en">agricultural production (compound units test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests compound unit conversions: kg/ha, MJ/kg, person*km, m2*year</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Wheat in kg (reference product) -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="wheat-uuid" productionVolumeAmount="5000.0">
+        <name xml:lang="en">wheat grain</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Fertilizer application in kg/ha (compound mass unit) -->
+      <intermediateExchange id="in-1" unitId="unit-kg-per-ha" amount="0.02" intermediateExchangeId="fertilizer-uuid" activityLinkId="fertilizer-prod-uuid">
+        <name xml:lang="en">nitrogen fertilizer</name>
+        <unitName xml:lang="en">kg/ha</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Fuel with energy content in MJ/kg (compound energy unit) -->
+      <intermediateExchange id="in-2" unitId="unit-mj-per-kg" amount="0.1" intermediateExchangeId="diesel-uuid" activityLinkId="diesel-prod-uuid">
+        <name xml:lang="en">diesel fuel</name>
+        <unitName xml:lang="en">MJ/kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Transportation service in person*km (compound count unit) -->
+      <intermediateExchange id="in-3" unitId="unit-person-km" amount="5.0" intermediateExchangeId="transport-uuid" activityLinkId="transport-serv-uuid">
+        <name xml:lang="en">passenger transport</name>
+        <unitName xml:lang="en">person*km</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE INPUT: Land occupation in m2*year (compound area-time unit) -->
+      <elementaryExchange id="elem-1" unitId="unit-m2-year" amount="0.0002" elementaryExchangeId="agricultural-land-uuid">
+        <name xml:lang="en">Agricultural land occupation</name>
+        <unitName xml:lang="en">m2*year</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">land</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Nitrous oxide per area in kg N/ha -->
+      <elementaryExchange id="elem-2" unitId="unit-kg-n-per-ha" amount="0.00001" elementaryExchangeId="n2o-uuid">
+        <name xml:lang="en">Nitrous oxide (N2O)</name>
+        <unitName xml:lang="en">kg N/ha</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE OUTPUT: Phosphorous runoff in kg P/ha -->
+      <elementaryExchange id="elem-3" unitId="unit-kg-p-per-ha" amount="0.000005" elementaryExchangeId="phosphorus-uuid">
+        <name xml:lang="en">Phosphate runoff</name>
+        <unitName xml:lang="en">kg P/ha</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">groundwater</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

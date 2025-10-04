@@ -1,0 +1,105 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="zero-neg-uuid" activityNameId="zero-neg-uuid" type="1">
+        <activityName xml:lang="en">zero and negative amounts test</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests handling of zero amounts and negative values (unusual but valid)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT: Normal reference product -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="normal-product-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">normal product</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT: Co-product with zero amount (should be filtered by cut-off) -->
+      <intermediateExchange id="out-2" unitId="unit-kg" amount="0.0" intermediateExchangeId="zero-coproduct-uuid" productionVolumeAmount="0.0">
+        <name xml:lang="en">zero co-product</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Normal positive input -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.8" intermediateExchangeId="normal-input-uuid" activityLinkId="normal-prod-uuid">
+        <name xml:lang="en">normal input</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Zero amount input (edge case) -->
+      <intermediateExchange id="in-2" unitId="unit-kg" amount="0.0" intermediateExchangeId="zero-input-uuid" activityLinkId="zero-prod-uuid">
+        <name xml:lang="en">zero input</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Negative input (unusual but can represent credits/avoided impacts) -->
+      <intermediateExchange id="in-3" unitId="unit-mj" amount="-2.5" intermediateExchangeId="negative-energy-uuid" activityLinkId="energy-credit-uuid">
+        <name xml:lang="en">energy credit (negative)</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: Normal emission -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="1.5" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Zero emission -->
+      <elementaryExchange id="elem-2" unitId="unit-kg" amount="0.0" elementaryExchangeId="zero-emission-uuid">
+        <name xml:lang="en">Zero emission</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Negative emission (carbon capture, avoided impact) -->
+      <elementaryExchange id="elem-3" unitId="unit-kg" amount="-0.5" elementaryExchangeId="captured-co2-uuid">
+        <name xml:lang="en">Captured CO2 (negative emission)</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Very small amount (numerical precision test) -->
+      <elementaryExchange id="elem-4" unitId="unit-kg" amount="1.23456789e-15" elementaryExchangeId="tiny-emission-uuid">
+        <name xml:lang="en">Tiny emission (precision test)</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

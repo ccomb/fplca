@@ -1,0 +1,108 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" activityNameId="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" type="1">
+        <activityName xml:lang="en">sawmill operation (allocation sensitivity test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests allocation sensitivity: logs → lumber + sawdust + bark (different mass/value ratios)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT 1: Lumber (reference product - main product) -->
+      <intermediateExchange id="out-1" unitId="unit-m3" amount="0.6" intermediateExchangeId="lumber-uuid" productionVolumeAmount="600.0">
+        <name xml:lang="en">sawn timber</name>
+        <unitName xml:lang="en">m3</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 2: Sawdust (co-product - by mass allocation gets significant share) -->
+      <intermediateExchange id="out-2" unitId="unit-kg" amount="200.0" intermediateExchangeId="sawdust-uuid" productionVolumeAmount="200000.0">
+        <name xml:lang="en">sawdust</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 3: Bark (co-product - lower value, often treated as waste) -->
+      <intermediateExchange id="out-3" unitId="unit-kg" amount="100.0" intermediateExchangeId="bark-uuid" productionVolumeAmount="100000.0">
+        <name xml:lang="en">bark</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>3</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 4: Wood chips (co-product) -->
+      <intermediateExchange id="out-4" unitId="unit-kg" amount="80.0" intermediateExchangeId="wood-chips-uuid" productionVolumeAmount="80000.0">
+        <name xml:lang="en">wood chips</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>4</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Logs -->
+      <intermediateExchange id="in-1" unitId="unit-m3" amount="1.0" intermediateExchangeId="logs-uuid" activityLinkId="bbbbbbbb-cccc-dddd-eeee-ffffffffffff">
+        <name xml:lang="en">round wood logs</name>
+        <unitName xml:lang="en">m3</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Electricity for sawmill -->
+      <intermediateExchange id="in-2" unitId="unit-kwh" amount="25.0" intermediateExchangeId="electricity-uuid" activityLinkId="cccccccc-dddd-eeee-ffff-gggggggggggg">
+        <name xml:lang="en">electricity</name>
+        <unitName xml:lang="en">kWh</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Diesel fuel for equipment -->
+      <intermediateExchange id="in-3" unitId="unit-l" amount="5.0" intermediateExchangeId="diesel-fuel-uuid" activityLinkId="dddddddd-eeee-ffff-gggg-hhhhhhhhhhhh">
+        <name xml:lang="en">diesel fuel</name>
+        <unitName xml:lang="en">l</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: CO2 from diesel combustion -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="12.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Wood particulates -->
+      <elementaryExchange id="elem-2" unitId="unit-kg" amount="0.5" elementaryExchangeId="particulates-uuid">
+        <name xml:lang="en">Particulates, wood dust</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">urban air close to ground</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Land occupation -->
+      <elementaryExchange id="elem-3" unitId="unit-m2" amount="10.0" elementaryExchangeId="industrial-land-uuid">
+        <name xml:lang="en">Industrial land occupation</name>
+        <unitName xml:lang="en">m2</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">land</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

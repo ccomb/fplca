@@ -29,9 +29,9 @@ import ACV.Progress
 import ACV.Types
 import ACV.UnitConversion (normalizeExchangeAmount, normalizedAmountValue)
 import Control.Parallel.Strategies
-import Data.List (find, sortOn)
+import Data.List (find, partition, sortOn)
 import qualified Data.Map as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -77,6 +77,7 @@ buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database
 buildDatabaseWithMatrices activityDB flowDB unitDB =
     let _ = unsafePerformIO $ reportMatrixOperation "Building database with pre-computed sparse matrices"
         indexes = buildIndexes activityDB flowDB
+        referenceProducts = idxReferenceProducts indexes
         -- Build complete sparse coordinate lists for entire database
         _ = unsafePerformIO $ reportMatrixOperation "Building activity indexes"
         allActivities = activityDB
@@ -93,18 +94,29 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                     | not (exchangeIsInput ex) = [] -- Skip technosphere outputs/co-products
                     | exchangeIsReference ex = [] -- Skip reference products - normalization approach
                     | otherwise =
-                        case exchangeActivityLinkId ex of
-                            Just inputActivityUUID ->
-                                case M.lookup inputActivityUUID activityIndex of
-                                    Just producerIdx ->
-                                        let unitName = getUnitNameForExchange unitDB ex
-                                            normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
-                                            rawValue = normalizedAmountValue normalized
-                                            denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                            value = rawValue / denom -- Normalize per unit reference product
-                                         in ([(producerIdx, j, value) | abs value > 1e-15])
-                                    Nothing -> []
-                            Nothing -> []
+                        let directProducerIdx =
+                                case exchangeActivityLinkId ex of
+                                    Just inputActivityUUID -> M.lookup inputActivityUUID activityIndex
+                                    Nothing -> Nothing
+                            fallbackProducerIdx =
+                                case M.lookup (exchangeFlowId ex) referenceProducts of
+                                    Just [(producerUUID, _)]
+                                        | producerUUID /= activityId consumerActivity ->
+                                            M.lookup producerUUID activityIndex
+                                    _ -> Nothing
+                            chosenProducerIdx =
+                                case directProducerIdx of
+                                    Just producerIdx -> Just producerIdx
+                                    Nothing -> fallbackProducerIdx
+                         in case chosenProducerIdx of
+                                Just producerIdx ->
+                                    let unitName = getUnitNameForExchange unitDB ex
+                                        normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                        rawValue = normalizedAmountValue normalized
+                                        denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
+                                        value = rawValue / denom -- Normalize per unit reference product
+                                     in ([(producerIdx, j, value) | abs value > 1e-15])
+                                Nothing -> []
                 buildActivityTriplets (j, consumerActivity) =
                     let
                         -- Find reference product amount for normalization
@@ -302,8 +314,8 @@ buildActivityExchangeIndex procDB =
 -- | Construction de l'index des produits de référence
 buildReferenceProductIndex :: ActivityDB -> ReferenceProductIndex
 buildReferenceProductIndex procDB =
-    M.fromList
-        [ (exchangeFlowId ex, (activityId proc, ex))
+    M.fromListWith (++)
+        [ (exchangeFlowId ex, [(activityId proc, ex)])
         | proc <- M.elems procDB
         , ex <- exchanges proc
         , exchangeIsReference ex
@@ -454,7 +466,8 @@ Time Complexity: O(p) where p is the number of reference products
 findAllReferenceProducts :: Database -> [(Activity, Flow, Exchange)]
 findAllReferenceProducts db =
     [ (proc, flow, exchange)
-    | (flowUUID, (procUUID, exchange)) <- M.toList (idxReferenceProducts $ dbIndexes db)
+    | (flowUUID, producers) <- M.toList (idxReferenceProducts $ dbIndexes db)
+    , (procUUID, exchange) <- producers
     , Just proc <- [M.lookup procUUID (dbActivities db)]
     , Just flow <- [M.lookup flowUUID (dbFlows db)]
     ]

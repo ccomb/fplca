@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" activityNameId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" type="1">
+        <activityName xml:lang="en">mining of iron ore (grams)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Iron ore mining with gram units for precision</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- Output: Iron ore in tonnes -->
+      <intermediateExchange id="out-1" unitId="unit-t" amount="1.0" intermediateExchangeId="iron-ore-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">iron ore</name>
+        <unitName xml:lang="en">t</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- Elementary exchange: Particulates < 2.5 um in grams -->
+      <elementaryExchange id="elem-1" unitId="unit-g" amount="500.0" elementaryExchangeId="pm25-uuid">
+        <name xml:lang="en">Particulates, &lt; 2.5 um</name>
+        <unitName xml:lang="en">g</unitName>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- Elementary exchange: Water use in liters -->
+      <elementaryExchange id="elem-2" unitId="unit-l" amount="5000.0" elementaryExchangeId="water-uuid">
+        <name xml:lang="en">Water</name>
+        <unitName xml:lang="en">l</unitName>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

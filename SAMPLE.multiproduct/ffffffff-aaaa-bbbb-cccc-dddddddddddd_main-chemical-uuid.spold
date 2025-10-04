@@ -1,0 +1,115 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="ffffffff-aaaa-bbbb-cccc-dddddddddddd" activityNameId="ffffffff-aaaa-bbbb-cccc-dddddddddddd" type="1">
+        <activityName xml:lang="en">chemical process (cut-off strategy test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests cut-off strategy: main product + zero co-products (should be filtered)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT 1: Main chemical product (reference) -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="main-chemical-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">main chemical</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 2: By-product with zero amount (should be filtered by cut-off) -->
+      <intermediateExchange id="out-2" unitId="unit-kg" amount="0.0" intermediateExchangeId="byproduct-1-uuid" productionVolumeAmount="0.0">
+        <name xml:lang="en">by-product 1 (zero)</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 3: Another zero by-product -->
+      <intermediateExchange id="out-3" unitId="unit-kg" amount="0.0" intermediateExchangeId="byproduct-2-uuid" productionVolumeAmount="0.0">
+        <name xml:lang="en">by-product 2 (zero)</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>3</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 4: Very small by-product (edge case for cutoff threshold) -->
+      <intermediateExchange id="out-4" unitId="unit-kg" amount="1.0e-12" intermediateExchangeId="trace-byproduct-uuid" productionVolumeAmount="1.0e-9">
+        <name xml:lang="en">trace by-product</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>4</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 5: Waste product (negative value - disposal credit) -->
+      <intermediateExchange id="out-5" unitId="unit-kg" amount="-0.1" intermediateExchangeId="waste-product-uuid" productionVolumeAmount="-100.0">
+        <name xml:lang="en">waste requiring disposal</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>5</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Raw material A -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="0.8" intermediateExchangeId="raw-material-a-uuid" activityLinkId="eeeeeeee-ffff-aaaa-bbbb-cccccccccccc">
+        <name xml:lang="en">raw material A</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Raw material B -->
+      <intermediateExchange id="in-2" unitId="unit-kg" amount="0.3" intermediateExchangeId="raw-material-b-uuid" activityLinkId="dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb">
+        <name xml:lang="en">raw material B</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Process energy -->
+      <intermediateExchange id="in-3" unitId="unit-mj" amount="15.0" intermediateExchangeId="steam-energy-uuid" activityLinkId="cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa">
+        <name xml:lang="en">process steam</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: Process emissions -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="0.05" elementaryExchangeId="voc-emissions-uuid">
+        <name xml:lang="en">Volatile organic compounds</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Water consumption -->
+      <elementaryExchange id="elem-2" unitId="unit-m3" amount="2.0" elementaryExchangeId="process-water-uuid">
+        <name xml:lang="en">Water, process</name>
+        <unitName xml:lang="en">m3</unitName>
+        <compartment>
+          <compartment xml:lang="en">natural resource</compartment>
+          <subcompartment xml:lang="en">in water</subcompartment>
+        </compartment>
+        <inputGroup>4</inputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Chemical waste to treatment -->
+      <elementaryExchange id="elem-3" unitId="unit-kg" amount="0.2" elementaryExchangeId="chemical-waste-uuid">
+        <name xml:lang="en">Chemical waste to treatment</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">groundwater</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

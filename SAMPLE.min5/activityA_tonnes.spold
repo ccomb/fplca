@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" activityNameId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" type="1">
+        <activityName xml:lang="en">production of steel (tonnes)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Steel production activity with tonne units</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- Output: Steel in tonnes -->
+      <intermediateExchange id="out-1" unitId="unit-t" amount="1.0" intermediateExchangeId="steel-uuid" productionVolumeAmount="100.0">
+        <name xml:lang="en">steel</name>
+        <unitName xml:lang="en">t</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- Input: Iron ore in tonnes -->
+      <intermediateExchange id="in-1" unitId="unit-t" amount="1.6" intermediateExchangeId="iron-ore-uuid" activityLinkId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb">
+        <name xml:lang="en">iron ore</name>
+        <unitName xml:lang="en">t</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- Elementary exchange: CO2 emissions in kg -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="2000.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

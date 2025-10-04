@@ -219,7 +219,7 @@ type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Ex
 type ActivityExchangeIndex = M.Map UUID [Exchange] -- ActivityID -> [Exchange]
 
 -- | Index des produits de référence - tous les outputs principaux
-type ReferenceProductIndex = M.Map UUID (UUID, Exchange) -- FlowID -> (ActivityID, Exchange)
+type ReferenceProductIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]
 
 -- | Index des entrées par activité - sépare inputs/outputs pour recherches efficaces
 type ActivityInputIndex = M.Map UUID [Exchange] -- ActivityID -> [Input Exchanges]

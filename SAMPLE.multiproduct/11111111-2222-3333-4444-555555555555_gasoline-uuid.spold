@@ -1,0 +1,101 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="11111111-2222-3333-4444-555555555555" activityNameId="11111111-2222-3333-4444-555555555555" type="1">
+        <activityName xml:lang="en">oil refinery (joint production test)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests joint production: crude oil → gasoline + diesel + heating oil (3 co-products)</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT 1: Gasoline (reference product - highest value) -->
+      <intermediateExchange id="out-1" unitId="unit-l" amount="40.0" intermediateExchangeId="gasoline-uuid" productionVolumeAmount="40000.0">
+        <name xml:lang="en">gasoline</name>
+        <unitName xml:lang="en">l</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 2: Diesel (co-product) -->
+      <intermediateExchange id="out-2" unitId="unit-l" amount="35.0" intermediateExchangeId="diesel-uuid" productionVolumeAmount="35000.0">
+        <name xml:lang="en">diesel fuel</name>
+        <unitName xml:lang="en">l</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 3: Heating oil (co-product) -->
+      <intermediateExchange id="out-3" unitId="unit-l" amount="20.0" intermediateExchangeId="heating-oil-uuid" productionVolumeAmount="20000.0">
+        <name xml:lang="en">heating oil</name>
+        <unitName xml:lang="en">l</unitName>
+        <outputGroup>3</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 4: Heavy fuel oil (co-product) -->
+      <intermediateExchange id="out-4" unitId="unit-l" amount="5.0" intermediateExchangeId="heavy-fuel-uuid" productionVolumeAmount="5000.0">
+        <name xml:lang="en">heavy fuel oil</name>
+        <unitName xml:lang="en">l</unitName>
+        <outputGroup>4</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Crude oil -->
+      <intermediateExchange id="in-1" unitId="unit-l" amount="100.0" intermediateExchangeId="crude-oil-uuid" activityLinkId="22222222-3333-4444-5555-666666666666">
+        <name xml:lang="en">crude oil</name>
+        <unitName xml:lang="en">l</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Energy for refining -->
+      <intermediateExchange id="in-2" unitId="unit-mj" amount="50.0" intermediateExchangeId="process-energy-uuid" activityLinkId="33333333-4444-5555-6666-777777777777">
+        <name xml:lang="en">process energy</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: CO2 emissions from refining -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="8.0" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: SO2 emissions -->
+      <elementaryExchange id="elem-2" unitId="unit-kg" amount="0.1" elementaryExchangeId="so2-uuid">
+        <name xml:lang="en">Sulfur dioxide</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Refinery wastewater -->
+      <elementaryExchange id="elem-3" unitId="unit-m3" amount="2.0" elementaryExchangeId="wastewater-uuid">
+        <name xml:lang="en">Refinery wastewater</name>
+        <unitName xml:lang="en">m3</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">surface water</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>
