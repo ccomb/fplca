@@ -3,19 +3,24 @@
 
 module ACV.Service where
 
+import ACV.CLI.Types (DebugMatricesOptions (..))
 import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
-import ACV.Matrix (computeInventoryMatrix)
+import ACV.Matrix (applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList)
+import ACV.Progress
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
 import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)
+import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import ACV.Progress
+import qualified Data.Vector.Unboxed as U
+import System.IO
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Domain service errors
 data ServiceError
@@ -506,3 +511,208 @@ exportLCIAAsXML _ _ = Right ()
 -- | Export LCIA results as CSV (placeholder)
 exportLCIAAsCSV :: Value -> FilePath -> Either ServiceError ()
 exportLCIAAsCSV _ _ = Right ()
+
+-- | Export matrix debug data
+exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> Either ServiceError Value
+exportMatrixDebugData database uuid opts = do
+    validUuid <- validateUUID uuid
+    case M.lookup validUuid (dbActivities database) of
+        Nothing -> Left $ ActivityNotFound validUuid
+        Just targetActivity -> do
+            -- Extract matrix debugging information (includes all computations)
+            let matrixData = extractMatrixDebugInfo database validUuid (debugFlowFilter opts)
+
+            -- Get inventory from matrixData (already computed)
+            let inventoryList = mdInventoryVector matrixData
+            let bioFlowUUIDs = mdBioFlowUUIDs matrixData
+            let inventory = M.fromList $ zip bioFlowUUIDs inventoryList
+
+            -- FORCE CSV export execution - use deepseq to ensure it runs
+            let !csvResult = unsafePerformIO $ do
+                    putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
+                    exportMatrixDebugCSVs (debugOutput opts) matrixData
+                    putStrLn $ "DEBUG: CSV export completed"
+                    return "CSV_EXPORTED"
+
+            let summary =
+                    M.fromList
+                        [ ("activity_uuid" :: Text, uuid)
+                        , ("activity_name" :: Text, activityName targetActivity)
+                        , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
+                        , ("matrix_debug_exported" :: Text, T.pack csvResult)
+                        , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
+                        , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
+                        ]
+            Right $ toJSON summary
+
+-- | Extract matrix debug information from Database
+extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> MatrixDebugInfo
+extractMatrixDebugInfo database targetUUID flowFilter =
+    let activities = dbActivities database
+        flows = dbFlows database
+        techTriples = dbTechnosphereTriples database
+        bioTriples = dbBiosphereTriples database
+        activityIndex = dbActivityIndex database
+        bioFlowUUIDs = dbBiosphereFlows database
+        activityCount = dbActivityCount database
+        bioFlowCount = dbBiosphereCount database
+
+        -- Build demand vector for target activity (f[i] = 1 for target, 0 elsewhere)
+        demandVec = buildDemandVectorFromIndex activityIndex targetUUID
+        demandList = toList demandVec
+
+        -- Solve (I - A) * supply = demand using PETSc (same as in computeInventoryMatrix)
+        supplyVec = solveSparseLinearSystem techTriples activityCount demandVec
+        supplyList = toList supplyVec
+
+        -- Calculate inventory using biosphere matrix: g = B * supply
+        inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+        inventoryList = toList inventoryVec
+
+        -- Filter biosphere flows if specified
+        filteredBioTriples = case flowFilter of
+            Nothing -> bioTriples
+            Just filterText ->
+                let matchingFlowIndices =
+                        [ idx | (uuid, idx) <- zip bioFlowUUIDs [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
+                        ]
+                 in filter (\(row, _, _) -> row `elem` matchingFlowIndices) bioTriples
+     in MatrixDebugInfo
+            { mdActivities = activities
+            , mdFlows = flows
+            , mdTechTriples = techTriples
+            , mdBioTriples = filteredBioTriples
+            , mdActivityIndex = activityIndex
+            , mdBioFlowUUIDs = bioFlowUUIDs
+            , mdTargetUUID = targetUUID
+            , mdSupplyVector = supplyList
+            , mdDemandVector = demandList
+            , mdInventoryVector = inventoryList
+            }
+
+-- | Matrix debug information container
+data MatrixDebugInfo = MatrixDebugInfo
+    { mdActivities :: M.Map UUID Activity
+    , mdFlows :: M.Map UUID Flow
+    , mdTechTriples :: [SparseTriple]
+    , mdBioTriples :: [SparseTriple]
+    , mdActivityIndex :: M.Map UUID Int
+    , mdBioFlowUUIDs :: [UUID]
+    , mdTargetUUID :: UUID
+    , mdSupplyVector :: [Double] -- Real supply amounts from PETSc solver
+    , mdDemandVector :: [Double] -- Demand vector (f)
+    , mdInventoryVector :: [Double] -- Final inventory vector (g)
+    }
+
+-- | Export matrix debug CSVs
+exportMatrixDebugCSVs :: FilePath -> MatrixDebugInfo -> IO ()
+exportMatrixDebugCSVs basePath debugInfo = do
+    let supplyChainPath = basePath ++ "_supply_chain.csv"
+        biosphereMatrixPath = basePath ++ "_biosphere_matrix.csv"
+
+    putStrLn $ "DEBUG: exportMatrixDebugCSVs called with basePath: " ++ basePath
+    putStrLn $ "DEBUG: Will create files: " ++ supplyChainPath ++ " and " ++ biosphereMatrixPath
+
+    -- Debug demand vector
+    let demandVector = mdDemandVector debugInfo
+        targetIndex = case M.lookup (mdTargetUUID debugInfo) (mdActivityIndex debugInfo) of
+            Just idx -> idx
+            Nothing -> -1
+        targetDemand =
+            if targetIndex >= 0 && targetIndex < length demandVector
+                then demandVector !! targetIndex
+                else -999.0
+    putStrLn $ "DEBUG: Target activity index: " ++ show targetIndex
+    putStrLn $ "DEBUG: Target demand value: " ++ show targetDemand
+    putStrLn $ "DEBUG: Demand vector length: " ++ show (length demandVector)
+    putStrLn $ "DEBUG: Non-zero demand entries: " ++ show (length $ filter (/= 0.0) demandVector)
+
+    -- Export supply chain activities (from technosphere matrix)
+    putStrLn "DEBUG: Calling exportSupplyChainData"
+    exportSupplyChainData supplyChainPath debugInfo
+
+    -- Export biosphere matrix contributions
+    putStrLn "DEBUG: Calling exportBiosphereMatrixData"
+    exportBiosphereMatrixData biosphereMatrixPath debugInfo
+
+    putStrLn "DEBUG: Both CSV exports completed"
+
+-- | Export supply chain data showing which activities contribute to target
+exportSupplyChainData :: FilePath -> MatrixDebugInfo -> IO ()
+exportSupplyChainData filePath debugInfo = do
+    let activities = mdActivities debugInfo
+        activityIndex = mdActivityIndex debugInfo
+        supplyVector = mdSupplyVector debugInfo
+        targetUUID = mdTargetUUID debugInfo
+
+        -- Create supply chain data with REAL supply amounts from solver
+        supplyChainRows =
+            [ csvRow uuid activity idx supply
+            | (uuid, idx) <- M.toList activityIndex
+            , Just activity <- [M.lookup uuid activities]
+            , let supply = if idx < length supplyVector then supplyVector !! idx else 0.0
+            ]
+
+        csvRow uuid activity idx supply =
+            [ show uuid
+            , T.unpack (activityName activity)
+            , T.unpack (activityLocation activity)
+            , show supply -- REAL supply amount from PETSc solver
+            , show idx
+            ]
+
+        csvHeader = ["activity_id", "activity_name", "location", "supply_amount", "col_idx"]
+        allRows = csvHeader : supplyChainRows
+        csvContent = L.intercalate "\n" (map (L.intercalate ",") allRows)
+
+    putStrLn $ "DEBUG: Writing supply chain data with " ++ show (length supplyChainRows) ++ " activities"
+    putStrLn $ "DEBUG: Supply vector length: " ++ show (length supplyVector)
+    writeFile filePath csvContent
+
+-- | Export biosphere matrix contributions
+exportBiosphereMatrixData :: FilePath -> MatrixDebugInfo -> IO ()
+exportBiosphereMatrixData filePath debugInfo = do
+    let flows = mdFlows debugInfo
+        activities = mdActivities debugInfo
+        bioTriples = mdBioTriples debugInfo
+        bioFlowUUIDs = mdBioFlowUUIDs debugInfo
+        activityIndex = mdActivityIndex debugInfo
+        supplyVector = mdSupplyVector debugInfo
+
+        -- Convert matrix triplets to CSV rows with REAL contributions
+        matrixRows =
+            [ csvRow bioTriple
+            | bioTriple@(row, col, value) <- bioTriples
+            , abs value > 1e-20 -- Filter very small values
+            ]
+
+        csvRow (row, col, value) =
+            [ maybe "unknown" show (getFlowUUID row)
+            , maybe "unknown" (T.unpack . flowName) (getFlow row)
+            , maybe "unknown" T.unpack (getFlowUnit row)
+            , maybe "unknown" show (getActivityUUID col)
+            , maybe "unknown" (T.unpack . activityName) (getActivity col)
+            , show value
+            , show realContribution -- REAL contribution = matrix_value × supply_amount
+            ]
+          where
+            getFlowUUID rowIdx =
+                if rowIdx < length bioFlowUUIDs
+                    then Just (bioFlowUUIDs !! rowIdx)
+                    else Nothing
+            getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
+            getFlowUnit rowIdx = fmap (T.pack . show . flowUnitId) (getFlow rowIdx)
+            getActivityUUID colIdx = fmap fst $ L.find ((== colIdx) . snd) (M.toList activityIndex)
+            getActivity colIdx = getActivityUUID colIdx >>= flip M.lookup activities
+            -- Calculate REAL contribution: B[row,col] × supply[col]
+            realContribution =
+                if col < length supplyVector
+                    then value * (supplyVector !! col)
+                    else 0.0
+
+        csvHeader = ["flow_id", "flow_name", "unit", "activity_id", "activity_name", "matrix_value", "contribution"]
+        allRows = csvHeader : matrixRows
+        csvContent = L.intercalate "\n" (map (L.intercalate ",") allRows)
+
+    putStrLn $ "DEBUG: Writing biosphere matrix with " ++ show (length matrixRows) ++ " entries"
+    writeFile filePath csvContent

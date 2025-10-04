@@ -67,6 +67,7 @@ commandParser = subparser
  <> OA.command "activities" (info (searchActivitiesParser <**> helper) (progDesc "Search activities"))
  <> OA.command "flows" (info (searchFlowsParser <**> helper) (progDesc "Search flows"))
  <> OA.command "lcia" (info (lciaParser <**> helper) (progDesc "Compute LCIA scores with characterization method"))
+ <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
   )
 
 -- | Server command parser
@@ -216,6 +217,31 @@ lciaOptionsParser = do
     )
 
   pure LCIAOptions{..}
+
+-- | Debug matrices command parser
+debugMatricesParser :: Parser Command
+debugMatricesParser = do
+  uuid <- argument textReader (metavar "UUID" <> help "Activity UUID for matrix debugging")
+  options <- debugMatricesOptionsParser
+  pure $ DebugMatrices uuid options
+
+-- | Debug matrices options parser
+debugMatricesOptionsParser :: Parser DebugMatricesOptions
+debugMatricesOptionsParser = do
+  debugOutput <- strOption
+    ( long "output"
+   <> short 'o'
+   <> metavar "FILE"
+   <> help "Base filename for debug output (will generate _supply_chain.csv and _biosphere_matrix.csv)"
+    )
+
+  debugFlowFilter <- optional $ strOption
+    ( long "flow-filter"
+   <> metavar "FLOW"
+   <> help "Filter to specific biosphere flow (e.g., 'Sulphur dioxide')"
+    )
+
+  pure DebugMatricesOptions{..}
 
 -- | Text reader for UUID arguments
 textReader :: ReadM Text

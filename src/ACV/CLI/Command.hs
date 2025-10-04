@@ -3,7 +3,7 @@
 module ACV.CLI.Command where
 
 import ACV.CLI.Format
-import ACV.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..))
+import ACV.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
 import ACV.Progress
 import qualified ACV.Service
 import ACV.Types (Database)
@@ -88,6 +88,10 @@ executeCommand (CLIConfig globalOpts cmd) database = do
     -- LCIA computation
     LCIA uuid lciaOpts ->
       executeLCIACommand outputFormat jsonPathOpt database uuid lciaOpts
+
+    -- Matrix debugging
+    DebugMatrices uuid debugOpts ->
+      executeDebugMatricesCommand database uuid debugOpts
 
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
@@ -204,6 +208,22 @@ executeLCIACommand fmt jsonPathOpt database uuid opts = do
             Right _ -> reportProgress Info $ "Results exported to CSV: " ++ csvPath
         Nothing -> return ()
 
+-- | Execute matrix debugging command
+executeDebugMatricesCommand :: Database -> T.Text -> DebugMatricesOptions -> IO ()
+executeDebugMatricesCommand database uuid opts = do
+  reportProgress Info $ "Extracting matrix debug data for activity: " ++ T.unpack uuid
+  reportProgress Info $ "Output base: " ++ debugOutput opts
+
+  case debugFlowFilter opts of
+    Just flowFilter -> reportProgress Info $ "Flow filter: " ++ T.unpack flowFilter
+    Nothing -> reportProgress Info "No flow filter specified (all biosphere flows)"
+
+  case ACV.Service.exportMatrixDebugData database uuid opts of
+    Left err -> reportServiceError err
+    Right result -> do
+      reportProgress Info "Matrix debug export completed"
+      reportProgress Info $ "Supply chain data: " ++ debugOutput opts ++ "_supply_chain.csv"
+      reportProgress Info $ "Biosphere matrix: " ++ debugOutput opts ++ "_biosphere_matrix.csv"
 
 -- | Output result in the specified format
 outputResult :: OutputFormat -> Maybe Text -> Value -> IO ()

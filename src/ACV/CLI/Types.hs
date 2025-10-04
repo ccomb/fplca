@@ -48,6 +48,7 @@ data Command =
   | SearchFlows SearchFlowsOptions             -- Search flows
     -- No separate synonyms command - synonyms are included in flow responses
   | LCIA Text LCIAOptions                 -- LCIA computation
+  | DebugMatrices Text DebugMatricesOptions -- Matrix debugging for activity
   deriving (Eq, Show, Generic)
 
 -- | Server-specific options
@@ -99,6 +100,12 @@ data LCIAOptions = LCIAOptions
   { lciaMethod :: FilePath        -- --method (required for LCIA)
   , lciaOutput :: Maybe FilePath  -- --output XML export
   , lciaCSV :: Maybe FilePath     -- --csv export
+  } deriving (Eq, Show, Generic)
+
+-- | Matrix debugging options
+data DebugMatricesOptions = DebugMatricesOptions
+  { debugOutput :: FilePath           -- --output base filename (required)
+  , debugFlowFilter :: Maybe Text     -- --flow-filter (e.g., "Sulphur dioxide")
   } deriving (Eq, Show, Generic)
 
 -- | Complete CLI configuration
