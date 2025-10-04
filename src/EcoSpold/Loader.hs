@@ -6,12 +6,13 @@
 
 {-|
 Module      : EcoSpold.Loader
-Description : High-performance EcoSpold XML loading with intelligent caching
+Description : High-performance EcoSpold XML loading with matrix caching
 
-This module provides optimized loading of EcoSpold XML files with a two-tier caching system:
-
-1. **SimpleDatabase Cache**: Parsed activities, flows, and units (3.5s load)
-2. **Matrix Database Cache**: Pre-computed sparse matrices for direct LCA solving (0.5s load)
+This module provides optimized loading of EcoSpold XML files together with a
+single cache storing the fully indexed database and pre-computed sparse
+matrices. When the cache is absent or invalidated, the loader reparses all
+EcoSpold datasets, builds the in-memory structures, and writes the matrix cache
+for subsequent runs.
 
 Key performance features:
 - Parallel parsing with controlled concurrency (prevents resource exhaustion)
@@ -19,31 +20,26 @@ Key performance features:
 - Memory-efficient chunked processing for large databases
 - Hash-based cache filenames for multi-dataset support
 
-Cache Performance (Ecoinvent 3.8 with 18K activities):
-- Cold start (XML parsing): ~45s
-- SimpleDatabase cache hit: ~3.5s
+Cache performance (Ecoinvent 3.8 with 18K activities):
+- Cold start (XML parsing + matrix build): ~45s
 - Matrix cache hit: ~0.5s
 
-The caching system is essential for development workflow and production deployment.
+The cache keeps day-to-day execution fast while preserving reproducibility.
 -}
 
-module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedSpoldsWithFlows, saveCachedSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices) where
+module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices) where
 
 import ACV.Progress
 import ACV.Types
 import Control.Concurrent.Async
-import Control.Exception (SomeException, catch)
 import Control.Monad
 import Data.Binary (decodeFile, encodeFile)
 import Data.Hashable (hash)
-import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Map as M
-import qualified Data.Set as S
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
-import System.Directory (doesFileExist, listDirectory, removeFile)
+import System.Directory (doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
-import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
 
 {-|
@@ -63,57 +59,6 @@ Current version 8 includes: Matrix pre-computation caching
 cacheFormatVersion :: Int
 cacheFormatVersion = 8
 
-{-|
-Generate cache filename based on data directory, file list, and version.
-
-Creates deterministic cache filenames that automatically invalidate when:
-- Source directory changes
-- File list changes (files added/removed)
-- Cache format version changes
-
-Format: "ecoinvent.cache.v{VERSION}.{HASH}.bin"
-where HASH = hash(directory_path + file_list)
-
-This ensures cache safety across different datasets and development scenarios.
--}
-generateCacheFilename :: FilePath -> IO FilePath
-generateCacheFilename dataDir = do
-    files <- listDirectory dataDir
-    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let filesHash = abs $ hash (show (dataDir, spoldFiles)) -- Hash both directory path and file list
-    return $ "ecoinvent.cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
-
-{-|
-Clean up outdated cache files for the same dataset.
-
-Removes cache files with:
-- Same dataset hash (same source files)
-- Different format version (older versions)
-
-This prevents disk space accumulation while preserving caches
-for different datasets that may be in use simultaneously.
--}
-cleanupOldCaches :: FilePath -> IO ()
-cleanupOldCaches dataDir = do
-    currentCache <- generateCacheFilename dataDir
-    files <- listDirectory "."
-
-    -- Extract hash from current cache filename: "ecoinvent.cache.v7.HASH.bin" -> "HASH"
-    let currentHash = case reverse (take 2 (reverse (words (map (\c -> if c == '.' then ' ' else c) currentCache)))) of
-            [hash, "bin"] -> hash
-            _ -> "" -- Fallback if parsing fails
-
-    -- Only remove caches with same hash but different version
-    let cacheFiles =
-            [ f | f <- files, "ecoinvent.cache.v" `isPrefixOf` f, f /= currentCache, currentHash `isInfixOf` f, not (("ecoinvent.cache.v" ++ show cacheFormatVersion ++ ".") `isPrefixOf` f) -- Don't remove current cache
-            -- Same dataset (same hash)
-            -- Different version
-            ]
-    mapM_ removeOldCache cacheFiles
-  where
-    removeOldCache cacheFile = do
-        reportCacheOperation $ "Removing outdated cache: " ++ cacheFile
-        catch (removeFile cacheFile) (\(_ :: SomeException) -> return ())
 
 {-|
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -230,66 +175,6 @@ loadAllSpoldsWithFlows dir = do
     chunksOf :: Int -> [a] -> [[a]]
     chunksOf _ [] = []
     chunksOf n xs = take n xs : chunksOf n (drop n xs)
-
-{-|
-Load SimpleDatabase from cache with automatic fallback to XML parsing.
-
-This function implements the first tier of the caching system:
-
-1. **Cache Hit**: Load pre-parsed SimpleDatabase from binary cache (~3.5s)
-2. **Cache Miss**: Parse XML files and build SimpleDatabase (~45s)
-
-The cache is automatically invalidated when source files change,
-ensuring data consistency while maximizing performance.
-
-Returns: (SimpleDatabase, wasFromCache)
--}
-loadCachedSpoldsWithFlows :: FilePath -> IO (SimpleDatabase, Bool)
-loadCachedSpoldsWithFlows dataDir = do
-    cacheFile <- generateCacheFilename dataDir
-    cleanupOldCaches dataDir
-
-    cacheExists <- doesFileExist cacheFile
-    if cacheExists
-        then do
-            reportCacheInfo cacheFile
-            withProgressTiming Cache "SimpleDatabase cache load" $ do
-                !db <- decodeFile cacheFile
-                reportCacheOperation $
-                    "Cache loaded: "
-                    ++ show (M.size $ sdbActivities db)
-                    ++ " activities, "
-                    ++ show (M.size $ sdbFlows db)
-                    ++ " flows"
-                return (db, True)
-        else do
-            reportCacheOperation "No cache found, parsing XML files from scratch"
-            withProgressTiming Info "XML file parsing and deduplication" $ do
-                !db <- loadAllSpoldsWithFlows dataDir
-                reportProgress Info $
-                    "XML parsing completed ("
-                    ++ show (M.size $ sdbActivities db)
-                    ++ " activities, "
-                    ++ show (M.size $ sdbFlows db)
-                    ++ " flows)"
-                return (db, False)
-
-{-|
-Save SimpleDatabase to binary cache for future use.
-
-Serializes the parsed SimpleDatabase to a binary cache file,
-enabling fast startup on subsequent runs. The cache filename
-is automatically generated based on source directory and file list.
-
-Cache files are typically 50-100MB for full Ecoinvent database.
--}
-saveCachedSpoldsWithFlows :: FilePath -> SimpleDatabase -> IO ()
-saveCachedSpoldsWithFlows dataDir db = do
-    cacheFile <- generateCacheFilename dataDir
-    withProgressTiming Cache "SimpleDatabase cache save" $ do
-        encodeFile cacheFile db
-        reportCacheInfo cacheFile
-        reportCacheOperation "SimpleDatabase cache saved successfully"
 
 {-|
 Generate filename for matrix cache (second-tier caching).

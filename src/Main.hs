@@ -2,7 +2,7 @@
 
 module Main where
 
-import Control.Monad (forM_, when, unless)
+import Control.Monad (forM_, unless)
 import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -23,7 +23,7 @@ import ACV.Progress
 import ACV.Query (DatabaseStats (..), buildDatabaseWithMatrices, getDatabaseStats)
 import ACV.Types
 import Data.IORef (newIORef, readIORef, writeIORef)
-import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, loadCachedSpoldsWithFlows, saveCachedDatabaseWithMatrices, saveCachedSpoldsWithFlows)
+import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
 
 -- For server mode
 import ACV.API (ACVAPI, acvAPI, acvServer)
@@ -86,11 +86,8 @@ loadDatabase dataDirectory disableCache =
           reportCacheOperation "Using cached Database with pre-computed matrices"
           return db
         Nothing -> do
-          reportCacheOperation "No matrix cache found, building from SimpleDatabase cache"
-          (simpleDb, wasFromCache) <- loadCachedSpoldsWithFlows dataDirectory
-          when (not wasFromCache) $ do
-            reportCacheOperation "Saving SimpleDatabase to cache for next time"
-            saveCachedSpoldsWithFlows dataDirectory simpleDb
+          reportCacheOperation "No matrix cache found, parsing EcoSpold XML files"
+          simpleDb <- loadAllSpoldsWithFlows dataDirectory
 
           reportProgress Info "Building indexes and pre-computing matrices for efficient queries"
           let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
