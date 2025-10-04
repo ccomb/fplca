@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-{-|
+{- |
 Module      : ACV.Matrix
 Description : Matrix-based LCA calculations using PETSc sparse solvers
 
@@ -30,7 +30,6 @@ Performance characteristics:
 - Forward/backward solve: O(n log n)
 - Memory usage: ~50-100 MB for typical Ecoinvent database
 -}
-
 module ACV.Matrix (
     Inventory,
     computeInventoryMatrix,
@@ -65,7 +64,6 @@ import Numerical.PETSc.Internal
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
-
 
 -- | Final inventory vector mapping biosphere flow UUIDs to quantities.
 type Inventory = M.Map UUID Double
@@ -107,7 +105,7 @@ buildPetscMatrixData triplets n =
      in
         V.fromList petscTriplets
 
-{-|
+{- |
 Solve the fundamental LCA equation (I - A) * x = b using PETSc MUMPS direct solver.
 
 This function:
@@ -125,7 +123,6 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
     -- Build (I - A) system from sparse triplets
     -- Add identity matrix: I[i,i] = 1.0
     let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
-    -- Subtract technosphere: (I - A)[i,j] = I[i,j] - A[i,j]
     let systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
     let allTriples = identityTriples ++ systemTechTriples
 
@@ -183,7 +180,7 @@ applySparseMatrix sparseTriples nRows inputVec =
             return result
      in resultVec
 
-{-|
+{- |
 Compute the complete LCA inventory for a given root activity using matrix-based calculations.
 
 This is the main entry point for LCA calculations. It performs the complete inventory
@@ -230,7 +227,7 @@ computeInventoryMatrix db rootUUID =
         result = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
      in result
 
-{-|
+{- |
 Build the final demand vector f for LCA calculations.
 
 The demand vector represents external demand for products from each activity:
@@ -247,7 +244,7 @@ buildDemandVectorFromIndex activityIndex rootUUID =
         rootIndex = fromMaybe 0 (M.lookup rootUUID activityIndex)
      in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
 
-{-|
+{- |
 Legacy function for building demand vector.
 
 @deprecated Use 'buildDemandVectorFromIndex' instead, which uses pre-computed indices.
