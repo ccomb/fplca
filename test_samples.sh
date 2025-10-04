@@ -1,13 +1,14 @@
 #!/bin/bash
 
-# SAMPLE Data Test Runner - Comprehensive and Smart
-# Tests all SAMPLE datasets with appropriate test selection
+# SAMPLE Data Test Runner - Comprehensive with Inventory Validation
+# Tests all SAMPLE datasets with appropriate test selection AND validates inventory correctness
 
 set -e
 
 echo "=== ACV Engine SAMPLE Test Suite ==="
 echo "Comprehensive testing of all SAMPLE datasets"
 echo "Using --no-cache to ensure fresh parsing and matrix assembly"
+echo "Includes inventory correctness validation with expected results"
 echo
 
 # Colors
@@ -97,8 +98,21 @@ echo
 
 if [ $FAILED_TESTS -eq 0 ]; then
     echo -e "${GREEN}🎉 ALL TESTS PASSED!${NC}"
-    echo "ACV Engine is functioning correctly across all test scenarios."
-    exit 0
+    echo "Now running inventory correctness validation..."
+    echo
+
+    # Run inventory validation
+    if source expected_results.sh && run_inventory_validation; then
+        echo
+        echo -e "${GREEN}✅ COMPLETE SUCCESS!${NC}"
+        echo "ACV Engine is functioning correctly across all test scenarios with correct inventory calculations."
+        exit 0
+    else
+        echo
+        echo -e "${RED}❌ INVENTORY VALIDATION FAILED!${NC}"
+        echo "Basic tests passed but inventory calculations are incorrect."
+        exit 1
+    fi
 else
     echo -e "${RED}⚠ $FAILED_TESTS tests failed.${NC}"
     echo "Check individual test outputs for debugging."
