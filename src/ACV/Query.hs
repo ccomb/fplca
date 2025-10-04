@@ -88,7 +88,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         -- Build technosphere sparse triplets (optimized with strict evaluation)
         _ = unsafePerformIO $ reportMatrixOperation "Building technosphere matrix triplets"
         !techTriples =
-            let buildTechTriple j consumerActivity ex
+            let buildTechTriple normalizationFactor j consumerActivity ex
                     | not (isTechnosphereExchange ex) = []
                     | exchangeIsReference ex = [] -- Skip reference products - normalization approach
                     | otherwise =
@@ -98,7 +98,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                     Just producerIdx ->
                                         let unitName = getUnitNameForExchange unitDB ex
                                             normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
-                                            value = normalizedAmountValue normalized -- Positive: A(i,j) = amount of product i required by activity j
+                                            rawValue = normalizedAmountValue normalized
+                                            denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
+                                            value = rawValue / denom -- Normalize per unit reference product
                                          in if abs value > 1e-15 then [(producerIdx, j, value)] else []
                                     Nothing -> []
                             Nothing -> []
@@ -109,13 +111,12 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                             Just refEx ->
                                 let unitName = getUnitNameForExchange unitDB refEx
                                     normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
-                                    normalizedAmount = normalizedAmountValue normalizedRef
-                                 in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
+                                 in normalizedAmountValue normalizedRef
                             Nothing -> 1.0 -- No reference product, no scaling needed
+                        normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
-                        -- Build triplets - NO reference product normalization needed here
-                        -- (normalization will be done separately in the matrix solver)
-                        buildNormalizedTechTriple ex = buildTechTriple j consumerActivity ex
+                        -- Build triplets with amounts normalized to one unit of reference product
+                        buildNormalizedTechTriple ex = buildTechTriple normalizationFactor j consumerActivity ex
                      in
                         concatMap buildNormalizedTechTriple (exchanges consumerActivity)
                 !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
@@ -138,7 +139,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
 
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
         !bioTriples =
-            let buildBioTriple j activity ex
+            let buildBioTriple normalizationFactor j activity ex
                     | not (isBiosphereExchange ex) = []
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
@@ -146,10 +147,11 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                 let unitName = getUnitNameForExchange unitDB ex
                                     normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
                                     normalizedAmount = normalizedAmountValue normalized
+                                    denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                     amount =
                                         if exchangeIsInput ex
-                                            then -normalizedAmount -- Resource consumption (negative)
-                                            else normalizedAmount -- Emission (positive)
+                                            then -normalizedAmount / denom -- Resource consumption (negative)
+                                            else normalizedAmount / denom -- Emission (positive)
                                  in if abs amount > 1e-15 then [(i, j, amount)] else []
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
@@ -159,13 +161,12 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                             Just refEx ->
                                 let unitName = getUnitNameForExchange unitDB refEx
                                     normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
-                                    normalizedAmount = normalizedAmountValue normalizedRef
-                                 in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
+                                 in normalizedAmountValue normalizedRef
                             Nothing -> 1.0 -- No reference product, no scaling needed
+                        normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
-                        -- Build biosphere triplets - NO reference product normalization needed here
-                        -- (normalization will be done separately in the matrix solver)
-                        buildNormalizedBioTriple ex = buildBioTriple j activity ex
+                        -- Build biosphere triplets normalized to the activity's reference product
+                        buildNormalizedBioTriple ex = buildBioTriple normalizationFactor j activity ex
                      in
                         concatMap buildNormalizedBioTriple (exchanges activity)
                 !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))
