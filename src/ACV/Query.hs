@@ -27,7 +27,7 @@ module ACV.Query where
 
 import ACV.Progress
 import ACV.Types
-import ACV.UnitConversion (normalizeExchangeAmount)
+import ACV.UnitConversion (normalizeExchangeAmount, normalizedAmountValue)
 import Control.Parallel.Strategies
 import Data.List (find, sortOn)
 import qualified Data.Map as M
@@ -97,8 +97,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                 case M.lookup inputActivityUUID activityIndex of
                                     Just producerIdx ->
                                         let unitName = getUnitNameForExchange unitDB ex
-                                            (normalizedValue, _) = normalizeExchangeAmount unitName (exchangeAmount ex)
-                                            value = normalizedValue -- Positive: A(i,j) = amount of product i required by activity j
+                                            normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                            value = normalizedAmountValue normalized -- Positive: A(i,j) = amount of product i required by activity j
                                          in if abs value > 1e-15 then [(producerIdx, j, value)] else []
                                     Nothing -> []
                             Nothing -> []
@@ -108,7 +108,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                         refProductAmount = case find exchangeIsReference (exchanges consumerActivity) of
                             Just refEx ->
                                 let unitName = getUnitNameForExchange unitDB refEx
-                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                    normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                    normalizedAmount = normalizedAmountValue normalizedRef
                                  in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
                             Nothing -> 1.0 -- No reference product, no scaling needed
 
@@ -143,7 +144,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
                                 let unitName = getUnitNameForExchange unitDB ex
-                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                    normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                    normalizedAmount = normalizedAmountValue normalized
                                     amount =
                                         if exchangeIsInput ex
                                             then -normalizedAmount -- Resource consumption (negative)
@@ -156,7 +158,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                         refProductAmount = case find exchangeIsReference (exchanges activity) of
                             Just refEx ->
                                 let unitName = getUnitNameForExchange unitDB refEx
-                                    (normalizedAmount, _) = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                    normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
+                                    normalizedAmount = normalizedAmountValue normalizedRef
                                  in if normalizedAmount > 1e-15 then normalizedAmount else 1.0
                             Nothing -> 1.0 -- No reference product, no scaling needed
 
