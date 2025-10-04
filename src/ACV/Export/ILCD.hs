@@ -2,7 +2,7 @@
 
 module ACV.Export.ILCD (exportInventoryAsILCD) where
 
-import ACV.Inventory (Inventory)
+import ACV.Matrix (Inventory)
 import ACV.Types
 import qualified Data.Map as M
 import qualified Data.Text as T

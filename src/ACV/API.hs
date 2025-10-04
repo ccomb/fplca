@@ -5,7 +5,7 @@
 
 module ACV.API where
 
-import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
+import ACV.Matrix (Inventory)
 import ACV.Query
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)

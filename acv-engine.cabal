@@ -61,7 +61,6 @@ executable acv-cli
   other-modules:     ACV.Types
                      , ACV.Types.API
                      , ACV.Tree
-                     , ACV.Inventory
                      , ACV.Matrix
                      , ACV.PEF
                      , ACV.Progress
@@ -103,4 +102,3 @@ test-suite acv-tests
                      , directory
                      , filepath
   default-language:    Haskell2010
-

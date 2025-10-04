@@ -4,8 +4,7 @@
 module ACV.Service where
 
 import ACV.CLI.Types (DebugMatricesOptions (..))
-import ACV.Inventory (Inventory, computeInventoryFromLoopAwareTree, computeInventoryWithFlows)
-import ACV.Matrix (applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList)
+import ACV.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList)
 import ACV.Progress
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)

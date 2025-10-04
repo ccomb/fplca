@@ -1,6 +1,6 @@
 module ACV.PEF where
 
-import ACV.Inventory (Inventory)
+import ACV.Matrix (Inventory)
 import ACV.Types
 import qualified Data.Map as M
 

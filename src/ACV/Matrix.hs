@@ -32,6 +32,7 @@ Performance characteristics:
 -}
 
 module ACV.Matrix (
+    Inventory,
     computeInventoryMatrix,
     buildDemandVector,
     buildDemandVectorFromIndex,
@@ -65,6 +66,9 @@ import Numerical.PETSc.Internal
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
 
+
+-- | Final inventory vector mapping biosphere flow UUIDs to quantities.
+type Inventory = M.Map UUID Double
 
 -- | Aggregate duplicate matrix entries by summing values for same (i,j) coordinates
 aggregateMatrixEntries :: [(Int, Int, Double)] -> [(Int, Int, Double)]
@@ -203,7 +207,7 @@ Output:
 Performance: ~7s total for full Ecoinvent database (14K activities)
 - 3.5s cache loading + 3s solver + 0.5s biosphere calculation
 -}
-computeInventoryMatrix :: Database -> UUID -> M.Map UUID Double
+computeInventoryMatrix :: Database -> UUID -> Inventory
 computeInventoryMatrix db rootUUID =
     let activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
