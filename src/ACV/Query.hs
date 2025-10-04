@@ -102,7 +102,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                             rawValue = normalizedAmountValue normalized
                                             denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                             value = rawValue / denom -- Normalize per unit reference product
-                                         in if abs value > 1e-15 then [(producerIdx, j, value)] else []
+                                         in ([(producerIdx, j, value) | abs value > 1e-15])
                                     Nothing -> []
                             Nothing -> []
                 buildActivityTriplets (j, consumerActivity) =
@@ -117,7 +117,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                         normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
                         -- Build triplets with amounts normalized to one unit of reference product
-                        buildNormalizedTechTriple ex = buildTechTriple normalizationFactor j consumerActivity ex
+                        buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity
                      in
                         concatMap buildNormalizedTechTriple (exchanges consumerActivity)
                 !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
@@ -147,13 +147,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                             Just i ->
                                 let unitName = getUnitNameForExchange unitDB ex
                                     normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
-                                    normalizedAmount = normalizedAmountValue normalized
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                    amount =
-                                        if exchangeIsInput ex
-                                            then -normalizedAmount / denom -- Resource consumption (negative)
-                                            else normalizedAmount / denom -- Emission (positive)
-                                 in if abs amount > 1e-15 then [(i, j, amount)] else []
+                                    amount = normalizedAmountValue normalized / denom
+                                 in ([(i, j, amount) | abs amount > 1e-15])
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
                     let
@@ -167,7 +163,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                         normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
                         -- Build biosphere triplets normalized to the activity's reference product
-                        buildNormalizedBioTriple ex = buildBioTriple normalizationFactor j activity ex
+                        buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in
                         concatMap buildNormalizedBioTriple (exchanges activity)
                 !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))
@@ -612,9 +608,7 @@ findFlowsBySynonymInLanguage db lang searchText =
 matchesFlowInLanguage :: [Text] -> Text -> Flow -> Bool
 matchesFlowInLanguage searchTerms lang flow =
     let lowerName = T.toLower (flowName flow)
-        langSynonyms = case M.lookup lang (flowSynonyms flow) of
-            Nothing -> []
-            Just syns -> S.toList syns
+        langSynonyms = maybe [] S.toList (M.lookup lang (flowSynonyms flow))
         lowerSynonyms = map T.toLower langSynonyms
 
         matchesTerm term =
