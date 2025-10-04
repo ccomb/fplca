@@ -139,12 +139,22 @@ parseExchangeWithFlowOptimized cur =
             (x : _) -> x
 
         -- Extract inputGroup and outputGroup from child elements
-        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
-            [] -> ""
-            (x : _) -> x
-        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
-            [] -> ""
-            (x : _) -> x
+        -- Some datasets keep group flags as attributes, others nest them as child nodes.
+        -- Prefer attributes (correct EcoSpold structure) but fall back to elements.
+        !attrInputGroup = getAttr cur "inputGroup"
+        !attrOutputGroup = getAttr cur "outputGroup"
+        !inputGroup =
+            if not (T.null attrInputGroup)
+                then attrInputGroup
+                else case cur $/ element (nsElement "inputGroup") &/ content of
+                    [] -> ""
+                    (x : _) -> x
+        !outputGroup =
+            if not (T.null attrOutputGroup)
+                then attrOutputGroup
+                else case cur $/ element (nsElement "outputGroup") &/ content of
+                    [] -> ""
+                    (x : _) -> x
 
         -- Determine type based on input/output groups (mutually exclusive)
         !isInput = inputGroup /= ""
@@ -180,12 +190,20 @@ parseElementaryExchangeWithFlowOptimized cur =
             [] -> "kg"
             (x : _) -> x
 
-        !inputGroup = case cur $/ element (nsElement "inputGroup") &/ content of
-            [] -> ""
-            (x : _) -> x
-        !outputGroup = case cur $/ element (nsElement "outputGroup") &/ content of
-            [] -> ""
-            (x : _) -> x
+        !attrInputGroup = getAttr cur "inputGroup"
+        !attrOutputGroup = getAttr cur "outputGroup"
+        !inputGroup =
+            if not (T.null attrInputGroup)
+                then attrInputGroup
+                else case cur $/ element (nsElement "inputGroup") &/ content of
+                    [] -> ""
+                    (x : _) -> x
+        !outputGroup =
+            if not (T.null attrOutputGroup)
+                then attrOutputGroup
+                else case cur $/ element (nsElement "outputGroup") &/ content of
+                    [] -> ""
+                    (x : _) -> x
 
         !isInput = inputGroup /= ""
         !ftype = Biosphere
