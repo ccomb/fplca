@@ -158,7 +158,7 @@ parseExchangeWithFlowOptimized cur =
 
         -- Determine type based on input/output groups (mutually exclusive)
         !isInput = inputGroup /= ""
-        !isRef = outputGroup == "0" -- Reference product has outputGroup="0"
+        !isRef = outputGroup == "4" || outputGroup == "0" -- Reference product is flagged with 4 (legacy datasets used 0)
         !ftype = Technosphere
 
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
