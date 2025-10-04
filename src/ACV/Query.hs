@@ -90,6 +90,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         !techTriples =
             let buildTechTriple normalizationFactor j consumerActivity ex
                     | not (isTechnosphereExchange ex) = []
+                    | not (exchangeIsInput ex) = [] -- Skip technosphere outputs/co-products
                     | exchangeIsReference ex = [] -- Skip reference products - normalization approach
                     | otherwise =
                         case exchangeActivityLinkId ex of
