@@ -1,14 +1,17 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Navigation as Nav
 import Dict
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
+import Url
 import Url.Builder
+import Url.Parser as Parser exposing (Parser, oneOf, string, (</>), parse, top)
 import Models.Activity exposing (ActivityTree, ActivitySummary, SearchResults, activityTreeDecoder, activitySummaryDecoder, searchResultsDecoder)
-import Models.Page exposing (Page(..))
+import Models.Page exposing (Page(..), Route(..))
 import Views.TreeView as TreeView
 import Views.LeftMenu as LeftMenu
 import Views.ActivitiesView as ActivitiesView
@@ -16,16 +19,20 @@ import Views.ActivitiesView as ActivitiesView
 
 main : Program () Model Msg
 main =
-    Browser.element
+    Browser.application
         { init = init
+        , view = \model -> { title = "ACV Engine", body = [view model] }
         , update = update
         , subscriptions = subscriptions
-        , view = view
+        , onUrlChange = UrlChanged
+        , onUrlRequest = LinkClicked
         }
 
 
 type alias Model =
-    { currentPage : Page
+    { key : Nav.Key
+    , url : Url.Url
+    , currentPage : Page
     , currentTree : Maybe ActivityTree
     , currentActivityId : String
     , loading : Bool
@@ -49,26 +56,92 @@ type Msg
     | ActivitiesSearchResults (Result Http.Error (SearchResults ActivitySummary))
     | SelectActivity String
     | NodeHovered (Maybe String)
+    | LinkClicked Browser.UrlRequest
+    | UrlChanged Url.Url
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
+-- URL parsing
+routeParser : Parser (Route -> a) a
+routeParser =
+    oneOf
+        [ Parser.map ActivitiesRoute top
+        , Parser.map ActivitiesRoute (Parser.s "activities")
+        , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
+        , Parser.map ActivityRoute (Parser.s "activity" </> string)
+        ]
+
+
+parseUrl : Url.Url -> Route
+parseUrl url =
+    -- Use fragment instead of path for hash-based routing
+    case url.fragment of
+        Nothing ->
+            ActivitiesRoute
+
+        Just fragment ->
+            case Parser.parse routeParser { url | path = "/" ++ fragment, fragment = Nothing } of
+                Just route ->
+                    route
+
+                Nothing ->
+                    NotFoundRoute
+
+
+routeToPage : Route -> Page
+routeToPage route =
+    case route of
+        ActivitiesRoute ->
+            ActivitiesPage
+
+        ActivityRoute _ ->
+            GraphPage
+
+        ActivityTreeRoute _ ->
+            GraphPage
+
+        NotFoundRoute ->
+            ActivitiesPage
+
+
+init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init _ url key =
     let
-        initialActivityId =
-            "22222222-3333-4444-5555-666666666661_chemical-b-uuid"  -- Updated for SAMPLE.switching
+        route = parseUrl url
+        defaultActivityId = "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
+
+        (activityId, shouldLoad) =
+            case route of
+                ActivityRoute processId ->
+                    (processId, True)
+
+                ActivityTreeRoute processId ->
+                    (processId, True)
+
+                _ ->
+                    (defaultActivityId, False)
+
+        initialPage = routeToPage route
+
+        model =
+            { key = key
+            , url = url
+            , currentPage = initialPage
+            , currentTree = Nothing
+            , currentActivityId = activityId
+            , loading = shouldLoad
+            , error = Nothing
+            , navigationHistory = []
+            , activitiesSearchQuery = ""
+            , searchResults = Nothing
+            , searchLoading = False
+            , hoveredNode = Nothing
+            }
     in
-    ( { currentPage = GraphPage
-      , currentTree = Nothing
-      , currentActivityId = initialActivityId
-      , loading = True
-      , error = Nothing
-      , navigationHistory = []
-      , activitiesSearchQuery = ""
-      , searchResults = Nothing
-      , searchLoading = False
-      , hoveredNode = Nothing
-      }
-    , loadActivityTree initialActivityId
+    ( model
+    , if shouldLoad then
+        loadActivityTree activityId
+      else
+        Cmd.none
     )
 
 
@@ -107,8 +180,7 @@ update msg model =
                 ( { model
                     | navigationHistory = model.currentActivityId :: model.navigationHistory
                   }
-                , Cmd.batch
-                    [ loadActivityTree nodeId ]
+                , navigateToActivity model.key nodeId
                 )
 
             else
@@ -181,15 +253,73 @@ update msg model =
 
         SelectActivity activityId ->
             ( { model
-                | currentActivityId = activityId
-                , currentPage = GraphPage
-                , navigationHistory = model.currentActivityId :: model.navigationHistory
+                | navigationHistory = model.currentActivityId :: model.navigationHistory
               }
-            , loadActivityTree activityId
+            , navigateToActivity model.key activityId
             )
 
         NodeHovered nodeId ->
             ( { model | hoveredNode = nodeId }, Cmd.none )
+
+        LinkClicked urlRequest ->
+            case urlRequest of
+                Browser.Internal url ->
+                    ( model, Nav.pushUrl model.key (Url.toString url) )
+
+                Browser.External href ->
+                    ( model, Nav.load href )
+
+        UrlChanged url ->
+            let
+                route = parseUrl url
+                newPage = routeToPage route
+                (newActivityId, shouldLoad) =
+                    case route of
+                        ActivityRoute processId ->
+                            (processId, True)
+
+                        ActivityTreeRoute processId ->
+                            (processId, True)
+
+                        _ ->
+                            (model.currentActivityId, False)
+
+                updatedModel =
+                    { model
+                    | url = url
+                    , currentPage = newPage
+                    , currentActivityId = newActivityId
+                    , loading = shouldLoad
+                    }
+            in
+            ( updatedModel
+            , if shouldLoad && newActivityId /= model.currentActivityId then
+                loadActivityTree newActivityId
+              else
+                Cmd.none
+            )
+
+
+-- Navigation helpers
+routeToUrl : Route -> String
+routeToUrl route =
+    case route of
+        ActivitiesRoute ->
+            "/#activities"
+
+        ActivityRoute processId ->
+            "/#activity/" ++ processId
+
+        ActivityTreeRoute processId ->
+            "/#activity/" ++ processId ++ "/tree"
+
+        NotFoundRoute ->
+            "/"
+
+
+navigateToActivity : Nav.Key -> String -> Cmd Msg
+navigateToActivity key processId =
+    Nav.pushUrl key (routeToUrl (ActivityTreeRoute processId))
 
 
 subscriptions : Model -> Sub Msg

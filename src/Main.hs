@@ -252,10 +252,10 @@ createCombinedApp database maxTreeDepth req respond = do
   if C8.pack "/api/" `BS.isPrefixOf` path
     then serve acvAPI (acvServer database maxTreeDepth) req respond
     else
-      -- Route everything else to static files
+      -- For SPA: serve index.html for all non-API routes
       let staticSettings =
             (defaultWebAppSettings "web/dist")
-              { ssRedirectToIndex = True
+              { ssRedirectToIndex = False  -- Don't redirect, serve directly
               , ssIndices = case toPiece (T.pack "index.html") of
                   Just piece -> [piece]
                   Nothing -> []
