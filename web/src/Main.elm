@@ -33,7 +33,7 @@ type alias Model =
     { key : Nav.Key
     , url : Url.Url
     , currentPage : Page
-    , currentTree : Maybe ActivityTree
+    , cachedTrees : Dict.Dict String ActivityTree  -- Cache trees by activity ID
     , currentActivityId : String
     , loading : Bool
     , error : Maybe String
@@ -126,7 +126,7 @@ init _ url key =
             { key = key
             , url = url
             , currentPage = initialPage
-            , currentTree = Nothing
+            , cachedTrees = Dict.empty
             , currentActivityId = activityId
             , loading = shouldLoad
             , error = Nothing
@@ -149,17 +149,23 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         LoadActivity activityId ->
+            let
+                shouldLoad = not (Dict.member activityId model.cachedTrees)
+            in
             ( { model
-                | loading = True
+                | loading = shouldLoad
                 , error = Nothing
                 , currentActivityId = activityId
               }
-            , loadActivityTree activityId
+            , if shouldLoad then
+                loadActivityTree activityId
+              else
+                Cmd.none
             )
 
         ActivityLoaded (Ok tree) ->
             ( { model
-                | currentTree = Just tree
+                | cachedTrees = Dict.insert model.currentActivityId tree model.cachedTrees
                 , loading = False
                 , error = Nothing
               }
@@ -168,8 +174,7 @@ update msg model =
 
         ActivityLoaded (Err error) ->
             ( { model
-                | currentTree = Nothing
-                , loading = False
+                | loading = False
                 , error = Just (httpErrorToString error)
               }
             , Cmd.none
@@ -187,7 +192,7 @@ update msg model =
                 ( model, Cmd.none )
 
         NavigateToParent ->
-            case model.currentTree of
+            case Dict.get model.currentActivityId model.cachedTrees of
                 Just tree ->
                     case Dict.get model.currentActivityId tree.nodes of
                         Just currentNode ->
@@ -195,8 +200,13 @@ update msg model =
                                 Just parentId ->
                                     ( { model
                                         | navigationHistory = List.drop 1 model.navigationHistory
+                                        , currentActivityId = parentId
+                                        , loading = not (Dict.member parentId model.cachedTrees)
                                       }
-                                    , loadActivityTree parentId
+                                    , if Dict.member parentId model.cachedTrees then
+                                        Cmd.none
+                                      else
+                                        loadActivityTree parentId
                                     )
 
                                 Nothing ->
@@ -204,8 +214,13 @@ update msg model =
                                         parentId :: rest ->
                                             ( { model
                                                 | navigationHistory = rest
+                                                , currentActivityId = parentId
+                                                , loading = not (Dict.member parentId model.cachedTrees)
                                               }
-                                            , loadActivityTree parentId
+                                            , if Dict.member parentId model.cachedTrees then
+                                                Cmd.none
+                                              else
+                                                loadActivityTree parentId
                                             )
 
                                         [] ->
@@ -218,7 +233,12 @@ update msg model =
                     ( model, Cmd.none )
 
         NavigateToPage page ->
-            ( { model | currentPage = page }, Cmd.none )
+            let
+                url = case page of
+                    ActivitiesPage -> "/#activities"
+                    GraphPage -> "/#activity/" ++ model.currentActivityId ++ "/tree"
+            in
+            ( model, Nav.pushUrl model.key url )
 
         UpdateSearchQuery query ->
             ( { model | activitiesSearchQuery = query }
@@ -273,7 +293,7 @@ update msg model =
             let
                 route = parseUrl url
                 newPage = routeToPage route
-                (newActivityId, shouldLoad) =
+                (newActivityId, needsActivity) =
                     case route of
                         ActivityRoute processId ->
                             (processId, True)
@@ -284,6 +304,8 @@ update msg model =
                         _ ->
                             (model.currentActivityId, False)
 
+                shouldLoad = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedTrees)
+
                 updatedModel =
                     { model
                     | url = url
@@ -293,7 +315,7 @@ update msg model =
                     }
             in
             ( updatedModel
-            , if shouldLoad && newActivityId /= model.currentActivityId then
+            , if shouldLoad then
                 loadActivityTree newActivityId
               else
                 Cmd.none
@@ -330,7 +352,7 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     div [ class "app-container" ]
-        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage)
+        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId)
         , div [ class "main-content" ]
             [ case model.currentPage of
                 ActivitiesPage ->
@@ -385,7 +407,7 @@ viewGraphPage model =
                         ]
                     , div [ class "level-right" ]
                         [ div [ class "level-item" ]
-                            [ case model.currentTree of
+                            [ case Dict.get model.currentActivityId model.cachedTrees of
                                 Just tree ->
                                     case Dict.get model.currentActivityId tree.nodes of
                                         Just currentNode ->
@@ -408,7 +430,7 @@ viewGraphPage model =
         , -- Main content
           div [ class "section" ]
             [ div [ class "container is-fluid" ]
-                [ case ( model.loading, model.error, model.currentTree ) of
+                [ case ( model.loading, model.error, Dict.get model.currentActivityId model.cachedTrees ) of
                     ( True, _, _ ) ->
                         div [ class "has-text-centered" ]
                             [ div [ class "is-size-3" ] [ text "Loading..." ]
@@ -460,7 +482,7 @@ viewGraphPage model =
 
 canNavigateToParent : Model -> Bool
 canNavigateToParent model =
-    case model.currentTree of
+    case Dict.get model.currentActivityId model.cachedTrees of
         Just tree ->
             case Dict.get model.currentActivityId tree.nodes of
                 Just currentNode ->
