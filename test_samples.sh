@@ -68,6 +68,10 @@ run_test "SAMPLE.edge" "activity zero-neg-uuid_normal-product-uuid" "Zero/negati
 run_test "SAMPLE.edge" "activity invalid-refs-uuid_valid-product-uuid" "Invalid UUID references"
 run_test "SAMPLE.edge" "activity xml-edge-uuid_xml-test-product-uuid" "XML parsing edge cases"
 
+echo -e "${BLUE}SAMPLE.switching${NC} - Process Switching & Reference Product Tests"
+run_test "SAMPLE.switching" "activity 22222222-3333-4444-5555-666666666661" "Chemical plant (duplicate UUID handling)"
+run_test "SAMPLE.switching" "activity 33333333-4444-5555-6666-777777777772" "Power plant (duplicate UUID handling)"
+
 # Test original samples (basic functionality)
 echo -e "${YELLOW}=== Original Sample Datasets ===${NC}"
 

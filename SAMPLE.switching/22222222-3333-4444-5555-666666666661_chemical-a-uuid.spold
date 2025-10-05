@@ -1,0 +1,94 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="22222222-3333-4444-5555-666666666661" activityNameId="22222222-3333-4444-5555-666666666661" type="1">
+        <activityName xml:lang="en">flexible chemical plant (mode A - Chemical A primary)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests process switching: same plant producing Chemical A as main product, Chemical B as zero co-product</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT 1: Chemical A (reference product - main production mode) -->
+      <intermediateExchange id="out-1" unitId="unit-kg" amount="1.0" intermediateExchangeId="chemical-a-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">Chemical A</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 2: Chemical B (zero co-product when in mode A) -->
+      <intermediateExchange id="out-2" unitId="unit-kg" amount="0.0" intermediateExchangeId="chemical-b-uuid" productionVolumeAmount="0.0">
+        <name xml:lang="en">Chemical B</name>
+        <unitName xml:lang="en">kg</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Raw material feedstock -->
+      <intermediateExchange id="in-1" unitId="unit-kg" amount="1.2" intermediateExchangeId="raw-feedstock-uuid" activityLinkId="33333333-4444-5555-6666-777777777777">
+        <name xml:lang="en">Raw feedstock</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Process energy -->
+      <intermediateExchange id="in-2" unitId="unit-mj" amount="5.0" intermediateExchangeId="process-energy-uuid" activityLinkId="44444444-5555-6666-7777-888888888888">
+        <name xml:lang="en">Process energy</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Catalyst A (specific to Chemical A production) -->
+      <intermediateExchange id="in-3" unitId="unit-kg" amount="0.01" intermediateExchangeId="catalyst-a-uuid" activityLinkId="55555555-6666-7777-8888-999999999999">
+        <name xml:lang="en">Catalyst A</name>
+        <unitName xml:lang="en">kg</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: CO2 emissions -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="0.8" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Process wastewater -->
+      <elementaryExchange id="elem-2" unitId="unit-l" amount="2.0" elementaryExchangeId="process-wastewater-uuid">
+        <name xml:lang="en">Process wastewater</name>
+        <unitName xml:lang="en">l</unitName>
+        <compartment>
+          <compartment xml:lang="en">water</compartment>
+          <subcompartment xml:lang="en">surface water</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Chemical A specific emissions -->
+      <elementaryExchange id="elem-3" unitId="unit-g" amount="5.0" elementaryExchangeId="chemical-a-voc-uuid">
+        <name xml:lang="en">Chemical A VOC emissions</name>
+        <unitName xml:lang="en">g</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>

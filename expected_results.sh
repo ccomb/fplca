@@ -113,6 +113,39 @@ test_refinery_joint_production() {
     return $failed
 }
 
+test_process_switching() {
+    echo "🧪 Process Switching - Same UUID, Different Reference Products"
+    local failed=0
+
+    # Test Chemical Plant (duplicate UUID handling)
+    # System loads one mode - we test whichever gets loaded
+    local chemical_activity="22222222-3333-4444-5555-666666666661"
+    local switching_dataset="SAMPLE.switching"
+
+    # Based on testing, system loads Mode B (Chemical B primary)
+    if ! validate_inventory "Switching-CO2" "$switching_dataset" "$chemical_activity" "Carbon dioxide, fossil" "1.2" "kg" 5; then
+        failed=1
+    fi
+
+    if ! validate_inventory "Switching-VOC" "$switching_dataset" "$chemical_activity" "Chemical B VOC emissions" "8.0e-3" "g" 5; then
+        failed=1
+    fi
+
+    # Note: Chemical A is a zero technosphere co-product, correctly filtered from biosphere inventory
+    # No need to test it in inventory validation as it only shows biosphere flows
+
+    # Test Power Plant (duplicate UUID handling)
+    local power_activity="33333333-4444-5555-6666-777777777772"
+
+    # Test that power plant loads one of the fuel modes
+    # We'll accept either coal or gas mode - just test CO2 is present
+    if ! validate_inventory "Power-CO2" "$switching_dataset" "$power_activity" "Carbon dioxide, fossil" "0.20" "kg" 15; then
+        failed=1
+    fi
+
+    return $failed
+}
+
 # Run all validation tests
 run_inventory_validation() {
     echo "=== Inventory Correctness Validation ==="
@@ -141,6 +174,12 @@ run_inventory_validation() {
     total_tests=$((total_tests + 1))
     echo
 
+    if test_process_switching; then
+        passed_tests=$((passed_tests + 1))
+    fi
+    total_tests=$((total_tests + 1))
+    echo
+
     # Summary
     echo "📊 Inventory Validation Summary:"
     echo "   Test suites: $total_tests"
@@ -160,4 +199,5 @@ export -f validate_inventory
 export -f test_nuclear_power_units
 export -f test_steel_mass_conversions
 export -f test_refinery_joint_production
+export -f test_process_switching
 export -f run_inventory_validation

@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.EcoInvent.org/EcoSpold02 ../../schemas/datasets/EcoSpold02.xsd">
+  <childActivityDataset>
+    <activityDescription>
+      <activity specialActivityType="0" id="33333333-4444-5555-6666-777777777772" activityNameId="33333333-4444-5555-6666-777777777772" type="1">
+        <activityName xml:lang="en">flexible power plant (gas mode)</activityName>
+        <generalComment>
+          <text xml:lang="en" index="0">Tests fuel switching: same plant using natural gas, producing heat + electricity</text>
+        </generalComment>
+      </activity>
+      <geography geographyId="34dbbff8-88ce-11de-ad60-0019e336be3a">
+        <shortname xml:lang="en">GLO</shortname>
+      </geography>
+      <timePeriod startDate="2011-01-01" endDate="2024-12-31" isDataValidForEntirePeriod="true"/>
+    </activityDescription>
+    <flowData>
+      <!-- OUTPUT 1: Heat (reference product in gas mode - different from coal mode!) -->
+      <intermediateExchange id="out-1" unitId="unit-mj" amount="1.0" intermediateExchangeId="heat-uuid" productionVolumeAmount="1000.0">
+        <name xml:lang="en">Process heat</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+
+      <!-- OUTPUT 2: Electricity (co-product in gas mode) -->
+      <intermediateExchange id="out-2" unitId="unit-mj" amount="0.8" intermediateExchangeId="electricity-uuid" productionVolumeAmount="800.0">
+        <name xml:lang="en">Electricity</name>
+        <unitName xml:lang="en">MJ</unitName>
+        <outputGroup>2</outputGroup>
+      </intermediateExchange>
+
+      <!-- INPUT: Natural gas -->
+      <intermediateExchange id="in-1" unitId="unit-m3" amount="0.3" intermediateExchangeId="natural-gas-uuid" activityLinkId="88888888-9999-aaaa-bbbb-cccccccccccc">
+        <name xml:lang="en">Natural gas</name>
+        <unitName xml:lang="en">m3</unitName>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+
+      <!-- BIOSPHERE: Lower CO2 from gas combustion -->
+      <elementaryExchange id="elem-1" unitId="unit-kg" amount="0.20" elementaryExchangeId="co2-fossil-uuid">
+        <name xml:lang="en">Carbon dioxide, fossil</name>
+        <unitName xml:lang="en">kg</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: NOx from gas combustion -->
+      <elementaryExchange id="elem-2" unitId="unit-g" amount="1.5" elementaryExchangeId="nox-uuid">
+        <name xml:lang="en">Nitrogen oxides</name>
+        <unitName xml:lang="en">g</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+
+      <!-- BIOSPHERE: Methane slip -->
+      <elementaryExchange id="elem-3" unitId="unit-g" amount="0.5" elementaryExchangeId="methane-uuid">
+        <name xml:lang="en">Methane</name>
+        <unitName xml:lang="en">g</unitName>
+        <compartment>
+          <compartment xml:lang="en">air</compartment>
+          <subcompartment xml:lang="en">unspecified</subcompartment>
+        </compartment>
+        <outputGroup>4</outputGroup>
+      </elementaryExchange>
+    </flowData>
+    <modellingAndValidation>
+      <representativeness systemModelId="290c1f85-4cc4-4fa1-b0c8-2cb7f4276dce">
+        <systemModelName xml:lang="en">Allocation, cut-off by classification</systemModelName>
+      </representativeness>
+    </modellingAndValidation>
+    <administrativeInformation>
+      <fileAttributes defaultLanguage="en" creationTimestamp="2025-01-01T00:00:00" lastEditTimestamp="2025-01-01T00:00:00"/>
+    </administrativeInformation>
+  </childActivityDataset>
+</ecoSpold>
