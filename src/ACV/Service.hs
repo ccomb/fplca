@@ -61,6 +61,13 @@ resolveActivityByProcessId db queryText =
                 Nothing -> Left $ ActivityNotFound queryText
         Left _ -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid): " <> queryText
 
+-- | Extract ProcessId from an Activity (using stored ProcessId from filename)
+getProcessIdFromActivity :: Activity -> Text
+getProcessIdFromActivity activity =
+    case activityProcessId activity of
+        Just processId -> processIdToText processId
+        Nothing -> error $ "Activity missing ProcessId: " <> T.unpack (activityId activity) <> " - this should not happen after parser fix"
+
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
 getActivityInfo db queryText = do
@@ -115,7 +122,10 @@ convertToInventoryExport db rootActivity inventory calculationDepth =
 
         !metadata =
             InventoryMetadata
-                { imRootActivity = ActivitySummary (activityId rootActivity) (activityName rootActivity) (activityLocation rootActivity)
+                { imRootActivity = ActivitySummary
+                    (getProcessIdFromActivity rootActivity)
+                    (activityName rootActivity)
+                    (activityLocation rootActivity)
                 , imCalculationDepth = calculationDepth -- Actual calculation depth used
                 , imTotalFlows = length flowDetails
                 , imEmissionFlows = emissionFlows
@@ -307,7 +317,10 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam =
         total = length allResults
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
-        activityResults = map (\activity -> ActivitySummary (activityId activity) (activityName activity) (activityLocation activity)) pagedResults
+        activityResults = map (\activity -> ActivitySummary
+            (getProcessIdFromActivity activity)
+            (activityName activity)
+            (activityLocation activity)) pagedResults
      in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
 
 -- | Calculate extended metadata for an activity
@@ -389,7 +402,7 @@ getTargetActivity db exchange = do
     targetActivity <- M.lookup targetId (dbActivities db)
     return $
         ActivitySummary
-            { prsId = activityId targetActivity
+            { prsId = getProcessIdFromActivity targetActivity
             , prsName = activityName targetActivity
             , prsLocation = activityLocation targetActivity
             }
@@ -412,7 +425,10 @@ getActivitiesUsingFlow db flowUUID =
         Nothing -> []
         Just activityUUIDs ->
             let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
-             in [ ActivitySummary (activityId proc) (activityName proc) (activityLocation proc)
+             in [ ActivitySummary
+                    (getProcessIdFromActivity proc)
+                    (activityName proc)
+                    (activityLocation proc)
                 | procUUID <- uniqueUUIDs
                 , Just proc <- [M.lookup procUUID (dbActivities db)]
                 ]

@@ -80,8 +80,10 @@ streamParseActivityAndFlowsFromFile path = do
     let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor processId
     -- Apply cut-off strategy (conservative version)
     let !procWithCutoff = applyCutoffStrategy proc
+    -- Preserve the ProcessId after cutoff strategy
+    let !finalProc = procWithCutoff{activityProcessId = Just processId}
     -- Force full evaluation before returning
-    procWithCutoff `seq` flows `seq` units `seq` return (procWithCutoff, flows, units)
+    finalProc `seq` flows `seq` units `seq` return (finalProc, flows, units)
 
 -- | Optimized version of parseActivityWithFlowsAndUnits with better memory management
 parseActivityWithFlowsAndUnitsOptimized :: Cursor -> ProcessId -> (Activity, [Flow], [Unit])

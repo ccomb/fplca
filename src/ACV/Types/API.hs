@@ -22,7 +22,7 @@ data SearchResults a = SearchResults
 
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
-    { prsId :: UUID
+    { prsId :: Text  -- ProcessId format: activity_uuid_product_uuid
     , prsName :: Text
     , prsLocation :: Text
     }

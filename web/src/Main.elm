@@ -55,7 +55,7 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         initialActivityId =
-            "cfc47a90-26ad-5e47-87d6-16e89be827b1"
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid"
     in
     ( { currentPage = GraphPage
       , currentTree = Nothing
