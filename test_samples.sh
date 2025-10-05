@@ -69,20 +69,20 @@ run_test "SAMPLE.edge" "activity invalid-refs-uuid_valid-product-uuid" "Invalid 
 run_test "SAMPLE.edge" "activity xml-edge-uuid_xml-test-product-uuid" "XML parsing edge cases"
 
 echo -e "${BLUE}SAMPLE.switching${NC} - Process Switching & Reference Product Tests"
-run_test "SAMPLE.switching" "activity 22222222-3333-4444-5555-666666666661" "Chemical plant (duplicate UUID handling)"
-run_test "SAMPLE.switching" "activity 33333333-4444-5555-6666-777777777772" "Power plant (duplicate UUID handling)"
+run_test "SAMPLE.switching" "activity 22222222-3333-4444-5555-666666666661_chemical-b-uuid" "Chemical plant (Chemical B mode)"
+run_test "SAMPLE.switching" "activity 33333333-4444-5555-6666-777777777772_gas-power-uuid" "Power plant (gas mode)"
 
 # Test original samples (basic functionality)
 echo -e "${YELLOW}=== Original Sample Datasets ===${NC}"
 
 if [ -d "SAMPLE.min3" ]; then
     echo -e "${BLUE}SAMPLE.min3${NC} - Original working test data"
-    run_test "SAMPLE.min3" "activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" "Basic activity query"
+    run_test "SAMPLE.min3" "activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid" "Basic activity query"
 fi
 
 if [ -d "SAMPLE.min" ]; then
     echo -e "${BLUE}SAMPLE.min${NC} - Complex sample with loops"
-    run_test "SAMPLE.min" "activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" "Self-loop handling"
+    run_test "SAMPLE.min" "activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid" "Self-loop handling"
 fi
 
 # Summary

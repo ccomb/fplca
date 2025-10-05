@@ -51,26 +51,20 @@ findActivityByProcessId db processId =
         (activity:_) -> Just activity
         [] -> Nothing
 
--- | Resolve query input - either UUID or ProcessId format
-resolveActivityQuery :: Database -> Text -> Either ServiceError Activity
-resolveActivityQuery db queryText
-    -- First try as UUID (backward compatibility)
-    | Right validUuid <- validateUUID queryText =
-        case M.lookup validUuid (dbActivities db) of
-            Just activity -> Right activity
-            Nothing -> Left $ ActivityNotFound queryText
-    -- If not a valid UUID, try as ProcessId
-    | Right processId <- parseProcessIdFromText queryText =
-        case findActivityByProcessId db processId of
-            Just activity -> Right activity
-            Nothing -> Left $ ActivityNotFound queryText
-    -- If neither UUID nor ProcessId format, return error
-    | otherwise = Left $ InvalidUUID $ "Query must be either a valid UUID or ProcessId (activity_uuid_product_uuid): " <> queryText
+-- | Resolve activity query using ProcessId format only
+resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
+resolveActivityByProcessId db queryText =
+    case parseProcessIdFromText queryText of
+        Right processId ->
+            case findActivityByProcessId db processId of
+                Just activity -> Right activity
+                Nothing -> Left $ ActivityNotFound queryText
+        Left _ -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid): " <> queryText
 
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
 getActivityInfo db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let activityForAPI = convertActivityForAPI db activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
@@ -87,7 +81,7 @@ getActivityInfo db queryText = do
 -- | Core inventory calculation logic using matrix-based LCA calculations
 computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
 computeActivityInventory db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let !inventory = computeInventoryMatrix db (activityId activity)
      in Right inventory
 
@@ -144,12 +138,11 @@ isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> Either ServiceError Value
-getActivityInventory db uuid = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities db) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just activity ->
-            let !inventory = computeInventoryMatrix db validUuid
+getActivityInventory db processIdText = do
+    case resolveActivityByProcessId db processIdText of
+        Left err -> Left err
+        Right activity ->
+            let !inventory = computeInventoryMatrix db (activityId activity)
                 !inventoryExport = convertToInventoryExport db activity inventory 35
              in Right $ toJSON inventoryExport
 
@@ -258,7 +251,7 @@ convertToTreeExport db rootUUID maxDepth tree =
 -- | Get activity tree as rich TreeExport with configurable depth
 getActivityTree :: Database -> Text -> Int -> Either ServiceError Value
 getActivityTree db queryText maxDepth = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let activityUuid = activityId activity
         loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
         treeExport = convertToTreeExport db activityUuid maxDepth loopAwareTree
@@ -287,7 +280,7 @@ getActivityFlowSummaries db activity =
 -- | Get activity flows as JSON (for CLI)
 getActivityFlows :: Database -> Text -> Either ServiceError Value
 getActivityFlows db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let flowSummaries = getActivityFlowSummaries db activity
      in Right $ toJSON flowSummaries
 
@@ -445,21 +438,21 @@ getActivityOutputDetails db activity = getActivityExchangeDetails db activity (n
 -- | Get activity inputs as JSON (for CLI)
 getActivityInputs :: Database -> Text -> Either ServiceError Value
 getActivityInputs db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let inputDetails = getActivityInputDetails db activity
      in Right $ toJSON inputDetails
 
 -- | Get activity outputs as JSON (for CLI)
 getActivityOutputs :: Database -> Text -> Either ServiceError Value
 getActivityOutputs db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let outputDetails = getActivityOutputDetails db activity
      in Right $ toJSON outputDetails
 
 -- | Get activity reference product as JSON (for CLI)
 getActivityReferenceProduct :: Database -> Text -> Either ServiceError Value
 getActivityReferenceProduct db queryText = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     case getActivityReferenceProductDetail db activity of
         Nothing -> Right $ toJSON (Nothing :: Maybe FlowDetail)
         Just refProduct -> Right $ toJSON refProduct
@@ -499,7 +492,7 @@ getSynonymStats _ =
 -- | Compute LCIA scores (placeholder)
 computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
 computeLCIA db queryText methodFile = do
-    activity <- resolveActivityQuery db queryText
+    activity <- resolveActivityByProcessId db queryText
     let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", activityId activity)]
      in Right $ toJSON placeholder
 
@@ -513,13 +506,12 @@ exportLCIAAsCSV _ _ = Right ()
 
 -- | Export matrix debug data
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> Either ServiceError Value
-exportMatrixDebugData database uuid opts = do
-    validUuid <- validateUUID uuid
-    case M.lookup validUuid (dbActivities database) of
-        Nothing -> Left $ ActivityNotFound validUuid
-        Just targetActivity -> do
+exportMatrixDebugData database processIdText opts = do
+    case resolveActivityByProcessId database processIdText of
+        Left err -> Left err
+        Right targetActivity -> do
             -- Extract matrix debugging information (includes all computations)
-            let matrixData = extractMatrixDebugInfo database validUuid (debugFlowFilter opts)
+            let matrixData = extractMatrixDebugInfo database (activityId targetActivity) (debugFlowFilter opts)
 
             -- Get inventory from matrixData (already computed)
             let inventoryList = mdInventoryVector matrixData
@@ -535,7 +527,7 @@ exportMatrixDebugData database uuid opts = do
 
             let summary =
                     M.fromList
-                        [ ("activity_uuid" :: Text, uuid)
+                        [ ("activity_uuid" :: Text, activityId targetActivity)
                         , ("activity_name" :: Text, activityName targetActivity)
                         , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
                         , ("matrix_debug_exported" :: Text, T.pack csvResult)

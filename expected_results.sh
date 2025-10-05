@@ -55,7 +55,7 @@ validate_inventory() {
 
 test_nuclear_power_units() {
     echo "🧪 Nuclear Power Plant - Activity Unit Conversions"
-    local activity="11111111-2222-3333-4444-555555555551"
+    local activity="11111111-2222-3333-4444-555555555551_nuclear-electricity-uuid"
     local dataset="SAMPLE.units"
 
     # Test the fixed Radon-222 calculation (our critical regression test)
@@ -69,7 +69,7 @@ test_nuclear_power_units() {
 
 test_steel_mass_conversions() {
     echo "🧪 Steel Production - Mass Unit Conversions"
-    local activity="11111111-2222-3333-4444-555555555552"
+    local activity="11111111-2222-3333-4444-555555555552_steel-uuid"
     local dataset="SAMPLE.units"
 
     local failed=0
@@ -91,7 +91,7 @@ test_steel_mass_conversions() {
 
 test_refinery_joint_production() {
     echo "🧪 Oil Refinery - Joint Production Allocation"
-    local activity="11111111-2222-3333-4444-555555555555"
+    local activity="11111111-2222-3333-4444-555555555555_gasoline-uuid"
     local dataset="SAMPLE.multiproduct"
 
     local failed=0
@@ -117,9 +117,8 @@ test_process_switching() {
     echo "🧪 Process Switching - Same UUID, Different Reference Products"
     local failed=0
 
-    # Test Chemical Plant (duplicate UUID handling)
-    # System loads one mode - we test whichever gets loaded
-    local chemical_activity="22222222-3333-4444-5555-666666666661"
+    # Test Chemical Plant Mode B (ProcessId format)
+    local chemical_activity="22222222-3333-4444-5555-666666666661_chemical-b-uuid"
     local switching_dataset="SAMPLE.switching"
 
     # Based on testing, system loads Mode B (Chemical B primary)
@@ -134,12 +133,11 @@ test_process_switching() {
     # Note: Chemical A is a zero technosphere co-product, correctly filtered from biosphere inventory
     # No need to test it in inventory validation as it only shows biosphere flows
 
-    # Test Power Plant (duplicate UUID handling)
-    local power_activity="33333333-4444-5555-6666-777777777772"
+    # Test Power Plant Gas Mode (ProcessId format)
+    local power_activity="33333333-4444-5555-6666-777777777772_gas-power-uuid"
 
-    # Test that power plant loads one of the fuel modes
-    # We'll accept either coal or gas mode - just test CO2 is present
-    if ! validate_inventory "Power-CO2" "$switching_dataset" "$power_activity" "Carbon dioxide, fossil" "0.20" "kg" 15; then
+    # Test gas mode CO2 emissions
+    if ! validate_inventory "Power-CO2" "$switching_dataset" "$power_activity" "Carbon dioxide, fossil" "0.20" "kg" 5; then
         failed=1
     fi
 
