@@ -75,13 +75,13 @@ data InventoryStatistics = InventoryStatistics
 -- | Tree export data structures for visualization
 data TreeExport = TreeExport
     { teTree :: TreeMetadata
-    , teNodes :: M.Map UUID ExportNode
+    , teNodes :: M.Map Text ExportNode  -- Changed to Text (ProcessId format)
     , teEdges :: [TreeEdge]
     }
     deriving (Generic)
 
 data TreeMetadata = TreeMetadata
-    { tmRootId :: UUID
+    { tmRootId :: Text  -- Changed to Text (ProcessId format)
     , tmMaxDepth :: Int
     , tmTotalNodes :: Int
     , tmLoopNodes :: Int
@@ -91,15 +91,15 @@ data TreeMetadata = TreeMetadata
     deriving (Generic)
 
 data ExportNode = ExportNode
-    { enId :: UUID
+    { enId :: Text  -- Changed to Text (ProcessId format)
     , enName :: Text
     , enDescription :: [Text]
     , enLocation :: Text
     , enUnit :: Text
     , enNodeType :: NodeType
     , enDepth :: Int
-    , enLoopTarget :: Maybe UUID
-    , enParentId :: Maybe UUID -- For navigation back up
+    , enLoopTarget :: Maybe Text  -- Changed to Text (ProcessId format)
+    , enParentId :: Maybe Text -- Changed to Text (ProcessId format) -- For navigation back up
     , enChildrenCount :: Int -- Number of potential children for expandability
     }
     deriving (Generic)
@@ -108,8 +108,8 @@ data NodeType = ActivityNode | LoopNode
     deriving (Eq, Show, Generic)
 
 data TreeEdge = TreeEdge
-    { teFrom :: UUID
-    , teTo :: UUID
+    { teFrom :: Text  -- Changed to Text (ProcessId format)
+    , teTo :: Text    -- Changed to Text (ProcessId format)
     , teFlow :: FlowInfo
     , teQuantity :: Double
     , teUnit :: Text

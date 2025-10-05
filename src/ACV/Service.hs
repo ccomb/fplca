@@ -51,7 +51,7 @@ findActivityByProcessId db processId =
         (activity:_) -> Just activity
         [] -> Nothing
 
--- | Resolve activity query using ProcessId format only
+-- | Resolve activity query using ProcessId format with UUID fallback for compatibility
 resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
 resolveActivityByProcessId db queryText =
     case parseProcessIdFromText queryText of
@@ -59,14 +59,41 @@ resolveActivityByProcessId db queryText =
             case findActivityByProcessId db processId of
                 Just activity -> Right activity
                 Nothing -> Left $ ActivityNotFound queryText
-        Left _ -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid): " <> queryText
+        Left _ ->
+            -- Fallback: try as bare UUID for ECOINVENT data compatibility
+            case M.lookup queryText (dbActivities db) of
+                Just activity -> Right activity
+                Nothing -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid) or valid UUID: " <> queryText
 
 -- | Extract ProcessId from an Activity (using stored ProcessId from filename)
 getProcessIdFromActivity :: Activity -> Text
 getProcessIdFromActivity activity =
     case activityProcessId activity of
         Just processId -> processIdToText processId
-        Nothing -> error $ "Activity missing ProcessId: " <> T.unpack (activityId activity) <> " - this should not happen after parser fix"
+        Nothing ->
+            -- Construct ProcessId for ECOINVENT data using reference product
+            let actUUID = activityId activity
+                -- Find reference product UUID, fallback to first output, then activity UUID
+                productUUID = case getReferenceProductId activity of
+                    Just refProdId -> refProdId
+                    Nothing -> case getFirstOutputProductId activity of
+                        Just firstProdId -> firstProdId
+                        Nothing -> actUUID  -- Ultimate fallback
+            in actUUID <> "_" <> productUUID
+
+-- | Get reference product flow ID from activity
+getReferenceProductId :: Activity -> Maybe Text
+getReferenceProductId activity =
+    case filter exchangeIsReference (exchanges activity) of
+        (refExchange:_) -> Just (exchangeFlowId refExchange)
+        [] -> Nothing
+
+-- | Get first output product flow ID from activity
+getFirstOutputProductId :: Activity -> Maybe Text
+getFirstOutputProductId activity =
+    case filter (\ex -> not (exchangeIsInput ex) && isTechnosphereExchange ex) (exchanges activity) of
+        (outputExchange:_) -> Just (exchangeFlowId outputExchange)
+        [] -> Nothing
 
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
@@ -162,11 +189,11 @@ data TreeStats = TreeStats Int Int Int -- total, loops, leaves
 combineStats :: TreeStats -> TreeStats -> TreeStats
 combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
 
--- | Helper to get node ID from LoopAwareTree
-getTreeNodeId :: LoopAwareTree -> UUID
-getTreeNodeId (TreeLeaf activity) = activityId activity
-getTreeNodeId (TreeLoop uuid _ _) = uuid
-getTreeNodeId (TreeNode activity _) = activityId activity
+-- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
+getTreeNodeId :: LoopAwareTree -> Text
+getTreeNodeId (TreeLeaf activity) = getProcessIdFromActivity activity
+getTreeNodeId (TreeLoop uuid _ _) = uuid  -- Loop references remain as bare UUID for now
+getTreeNodeId (TreeNode activity _) = getProcessIdFromActivity activity
 
 -- | Count potential children for navigation (technosphere inputs that could be expanded)
 countPotentialChildren :: Database -> Activity -> Int
@@ -176,13 +203,14 @@ countPotentialChildren db activity =
         ]
 
 -- | Extract nodes and edges from LoopAwareTree
-extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe UUID -> M.Map UUID ExportNode -> [TreeEdge] -> (M.Map UUID ExportNode, [TreeEdge], TreeStats)
+extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
 extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
     TreeLeaf activity ->
         let childrenCount = countPotentialChildren db activity
+            processId = getProcessIdFromActivity activity
             node =
                 ExportNode
-                    { enId = activityId activity
+                    { enId = processId  -- Now ProcessId format
                     , enName = activityName activity
                     , enDescription = activityDescription activity
                     , enLocation = activityLocation activity
@@ -193,12 +221,12 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
                     }
-            nodes' = M.insert (activityId activity) node nodeAcc
+            nodes' = M.insert processId node nodeAcc  -- Use ProcessId as key
          in (nodes', edgeAcc, TreeStats 1 0 1)
     TreeLoop uuid name depth ->
         let node =
                 ExportNode
-                    { enId = uuid
+                    { enId = uuid  -- Keep loop references as bare UUID
                     , enName = name
                     , enDescription = ["Loop reference"]
                     , enLocation = "N/A"
@@ -213,9 +241,10 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
         let childrenCount = countPotentialChildren db activity
+            currentProcessId = getProcessIdFromActivity activity
             parentNode =
                 ExportNode
-                    { enId = activityId activity
+                    { enId = currentProcessId  -- Now ProcessId format
                     , enName = activityName activity
                     , enDescription = activityDescription activity
                     , enLocation = activityLocation activity
@@ -226,14 +255,13 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
                     }
-            nodes' = M.insert (activityId activity) parentNode nodeAcc
-            currentId = activityId activity
+            nodes' = M.insert currentProcessId parentNode nodeAcc  -- Use ProcessId as key
             processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
-                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentId) nodeAcc edgeAcc
+                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc edgeAcc
                     edge =
                         TreeEdge
-                            { teFrom = currentId
-                            , teTo = getTreeNodeId subtree
+                            { teFrom = currentProcessId  -- Now ProcessId format
+                            , teTo = getTreeNodeId subtree  -- This now returns ProcessId format
                             , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
                             , teQuantity = quantity
                             , teUnit = getUnitNameForFlow (dbUnits db) flow
@@ -244,12 +272,12 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
          in (finalNodes, finalEdges, childStats)
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
-convertToTreeExport :: Database -> UUID -> Int -> LoopAwareTree -> TreeExport
-convertToTreeExport db rootUUID maxDepth tree =
+convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
+convertToTreeExport db rootProcessId maxDepth tree =
     let (nodes, edges, stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
         metadata =
             TreeMetadata
-                { tmRootId = rootUUID
+                { tmRootId = rootProcessId  -- Now ProcessId format
                 , tmMaxDepth = maxDepth
                 , tmTotalNodes = M.size nodes
                 , tmLoopNodes = length [() | (_, node) <- M.toList nodes, enNodeType node == LoopNode]
@@ -264,7 +292,7 @@ getActivityTree db queryText maxDepth = do
     activity <- resolveActivityByProcessId db queryText
     let activityUuid = activityId activity
         loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
-        treeExport = convertToTreeExport db activityUuid maxDepth loopAwareTree
+        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree  -- Pass ProcessId instead of UUID
      in Right $ toJSON treeExport
 
 -- | Get flow usage count across all activities

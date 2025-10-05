@@ -11,7 +11,7 @@ import GHC.Conc (getNumCapabilities)
 import Options.Applicative
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Text.Printf (printf)
 
 -- ACV Engine imports
@@ -30,7 +30,7 @@ import ACV.API (ACVAPI, acvAPI, acvServer)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod)
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run)
 import Servant
@@ -237,10 +237,16 @@ validateDatabase db = do
 
   reportProgress Info ""
 
--- | Create a combined Wai application serving both API and static files
+-- | Create a combined Wai application serving both API and static files with request logging
 createCombinedApp :: Database -> Int -> Application
 createCombinedApp database maxTreeDepth req respond = do
   let path = rawPathInfo req
+      queryString = rawQueryString req
+      fullUrl = path <> queryString
+
+  -- Simple request logging (like nginx/apache access log) with explicit flush
+  putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack fullUrl
+  hFlush stdout
 
   -- Route API requests to the Servant application
   if C8.pack "/api/" `BS.isPrefixOf` path

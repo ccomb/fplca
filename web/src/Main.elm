@@ -55,7 +55,7 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         initialActivityId =
-            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid"
+            "22222222-3333-4444-5555-666666666661_chemical-b-uuid"  -- Updated for SAMPLE.switching
     in
     ( { currentPage = GraphPage
       , currentTree = Nothing

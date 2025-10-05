@@ -8,6 +8,7 @@ module ACV.API where
 import ACV.Matrix (Inventory)
 import ACV.Query
 import qualified ACV.Service
+import ACV.Service (getProcessIdFromActivity)
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
 import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..), LCIARequest(..))
@@ -155,7 +156,7 @@ acvServer db maxTreeDepth =
     searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
     searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
         let activities = findActivitiesByFields db nameParam geoParam productParam
-            activitySummaries = [ActivitySummary (activityId activity) (activityName activity) (activityLocation activity) | activity <- activities]
+            activitySummaries = [ActivitySummary (getProcessIdFromActivity activity) (activityName activity) (activityLocation activity) | activity <- activities]
         return $ paginateResults activitySummaries limitParam offsetParam
 
 
