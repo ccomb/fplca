@@ -48,7 +48,6 @@ data InventoryExport = InventoryExport
 
 data InventoryMetadata = InventoryMetadata
     { imRootActivity :: ActivitySummary
-    , imCalculationDepth :: Int
     , imTotalFlows :: Int
     , imEmissionFlows :: Int -- Biosphere outputs (negative environmental impact)
     , imResourceFlows :: Int -- Biosphere inputs (resource extraction)

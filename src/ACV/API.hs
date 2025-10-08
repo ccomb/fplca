@@ -7,23 +7,23 @@ module ACV.API where
 
 import ACV.Matrix (Inventory)
 import ACV.Query
-import qualified ACV.Service
 import ACV.Service (getProcessIdFromActivity)
+import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
-import ACV.Types.API (SearchResults(..), ActivitySummary(..), FlowSearchResult(..), InventoryExport(..), InventoryMetadata(..), InventoryFlowDetail(..), InventoryStatistics(..), TreeExport(..), TreeMetadata(..), ExportNode(..), NodeType(..), TreeEdge(..), FlowInfo(..), FlowSummary(..), FlowRole(..), ActivityInfo(..), ActivityForAPI(..), ActivityMetadata(..), ActivityLinks(..), ActivityStats(..), ExchangeWithUnit(..), FlowDetail(..), ExchangeDetail(..), LCIARequest(..))
+import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson
-import Data.Aeson.Types (Result(..), fromJSON)
+import Data.Aeson.Types (Result (..), fromJSON)
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import qualified Data.ByteString.Lazy as BSL
 import Data.Time (UTCTime, getCurrentTime)
+import qualified Data.UUID as UUID
 import GHC.Generics
 import Servant
-import qualified Data.UUID as UUID
 
 -- | API type definition - RESTful design with focused endpoints
 type ACVAPI =
@@ -43,12 +43,8 @@ type ACVAPI =
                 :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
            )
 
-
 -- JSON instances
 instance ToJSON ACV.Query.SynonymStats
-
-
-
 
 -- | Helper function to validate ProcessId and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
@@ -65,7 +61,7 @@ withValidatedFlow db uuid action = do
     case ACV.Service.validateUUID uuid of
         Left (ACV.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
         Left _ -> throwError err400{errBody = "Invalid request"}
-        Right validUuid -> 
+        Right validUuid ->
             case M.lookup validUuid (dbFlows db) of
                 Nothing -> throwError err404{errBody = "Flow not found"}
                 Just flow -> action flow
@@ -133,7 +129,7 @@ acvServer db maxTreeDepth =
         case ACV.Service.computeActivityInventory db processId of
             Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (ACV.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Right inventory -> return $ ACV.Service.convertToInventoryExport db activity inventory 35
+            Right inventory -> return $ ACV.Service.convertToInventoryExport db activity inventory
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
@@ -149,7 +145,7 @@ acvServer db maxTreeDepth =
 
     -- Search flows by name or synonym with optional language filtering and pagination
     searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-    searchFlows queryParam langParam limitParam offsetParam = 
+    searchFlows queryParam langParam limitParam offsetParam =
         searchFlowsInternal db queryParam langParam limitParam offsetParam
 
     -- Search activities by specific fields with pagination and count
@@ -158,7 +154,6 @@ acvServer db maxTreeDepth =
         let activities = findActivitiesByFields db nameParam geoParam productParam
             activitySummaries = [ActivitySummary (getProcessIdFromActivity activity) (activityName activity) (activityLocation activity) | activity <- activities]
         return $ paginateResults activitySummaries limitParam offsetParam
-
 
     -- LCIA computation
     postLCIA :: Text -> LCIARequest -> Handler Value
@@ -175,7 +170,7 @@ paginateResults results limitParam offsetParam =
         offset = maybe 0 id offsetParam -- Default offset: 0
         paginatedResults = take limit $ drop offset results
         hasMore = offset + length paginatedResults < totalCount
-    in SearchResults paginatedResults totalCount offset limit hasMore
+     in SearchResults paginatedResults totalCount offset limit hasMore
 
 -- | Internal helper for flow search with optional language filtering
 searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)

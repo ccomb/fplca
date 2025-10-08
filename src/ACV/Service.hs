@@ -47,9 +47,9 @@ findActivityByProcessId :: Database -> ProcessId -> Maybe Activity
 findActivityByProcessId db processId =
     let allActivities = M.elems (dbActivities db)
         matchingActivities = filter (\activity -> activityProcessId activity == Just processId) allActivities
-    in case matchingActivities of
-        (activity:_) -> Just activity
-        [] -> Nothing
+     in case matchingActivities of
+            (activity : _) -> Just activity
+            [] -> Nothing
 
 -- | Resolve activity query using ProcessId format with UUID fallback for compatibility
 resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
@@ -78,21 +78,21 @@ getProcessIdFromActivity activity =
                     Just refProdId -> refProdId
                     Nothing -> case getFirstOutputProductId activity of
                         Just firstProdId -> firstProdId
-                        Nothing -> actUUID  -- Ultimate fallback
-            in actUUID <> "_" <> productUUID
+                        Nothing -> actUUID -- Ultimate fallback
+             in actUUID <> "_" <> productUUID
 
 -- | Get reference product flow ID from activity
 getReferenceProductId :: Activity -> Maybe Text
 getReferenceProductId activity =
     case filter exchangeIsReference (exchanges activity) of
-        (refExchange:_) -> Just (exchangeFlowId refExchange)
+        (refExchange : _) -> Just (exchangeFlowId refExchange)
         [] -> Nothing
 
 -- | Get first output product flow ID from activity
 getFirstOutputProductId :: Activity -> Maybe Text
 getFirstOutputProductId activity =
     case filter (\ex -> not (exchangeIsInput ex) && isTechnosphereExchange ex) (exchanges activity) of
-        (outputExchange:_) -> Just (exchangeFlowId outputExchange)
+        (outputExchange : _) -> Just (exchangeFlowId outputExchange)
         [] -> Nothing
 
 -- | Rich activity info (returns same format as API)
@@ -102,7 +102,7 @@ getActivityInfo db queryText = do
     let activityForAPI = convertActivityForAPI db activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
-        links = generateActivityLinks (activityId activity)  -- Use actual activity UUID for links
+        links = generateActivityLinks (activityId activity) -- Use actual activity UUID for links
         activityInfo =
             ActivityInfo
                 { piActivity = activityForAPI
@@ -120,8 +120,8 @@ computeActivityInventory db queryText = do
      in Right inventory
 
 -- | Convert raw inventory to structured export format
-convertToInventoryExport :: Database -> Activity -> Inventory -> Int -> InventoryExport
-convertToInventoryExport db rootActivity inventory calculationDepth =
+convertToInventoryExport :: Database -> Activity -> Inventory -> InventoryExport
+convertToInventoryExport db rootActivity inventory =
     let
         -- Include all flows from inventory calculation (no filtering)
         inventoryList = M.toList inventory
@@ -149,11 +149,11 @@ convertToInventoryExport db rootActivity inventory calculationDepth =
 
         !metadata =
             InventoryMetadata
-                { imRootActivity = ActivitySummary
-                    (getProcessIdFromActivity rootActivity)
-                    (activityName rootActivity)
-                    (activityLocation rootActivity)
-                , imCalculationDepth = calculationDepth -- Actual calculation depth used
+                { imRootActivity =
+                    ActivitySummary
+                        (getProcessIdFromActivity rootActivity)
+                        (activityName rootActivity)
+                        (activityLocation rootActivity)
                 , imTotalFlows = length flowDetails
                 , imEmissionFlows = emissionFlows
                 , imResourceFlows = resourceFlows
@@ -180,7 +180,7 @@ getActivityInventory db processIdText = do
         Left err -> Left err
         Right activity ->
             let !inventory = computeInventoryMatrix db (activityId activity)
-                !inventoryExport = convertToInventoryExport db activity inventory 35
+                !inventoryExport = convertToInventoryExport db activity inventory
              in Right $ toJSON inventoryExport
 
 -- | Simple stats tracking for tree processing
@@ -192,7 +192,7 @@ combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1
 -- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
 getTreeNodeId :: LoopAwareTree -> Text
 getTreeNodeId (TreeLeaf activity) = getProcessIdFromActivity activity
-getTreeNodeId (TreeLoop uuid _ _) = uuid  -- Loop references remain as bare UUID for now
+getTreeNodeId (TreeLoop uuid _ _) = uuid -- Loop references remain as bare UUID for now
 getTreeNodeId (TreeNode activity _) = getProcessIdFromActivity activity
 
 -- | Count potential children for navigation (technosphere inputs that could be expanded)
@@ -210,7 +210,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
             processId = getProcessIdFromActivity activity
             node =
                 ExportNode
-                    { enId = processId  -- Now ProcessId format
+                    { enId = processId -- Now ProcessId format
                     , enName = activityName activity
                     , enDescription = activityDescription activity
                     , enLocation = activityLocation activity
@@ -221,12 +221,12 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
                     }
-            nodes' = M.insert processId node nodeAcc  -- Use ProcessId as key
+            nodes' = M.insert processId node nodeAcc -- Use ProcessId as key
          in (nodes', edgeAcc, TreeStats 1 0 1)
     TreeLoop uuid name depth ->
         let node =
                 ExportNode
-                    { enId = uuid  -- Keep loop references as bare UUID
+                    { enId = uuid -- Keep loop references as bare UUID
                     , enName = name
                     , enDescription = ["Loop reference"]
                     , enLocation = "N/A"
@@ -244,7 +244,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
             currentProcessId = getProcessIdFromActivity activity
             parentNode =
                 ExportNode
-                    { enId = currentProcessId  -- Now ProcessId format
+                    { enId = currentProcessId -- Now ProcessId format
                     , enName = activityName activity
                     , enDescription = activityDescription activity
                     , enLocation = activityLocation activity
@@ -255,13 +255,13 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
                     }
-            nodes' = M.insert currentProcessId parentNode nodeAcc  -- Use ProcessId as key
+            nodes' = M.insert currentProcessId parentNode nodeAcc -- Use ProcessId as key
             processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
                 let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc edgeAcc
                     edge =
                         TreeEdge
-                            { teFrom = currentProcessId  -- Now ProcessId format
-                            , teTo = getTreeNodeId subtree  -- This now returns ProcessId format
+                            { teFrom = currentProcessId -- Now ProcessId format
+                            , teTo = getTreeNodeId subtree -- This now returns ProcessId format
                             , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
                             , teQuantity = quantity
                             , teUnit = getUnitNameForFlow (dbUnits db) flow
@@ -277,7 +277,7 @@ convertToTreeExport db rootProcessId maxDepth tree =
     let (nodes, edges, stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
         metadata =
             TreeMetadata
-                { tmRootId = rootProcessId  -- Now ProcessId format
+                { tmRootId = rootProcessId -- Now ProcessId format
                 , tmMaxDepth = maxDepth
                 , tmTotalNodes = M.size nodes
                 , tmLoopNodes = length [() | (_, node) <- M.toList nodes, enNodeType node == LoopNode]
@@ -292,7 +292,7 @@ getActivityTree db queryText maxDepth = do
     activity <- resolveActivityByProcessId db queryText
     let activityUuid = activityId activity
         loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
-        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree  -- Pass ProcessId instead of UUID
+        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree -- Pass ProcessId instead of UUID
      in Right $ toJSON treeExport
 
 -- | Get flow usage count across all activities
@@ -345,10 +345,15 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam =
         total = length allResults
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
-        activityResults = map (\activity -> ActivitySummary
-            (getProcessIdFromActivity activity)
-            (activityName activity)
-            (activityLocation activity)) pagedResults
+        activityResults =
+            map
+                ( \activity ->
+                    ActivitySummary
+                        (getProcessIdFromActivity activity)
+                        (activityName activity)
+                        (activityLocation activity)
+                )
+                pagedResults
      in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
 
 -- | Calculate extended metadata for an activity
