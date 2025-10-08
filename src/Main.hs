@@ -19,6 +19,7 @@ import ACV.CLI.Command
 import ACV.CLI.Parser
 import ACV.CLI.Types
 import ACV.CLI.Types (Command(Server), ServerOptions(..))
+import ACV.Matrix (initializePetscForServer, finalizePetscForServer)
 import ACV.Progress
 import ACV.Query (DatabaseStats (..), buildDatabaseWithMatrices, getDatabaseStats)
 import ACV.Types
@@ -59,6 +60,11 @@ main = do
   case ACV.CLI.Types.command cliConfig of
     Server serverOpts -> do
       let port = serverPort serverOpts
+
+      -- Initialize PETSc/MPI context once for the server's lifetime
+      reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
+      initializePetscForServer
+
       reportProgress Info $ "Starting API server on port " ++ show port
       reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
       reportProgress Info "Web interface available at: http://localhost/"

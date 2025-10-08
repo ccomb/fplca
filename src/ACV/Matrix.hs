@@ -37,12 +37,14 @@ module ACV.Matrix (
     solveSparseLinearSystem,
     applySparseMatrix,
     toList,
+    initializePetscForServer,
+    finalizePetscForServer,
 ) where
 
 import ACV.Progress
 import ACV.Types
 import ACV.UnitConversion (convertExchangeAmount)
-import Control.Monad (forM_)
+import Control.Monad (forM_, when, unless)
 import Control.Monad.ST
 import Data.List (elemIndex, sortOn)
 import qualified Data.Map as M
@@ -60,12 +62,27 @@ import System.IO.Unsafe (unsafePerformIO)
 
 -- PETSc imports
 import Numerical.PETSc.Internal
+import Data.IORef
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
 
 -- | Final inventory vector mapping biosphere flow UUIDs to quantities.
 type Inventory = M.Map UUID Double
+
+-- | Global PETSc initialization state to avoid re-initialization issues
+{-# NOINLINE petscInitialized #-}
+petscInitialized :: IORef Bool
+petscInitialized = unsafePerformIO $ newIORef False
+
+-- | Global MPI/PETSc initialization - call once and keep alive
+{-# NOINLINE petscGlobalInit #-}
+petscGlobalInit :: IO ()
+petscGlobalInit = do
+    initialized <- readIORef petscInitialized
+    unless initialized $ do
+        petscInit0  -- Initialize PETSc/MPI without automatic finalization
+        writeIORef petscInitialized True
 
 -- | Aggregate duplicate matrix entries by summing values for same (i,j) coordinates
 aggregateMatrixEntries :: [(Int, Int, Double)] -> [(Int, Int, Double)]
@@ -119,6 +136,9 @@ Performance: ~3s for 14,457 activities with 116K technosphere entries
 -}
 solveSparseLinearSystemPETSc :: [(Int, Int, Double)] -> Int -> Vector -> Vector
 solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
+    -- Ensure PETSc is initialized globally (once and persistent)
+    petscGlobalInit
+
     -- Build (I - A) system from sparse triplets
     -- Add identity matrix: I[i,i] = 1.0
     let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
@@ -135,23 +155,21 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
     let rhsData = V.fromList $ map realToFrac $ toList demandVec
     let nzPattern = ConstNZPR (fromIntegral $ length aggregatedTriples, fromIntegral $ length aggregatedTriples)
 
-    -- Use PETSc within the context
-    result <- withPetsc0 $ do
-        let comm = commWorld
+    -- Use PETSc within the already initialized context (no re-initialization)
+    let comm = commWorld
+    result <- withPetscMatrix comm n n MatAij matrixData nzPattern InsertValues $ \mat ->
+        withVecNew comm rhsData $ \rhs -> do
+            let (_, _, _, matMutable) = fromPetscMatrix mat
 
-        withPetscMatrix comm n n MatAij matrixData nzPattern InsertValues $ \mat ->
-            withVecNew comm rhsData $ \rhs -> do
-                let (_, _, _, matMutable) = fromPetscMatrix mat
-
-                -- Time the solver execution
-                withProgressTiming Solver "MUMPS direct solve" $ do
-                    -- Use PETSC_OPTIONS for solver configuration (supports MUMPS, SuperLU, etc.)
-                    withKspSetupSolveAllocFromOptions comm matMutable matMutable False rhs $ \ksp solution -> do
-                        -- Extract solution as list
-                        solutionData <- vecGetVS solution
-                        let solutionList = VS.toList solutionData
-                        let solutionResult = map realToFrac solutionList
-                        return solutionResult
+            -- Time the solver execution
+            withProgressTiming Solver "MUMPS direct solve" $ do
+                -- Use PETSC_OPTIONS for solver configuration (supports MUMPS, SuperLU, etc.)
+                withKspSetupSolveAllocFromOptions comm matMutable matMutable False rhs $ \ksp solution -> do
+                    -- Extract solution as list
+                    solutionData <- vecGetVS solution
+                    let solutionList = VS.toList solutionData
+                    let solutionResult = map realToFrac solutionList
+                    return solutionResult
 
     return $ fromList result
 
@@ -257,3 +275,22 @@ buildDemandVector activities actUUIDs rootUUID =
         indexMap = M.fromList $ zip actUUIDs [0 ..]
         rootIndex = fromMaybe 0 (M.lookup rootUUID indexMap)
      in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
+
+{- |
+Initialize PETSc once for the entire server lifetime.
+This prevents the MPI re-initialization issue by keeping the PETSc/MPI context alive.
+Should be called once during server startup.
+-}
+initializePetscForServer :: IO ()
+initializePetscForServer = petscGlobalInit
+
+{- |
+Finalize PETSc when the server shuts down.
+This should be called once during server cleanup.
+-}
+finalizePetscForServer :: IO ()
+finalizePetscForServer = do
+    initialized <- readIORef petscInitialized
+    when initialized $ do
+        petscFin  -- Explicitly finalize PETSc/MPI
+        writeIORef petscInitialized False
