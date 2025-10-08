@@ -5,9 +5,11 @@ type Route
     = ActivitiesRoute
     | ActivityRoute String  -- ProcessId
     | ActivityTreeRoute String  -- ProcessId
+    | ActivityInventoryRoute String  -- ProcessId
     | NotFoundRoute
 
 -- Page definitions for the SPA
 type Page
     = ActivitiesPage
     | GraphPage
+    | InventoryPage

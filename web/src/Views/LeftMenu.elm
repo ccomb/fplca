@@ -19,6 +19,7 @@ viewLeftMenu currentPage currentActivityId =
         , div [ class "menu-items" ]
             [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities" "/#activities"
             , menuItem currentPage GraphPage "fas fa-project-diagram" "Graph" ("/#activity/" ++ currentActivityId ++ "/tree")
+            , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" ("/#activity/" ++ currentActivityId ++ "/inventory")
             ]
         ]
 

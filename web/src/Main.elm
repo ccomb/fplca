@@ -11,10 +11,12 @@ import Url
 import Url.Builder
 import Url.Parser as Parser exposing (Parser, oneOf, string, (</>), parse, top)
 import Models.Activity exposing (ActivityTree, ActivitySummary, SearchResults, activityTreeDecoder, activitySummaryDecoder, searchResultsDecoder)
+import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.Page exposing (Page(..), Route(..))
 import Views.TreeView as TreeView
 import Views.LeftMenu as LeftMenu
 import Views.ActivitiesView as ActivitiesView
+import Views.InventoryView as InventoryView
 
 
 main : Program () Model Msg
@@ -34,6 +36,7 @@ type alias Model =
     , url : Url.Url
     , currentPage : Page
     , cachedTrees : Dict.Dict String ActivityTree  -- Cache trees by activity ID
+    , cachedInventories : Dict.Dict String InventoryExport  -- Cache inventories by activity ID
     , currentActivityId : String
     , loading : Bool
     , error : Maybe String
@@ -48,6 +51,8 @@ type alias Model =
 type Msg
     = LoadActivity String
     | ActivityLoaded (Result Http.Error ActivityTree)
+    | LoadInventory String
+    | InventoryLoaded (Result Http.Error InventoryExport)
     | NavigateToParent
     | NodeClicked String
     | NavigateToPage Page
@@ -67,6 +72,7 @@ routeParser =
         [ Parser.map ActivitiesRoute top
         , Parser.map ActivitiesRoute (Parser.s "activities")
         , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
+        , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map ActivityRoute (Parser.s "activity" </> string)
         ]
 
@@ -99,6 +105,9 @@ routeToPage route =
         ActivityTreeRoute _ ->
             GraphPage
 
+        ActivityInventoryRoute _ ->
+            InventoryPage
+
         NotFoundRoute ->
             ActivitiesPage
 
@@ -109,16 +118,19 @@ init _ url key =
         route = parseUrl url
         defaultActivityId = "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
 
-        (activityId, shouldLoad) =
+        (activityId, shouldLoad, loadType) =
             case route of
                 ActivityRoute processId ->
-                    (processId, True)
+                    (processId, True, "tree")
 
                 ActivityTreeRoute processId ->
-                    (processId, True)
+                    (processId, True, "tree")
+
+                ActivityInventoryRoute processId ->
+                    (processId, True, "inventory")
 
                 _ ->
-                    (defaultActivityId, False)
+                    (defaultActivityId, False, "none")
 
         initialPage = routeToPage route
 
@@ -127,6 +139,7 @@ init _ url key =
             , url = url
             , currentPage = initialPage
             , cachedTrees = Dict.empty
+            , cachedInventories = Dict.empty
             , currentActivityId = activityId
             , loading = shouldLoad
             , error = Nothing
@@ -136,13 +149,19 @@ init _ url key =
             , searchLoading = False
             , hoveredNode = Nothing
             }
+        cmd =
+            if shouldLoad then
+                case loadType of
+                    "tree" ->
+                        loadActivityTree activityId
+                    "inventory" ->
+                        loadInventoryData activityId
+                    _ ->
+                        Cmd.none
+            else
+                Cmd.none
     in
-    ( model
-    , if shouldLoad then
-        loadActivityTree activityId
-      else
-        Cmd.none
-    )
+    ( model, cmd )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -173,6 +192,38 @@ update msg model =
             )
 
         ActivityLoaded (Err error) ->
+            ( { model
+                | loading = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        LoadInventory activityId ->
+            let
+                shouldLoad = not (Dict.member activityId model.cachedInventories)
+            in
+            ( { model
+                | loading = shouldLoad
+                , error = Nothing
+                , currentActivityId = activityId
+              }
+            , if shouldLoad then
+                loadInventoryData activityId
+              else
+                Cmd.none
+            )
+
+        InventoryLoaded (Ok inventory) ->
+            ( { model
+                | cachedInventories = Dict.insert model.currentActivityId inventory model.cachedInventories
+                , loading = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        InventoryLoaded (Err error) ->
             ( { model
                 | loading = False
                 , error = Just (httpErrorToString error)
@@ -237,6 +288,7 @@ update msg model =
                 url = case page of
                     ActivitiesPage -> "/#activities"
                     GraphPage -> "/#activity/" ++ model.currentActivityId ++ "/tree"
+                    InventoryPage -> "/#activity/" ++ model.currentActivityId ++ "/inventory"
             in
             ( model, Nav.pushUrl model.key url )
 
@@ -301,10 +353,15 @@ update msg model =
                         ActivityTreeRoute processId ->
                             (processId, True)
 
+                        ActivityInventoryRoute processId ->
+                            (processId, True)
+
                         _ ->
                             (model.currentActivityId, False)
 
-                shouldLoad = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedTrees)
+                shouldLoadTree = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedTrees) && newPage == GraphPage
+                shouldLoadInventory = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedInventories) && newPage == InventoryPage
+                shouldLoad = shouldLoadTree || shouldLoadInventory
 
                 updatedModel =
                     { model
@@ -313,13 +370,16 @@ update msg model =
                     , currentActivityId = newActivityId
                     , loading = shouldLoad
                     }
+
+                cmd =
+                    if shouldLoadTree then
+                        loadActivityTree newActivityId
+                    else if shouldLoadInventory then
+                        loadInventoryData newActivityId
+                    else
+                        Cmd.none
             in
-            ( updatedModel
-            , if shouldLoad then
-                loadActivityTree newActivityId
-              else
-                Cmd.none
-            )
+            ( updatedModel, cmd )
 
 
 -- Navigation helpers
@@ -334,6 +394,9 @@ routeToUrl route =
 
         ActivityTreeRoute processId ->
             "/#activity/" ++ processId ++ "/tree"
+
+        ActivityInventoryRoute processId ->
+            "/#activity/" ++ processId ++ "/inventory"
 
         NotFoundRoute ->
             "/"
@@ -374,6 +437,12 @@ view model =
 
                 GraphPage ->
                     viewGraphPage model
+
+                InventoryPage ->
+                    InventoryView.viewInventoryPage
+                        (Dict.get model.currentActivityId model.cachedInventories)
+                        model.loading
+                        model.error
             ]
         ]
 
@@ -500,6 +569,14 @@ loadActivityTree activityId =
     Http.get
         { url = "/api/v1/activity/" ++ activityId ++ "/tree"
         , expect = Http.expectJson ActivityLoaded activityTreeDecoder
+        }
+
+
+loadInventoryData : String -> Cmd Msg
+loadInventoryData activityId =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId ++ "/inventory"
+        , expect = Http.expectJson InventoryLoaded inventoryExportDecoder
         }
 
 
