@@ -123,12 +123,13 @@ computeActivityInventory db queryText = do
 convertToInventoryExport :: Database -> Activity -> Inventory -> InventoryExport
 convertToInventoryExport db rootActivity inventory =
     let
-        -- Include all flows from inventory calculation (no filtering)
+        -- Filter out flows with zero quantities to reduce noise in the results
         inventoryList = M.toList inventory
 
         !flowDetails =
             [ InventoryFlowDetail flow quantity unitName isEmission category
             | (flowUUID, quantity) <- inventoryList
+            , quantity /= 0  -- Exclude flows with zero quantities
             , Just flow <- [M.lookup flowUUID (dbFlows db)]
             , let !unitName = getUnitNameForFlow (dbUnits db) flow
                   !isEmission = not (isResourceExtraction flow quantity)
