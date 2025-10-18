@@ -359,8 +359,8 @@ update msg model =
                         _ ->
                             (model.currentActivityId, False)
 
-                shouldLoadTree = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedTrees) && newPage == GraphPage
-                shouldLoadInventory = needsActivity && newActivityId /= model.currentActivityId && not (Dict.member newActivityId model.cachedInventories) && newPage == InventoryPage
+                shouldLoadTree = needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedTrees)
+                shouldLoadInventory = needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
                 shouldLoad = shouldLoadTree || shouldLoadInventory
 
                 updatedModel =

@@ -1,7 +1,7 @@
 module Views.LeftMenu exposing (viewLeftMenu)
 
-import Html exposing (Html, div, nav, a, span, i, text)
-import Html.Attributes exposing (class, classList, href)
+import Html exposing (Html, div, nav, button, span, i, text)
+import Html.Attributes exposing (class, classList)
 import Html.Events exposing (onClick)
 import Models.Page exposing (Page(..))
 
@@ -17,21 +17,20 @@ viewLeftMenu currentPage currentActivityId =
             [ span [ class "title is-5 has-text-white" ] [ text "ACV Engine" ]
             ]
         , div [ class "menu-items" ]
-            [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities" "/#activities"
-            , menuItem currentPage GraphPage "fas fa-project-diagram" "Graph" ("/#activity/" ++ currentActivityId ++ "/tree")
-            , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" ("/#activity/" ++ currentActivityId ++ "/inventory")
+            [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities"
+            , menuItem currentPage GraphPage "fas fa-project-diagram" "Graph"
+            , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory"
             ]
         ]
 
 
-menuItem : Page -> Page -> String -> String -> String -> Html Msg
-menuItem currentPage targetPage iconClass label url =
-    a
+menuItem : Page -> Page -> String -> String -> Html Msg
+menuItem currentPage targetPage iconClass label =
+    button
         [ classList
             [ ( "menu-item", True )
             , ( "is-active", currentPage == targetPage )
             ]
-        , href url
         , onClick targetPage
         ]
         [ span [ class "icon" ]
