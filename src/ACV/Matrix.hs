@@ -161,15 +161,34 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
         withVecNew comm rhsData $ \rhs -> do
             let (_, _, _, matMutable) = fromPetscMatrix mat
 
-            -- Time the solver execution
-            withProgressTiming Solver "MUMPS direct solve" $ do
-                -- Use PETSC_OPTIONS for solver configuration (supports MUMPS, SuperLU, etc.)
-                withKspSetupSolveAllocFromOptions comm matMutable matMutable False rhs $ \ksp solution -> do
-                    -- Extract solution as list
-                    solutionData <- vecGetVS solution
-                    let solutionList = VS.toList solutionData
-                    let solutionResult = map realToFrac solutionList
-                    return solutionResult
+            -- Time the solver execution with enhanced error handling
+            withProgressTiming Solver "PETSc solve with environment options" $ do
+                -- Use explicit KSP setup to ensure PETSC_OPTIONS are consumed properly
+                withKsp comm $ \ksp -> do
+                    -- Set up operators first
+                    kspSetOperators ksp matMutable matMutable
+
+                    -- Explicitly consume PETSC_OPTIONS environment variables
+                    kspSetFromOptions ksp
+                    pc <- kspGetPC ksp
+                    pcSetFromOptions pc
+
+                    -- Debug: Report that options were applied
+                    reportSolverOperation "Applied PETSC_OPTIONS to KSP and PC"
+
+                    -- Configure solver
+                    kspSetInitialGuessNonzero ksp False
+                    kspSetUp ksp
+
+                    -- Allocate solution vector and solve
+                    withVecDuplicate rhs $ \solution -> do
+                        kspSolve ksp rhs solution
+
+                        -- Extract solution as list
+                        solutionData <- vecGetVS solution
+                        let solutionList = VS.toList solutionData
+                        let solutionResult = map realToFrac solutionList
+                        return solutionResult
 
     return $ fromList result
 
