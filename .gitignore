@@ -7,3 +7,10 @@ web/dist/
 web/elm-stuff/
 .aicodeprep-gui
 web/main.js
+ECOINVENT*
+SAMPLE*
+CLAUDE*
+brightway2*
+EF-v3.1/
+*\.bin
+uv.lock

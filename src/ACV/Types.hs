@@ -252,6 +252,12 @@ data Indexes = Indexes
 -- | Sparse matrix coordinate triplet (row, col, value)
 type SparseTriple = (Int, Int, Double)
 
+-- | Pre-computed matrix factorization for fast inventory calculations
+data MatrixFactorization = MatrixFactorization
+    { mfSystemMatrix :: ![SparseTriple] -- Cached (I - A) system matrix
+    , mfActivityCount :: !Int -- Matrix dimension
+    } deriving (Generic, Binary)
+
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
     { dbActivities :: !ActivityDB
@@ -265,6 +271,8 @@ data Database = Database
     , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs
     , dbActivityCount :: !Int -- Number of activities (matrix dimension)
     , dbBiosphereCount :: !Int -- Number of biosphere flows (matrix dimension)
+    -- Cached factorization for concurrent inventory calculations (runtime only)
+    , dbCachedFactorization :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
     }
     deriving (Generic, Binary)
 

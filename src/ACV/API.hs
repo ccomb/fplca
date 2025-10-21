@@ -6,8 +6,9 @@
 module ACV.API where
 
 import ACV.Matrix (Inventory)
+import ACV.Matrix.SharedSolver (SharedSolver)
 import ACV.Query
-import ACV.Service (getProcessIdFromActivity)
+import ACV.Service (getProcessIdFromActivity, getActivityInventoryWithSharedSolver)
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
@@ -24,6 +25,7 @@ import Data.Time (UTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import GHC.Generics
 import Servant
+import Control.Monad.IO.Class (liftIO)
 
 -- | API type definition - RESTful design with focused endpoints
 type ACVAPI =
@@ -67,8 +69,8 @@ withValidatedFlow db uuid action = do
                 Just flow -> action flow
 
 -- | API server implementation with multiple focused endpoints
-acvServer :: Database -> Int -> Server ACVAPI
-acvServer db maxTreeDepth =
+acvServer :: Database -> Int -> SharedSolver -> Server ACVAPI
+acvServer db maxTreeDepth sharedSolver =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -125,11 +127,13 @@ acvServer db maxTreeDepth =
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
-    getActivityInventory processId = withValidatedActivity db processId $ \activity -> do
-        case ACV.Service.computeActivityInventory db processId of
+    getActivityInventory processId = do
+        result <- liftIO $ getActivityInventoryWithSharedSolver sharedSolver db processId
+        case result of
             Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (ACV.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Right inventory -> return $ ACV.Service.convertToInventoryExport db activity inventory
+            Left _ -> throwError err500{errBody = "Internal server error"}
+            Right inventoryExport -> return inventoryExport
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail

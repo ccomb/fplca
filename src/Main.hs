@@ -3,6 +3,7 @@
 module Main where
 
 import Control.Monad (forM_, unless)
+import Control.Exception (catch, SomeException)
 import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -12,6 +13,7 @@ import Options.Applicative
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
 
 -- ACV Engine imports
@@ -19,7 +21,8 @@ import ACV.CLI.Command
 import ACV.CLI.Parser
 import ACV.CLI.Types
 import ACV.CLI.Types (Command(Server), ServerOptions(..))
-import ACV.Matrix (initializePetscForServer, finalizePetscForServer)
+import ACV.Matrix (initializePetscForServer, finalizePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
+import ACV.Matrix.SharedSolver (SharedSolver, createSharedSolver, shutdownSharedSolver)
 import ACV.Progress
 import ACV.Query (DatabaseStats (..), buildDatabaseWithMatrices, getDatabaseStats)
 import ACV.Types
@@ -61,15 +64,30 @@ main = do
     Server serverOpts -> do
       let port = serverPort serverOpts
 
+      -- Install SIGPIPE handler to prevent broken pipe crashes
+      reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
+      _ <- installHandler sigPIPE Ignore Nothing
+
       -- Initialize PETSc/MPI context once for the server's lifetime
       reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
       initializePetscForServer
+
+      -- Perform global matrix factorization once
+      let techTriples = dbTechnosphereTriples database
+          activityCount = dbActivityCount database
+      reportProgress Info "Pre-computing matrix factorization for fast concurrent inventory calculations"
+      factorization <- precomputeMatrixFactorization techTriples activityCount
+      let databaseWithFactorization = addFactorizationToDatabase database factorization
+
+      -- Create shared solver with cached factorization for fast concurrent solves
+      reportProgress Info "Creating shared solver with cached factorization"
+      sharedSolver <- createSharedSolver (dbCachedFactorization databaseWithFactorization) techTriples activityCount
 
       reportProgress Info $ "Starting API server on port " ++ show port
       reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
       reportProgress Info "Web interface available at: http://localhost/"
 
-      let combinedApp = Main.createCombinedApp database (treeDepth (globalOptions cliConfig))
+      let combinedApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver
       run port combinedApp
 
     _ -> executeCommand cliConfig database
@@ -101,6 +119,7 @@ loadDatabase dataDirectory disableCache =
           reportCacheOperation "Saving Database with matrices to cache for next time"
           saveCachedDatabaseWithMatrices dataDirectory db
           return db
+
 
 -- | Report active configuration
 reportConfiguration :: GlobalOptions -> FilePath -> IO ()
@@ -244,8 +263,8 @@ validateDatabase db = do
   reportProgress Info ""
 
 -- | Create a combined Wai application serving both API and static files with request logging
-createCombinedApp :: Database -> Int -> Application
-createCombinedApp database maxTreeDepth req respond = do
+createCombinedApp :: Database -> Int -> SharedSolver -> Application
+createCombinedApp database maxTreeDepth sharedSolver req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
@@ -256,7 +275,7 @@ createCombinedApp database maxTreeDepth req respond = do
 
   -- Route API requests to the Servant application
   if C8.pack "/api/" `BS.isPrefixOf` path
-    then serve acvAPI (acvServer database maxTreeDepth) req respond
+    then serve acvAPI (acvServer database maxTreeDepth sharedSolver) req respond
     else
       -- For SPA: serve index.html for all non-API routes
       let staticSettings =

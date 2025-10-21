@@ -197,6 +197,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
             , dbBiosphereFlows = bioFlowUUIDs
             , dbActivityCount = activityCount
             , dbBiosphereCount = bioFlowCount
+            , dbCachedFactorization = Nothing -- No factorization initially - computed at startup
             }
 
 {- |

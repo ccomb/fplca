@@ -37,13 +37,15 @@ module ACV.Progress (
     ProgressLevel(..)
 ) where
 
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import System.IO (stderr, hPutStrLn, hFlush)
-import Text.Printf (printf)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (bracket_, try, SomeException)
+import Control.Monad (when)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Stats (getRTSStats, RTSStats(..))
 import System.Directory (getFileSize, doesFileExist)
-import Control.Monad (when)
+import System.IO (stderr, hPutStrLn, hFlush)
+import System.IO.Unsafe (unsafePerformIO)
+import Text.Printf (printf)
 
 -- | Progress reporting levels
 data ProgressLevel
@@ -54,7 +56,13 @@ data ProgressLevel
     | Error     -- ^ Error messages
     deriving (Eq, Show)
 
--- | Report progress with consistent formatting
+-- | Global mutex to serialize all progress output operations
+-- This prevents concurrent stderr output from corrupting the console and causing crashes
+{-# NOINLINE progressOutputMutex #-}
+progressOutputMutex :: MVar ()
+progressOutputMutex = unsafePerformIO $ newMVar ()
+
+-- | Report progress with consistent formatting and thread-safe output
 reportProgress :: ProgressLevel -> String -> IO ()
 reportProgress level message = do
     let prefix = case level of
@@ -63,8 +71,10 @@ reportProgress level message = do
             Matrix -> "[MATRIX] "
             Solver -> "[SOLVER] "
             Error  -> "[ERROR] "
-    hPutStrLn stderr $ prefix ++ message
-    hFlush stderr
+    -- Serialize all output to prevent thread-unsafe stderr corruption
+    withMVar progressOutputMutex $ \_ -> do
+        hPutStrLn stderr $ prefix ++ message
+        hFlush stderr
 
 -- | Report progress with timing information
 reportProgressWithTiming :: ProgressLevel -> String -> Double -> IO ()

@@ -4,7 +4,8 @@
 module ACV.Service where
 
 import ACV.CLI.Types (DebugMatricesOptions (..))
-import ACV.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList)
+import ACV.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList, fromList)
+import ACV.Matrix.SharedSolver (SharedSolver, solveWithSharedSolver)
 import ACV.Progress
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
@@ -119,6 +120,36 @@ computeActivityInventory db queryText = do
     let !inventory = computeInventoryMatrix db (activityId activity)
      in Right inventory
 
+-- | Shared solver-aware inventory calculation for concurrent processing
+computeActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError Inventory)
+computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
+    case resolveActivityByProcessId db queryText of
+        Left err -> return $ Left err
+        Right activity -> do
+            -- Inline matrix calculation with shared solver to avoid circular dependency
+            let activityCount = dbActivityCount db
+                bioFlowCount = dbBiosphereCount db
+                techTriples = dbTechnosphereTriples db
+                bioTriples = dbBiosphereTriples db
+                activityIndex = dbActivityIndex db
+                bioFlowUUIDs = dbBiosphereFlows db
+                demandVec = buildDemandVectorFromIndex activityIndex (activityId activity)
+
+            -- Use shared solver with MVar synchronization - this is thread-safe
+            -- The shared solver uses the cached factorization from the database
+            supplyVec <- case dbCachedFactorization db of
+                Just _ -> do
+                    -- Use shared solver with cached factorization - thread-safe and fast
+                    solveWithSharedSolver sharedSolver demandVec
+                Nothing -> do
+                    -- Fallback: use direct matrix computation if no cached factorization
+                    return $ solveSparseLinearSystem techTriples activityCount demandVec
+
+            -- Calculate inventory using sparse biosphere matrix: g = B * supply
+            let inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+                inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
+            return $ Right inventory
+
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> Activity -> Inventory -> InventoryExport
 convertToInventoryExport db rootActivity inventory =
@@ -183,6 +214,37 @@ getActivityInventory db processIdText = do
             let !inventory = computeInventoryMatrix db (activityId activity)
                 !inventoryExport = convertToInventoryExport db activity inventory
              in Right $ toJSON inventoryExport
+
+-- | Shared solver-aware activity inventory export for concurrent processing
+getActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError InventoryExport)
+getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
+    case resolveActivityByProcessId db processIdText of
+        Left err -> return $ Left err
+        Right activity -> do
+            -- Inline matrix calculation with shared solver to avoid circular dependency
+            let activityCount = dbActivityCount db
+                bioFlowCount = dbBiosphereCount db
+                techTriples = dbTechnosphereTriples db
+                bioTriples = dbBiosphereTriples db
+                activityIndex = dbActivityIndex db
+                bioFlowUUIDs = dbBiosphereFlows db
+                demandVec = buildDemandVectorFromIndex activityIndex (activityId activity)
+
+            -- Use shared solver with MVar synchronization - this is thread-safe
+            -- The shared solver uses the cached factorization from the database
+            supplyVec <- case dbCachedFactorization db of
+                Just _ -> do
+                    -- Use shared solver with cached factorization - thread-safe and fast
+                    solveWithSharedSolver sharedSolver demandVec
+                Nothing -> do
+                    -- Fallback: use direct matrix computation if no cached factorization
+                    return $ solveSparseLinearSystem techTriples activityCount demandVec
+
+            -- Calculate inventory using sparse biosphere matrix: g = B * supply
+            let inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+                inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
+            let inventoryExport = convertToInventoryExport db activity inventory
+            return $ Right inventoryExport
 
 -- | Simple stats tracking for tree processing
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves

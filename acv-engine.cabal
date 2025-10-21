@@ -62,6 +62,7 @@ executable acv-cli
                      , ACV.Types.API
                      , ACV.Tree
                      , ACV.Matrix
+                     , ACV.Matrix.SharedSolver
                      , ACV.PEF
                      , ACV.Progress
                      , ACV.Query
