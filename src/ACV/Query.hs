@@ -114,7 +114,8 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                         normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
                                         rawValue = normalizedAmountValue normalized
                                         denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                        value = rawValue / denom -- Normalize per unit reference product
+                                        -- Apply negative sign for technosphere inputs (standard LCA convention)
+                                        value = -(rawValue / denom)
                                      in ([(producerIdx, j, value) | abs value > 1e-15])
                                 Nothing -> []
                 buildActivityTriplets (j, consumerActivity) =
@@ -315,7 +316,8 @@ buildActivityExchangeIndex procDB =
 -- | Construction de l'index des produits de référence
 buildReferenceProductIndex :: ActivityDB -> ReferenceProductIndex
 buildReferenceProductIndex procDB =
-    M.fromListWith (++)
+    M.fromListWith
+        (++)
         [ (exchangeFlowId ex, [(activityId proc, ex)])
         | proc <- M.elems procDB
         , ex <- exchanges proc
