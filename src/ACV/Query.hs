@@ -110,9 +110,7 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                     Nothing -> fallbackProducerIdx
                          in case chosenProducerIdx of
                                 Just producerIdx ->
-                                    let unitName = getUnitNameForExchange unitDB ex
-                                        normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
-                                        rawValue = normalizedAmountValue normalized
+                                    let rawValue = exchangeAmount ex  -- Use raw amount, no unit conversion
                                         denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                         -- Apply negative sign for technosphere inputs (standard LCA convention)
                                         value = -(rawValue / denom)
@@ -121,11 +119,10 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                 buildActivityTriplets (j, consumerActivity) =
                     let
                         -- Find reference product amount for normalization
+                        -- Use raw amount (no unit conversion) to maintain dimensionless ratios
+                        -- Matrix coefficients should be ratios in original spold units
                         refProductAmount = case find exchangeIsReference (exchanges consumerActivity) of
-                            Just refEx ->
-                                let unitName = getUnitNameForExchange unitDB refEx
-                                    normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
-                                 in normalizedAmountValue normalizedRef
+                            Just refEx -> exchangeAmount refEx
                             Nothing -> 1.0 -- No reference product, no scaling needed
                         normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
@@ -158,21 +155,19 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
-                                let unitName = getUnitNameForExchange unitDB ex
-                                    normalized = normalizeExchangeAmount unitName (exchangeAmount ex)
+                                let rawAmount = exchangeAmount ex  -- Use raw amount, no unit conversion
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                    rawAmount = normalizedAmountValue normalized / denom
-                                    amount = if exchangeIsInput ex then -rawAmount else rawAmount
+                                    normalizedAmount = rawAmount / denom
+                                    amount = if exchangeIsInput ex then -normalizedAmount else normalizedAmount
                                  in ([(i, j, amount) | abs amount > 1e-15])
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
                     let
-                        -- Find reference product amount for this activity (same as technosphere)
+                        -- Find reference product amount for this activity
+                        -- Use raw amount (no unit conversion) to maintain dimensionless ratios
+                        -- Both technosphere and biosphere use raw/raw for consistency
                         refProductAmount = case find exchangeIsReference (exchanges activity) of
-                            Just refEx ->
-                                let unitName = getUnitNameForExchange unitDB refEx
-                                    normalizedRef = normalizeExchangeAmount unitName (exchangeAmount refEx)
-                                 in normalizedAmountValue normalizedRef
+                            Just refEx -> exchangeAmount refEx
                             Nothing -> 1.0 -- No reference product, no scaling needed
                         normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
