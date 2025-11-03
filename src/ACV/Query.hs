@@ -81,9 +81,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
         -- Build complete sparse coordinate lists for entire database
         _ = unsafePerformIO $ reportMatrixOperation "Building activity indexes"
         allActivities = activityDB
-        activityUUIDs = M.keys allActivities
-        activityCount = length activityUUIDs
-        activityIndex = M.fromList $ zip activityUUIDs [0 ..]
+        activityProcessIds = M.keys allActivities
+        activityCount = length activityProcessIds
+        activityIndex = M.fromList $ zip activityProcessIds [0 ..]
         _ = unsafePerformIO $ reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
 
         -- Build technosphere sparse triplets (optimized with strict evaluation)
@@ -96,13 +96,14 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                     | otherwise =
                         let directProducerIdx =
                                 case exchangeActivityLinkId ex of
-                                    Just inputActivityUUID -> M.lookup inputActivityUUID activityIndex
+                                    Just inputActivityUUID ->
+                                        findProcessIdByActivityUUID activityDB inputActivityUUID >>= flip M.lookup activityIndex
                                     Nothing -> Nothing
                             fallbackProducerIdx =
                                 case M.lookup (exchangeFlowId ex) referenceProducts of
                                     Just [(producerUUID, _)]
                                         | producerUUID /= activityId consumerActivity ->
-                                            M.lookup producerUUID activityIndex
+                                            findProcessIdByActivityUUID activityDB producerUUID >>= flip M.lookup activityIndex
                                     _ -> Nothing
                             chosenProducerIdx =
                                 case directProducerIdx of
@@ -158,7 +159,9 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                 let rawAmount = exchangeAmount ex  -- Use raw amount, no unit conversion
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                     normalizedAmount = rawAmount / denom
-                                    amount = if exchangeIsInput ex then -normalizedAmount else normalizedAmount
+                                    -- Universal Export convention: all biosphere flows are positive
+                                    -- Direction (resource vs emission) is encoded in flow compartment, not sign
+                                    amount = normalizedAmount
                                  in ([(i, j, amount) | abs amount > 1e-15])
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
@@ -355,22 +358,28 @@ Performance: O(log n + m) where n is total activities, m is result size
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam =
     let
-        -- Get candidate UUIDs using indexes for faster filtering
-        candidateUUIDs = case (nameParam, geoParam, productParam) of
+        -- Get candidate ProcessIds/UUIDs - indexes return UUIDs, fallback returns ProcessIds
+        candidates = case (nameParam, geoParam, productParam) of
             -- If we have a name parameter, use the name index for initial filtering
-            (Just name, _, _) -> getCandidatesFromNameIndex db name
+            (Just name, _, _) ->
+                let uuids = getCandidatesFromNameIndex db name
+                -- Convert UUIDs to ProcessIds by finding all matching ProcessIds
+                in [(pid, act) | uuid <- uuids
+                               , (pid, act) <- M.toList (dbActivities db)
+                               , activityUUID pid == uuid]
             -- If we have a location but no name, use location index
-            (Nothing, Just geo, _) -> getCandidatesFromLocationIndex db geo
-            -- If we only have product parameter, use reference product index
-            (Nothing, Nothing, Just _) -> M.keys (dbActivities db) -- Fall back to all activities
-            -- If no parameters, return all activities
-            (Nothing, Nothing, Nothing) -> M.keys (dbActivities db)
+            (Nothing, Just geo, _) ->
+                let uuids = getCandidatesFromLocationIndex db geo
+                in [(pid, act) | uuid <- uuids
+                               , (pid, act) <- M.toList (dbActivities db)
+                               , activityUUID pid == uuid]
+            -- If we only have product parameter or no params, check all activities
+            _ -> M.toList (dbActivities db)
 
         -- Filter the candidates with the full criteria
         filteredActivities =
             [ activity
-            | uuid <- candidateUUIDs
-            , Just activity <- [M.lookup uuid (dbActivities db)]
+            | (_, activity) <- candidates
             , matchesActivityFields db nameParam geoParam productParam activity
             ]
      in
@@ -466,7 +475,7 @@ findAllReferenceProducts db =
     [ (proc, flow, exchange)
     | (flowUUID, producers) <- M.toList (idxReferenceProducts $ dbIndexes db)
     , (procUUID, exchange) <- producers
-    , Just proc <- [M.lookup procUUID (dbActivities db)]
+    , Just proc <- [findActivityByActivityUUID (dbActivities db) procUUID]
     , Just flow <- [M.lookup flowUUID (dbFlows db)]
     ]
 
