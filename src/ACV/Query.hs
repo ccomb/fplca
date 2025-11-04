@@ -29,9 +29,9 @@ import ACV.Progress
 import ACV.Types
 import ACV.UnitConversion (normalizeExchangeAmount, normalizedAmountValue)
 import Control.Parallel.Strategies
-import Data.List (find, partition, sortOn)
+import Data.List (elemIndex, find, partition, sort, sortOn)
 import qualified Data.Map as M
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -137,8 +137,11 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
 
         -- Build biosphere sparse triplets (optimized with strict evaluation)
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere flow index"
+        -- CRITICAL: Must use sort for deterministic ordering! Set.toList has undefined order,
+        -- which would cause bioFlowIndex to assign random indices to flows on each run,
+        -- breaking the correspondence between B matrix rows and inventory vector indices.
         !bioFlowUUIDs =
-            S.toList $
+            sort $ S.toList $
                 S.fromList
                     [ exchangeFlowId ex
                     | activity <- M.elems allActivities
@@ -159,10 +162,10 @@ buildDatabaseWithMatrices activityDB flowDB unitDB =
                                 let rawAmount = exchangeAmount ex  -- Use raw amount, no unit conversion
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                     normalizedAmount = rawAmount / denom
-                                    -- Universal Export convention: all biosphere flows are positive
+                                    -- Standard LCA convention: biosphere flows use absolute values (positive)
                                     -- Direction (resource vs emission) is encoded in flow compartment, not sign
                                     amount = normalizedAmount
-                                 in ([(i, j, amount) | abs amount > 1e-15])
+                                 in [(i, j, amount) | abs amount > 1e-15]
                             Nothing -> []
                 buildActivityBioTriplets (j, activity) =
                     let
