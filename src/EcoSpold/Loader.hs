@@ -36,6 +36,7 @@ import Control.Monad
 import Data.Binary (decodeFile, encodeFile)
 import Data.Hashable (hash)
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import System.Directory (doesFileExist, listDirectory)
@@ -147,8 +148,8 @@ loadAllSpoldsWithFlows dir = do
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
 
-        -- Build maps for this chunk
-        let !procMap = M.fromList [(activityId p, p) | p <- procs]
+        -- Build maps for this chunk - use ProcessId to preserve all products from multi-output activities
+        let !procMap = M.fromList [(fromMaybe (processIdFromActivityUUID (activityId p)) (activityProcessId p), p) | p <- procs]
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 

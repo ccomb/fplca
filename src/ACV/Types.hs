@@ -194,8 +194,28 @@ type FlowDB = M.Map UUID Flow
 -- | Base de données des unités (dédupliquée)
 type UnitDB = M.Map UUID Unit
 
--- | Base de données des activités (backward compatibility with UUID keys)
-type ActivityDB = M.Map UUID Activity
+-- | Base de données des activités - keyed by ProcessId to support multi-product activities
+-- Each spold file (activity_uuid_product_uuid.spold) becomes a separate entry
+type ActivityDB = M.Map ProcessId Activity
+
+-- | Find any ProcessId matching an activity UUID
+-- Returns the first ProcessId found with the given activity UUID.
+-- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds),
+-- so we must translate from UUID → ProcessId to handle multi-product activities.
+findProcessIdByActivityUUID :: ActivityDB -> UUID -> Maybe ProcessId
+findProcessIdByActivityUUID activityDB searchUUID =
+    case [pid | (pid, _) <- M.toList activityDB, activityUUID pid == searchUUID] of
+        (pid:_) -> Just pid
+        [] -> Nothing
+
+-- | Find activity by activity UUID (returns first matching product)
+-- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
+-- When multiple products exist for one activity, this returns an arbitrary match.
+findActivityByActivityUUID :: ActivityDB -> UUID -> Maybe Activity
+findActivityByActivityUUID activityDB searchUUID =
+    case [act | (pid, act) <- M.toList activityDB, activityUUID pid == searchUUID] of
+        (act:_) -> Just act
+        [] -> Nothing
 
 -- | Index par nom de activité - permet la recherche par nom (insensible à la casse)
 type NameIndex = M.Map Text [UUID] -- Nom -> Liste des UUIDs des activités
@@ -267,8 +287,8 @@ data Database = Database
     , -- Pre-computed sparse matrices for efficient LCA calculations
       dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
     , dbBiosphereTriples :: ![SparseTriple] -- B matrix: biosphere flows × activities (sparse)
-    , dbActivityIndex :: !(M.Map UUID Int) -- Activity UUID → matrix index mapping
-    , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs
+    , dbActivityIndex :: !(M.Map ProcessId Int) -- ProcessId → matrix index mapping
+    , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs (source of truth for indexing)
     , dbActivityCount :: !Int -- Number of activities (matrix dimension)
     , dbBiosphereCount :: !Int -- Number of biosphere flows (matrix dimension)
     -- Cached factorization for concurrent inventory calculations (runtime only)

@@ -318,16 +318,16 @@ calculation in two steps:
 
 Input:
 - Database with pre-computed sparse matrices (techTriples, bioTriples)
-- Root activity UUID for which to compute inventory
+- Root activity ProcessId for which to compute inventory
 
 Output:
 - Map from biosphere flow UUID to inventory quantity (kg, MJ, etc.)
 
-Performance: ~7s total for full Ecoinvent database (14K activities)
+Performance: ~7s total for full Ecoinvent database (25K products)
 - 3.5s cache loading + 3s solver + 0.5s biosphere calculation
 -}
-computeInventoryMatrix :: Database -> UUID -> Inventory
-computeInventoryMatrix db rootUUID =
+computeInventoryMatrix :: Database -> ProcessId -> Inventory
+computeInventoryMatrix db rootProcessId =
     let activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
 
@@ -335,10 +335,13 @@ computeInventoryMatrix db rootUUID =
         techTriples = dbTechnosphereTriples db
         bioTriples = dbBiosphereTriples db
         activityIndex = dbActivityIndex db
-        bioFlowUUIDs = dbBiosphereFlows db
+        -- CRITICAL FIX: Rebuild bioFlowIndex from dbBiosphereFlows to ensure consistency
+        -- with the B matrix which was built using indices from the same list.
+        -- Storing both the Map and the list is redundant and error-prone.
+        bioFlowIndex = M.fromList $ zip (dbBiosphereFlows db) [0..]
 
-        -- Build demand vector for root activity (f[i] = 1 for root, 0 elsewhere)
-        demandVec = buildDemandVectorFromIndex activityIndex rootUUID
+        -- Build demand vector (will error if ProcessId not in index - validation happens at service layer)
+        demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
 
         -- Solve sparse LCA equation: (I - A) * supply = demand using PETSc
         -- Try to use cached factorization for faster solving
@@ -349,7 +352,10 @@ computeInventoryMatrix db rootUUID =
         -- Calculate inventory using sparse biosphere matrix: g = B * supply
         inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
 
-        result = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
+        -- Build result map using the stored bioFlowIndex (ensures consistency with bioTriples)
+        result = M.fromList [(uuid, inventoryVec U.! idx)
+                           | (uuid, idx) <- M.toList bioFlowIndex
+                           , idx < U.length inventoryVec]
      in result
 
 {- |
@@ -381,12 +387,13 @@ The demand vector represents external demand for products from each activity:
 
 This vector is used in the fundamental LCA equation: (I - A) * s = f
 
-Uses the pre-built activity index mapping from UUID to matrix indices for efficiency.
+Uses the pre-built activity index mapping from ProcessId to matrix indices for efficiency.
 -}
-buildDemandVectorFromIndex :: M.Map UUID Int -> UUID -> Vector
-buildDemandVectorFromIndex activityIndex rootUUID =
+buildDemandVectorFromIndex :: M.Map ProcessId Int -> ProcessId -> Vector
+buildDemandVectorFromIndex activityIndex rootProcessId =
     let n = M.size activityIndex
-        rootIndex = fromMaybe 0 (M.lookup rootUUID activityIndex)
+        rootIndex = fromMaybe (error $ "FATAL: ProcessId not found in activity index: " ++ show rootProcessId)
+                              (M.lookup rootProcessId activityIndex)
      in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
 
 {- |
