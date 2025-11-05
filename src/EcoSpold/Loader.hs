@@ -103,13 +103,13 @@ loadAllSpoldsWithFlows dir = do
     -- Simple chunking without complex nested batching
     loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
     loadWithSimpleChunks allFiles = do
-        let optimalChunkSize = 150  -- Smaller chunks for better parallelism
+        let optimalChunkSize = 500  -- Sweet spot for memory vs parallelism
         let chunks = chunksOf optimalChunkSize allFiles
         reportProgress Info $ "Processing " ++ show (length chunks) ++ " chunks of ~" ++ show optimalChunkSize ++ " files each with controlled parallelism"
 
-        -- Process chunks with high parallelism to maximize CPU and I/O utilization
+        -- Process chunks with controlled parallelism (2 chunks at a time)
         startTime <- getCurrentTime
-        let parallelism = 8  -- Process 8 chunks concurrently for better CPU utilization
+        let parallelism = 2  -- Process 2 chunks concurrently
         results <- processChunksInParallel parallelism startTime (length chunks) chunks
         let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
@@ -149,9 +149,9 @@ loadAllSpoldsWithFlows dir = do
         -- Report memory usage for large chunks (reduced frequency to minimize overhead)
         when (chunkNum `mod` 10 == 1) $ reportMemoryUsage $ "Chunk " ++ show chunkNum ++ " memory check"
 
-        -- Process files in parallel batches - I/O bound so can use more workers than CPU cores
-        let maxConcurrency = 12  -- 3x CPU cores for I/O-bound XML parsing
-        when (chunkNum == 1) $ reportProgress Info $ "Using " ++ show maxConcurrency ++ " concurrent workers per chunk"
+        -- Process files in smaller parallel batches to avoid thread/handle exhaustion
+        let maxConcurrency = 4  -- Conservative: 1x CPU cores to avoid resource contention
+        when (chunkNum == 1) $ reportProgress Info $ "Using " ++ show maxConcurrency ++ " concurrent workers"
         chunkResults <- processWithLimitedConcurrency maxConcurrency chunk
         let (!procs, flowLists, unitLists) = unzip3 chunkResults
         let !allFlows = concat flowLists
@@ -190,20 +190,9 @@ loadAllSpoldsWithFlows dir = do
       where
         processGroup group = do
             groupResults <- mapConcurrently (activityChunkWithProgress startTime totalChunks) group
-            -- Force deep evaluation of all components to prevent thunk buildup
-            let !forced = forceList groupResults
+            -- Force evaluation of results before moving to next group
+            let !forced = groupResults
             return forced
-
-        -- Force evaluation of all tuple components to prevent memory leaks
-        forceList [] = []
-        forceList ((a, b, c, d, e):xs) =
-            let !a' = a
-                !b' = b
-                !c' = c
-                !d' = d
-                !e' = e
-                !rest = forceList xs
-            in (a', b', c', d', e') : rest
 
     -- Process files with limited concurrency to prevent resource exhaustion
     processWithLimitedConcurrency :: Int -> [FilePath] -> IO [(Activity, [Flow], [Unit])]
