@@ -45,9 +45,6 @@ type ACVAPI =
                 :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
            )
 
--- JSON instances
-instance ToJSON ACV.Query.SynonymStats
-
 -- | Helper function to validate ProcessId and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
 withValidatedActivity db processId action = do
@@ -121,9 +118,12 @@ acvServer db maxTreeDepth sharedSolver =
     getActivityTree processId = withValidatedActivity db processId $ \activity -> do
         -- Use CLI --tree-depth option for configurable depth
         -- Default depth limit prevents DOS attacks via deep tree requests
-        let activityUuid = activityId activity
+        -- Extract activity UUID from processId (format: activityUUID_productUUID)
+        let activityUuid = case T.splitOn "_" processId of
+                (uuid:_) -> uuid
+                [] -> processId  -- Fallback
             loopAwareTree = buildLoopAwareTree db activityUuid maxTreeDepth
-        return $ ACV.Service.convertToTreeExport db activityUuid maxTreeDepth loopAwareTree
+        return $ ACV.Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
@@ -179,10 +179,9 @@ paginateResults results limitParam offsetParam =
 -- | Internal helper for flow search with optional language filtering
 searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
 searchFlowsInternal _ Nothing _ _ _ = return $ SearchResults [] 0 0 50 False
-searchFlowsInternal db (Just query) langParam limitParam offsetParam = do
-    let flows = case langParam of
-            Nothing -> findFlowsBySynonym db query
-            Just lang -> findFlowsBySynonymInLanguage db lang query
+searchFlowsInternal db (Just query) _langParam limitParam offsetParam = do
+    -- Language filtering not yet implemented, search all synonyms
+    let flows = findFlowsBySynonym db query
         flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
     return $ paginateResults flowSearchResults limitParam offsetParam
 

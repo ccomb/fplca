@@ -8,6 +8,7 @@ import Data.List (intercalate)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import GHC.Conc (getNumCapabilities)
 import Options.Applicative
 import System.Environment (lookupEnv)
@@ -24,7 +25,7 @@ import ACV.CLI.Types (Command(Server), ServerOptions(..))
 import ACV.Matrix (initializePetscForServer, finalizePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
 import ACV.Matrix.SharedSolver (SharedSolver, createSharedSolver, shutdownSharedSolver)
 import ACV.Progress
-import ACV.Query (DatabaseStats (..), buildDatabaseWithMatrices, getDatabaseStats)
+import ACV.Query (buildDatabaseWithMatrices)
 import ACV.Types
 import Data.IORef (newIORef, readIORef, writeIORef)
 import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
@@ -75,13 +76,16 @@ main = do
       -- Perform global matrix factorization once
       let techTriples = dbTechnosphereTriples database
           activityCount = dbActivityCount database
+          -- Convert Int32 to Int for PETSc functions
+          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+          activityCountInt = fromIntegral activityCount
       reportProgress Info "Pre-computing matrix factorization for fast concurrent inventory calculations"
-      factorization <- precomputeMatrixFactorization techTriples activityCount
+      factorization <- precomputeMatrixFactorization techTriplesInt activityCountInt
       let databaseWithFactorization = addFactorizationToDatabase database factorization
 
       -- Create shared solver with cached factorization for fast concurrent solves
       reportProgress Info "Creating shared solver with cached factorization"
-      sharedSolver <- createSharedSolver (dbCachedFactorization databaseWithFactorization) techTriples activityCount
+      sharedSolver <- createSharedSolver (dbCachedFactorization databaseWithFactorization) techTriplesInt activityCountInt
 
       reportProgress Info $ "Starting API server on port " ++ show port
       reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
@@ -151,13 +155,15 @@ validateAndReportDatabase database = do
   -- Validate database quality
   validateDatabase database
 
-  -- Display database statistics
-  let stats = getDatabaseStats database
-  reportProgress Info "=== DATABASE STATISTICS ==="
-  displayDatabaseStats database stats
+  -- Display database statistics (stats functions not yet implemented after refactoring)
+  reportProgress Info "=== DATABASE LOADED ==="
+  -- let stats = getDatabaseStats database
+  -- displayDatabaseStats database stats
   reportProgress Info ""
 
 -- | Display database statistics in a user-friendly format
+-- (Commented out until DatabaseStats is re-implemented after refactoring)
+{-
 displayDatabaseStats :: Database -> DatabaseStats -> IO ()
 displayDatabaseStats db stats = do
   reportProgress Info $ "Activities: " ++ show (statsActivityCount stats) ++ " processes"
@@ -225,6 +231,7 @@ displayDatabaseStats db stats = do
   -- Report current memory usage
   reportMemoryUsage "Database loaded in memory"
   reportProgress Info ""
+-}
 
 -- | Validate database integrity and report potential issues
 validateDatabase :: Database -> IO ()
@@ -233,7 +240,7 @@ validateDatabase db = do
 
   -- Check for orphaned flows
   let allFlows = M.keys (dbFlows db)
-      usedFlows = S.fromList $ concatMap (map exchangeFlowId . exchanges) (M.elems $ dbActivities db)
+      usedFlows = S.fromList $ concatMap (map exchangeFlowId . exchanges) (V.toList $ dbActivities db)
       orphanedFlows = filter (`S.notMember` usedFlows) allFlows
 
   if null orphanedFlows
@@ -241,18 +248,21 @@ validateDatabase db = do
     else reportProgress Info $ "  ⚠ Found " ++ show (length orphanedFlows) ++ " orphaned flows (unused in any activity)"
 
   -- Check reference products
-  let activitiesWithoutRef = filter (null . filter exchangeIsReference . exchanges) (M.elems $ dbActivities db)
+  let activitiesWithoutRef = filter (null . filter exchangeIsReference . exchanges) (V.toList $ dbActivities db)
   if null activitiesWithoutRef
     then reportProgress Info "  ✓ All activities have reference products"
     else reportProgress Info $ "  ⚠ Found " ++ show (length activitiesWithoutRef) ++ " activities without reference products"
 
   -- Check for extremely unbalanced activities (more than 100:1 ratio)
+  -- (Stats disabled until getDatabaseStats is re-implemented)
+  {-
   let stats = getDatabaseStats db
       avgInputsPerActivity = fromIntegral (statsInputCount stats) / fromIntegral (statsActivityCount stats) :: Double
       avgOutputsPerActivity = fromIntegral (statsOutputCount stats) / fromIntegral (statsActivityCount stats) :: Double
       ratio = if avgInputsPerActivity > 0 then avgOutputsPerActivity / avgInputsPerActivity else 0
 
   reportProgress Info $ "  ✓ Average exchange balance: " ++ printf "%.1f" ratio ++ ":1 (outputs:inputs)"
+  -}
 
   -- Overall assessment
   let issues = length orphanedFlows + length activitiesWithoutRef

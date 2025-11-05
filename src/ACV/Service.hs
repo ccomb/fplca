@@ -12,6 +12,7 @@ import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildL
 import ACV.Types
 import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)
+import Data.Int (Int32)
 import qualified Data.List as L
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
@@ -19,6 +20,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
@@ -39,33 +41,42 @@ validateUUID uuidText
     | otherwise = Left $ InvalidUUID $ "Invalid UUID format: " <> uuidText
 
 -- | Parse ProcessId from text (activity_uuid_product_uuid format)
-parseProcessIdFromText :: Text -> Either ServiceError ProcessId
-parseProcessIdFromText text =
-    case parseProcessId text of
+parseProcessIdFromText :: Database -> Text -> Either ServiceError ProcessId
+parseProcessIdFromText db text =
+    case parseProcessId db text of
         Just processId -> Right processId
         Nothing -> Left $ InvalidProcessId $ "Invalid ProcessId format (expected activity_uuid_product_uuid): " <> text
 
--- | Find activity by ProcessId by searching through all activities
+-- | Find activity by ProcessId using direct Vector access
 findActivityByProcessId :: Database -> ProcessId -> Maybe Activity
 findActivityByProcessId db processId =
-    let allActivities = M.elems (dbActivities db)
-        matchingActivities = filter (\activity -> activityProcessId activity == Just processId) allActivities
-     in case matchingActivities of
-            (activity : _) -> Just activity
-            [] -> Nothing
+    if processId >= 0 && fromIntegral processId < V.length (dbActivities db)
+    then Just $ dbActivities db V.! fromIntegral processId
+    else Nothing
 
 -- | Resolve activity query using ProcessId format with UUID fallback for compatibility
 resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
 resolveActivityByProcessId db queryText =
-    case parseProcessIdFromText queryText of
+    case resolveActivityAndProcessId db queryText of
+        Right (_processId, activity) -> Right activity
+        Left err -> Left err
+
+-- | Resolve activity and get both ProcessId and Activity
+-- This is the preferred function when you need the ProcessId (e.g., for matrix operations)
+resolveActivityAndProcessId :: Database -> Text -> Either ServiceError (ProcessId, Activity)
+resolveActivityAndProcessId db queryText =
+    case parseProcessIdFromText db queryText of
         Right processId ->
             case findActivityByProcessId db processId of
-                Just activity -> Right activity
+                Just activity -> Right (processId, activity)
                 Nothing -> Left $ ActivityNotFound queryText
         Left _ ->
             -- Fallback: try as bare UUID for ECOINVENT data compatibility
-            case findActivityByActivityUUID (dbActivities db) queryText of
-                Just activity -> Right activity
+            case findProcessIdByActivityUUID db queryText of
+                Just processId ->
+                    case findActivityByProcessId db processId of
+                        Just activity -> Right (processId, activity)
+                        Nothing -> Left $ ActivityNotFound queryText
                 Nothing -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid) or valid UUID: " <> queryText
 
 -- | Validate that a ProcessId exists in the matrix activity index
@@ -73,28 +84,26 @@ resolveActivityByProcessId db queryText =
 -- The activity index is required for building demand vectors and performing inventory calculations
 validateProcessIdInMatrixIndex :: Database -> ProcessId -> Either ServiceError ()
 validateProcessIdInMatrixIndex db processId =
-    case M.lookup processId (dbActivityIndex db) of
-        Just _ -> Right ()
-        Nothing -> Left $ MatrixError $
-            "ProcessId not available for matrix calculations: " <>
-            processIdToText processId <>
-            ". This activity may exist in the database but is not indexed for inventory calculations."
+    if processId >= 0 && fromIntegral processId < V.length (dbActivityIndex db)
+    then Right ()
+    else Left $ MatrixError $
+        "ProcessId not available for matrix calculations: " <>
+        T.pack (show processId) <>
+        ". This activity may exist in the database but is not indexed for inventory calculations."
 
--- | Extract ProcessId from an Activity (using stored ProcessId from filename)
+-- | Generate a unique identifier for an Activity for tree visualization
+-- Since we no longer have activityId, we use activity name + location + reference product
 getProcessIdFromActivity :: Activity -> Text
 getProcessIdFromActivity activity =
-    case activityProcessId activity of
-        Just processId -> processIdToText processId
-        Nothing ->
-            -- Construct ProcessId for ECOINVENT data using reference product
-            let actUUID = activityId activity
-                -- Find reference product UUID, fallback to first output, then activity UUID
-                productUUID = case getReferenceProductId activity of
-                    Just refProdId -> refProdId
-                    Nothing -> case getFirstOutputProductId activity of
-                        Just firstProdId -> firstProdId
-                        Nothing -> actUUID -- Ultimate fallback
-             in actUUID <> "_" <> productUUID
+    let name = activityName activity
+        location = activityLocation activity
+        -- Find reference product UUID for uniqueness
+        productId = case getReferenceProductId activity of
+            Just refProdId -> refProdId
+            Nothing -> case getFirstOutputProductId activity of
+                Just firstProdId -> firstProdId
+                Nothing -> "no-product" -- Fallback
+     in name <> "_" <> location <> "_" <> productId
 
 -- | Get reference product flow ID from activity
 getReferenceProductId :: Activity -> Maybe Text
@@ -113,11 +122,13 @@ getFirstOutputProductId activity =
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
 getActivityInfo db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    let activityForAPI = convertActivityForAPI db activity
+    (processId, activity) <- resolveActivityAndProcessId db queryText
+    let activityForAPI = convertActivityForAPI db processId activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
-        links = generateActivityLinks (activityId activity) -- Use actual activity UUID for links
+        -- Use ProcessId (which encodes both activityUUID and productUUID) for links
+        activityIdForLinks = processIdToText db processId
+        links = generateActivityLinks activityIdForLinks
         activityInfo =
             ActivityInfo
                 { piActivity = activityForAPI
@@ -130,12 +141,7 @@ getActivityInfo db queryText = do
 -- | Core inventory calculation logic using matrix-based LCA calculations
 computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
 computeActivityInventory db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    -- Get the real ProcessId from the database (never fabricate)
-    processId <- case findProcessIdByActivityUUID (dbActivities db) (activityId activity) of
-        Just pid -> Right pid
-        Nothing -> Left $ InvalidProcessId $
-            "Activity " <> activityId activity <> " has no ProcessId in database"
+    (processId, _activity) <- resolveActivityAndProcessId db queryText
     -- Validate ProcessId exists in matrix index before expensive computation
     validateProcessIdInMatrixIndex db processId
     -- Matrix computation (will not fail if validation passed)
@@ -145,13 +151,9 @@ computeActivityInventory db queryText = do
 -- | Shared solver-aware inventory calculation for concurrent processing
 computeActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError Inventory)
 computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
-    case resolveActivityByProcessId db queryText of
+    case resolveActivityAndProcessId db queryText of
         Left err -> return $ Left err
-        Right activity -> do
-            -- Get the real ProcessId from the database (never fabricate)
-            processId <- case findProcessIdByActivityUUID (dbActivities db) (activityId activity) of
-                Just pid -> return pid
-                Nothing -> return $ error $ "Activity " <> show (activityId activity) <> " has no ProcessId in database"
+        Right (processId, _activity) -> do
 
             -- Validate ProcessId exists in matrix index before expensive computation
             case validateProcessIdInMatrixIndex db processId of
@@ -175,10 +177,16 @@ computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
                             solveWithSharedSolver sharedSolver demandVec
                         Nothing -> do
                             -- Fallback: use direct matrix computation if no cached factorization
-                            return $ solveSparseLinearSystem techTriples activityCount demandVec
+                            -- Convert Int32 to Int for solveSparseLinearSystem
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+                                activityCountInt = fromIntegral activityCount
+                            return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
-                    let inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+                    -- Convert Int32 to Int for applySparseMatrix
+                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+                        bioFlowCountInt = fromIntegral bioFlowCount
+                        inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
                     return $ Right inventory
 
@@ -240,12 +248,7 @@ isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> Either ServiceError Value
 getActivityInventory db processIdText = do
-    activity <- resolveActivityByProcessId db processIdText
-    -- Get the real ProcessId from the database (never fabricate)
-    processId <- case findProcessIdByActivityUUID (dbActivities db) (activityId activity) of
-        Just pid -> Right pid
-        Nothing -> Left $ InvalidProcessId $
-            "Activity " <> activityId activity <> " has no ProcessId in database"
+    (processId, activity) <- resolveActivityAndProcessId db processIdText
     -- Validate ProcessId exists in matrix index before expensive computation
     validateProcessIdInMatrixIndex db processId
     -- Matrix computation (will not fail if validation passed)
@@ -256,14 +259,9 @@ getActivityInventory db processIdText = do
 -- | Shared solver-aware activity inventory export for concurrent processing
 getActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError InventoryExport)
 getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
-    case resolveActivityByProcessId db processIdText of
+    case resolveActivityAndProcessId db processIdText of
         Left err -> return $ Left err
-        Right activity -> do
-            -- Get the real ProcessId from the database (never fabricate)
-            processId <- case findProcessIdByActivityUUID (dbActivities db) (activityId activity) of
-                Just pid -> return pid
-                Nothing -> return $ error $ "Activity " <> show (activityId activity) <> " has no ProcessId in database"
-
+        Right (processId, activity) -> do
             -- Validate ProcessId exists in matrix index before expensive computation
             case validateProcessIdInMatrixIndex db processId of
                 Left validationErr -> return $ Left validationErr
@@ -286,10 +284,16 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                             solveWithSharedSolver sharedSolver demandVec
                         Nothing -> do
                             -- Fallback: use direct matrix computation if no cached factorization
-                            return $ solveSparseLinearSystem techTriples activityCount demandVec
+                            -- Convert Int32 to Int for solveSparseLinearSystem
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+                                activityCountInt = fromIntegral activityCount
+                            return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
-                    let inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+                    -- Convert Int32 to Int for applySparseMatrix
+                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+                        bioFlowCountInt = fromIntegral bioFlowCount
+                        inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
                         inventoryExport = convertToInventoryExport db activity inventory
                     return $ Right inventoryExport
@@ -316,7 +320,7 @@ countPotentialChildren db activity =
         , exchangeIsInput ex
         , not (exchangeIsReference ex)
         , Just targetUUID <- [exchangeActivityLinkId ex]
-        , Just _ <- [findProcessIdByActivityUUID (dbActivities db) targetUUID]
+        , Just _ <- [findProcessIdByActivityUUID db targetUUID]
         ]
 
 -- | Extract nodes and edges from LoopAwareTree
@@ -406,10 +410,13 @@ convertToTreeExport db rootProcessId maxDepth tree =
 -- | Get activity tree as rich TreeExport with configurable depth
 getActivityTree :: Database -> Text -> Int -> Either ServiceError Value
 getActivityTree db queryText maxDepth = do
-    activity <- resolveActivityByProcessId db queryText
-    let activityUuid = activityId activity
+    (processId, activity) <- resolveActivityAndProcessId db queryText
+    -- Get the activity UUID from the processIdText (which is activityUUID_productUUID)
+    let activityUuid = case T.splitOn "_" queryText of
+            (uuid:_) -> uuid
+            [] -> queryText  -- Fallback
         loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
-        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree -- Pass ProcessId instead of UUID
+        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
      in Right $ toJSON treeExport
 
 -- | Get flow usage count across all activities
@@ -512,10 +519,11 @@ calculateActivityStats activity =
         }
 
 -- | Convert Activity to ActivityForAPI with unit names
-convertActivityForAPI :: Database -> Activity -> ActivityForAPI
-convertActivityForAPI db activity =
+-- Note: This function requires the ProcessId to get the activity UUID
+convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
+convertActivityForAPI db processId activity =
     ActivityForAPI
-        { pfaId = activityId activity
+        { pfaId = processIdToText db processId
         , pfaName = activityName activity
         , pfaDescription = activityDescription activity
         , pfaSynonyms = activitySynonyms activity
@@ -529,7 +537,7 @@ convertActivityForAPI db activity =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             targetActivityInfo = case exchange of
                 TechnosphereExchange _ _ _ _ _ linkId _ ->
-                    case findActivityByActivityUUID (dbActivities db) linkId of
+                    case findActivityByActivityUUID db linkId of
                         Just targetActivity -> Just (activityName targetActivity)
                         Nothing -> Nothing
                 BiosphereExchange _ _ _ _ -> Nothing
@@ -549,7 +557,7 @@ convertActivityForAPI db activity =
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
 getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
-    targetActivity <- findActivityByActivityUUID (dbActivities db) targetId
+    targetActivity <- findActivityByActivityUUID db targetId
     return $
         ActivitySummary
             { prsId = getProcessIdFromActivity targetActivity
@@ -580,7 +588,7 @@ getActivitiesUsingFlow db flowUUID =
                     (activityName proc)
                     (activityLocation proc)
                 | procUUID <- uniqueUUIDs
-                , Just proc <- [findActivityByActivityUUID (dbActivities db) procUUID]
+                , Just proc <- [findActivityByActivityUUID db procUUID]
                 ]
 
 -- | Helper function to get detailed exchanges with filtering
@@ -658,8 +666,8 @@ getSynonymStats _ =
 -- | Compute LCIA scores (placeholder)
 computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
 computeLCIA db queryText methodFile = do
-    activity <- resolveActivityByProcessId db queryText
-    let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", activityId activity)]
+    (processId, activity) <- resolveActivityAndProcessId db queryText
+    let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", processIdToText db processId)]
      in Right $ toJSON placeholder
 
 -- | Export LCIA results as XML (placeholder)
@@ -673,11 +681,15 @@ exportLCIAAsCSV _ _ = Right ()
 -- | Export matrix debug data
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> Either ServiceError Value
 exportMatrixDebugData database processIdText opts = do
-    case resolveActivityByProcessId database processIdText of
+    case resolveActivityAndProcessId database processIdText of
         Left err -> Left err
-        Right targetActivity -> do
+        Right (processId, targetActivity) -> do
+            -- Extract the activityUUID from processIdText (format: activityUUID_productUUID)
+            let activityUuid = case T.splitOn "_" processIdText of
+                    (uuid:_) -> uuid
+                    [] -> processIdText  -- Fallback
             -- Extract matrix debugging information (includes all computations)
-            let matrixData = extractMatrixDebugInfo database (activityId targetActivity) (debugFlowFilter opts)
+            let matrixData = extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
 
             -- Get inventory from matrixData (already computed)
             let inventoryList = mdInventoryVector matrixData
@@ -693,7 +705,7 @@ exportMatrixDebugData database processIdText opts = do
 
             let summary =
                     M.fromList
-                        [ ("activity_uuid" :: Text, activityId targetActivity)
+                        [ ("activity_uuid" :: Text, activityUuid)
                         , ("activity_name" :: Text, activityName targetActivity)
                         , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
                         , ("matrix_debug_exported" :: Text, T.pack csvResult)
@@ -709,25 +721,31 @@ extractMatrixDebugInfo database targetUUID flowFilter =
         flows = dbFlows database
         techTriples = dbTechnosphereTriples database
         bioTriples = dbBiosphereTriples database
-        activityIndex = dbActivityIndex database
+        activityIndexVec = dbActivityIndex database
         bioFlowUUIDs = dbBiosphereFlows database
         activityCount = dbActivityCount database
         bioFlowCount = dbBiosphereCount database
 
         -- Build demand vector for target activity (f[i] = 1 for target, 0 elsewhere)
         -- Need to find ProcessId from activity UUID - never fabricate
-        targetProcessId = case findProcessIdByActivityUUID activities targetUUID of
+        targetProcessId = case findProcessIdByActivityUUID database targetUUID of
             Just pid -> pid
             Nothing -> error $ "Activity " <> show targetUUID <> " has no ProcessId in database for debug-matrices"
-        demandVec = buildDemandVectorFromIndex activityIndex targetProcessId
+        demandVec = buildDemandVectorFromIndex activityIndexVec targetProcessId
         demandList = toList demandVec
 
         -- Solve (I - A) * supply = demand using PETSc (same as in computeInventoryMatrix)
-        supplyVec = solveSparseLinearSystem techTriples activityCount demandVec
+        -- Convert Int32 to Int for solveSparseLinearSystem
+        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+        activityCountInt = fromIntegral activityCount
+        supplyVec = solveSparseLinearSystem techTriplesInt activityCountInt demandVec
         supplyList = toList supplyVec
 
         -- Calculate inventory using biosphere matrix: g = B * supply
-        inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+        -- Convert Int32 to Int for applySparseMatrix
+        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+        bioFlowCountInt = fromIntegral bioFlowCount
+        inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
         inventoryList = toList inventoryVec
 
         -- Filter biosphere flows if specified
@@ -737,15 +755,18 @@ extractMatrixDebugInfo database targetUUID flowFilter =
                 let matchingFlowIndices =
                         [ idx | (uuid, idx) <- zip bioFlowUUIDs [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
                         ]
-                 in filter (\(row, _, _) -> row `elem` matchingFlowIndices) bioTriples
+                    matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
+                 in filter (\(row, _, _) -> row `elem` matchingFlowIndicesInt32) bioTriples
      in MatrixDebugInfo
             { mdActivities = activities
             , mdFlows = flows
             , mdTechTriples = techTriples
             , mdBioTriples = filteredBioTriples
-            , mdActivityIndex = activityIndex
+            , mdActivityIndex = activityIndexVec
             , mdBioFlowUUIDs = bioFlowUUIDs
             , mdTargetUUID = targetUUID
+            , mdTargetProcessId = targetProcessId
+            , mdDatabase = database
             , mdSupplyVector = supplyList
             , mdDemandVector = demandList
             , mdInventoryVector = inventoryList
@@ -753,13 +774,15 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 
 -- | Matrix debug information container
 data MatrixDebugInfo = MatrixDebugInfo
-    { mdActivities :: ActivityDB  -- Now M.Map ProcessId Activity
+    { mdActivities :: ActivityDB  -- V.Vector Activity indexed by ProcessId
     , mdFlows :: M.Map UUID Flow
     , mdTechTriples :: [SparseTriple]
     , mdBioTriples :: [SparseTriple]
-    , mdActivityIndex :: M.Map ProcessId Int  -- Now ProcessId-keyed
+    , mdActivityIndex :: V.Vector Int32  -- ProcessId → matrix column index
     , mdBioFlowUUIDs :: [UUID]
     , mdTargetUUID :: UUID
+    , mdTargetProcessId :: ProcessId  -- The ProcessId for the target activity
+    , mdDatabase :: Database  -- Database reference for lookups
     , mdSupplyVector :: [Double] -- Real supply amounts from PETSc solver
     , mdDemandVector :: [Double] -- Demand vector (f)
     , mdInventoryVector :: [Double] -- Final inventory vector (g)
@@ -776,10 +799,9 @@ exportMatrixDebugCSVs basePath debugInfo = do
 
     -- Debug demand vector
     let demandVector = mdDemandVector debugInfo
-        targetProcessId = findProcessIdByActivityUUID (mdActivities debugInfo) (mdTargetUUID debugInfo)
-        targetIndex = case targetProcessId >>= flip M.lookup (mdActivityIndex debugInfo) of
-            Just idx -> idx
-            Nothing -> -1
+        targetProcessId = mdTargetProcessId debugInfo
+        activityIndexVec = mdActivityIndex debugInfo
+        targetIndex = fromIntegral (activityIndexVec V.! fromEnum targetProcessId) :: Int
         targetDemand =
             if targetIndex >= 0 && targetIndex < length demandVector
                 then demandVector !! targetIndex
@@ -802,21 +824,23 @@ exportMatrixDebugCSVs basePath debugInfo = do
 -- | Export supply chain data showing which activities contribute to target
 exportSupplyChainData :: FilePath -> MatrixDebugInfo -> IO ()
 exportSupplyChainData filePath debugInfo = do
-    let activities = mdActivities debugInfo
-        activityIndex = mdActivityIndex debugInfo
+    let database = mdDatabase debugInfo
+        activities = mdActivities debugInfo
+        activityIndexVec = mdActivityIndex debugInfo
         supplyVector = mdSupplyVector debugInfo
         targetUUID = mdTargetUUID debugInfo
 
         -- Create supply chain data with REAL supply amounts from solver
         supplyChainRows =
             [ csvRow processId activity idx supply
-            | (processId, idx) <- M.toList activityIndex
-            , Just activity <- [M.lookup processId activities]
+            | processId <- [toEnum 0 .. toEnum (V.length activities - 1)]
+            , let activity = activities V.! fromEnum processId
+            , let idx = fromIntegral (activityIndexVec V.! fromEnum processId) :: Int
             , let supply = if idx < length supplyVector then supplyVector !! idx else 0.0
             ]
 
         csvRow processId activity idx supply =
-            [ T.unpack (processIdToText processId)
+            [ T.unpack (processIdToText database processId)
             , T.unpack (activityName activity)
             , T.unpack (activityLocation activity)
             , show supply -- REAL supply amount from PETSc solver
@@ -834,7 +858,8 @@ exportSupplyChainData filePath debugInfo = do
 -- | Export biosphere matrix contributions
 exportBiosphereMatrixData :: FilePath -> MatrixDebugInfo -> IO ()
 exportBiosphereMatrixData filePath debugInfo = do
-    let flows = mdFlows debugInfo
+    let database = mdDatabase debugInfo
+        flows = mdFlows debugInfo
         activities = mdActivities debugInfo
         bioTriples = mdBioTriples debugInfo
         bioFlowUUIDs = mdBioFlowUUIDs debugInfo
@@ -849,27 +874,42 @@ exportBiosphereMatrixData filePath debugInfo = do
             ]
 
         csvRow (row, col, value) =
-            [ maybe "unknown" show (getFlowUUID row)
-            , maybe "unknown" (T.unpack . flowName) (getFlow row)
-            , maybe "unknown" T.unpack (getFlowUnit row)
-            , maybe "unknown" (T.unpack . processIdToText) (getActivityProcessId col)
-            , maybe "unknown" (T.unpack . activityName) (getActivity col)
-            , show value
-            , show realContribution -- REAL contribution = matrix_value × supply_amount
-            ]
+            let rowInt = fromIntegral row :: Int
+                colInt = fromIntegral col :: Int
+             in [ maybe "unknown" show (getFlowUUID rowInt)
+                , maybe "unknown" (T.unpack . flowName) (getFlow rowInt)
+                , maybe "unknown" T.unpack (getFlowUnit rowInt)
+                , maybe "unknown" (T.unpack . processIdToText database) (getActivityProcessId colInt)
+                , maybe "unknown" (T.unpack . activityName) (getActivity colInt)
+                , show value
+                , show (realContribution colInt) -- REAL contribution = matrix_value × supply_amount
+                ]
           where
+            getFlowUUID :: Int -> Maybe UUID
             getFlowUUID rowIdx =
                 if rowIdx < length bioFlowUUIDs
                     then Just (bioFlowUUIDs !! rowIdx)
                     else Nothing
+            getFlow :: Int -> Maybe Flow
             getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
+            getFlowUnit :: Int -> Maybe Text
             getFlowUnit rowIdx = fmap (T.pack . show . flowUnitId) (getFlow rowIdx)
-            getActivityProcessId colIdx = fmap fst $ L.find ((== colIdx) . snd) (M.toList activityIndex)
-            getActivity colIdx = getActivityProcessId colIdx >>= flip M.lookup activities
+            -- Find ProcessId by searching for matching matrix column index
+            getActivityProcessId :: Int -> Maybe ProcessId
+            getActivityProcessId colIdx =
+                L.find (\pid -> fromIntegral (activityIndex V.! fromEnum pid) == colIdx)
+                       [toEnum 0 .. toEnum (V.length activities - 1)]
+            getActivity :: Int -> Maybe Activity
+            getActivity colIdx = do
+                processId <- getActivityProcessId colIdx
+                if fromEnum processId < V.length activities
+                    then Just (activities V.! fromEnum processId)
+                    else Nothing
             -- Calculate REAL contribution: B[row,col] × supply[col]
-            realContribution =
-                if col < length supplyVector
-                    then value * (supplyVector !! col)
+            realContribution :: Int -> Double
+            realContribution colIdx =
+                if colIdx < length supplyVector
+                    then value * (supplyVector !! colIdx)
                     else 0.0
 
         csvHeader = ["flow_id", "flow_name", "unit", "activity_id", "activity_name", "matrix_value", "contribution"]

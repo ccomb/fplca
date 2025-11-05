@@ -2,704 +2,259 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-{- |
-Module      : ACV.Query
-Description : Database indexing and sparse matrix construction for LCA calculations
-
-This module handles the construction of the Database type from raw EcoSpold data,
-including the critical sparse matrix pre-computation that enables fast LCA calculations.
-
-Key responsibilities:
-- Building activity and flow indexes for fast UUID lookups
-- Constructing sparse technosphere matrix (A) in coordinate triplet format
-- Constructing sparse biosphere matrix (B) in coordinate triplet format
-- Database statistics and search functionality
-
-The sparse matrices use coordinate triplet lists (i,j,value)
-that can be efficiently consumed by PETSc's sparse linear algebra routines.
-
-Performance characteristics:
-- Matrix construction: O(n*m) where n=activities, m=exchanges per activity
-- Memory usage: ~10-50 MB for typical databases
-- Construction time: ~1-5 seconds for full Ecoinvent database
--}
 module ACV.Query where
 
 import ACV.Progress
 import ACV.Types
 import ACV.UnitConversion (normalizeExchangeAmount, normalizedAmountValue)
 import Control.Parallel.Strategies
+import Data.Int (Int32)
 import Data.List (elemIndex, find, partition, sort, sortOn)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import GHC.Generics (Generic)
 import System.IO.Unsafe (unsafePerformIO)
 
--- | Construction des index à partir d'une base de données simple (parallélisée)
-buildIndexes :: ActivityDB -> FlowDB -> Indexes
-buildIndexes procDB flowDB =
-    let
-        -- Build indexes with parallel evaluation
-        nameIdx = buildNameIndex procDB `using` rdeepseq
-        locationIdx = buildLocationIndex procDB `using` rdeepseq
-        flowIdx = buildFlowIndex procDB `using` rdeepseq
-        unitIdx = buildActivityUnitIndex procDB `using` rdeepseq
-        flowCatIdx = buildFlowCategoryIndex flowDB `using` rdeepseq
-        flowTypeIdx = buildFlowTypeIndex flowDB `using` rdeepseq
-        exchangeIdx = buildExchangeIndex procDB `using` rdeepseq
-        procExchangeIdx = buildActivityExchangeIndex procDB `using` rdeepseq
-        refProdIdx = buildReferenceProductIndex procDB `using` rdeepseq
-        inputIdx = buildActivityInputIndex procDB `using` rdeepseq
-        outputIdx = buildActivityOutputIndex procDB `using` rdeepseq
-     in
-        Indexes
-            { -- Index au niveau activité
-              idxByName = nameIdx
-            , idxByLocation = locationIdx
-            , idxByFlow = flowIdx
-            , idxByUnit = unitIdx
-            , -- Index au niveau flux
-              idxFlowByCategory = flowCatIdx
-            , idxFlowByType = flowTypeIdx
-            , -- Index au niveau échange
-              idxExchangeByFlow = exchangeIdx
-            , idxExchangeByActivity = procExchangeIdx
-            , idxReferenceProducts = refProdIdx
-            , idxInputsByActivity = inputIdx
-            , idxOutputsByActivity = outputIdx
-            }
-
 -- | Build complete database with pre-computed sparse matrices
-buildDatabaseWithMatrices :: ActivityDB -> FlowDB -> UnitDB -> Database
-buildDatabaseWithMatrices activityDB flowDB unitDB =
+-- Now accepts a Map with (UUID, UUID) keys and converts to Vector internally
+buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> Database
+buildDatabaseWithMatrices activityMap flowDB unitDB =
     let _ = unsafePerformIO $ reportMatrixOperation "Building database with pre-computed sparse matrices"
-        indexes = buildIndexes activityDB flowDB
+
+        -- Step 1: Build UUID interning tables from Map keys
+        activityKeys = M.keys activityMap
+        sortedKeys = sort activityKeys  -- Ensure deterministic ordering
+
+        -- Build forward lookup: ProcessId (Int16) -> (UUID, UUID)
+        dbProcessIdTable = V.fromList sortedKeys
+
+        -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int16)
+        dbProcessIdLookup = M.fromList $ zip sortedKeys [0..]
+
+        -- Convert Map to Vector indexed by ProcessId
+        dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
+
+        -- Build indexes (now using Vector)
+        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable flowDB
+
         referenceProducts = idxReferenceProducts indexes
-        -- Build complete sparse coordinate lists for entire database
+
+        -- Build activity index for matrix construction
         _ = unsafePerformIO $ reportMatrixOperation "Building activity indexes"
-        allActivities = activityDB
-        activityProcessIds = M.keys allActivities
-        activityCount = length activityProcessIds
-        activityIndex = M.fromList $ zip activityProcessIds [0 ..]
+        activityCount = fromIntegral (V.length dbActivities) :: Int32
+
+        -- Map ProcessId to matrix index (0-based Int32)
+        dbActivityIndex = V.generate (fromIntegral activityCount) fromIntegral
+
         _ = unsafePerformIO $ reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
 
-        -- Build technosphere sparse triplets (optimized with strict evaluation)
+        -- Build technosphere sparse triplets
         _ = unsafePerformIO $ reportMatrixOperation "Building technosphere matrix triplets"
         !techTriples =
-            let buildTechTriple normalizationFactor j consumerActivity ex
+            let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
                     | not (isTechnosphereExchange ex) = []
-                    | not (exchangeIsInput ex) = [] -- Skip technosphere outputs/co-products
-                    | exchangeIsReference ex = [] -- Skip reference products - normalization approach
+                    | not (exchangeIsInput ex) = []
+                    | exchangeIsReference ex = []
                     | otherwise =
-                        let directProducerIdx =
-                                case exchangeActivityLinkId ex of
-                                    Just inputActivityUUID ->
-                                        findProcessIdByActivityUUID activityDB inputActivityUUID >>= flip M.lookup activityIndex
+                        let producerPid = case exchangeProcessLinkId ex of
+                                Just pid -> Just pid
+                                Nothing -> case exchangeActivityLinkId ex of
+                                    Just actUUID -> findProcessIdByActivityUUID' dbProcessIdTable actUUID
                                     Nothing -> Nothing
-                            fallbackProducerIdx =
-                                case M.lookup (exchangeFlowId ex) referenceProducts of
-                                    Just [(producerUUID, _)]
-                                        | producerUUID /= activityId consumerActivity ->
-                                            findProcessIdByActivityUUID activityDB producerUUID >>= flip M.lookup activityIndex
-                                    _ -> Nothing
-                            chosenProducerIdx =
-                                case directProducerIdx of
-                                    Just producerIdx -> Just producerIdx
-                                    Nothing -> fallbackProducerIdx
-                         in case chosenProducerIdx of
-                                Just producerIdx ->
-                                    let rawValue = exchangeAmount ex  -- Use raw amount, no unit conversion
+                            producerIdx = producerPid >>= \pid ->
+                                if pid >= 0 && fromIntegral pid < V.length dbActivityIndex
+                                then Just $ dbActivityIndex V.! fromIntegral pid
+                                else Nothing
+                         in case producerIdx of
+                                Just idx ->
+                                    let rawValue = exchangeAmount ex
                                         denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                        -- Apply negative sign for technosphere inputs (standard LCA convention)
                                         value = -(rawValue / denom)
-                                     in ([(producerIdx, j, value) | abs value > 1e-15])
+                                     in [(idx, j, value) | abs value > 1e-15]
                                 Nothing -> []
-                buildActivityTriplets (j, consumerActivity) =
-                    let
-                        -- Find reference product amount for normalization
-                        -- Use raw amount (no unit conversion) to maintain dimensionless ratios
-                        -- Matrix coefficients should be ratios in original spold units
-                        refProductAmount = case find exchangeIsReference (exchanges consumerActivity) of
-                            Just refEx -> exchangeAmount refEx
-                            Nothing -> 1.0 -- No reference product, no scaling needed
-                        normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
-                        -- Build triplets with amounts normalized to one unit of reference product
-                        buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity
-                     in
-                        concatMap buildNormalizedTechTriple (exchanges consumerActivity)
-                !result = concatMap buildActivityTriplets (zip [0 ..] (M.elems allActivities))
+                buildActivityTriplets (j, consumerPid) =
+                    let consumerActivity = dbActivities V.! fromIntegral consumerPid
+                        refProductAmounts = [ exchangeAmount ex | ex <- exchanges consumerActivity
+                                            , exchangeIsReference ex && not (exchangeIsInput ex) ]
+                        normalizationFactor = sum refProductAmounts
+                        buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
+                     in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
+
+                !result = concatMap buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
                 _ = unsafePerformIO $ reportMatrixOperation ("Technosphere matrix: " ++ show (length result) ++ " non-zero entries")
              in result
 
-        -- Build biosphere sparse triplets (optimized with strict evaluation)
-        _ = unsafePerformIO $ reportMatrixOperation "Building biosphere flow index"
-        -- CRITICAL: Must use sort for deterministic ordering! Set.toList has undefined order,
-        -- which would cause bioFlowIndex to assign random indices to flows on each run,
-        -- breaking the correspondence between B matrix rows and inventory vector indices.
-        !bioFlowUUIDs =
-            sort $ S.toList $
-                S.fromList
-                    [ exchangeFlowId ex
-                    | activity <- M.elems allActivities
-                    , ex <- exchanges activity
-                    , isBiosphereExchange ex
-                    ]
-        !bioFlowCount = length bioFlowUUIDs
-        !bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0 ..]
-        _ = unsafePerformIO $ reportMatrixOperation ("Biosphere index built: " ++ show bioFlowCount ++ " flows")
-
+        -- Build biosphere sparse triplets
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
+        bioFlowUUIDs = S.toList $ S.fromList [exchangeFlowId ex | pid <- [0..fromIntegral activityCount - 1],
+                                                                   let activity = dbActivities V.! fromIntegral pid,
+                                                                   ex <- exchanges activity,
+                                                                   isBiosphereExchange ex]
+        bioFlowCount = fromIntegral $ length bioFlowUUIDs :: Int32
+        bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0..]
+
         !bioTriples =
             let buildBioTriple normalizationFactor j activity ex
                     | not (isBiosphereExchange ex) = []
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
-                                let rawAmount = exchangeAmount ex  -- Use raw amount, no unit conversion
+                                let rawValue = exchangeAmount ex
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                    normalizedAmount = rawAmount / denom
-                                    -- Standard LCA convention: biosphere flows use absolute values (positive)
-                                    -- Direction (resource vs emission) is encoded in flow compartment, not sign
-                                    amount = normalizedAmount
-                                 in [(i, j, amount) | abs amount > 1e-15]
+                                    value = if exchangeIsInput ex
+                                           then -(rawValue / denom)  -- Resource extraction
+                                           else rawValue / denom      -- Emissions
+                                 in [(i, j, value) | abs value > 1e-15]
                             Nothing -> []
-                buildActivityBioTriplets (j, activity) =
-                    let
-                        -- Find reference product amount for this activity
-                        -- Use raw amount (no unit conversion) to maintain dimensionless ratios
-                        -- Both technosphere and biosphere use raw/raw for consistency
-                        refProductAmount = case find exchangeIsReference (exchanges activity) of
-                            Just refEx -> exchangeAmount refEx
-                            Nothing -> 1.0 -- No reference product, no scaling needed
-                        normalizationFactor = if refProductAmount > 1e-15 then refProductAmount else 1.0
 
-                        -- Build biosphere triplets normalized to the activity's reference product
+                buildActivityBioTriplets (j, pid) =
+                    let activity = dbActivities V.! fromIntegral pid
+                        refProductAmounts = [ exchangeAmount ex | ex <- exchanges activity
+                                            , exchangeIsReference ex && not (exchangeIsInput ex) ]
+                        normalizationFactor = sum refProductAmounts
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
-                     in
-                        concatMap buildNormalizedBioTriple (exchanges activity)
-                !result = concatMap buildActivityBioTriplets (zip [0 ..] (M.elems allActivities))
+                     in concatMap buildNormalizedBioTriple (exchanges activity)
+
+                !result = concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
                 _ = unsafePerformIO $ reportMatrixOperation ("Biosphere matrix: " ++ show (length result) ++ " non-zero entries")
              in result
 
-        -- Force evaluation of matrix contents to ensure they're built now, not lazily later
         _ = techTriples `seq` bioTriples `seq` unsafePerformIO (reportMatrixOperation "Database with matrices built successfully")
         _ = unsafePerformIO $ reportMatrixOperation ("Final matrix stats: " ++ show (length techTriples) ++ " tech entries, " ++ show (length bioTriples) ++ " bio entries")
+
      in Database
-            { dbActivities = activityDB
+            { dbProcessIdTable = dbProcessIdTable
+            , dbProcessIdLookup = dbProcessIdLookup
+            , dbActivities = dbActivities
             , dbFlows = flowDB
             , dbUnits = unitDB
             , dbIndexes = indexes
             , dbTechnosphereTriples = techTriples
             , dbBiosphereTriples = bioTriples
-            , dbActivityIndex = activityIndex
+            , dbActivityIndex = dbActivityIndex
             , dbBiosphereFlows = bioFlowUUIDs
             , dbActivityCount = activityCount
             , dbBiosphereCount = bioFlowCount
-            , dbCachedFactorization = Nothing -- No factorization initially - computed at startup
+            , dbCachedFactorization = Nothing
             }
 
-{- |
-Build activity name index for efficient text-based searching.
+-- Helper function to find ProcessId by activity UUID
+findProcessIdByActivityUUID' :: V.Vector (UUID, UUID) -> UUID -> Maybe ProcessId
+findProcessIdByActivityUUID' processIdTable searchUUID =
+    case [pid | (pid, (actUUID, _)) <- zip [0..] (V.toList processIdTable), actUUID == searchUUID] of
+        (pid:_) -> Just (fromIntegral pid)
+        [] -> Nothing
 
-Creates a mapping from lowercase activity names to lists of activity UUIDs.
-This enables fast fuzzy search by allowing substring matching against
-the normalized (lowercase) names.
+-- | Build indexes with ProcessIds
+buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> FlowDB -> Indexes
+buildIndexesWithProcessIds activityVec processIdTable flowDB =
+    let
+        -- Convert Vector to temporary Map for index building
+        -- We use the ProcessId-to-UUID mapping for lookups
+        activityUUIDs = [actUUID | (actUUID, _) <- V.toList processIdTable]
+        activities = V.toList activityVec
+        activityPairs = zip activityUUIDs activities
 
-Time Complexity: O(n) where n is the number of activities
-Space Complexity: O(n) for the index structure
--}
-buildNameIndex :: ActivityDB -> NameIndex
-buildNameIndex procDB =
-    M.fromListWith
-        (++)
-        [ (T.toLower (activityName proc), [activityId proc])
-        | proc <- M.elems procDB
-        ]
+        -- Build indexes using activity UUIDs
+        nameIdx = M.fromListWith (++)
+            [(T.toLower (activityName activity), [uuid]) | (uuid, activity) <- activityPairs]
 
-{- |
-Build activity location index for geography-based filtering.
+        locationIdx = M.fromListWith (++)
+            [(activityLocation activity, [uuid]) | (uuid, activity) <- activityPairs]
 
-Creates a mapping from location codes (e.g., "FR", "GLO", "RER") to
-lists of activity UUIDs. Enables efficient filtering by geography
-for LCA regionalization studies.
+        flowIdx = M.fromListWith (++)
+            [(exchangeFlowId ex, [uuid]) | (uuid, activity) <- activityPairs,
+                                           ex <- exchanges activity]
 
-Note: Location matching is exact, not fuzzy ("FR" ≠ "FRA")
+        unitIdx = M.fromListWith (++)
+            [(activityUnit activity, [uuid]) | (uuid, activity) <- activityPairs]
 
-Time Complexity: O(n) where n is the number of activities
--}
-buildLocationIndex :: ActivityDB -> LocationIndex
-buildLocationIndex procDB =
-    M.fromListWith
-        (++)
-        [ (activityLocation proc, [activityId proc])
-        | proc <- M.elems procDB
-        ]
+        flowCatIdx = M.fromListWith (++)
+            [(flowCategory flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
 
-{- |
-Build activity unit index for unit-based analysis.
+        flowTypeIdx = M.fromListWith (++)
+            [(flowType flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
 
-Creates a mapping from unit names to lists of activity UUIDs.
-Enables filtering activities by their functional unit
-(e.g., "kg", "MJ", "m3", "tkm").
+        exchangeIdx = M.fromListWith (++)
+            [(exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs,
+                                                 ex <- exchanges activity]
 
-Useful for: Comparative LCA studies, unit conversion validation
+        procExchangeIdx = M.fromListWith (++)
+            [(uuid, exchanges activity) | (uuid, activity) <- activityPairs]
 
-Time Complexity: O(n) where n is the number of activities
--}
-buildActivityUnitIndex :: ActivityDB -> ActivityUnitIndex
-buildActivityUnitIndex procDB =
-    M.fromListWith
-        (++)
-        [ (activityUnit proc, [activityId proc])
-        | proc <- M.elems procDB
-        ]
+        refProdIdx = M.fromListWith (++)
+            [(exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs,
+                                                 ex <- exchanges activity,
+                                                 exchangeIsReference ex]
 
-{- |
-Build flow usage index for activity-flow relationships.
+        inputIdx = M.fromListWith (++)
+            [(uuid, [ex]) | (uuid, activity) <- activityPairs,
+                           ex <- exchanges activity,
+                           exchangeIsInput ex]
 
-Creates a mapping from flow UUIDs to lists of activity UUIDs that use them.
-This is the inverse of the exchange index - it answers "which activities
-use this flow?" rather than "what exchanges does this activity have?"
+        outputIdx = M.fromListWith (++)
+            [(uuid, [ex]) | (uuid, activity) <- activityPairs,
+                           ex <- exchanges activity,
+                           not (exchangeIsInput ex)]
+     in
+        Indexes
+            { idxByName = nameIdx
+            , idxByLocation = locationIdx
+            , idxByFlow = flowIdx
+            , idxByUnit = unitIdx
+            , idxFlowByCategory = flowCatIdx
+            , idxFlowByType = flowTypeIdx
+            , idxExchangeByFlow = exchangeIdx
+            , idxExchangeByActivity = procExchangeIdx
+            , idxReferenceProducts = refProdIdx
+            , idxInputsByActivity = inputIdx
+            , idxOutputsByActivity = outputIdx
+            }
 
-Used for: Flow impact analysis, supply chain bottleneck identification
-
-Time Complexity: O(e) where e is the total number of exchanges
--}
-buildFlowIndex :: ActivityDB -> FlowIndex
-buildFlowIndex procDB =
-    M.fromListWith
-        (++)
-        [ (exchangeFlowId ex, [activityId proc])
-        | proc <- M.elems procDB
-        , ex <- exchanges proc
-        ]
-
--- | Construction de l'index par catégorie de flux
-buildFlowCategoryIndex :: FlowDB -> FlowCategoryIndex
-buildFlowCategoryIndex flowDB =
-    M.fromListWith
-        (++)
-        [ (flowCategory flow, [flowId flow])
-        | flow <- M.elems flowDB
-        ]
-
--- | Construction de l'index par type de flux
-buildFlowTypeIndex :: FlowDB -> FlowTypeIndex
-buildFlowTypeIndex flowDB =
-    M.fromListWith
-        (++)
-        [ (flowType flow, [flowId flow])
-        | flow <- M.elems flowDB
-        ]
-
--- | Construction de l'index des échanges par flux
-buildExchangeIndex :: ActivityDB -> ExchangeIndex
-buildExchangeIndex procDB =
-    M.fromListWith
-        (++)
-        [ (exchangeFlowId ex, [(activityId proc, ex)])
-        | proc <- M.elems procDB
-        , ex <- exchanges proc
-        ]
-
--- | Construction de l'index des échanges par activité
-buildActivityExchangeIndex :: ActivityDB -> ActivityExchangeIndex
-buildActivityExchangeIndex procDB =
-    M.fromList
-        [ (activityId proc, exchanges proc)
-        | proc <- M.elems procDB
-        ]
-
--- | Construction de l'index des produits de référence
-buildReferenceProductIndex :: ActivityDB -> ReferenceProductIndex
-buildReferenceProductIndex procDB =
-    M.fromListWith
-        (++)
-        [ (exchangeFlowId ex, [(activityId proc, ex)])
-        | proc <- M.elems procDB
-        , ex <- exchanges proc
-        , exchangeIsReference ex
-        ]
-
--- | Construction de l'index des entrées par activité
-buildActivityInputIndex :: ActivityDB -> ActivityInputIndex
-buildActivityInputIndex procDB =
-    M.fromList
-        [ (activityId proc, filter exchangeIsInput (exchanges proc))
-        | proc <- M.elems procDB
-        ]
-
--- | Construction de l'index des sorties par activité
-buildActivityOutputIndex :: ActivityDB -> ActivityOutputIndex
-buildActivityOutputIndex procDB =
-    M.fromList
-        [ (activityId proc, filter (not . exchangeIsInput) (exchanges proc))
-        | proc <- M.elems procDB
-        ]
-
--- | Requêtes utilisant les index
-
-{- |
-Find activities matching specific field criteria with index optimization.
-
-This function implements an efficient multi-field search strategy:
-1. Use indexes to get candidate UUIDs (reduces search space)
-2. Apply full criteria matching only to candidates
-3. Return matching Activity objects
-
-Search fields:
-- nameParam: Fuzzy substring matching in activity names
-- geoParam: Exact matching for geography codes
-- productParam: Fuzzy matching in reference product names
-
-Performance: O(log n + m) where n is total activities, m is result size
--}
+-- | Search activities by multiple fields (name, geography, product)
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam =
-    let
-        -- Get candidate ProcessIds/UUIDs - indexes return UUIDs, fallback returns ProcessIds
-        candidates = case (nameParam, geoParam, productParam) of
-            -- If we have a name parameter, use the name index for initial filtering
-            (Just name, _, _) ->
-                let uuids = getCandidatesFromNameIndex db name
-                -- Convert UUIDs to ProcessIds by finding all matching ProcessIds
-                in [(pid, act) | uuid <- uuids
-                               , (pid, act) <- M.toList (dbActivities db)
-                               , activityUUID pid == uuid]
-            -- If we have a location but no name, use location index
-            (Nothing, Just geo, _) ->
-                let uuids = getCandidatesFromLocationIndex db geo
-                in [(pid, act) | uuid <- uuids
-                               , (pid, act) <- M.toList (dbActivities db)
-                               , activityUUID pid == uuid]
-            -- If we only have product parameter or no params, check all activities
-            _ -> M.toList (dbActivities db)
+    let activities = V.toList (dbActivities db)
+        indexes = dbIndexes db
 
-        -- Filter the candidates with the full criteria
-        filteredActivities =
-            [ activity
-            | (_, activity) <- candidates
-            , matchesActivityFields db nameParam geoParam productParam activity
-            ]
-     in
-        filteredActivities
+        -- Filter by name if provided
+        nameFiltered = case nameParam of
+            Nothing -> activities
+            Just name ->
+                let nameKey = T.toLower name
+                    matchingUUIDs = fromMaybe [] $ M.lookup nameKey (idxByName indexes)
+                in [a | a <- activities,
+                       any (\uuid -> activityName a == activityName (fromMaybe a (findActivityByActivityUUID db uuid))) matchingUUIDs]
 
--- | Get candidate activity UUIDs from name index using fuzzy matching
-getCandidatesFromNameIndex :: Database -> Text -> [UUID]
-getCandidatesFromNameIndex db searchName =
-    let nameIndex = idxByName (dbIndexes db)
-        lowerSearch = T.toLower searchName
-        matchingEntries =
-            [ uuids
-            | (indexedName, uuids) <- M.toList nameIndex
-            , lowerSearch `T.isInfixOf` indexedName -- Note: indexedName is already lowercase from buildNameIndex
-            ]
-     in concat matchingEntries
+        -- Filter by geography if provided
+        geoFiltered = case geoParam of
+            Nothing -> nameFiltered
+            Just geo -> [a | a <- nameFiltered, T.toLower (activityLocation a) == T.toLower geo]
 
--- | Get candidate activity UUIDs from location index
-getCandidatesFromLocationIndex :: Database -> Text -> [UUID]
-getCandidatesFromLocationIndex db searchLocation =
-    let locationIndex = idxByLocation (dbIndexes db)
-        lowerSearch = T.toLower searchLocation
-        matchingEntries =
-            [ uuids
-            | (indexedLocation, uuids) <- M.toList locationIndex
-            , lowerSearch `T.isInfixOf` T.toLower indexedLocation
-            ]
-     in concat matchingEntries
+        -- Filter by product if provided
+        productFiltered = case productParam of
+            Nothing -> geoFiltered
+            Just product ->
+                let productKey = T.toLower product
+                in [a | a <- geoFiltered,
+                       any (\ex -> exchangeIsReference ex &&
+                                  not (exchangeIsInput ex) &&
+                                  case M.lookup (exchangeFlowId ex) (dbFlows db) of
+                                      Just flow -> T.toLower (flowName flow) == productKey
+                                      Nothing -> False) (exchanges a)]
+    in productFiltered
 
--- | Matching par champs spécifiques d'activité
-matchesActivityFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Activity -> Bool
-matchesActivityFields db nameParam geoParam productParam activity =
-    let nameMatch = case nameParam of
-            Nothing -> True
-            Just nameQuery ->
-                let lowerName = T.toLower (activityName activity)
-                    searchTerms = T.words (T.toLower nameQuery)
-                 in all (`T.isInfixOf` lowerName) searchTerms
-
-        geoMatch = case geoParam of
-            Nothing -> True
-            Just geoQuery ->
-                let activityLoc = T.toLower (activityLocation activity)
-                    queryLoc = T.toLower geoQuery
-                 in activityLoc == queryLoc -- Exact match for geography codes
-        productMatch = case productParam of
-            Nothing -> True
-            Just productQuery ->
-                let referenceFlowNames =
-                        [ T.toLower (flowName flow)
-                        | exchange <- exchanges activity
-                        , exchangeIsReference exchange
-                        , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-                        ]
-                    searchTerms = T.words (T.toLower productQuery)
-                    matchesProduct = any (\flowName -> all (`T.isInfixOf` flowName) searchTerms) referenceFlowNames
-                 in matchesProduct
-     in nameMatch && geoMatch && productMatch
-
-{- |
-Find flows by type (Technosphere or Biosphere) using pre-built index.
-
-This is a fundamental LCA operation for matrix construction:
-- Technosphere flows: Products and services exchanged between activities
-- Biosphere flows: Environmental exchanges (emissions, resources)
-
-Used extensively in sparse matrix assembly for solving LCA equations.
-
-Time Complexity: O(log 1 + r) where r is the number of flows of the given type
--}
-findFlowsByType :: Database -> FlowType -> [Flow]
-findFlowsByType db ftype =
-    case M.lookup ftype (idxFlowByType $ dbIndexes db) of
-        Nothing -> []
-        Just uuids -> mapMaybe (`M.lookup` dbFlows db) uuids
-
--- | ===== REQUÊTES AU NIVEAU ÉCHANGE =====
-
-{- |
-Find all reference products in the database with their producing activities.
-
-Reference products define what each activity produces and are critical for:
-- Supply chain linking ("who produces what I consume?")
-- Functional unit selection
-- Database completeness validation
-
-Returns triples of (producing activity, reference product flow, exchange details)
-
-Time Complexity: O(p) where p is the number of reference products
--}
-findAllReferenceProducts :: Database -> [(Activity, Flow, Exchange)]
-findAllReferenceProducts db =
-    [ (proc, flow, exchange)
-    | (flowUUID, producers) <- M.toList (idxReferenceProducts $ dbIndexes db)
-    , (procUUID, exchange) <- producers
-    , Just proc <- [findActivityByActivityUUID (dbActivities db) procUUID]
-    , Just flow <- [M.lookup flowUUID (dbFlows db)]
-    ]
-
--- | Statistiques de la base de données
-data DatabaseStats = DatabaseStats
-    { statsActivityCount :: !Int
-    , statsFlowCount :: !Int
-    , statsExchangeCount :: !Int
-    , statsTechnosphereFlows :: !Int
-    , statsBiosphereFlows :: !Int
-    , statsReferenceProducts :: !Int
-    , statsInputCount :: !Int
-    , statsOutputCount :: !Int
-    , statsLocations :: ![Text]
-    , statsCategories :: ![Text]
-    , statsUnits :: ![Text]
-    }
-    deriving (Show)
-
-{- |
-Calculate comprehensive database statistics for monitoring and validation.
-
-Provides key metrics for:
-- Database completeness assessment
-- Performance optimization insights
-- Quality assurance (balanced exchanges, coverage)
-- User interface displays
-
-Statistics include:
-- Activity/flow/exchange counts
-- Technosphere vs biosphere flow distribution
-- Geographic and unit coverage
-- Input/output balance indicators
-
-Time Complexity: O(n + f) where n is activities, f is flows
--}
-getDatabaseStats :: Database -> DatabaseStats
-getDatabaseStats db =
-    DatabaseStats
-        { statsActivityCount = M.size (dbActivities db)
-        , statsFlowCount = M.size (dbFlows db)
-        , statsExchangeCount = M.size (idxExchangeByFlow $ dbIndexes db)
-        , statsTechnosphereFlows = length $ findFlowsByType db Technosphere
-        , statsBiosphereFlows = length $ findFlowsByType db Biosphere
-        , statsReferenceProducts = M.size (idxReferenceProducts $ dbIndexes db)
-        , statsInputCount = sum [length inputs | inputs <- M.elems (idxInputsByActivity $ dbIndexes db)]
-        , statsOutputCount = sum [length outputs | outputs <- M.elems (idxOutputsByActivity $ dbIndexes db)]
-        , statsLocations = M.keys (idxByLocation $ dbIndexes db)
-        , statsCategories = M.keys (idxFlowByCategory $ dbIndexes db)
-        , statsUnits = S.toList $ S.fromList [getUnitNameForFlow (dbUnits db) flow | flow <- M.elems (dbFlows db)]
-        }
-
--- | Fonctions utilitaires pour les requêtes complexes
-
-{- |
-Search flows by name and synonyms using fuzzy matching.
-
-Implements multi-stage fuzzy search:
-1. Get candidates from category/name indexes (performance optimization)
-2. Apply fuzzy substring matching on name, category, and all synonyms
-3. Support multi-term queries (all terms must match somewhere)
-
-Used for: Flow discovery in web interfaces, impact category mapping
-
-Performance: O(log n + m*t) where n is flows, m is matches, t is terms
--}
+-- | Search flows by synonym
 findFlowsBySynonym :: Database -> Text -> [Flow]
-findFlowsBySynonym db searchText =
-    let lowerSearch = T.toLower searchText
-        searchTerms = T.words lowerSearch -- Split on whitespace for multi-term search
-        -- Try to get candidates from category index first for better performance
-        candidateUUIDs = getCandidatesFromFlowSearch db searchText
-        candidateFlows = mapMaybe (`M.lookup` dbFlows db) candidateUUIDs
-        -- Filter candidates with full fuzzy matching
-        matchingFlows = filter (matchesFlowFuzzy searchTerms) candidateFlows
-     in matchingFlows
-
--- | Get candidate flow UUIDs using category index and name matching
-getCandidatesFromFlowSearch :: Database -> Text -> [UUID]
-getCandidatesFromFlowSearch db searchText =
-    let lowerSearch = T.toLower searchText
-        categoryIndex = idxFlowByCategory (dbIndexes db)
-        -- Get flows from categories that match the search text
-        categoryMatches =
-            [ uuids
-            | (category, uuids) <- M.toList categoryIndex
-            , T.isInfixOf lowerSearch (T.toLower category)
-            ]
-        categoryUUIDs = concat categoryMatches
-
-        -- For name matching, use a more efficient approach
-        -- Check if we can find exact matches first, then fallback to partial matching
-        flowsDB = dbFlows db
-        nameMatches =
-            if length categoryUUIDs < 100 -- Only do expensive name search if category search was restrictive
-                then
-                    [ flowId flow
-                    | flow <- M.elems flowsDB
-                    , T.isInfixOf lowerSearch (T.toLower (flowName flow))
-                    ]
-                else
-                    [] -- Skip name matching if we already have many category matches
-
-        -- Combine and deduplicate
-        allCandidates = S.toList $ S.fromList (categoryUUIDs ++ nameMatches)
-     in allCandidates
-
--- | Advanced fuzzy matching for flows (substring matching + multi-term)
-matchesFlowFuzzy :: [Text] -> Flow -> Bool
-matchesFlowFuzzy searchTerms flow =
-    let lowerName = T.toLower (flowName flow)
-        lowerCategory = T.toLower (flowCategory flow)
-        allSynonyms = getAllSynonyms flow
-        lowerSynonyms = map T.toLower allSynonyms
-
-        -- Check if all search terms match somewhere
-        matchesTerm term =
-            -- Substring in flow name
-            term `T.isInfixOf` lowerName
-                ||
-                -- Substring in category
-                term `T.isInfixOf` lowerCategory
-                ||
-                -- Substring in any synonym
-                any (term `T.isInfixOf`) lowerSynonyms
-     in all matchesTerm searchTerms
-
-{- |
-Search flows by synonyms in a specific language with fuzzy matching.
-
-Similar to findFlowsBySynonym but restricts synonym matching to a specific
-language code (e.g., "fr", "de", "en"). This improves precision when
-working with multilingual databases.
-
-Used for: Internationalization, language-specific flow discovery
-
-Performance: O(log n + m*t) where n is flows, m is matches, t is terms
--}
-findFlowsBySynonymInLanguage :: Database -> Text -> Text -> [Flow]
-findFlowsBySynonymInLanguage db lang searchText =
-    let lowerSearch = T.toLower searchText
-        searchTerms = T.words lowerSearch
-        -- Use the same candidate filtering approach as the general search
-        candidateUUIDs = getCandidatesFromFlowSearch db searchText
-        candidateFlows = mapMaybe (`M.lookup` dbFlows db) candidateUUIDs
-        -- Filter candidates with language-specific matching
-        matchingFlows = filter (matchesFlowInLanguage searchTerms lang) candidateFlows
-     in matchingFlows
-
--- | Fuzzy matching for flows in specific language
-matchesFlowInLanguage :: [Text] -> Text -> Flow -> Bool
-matchesFlowInLanguage searchTerms lang flow =
-    let lowerName = T.toLower (flowName flow)
-        langSynonyms = maybe [] S.toList (M.lookup lang (flowSynonyms flow))
-        lowerSynonyms = map T.toLower langSynonyms
-
-        matchesTerm term =
-            -- Substring in flow name
-            term `T.isInfixOf` lowerName
-                ||
-                -- Substring in language-specific synonyms
-                any (term `T.isInfixOf`) lowerSynonyms
-     in all matchesTerm searchTerms
-
-{- |
-Get all available languages from flow synonyms.
-
-Extracts the complete set of language codes present in the database's
-synonym system. Used for building language selection interfaces and
-validating language-specific queries.
-
-Returns: List of ISO language codes (e.g., ["en", "fr", "de", "es"])
-
-Time Complexity: O(f*l) where f is flows, l is avg languages per flow
--}
-getAvailableLanguages :: Database -> [Text]
-getAvailableLanguages db =
-    S.toList $
-        S.fromList $
-            concat
-                [ M.keys (flowSynonyms flow)
-                | flow <- M.elems (dbFlows db)
-                ]
-
--- | Statistiques sur les synonymes
-data SynonymStats = SynonymStats
-    { ssFlowsWithSynonyms :: Int -- Nombre de flux avec synonymes
-    , ssAveragePerFlow :: Double -- Nombre moyen de synonymes par flux
-    , ssLanguageStats :: [(Text, Int)] -- Statistiques par langue
-    , ssTotalSynonyms :: Int -- Total des synonymes
-    }
-    deriving (Generic)
-
-{- |
-Calculate comprehensive synonym statistics for database analysis.
-
-Provides metrics on synonym coverage and distribution:
-- Number/percentage of flows with synonyms
-- Average synonyms per flow
-- Language distribution statistics
-- Total synonym count
-
-Used for: Database quality assessment, internationalization planning
-
-Time Complexity: O(f*s*l) where f is flows, s is synonyms, l is languages
--}
-getSynonymStats :: Database -> SynonymStats
-getSynonymStats db =
-    let flows = M.elems (dbFlows db)
-        flowsWithSynonyms = [flow | flow <- flows, not . M.null $ flowSynonyms flow]
-        totalSynonyms = sum [S.size syns | flow <- flows, syns <- M.elems (flowSynonyms flow)]
-        languageStats =
-            [ (lang, length [flow | flow <- flows, M.member lang (flowSynonyms flow)])
-            | lang <- getAvailableLanguages db
-            ]
-        avgSynonyms = if null flows then 0 else fromIntegral totalSynonyms / fromIntegral (length flows)
-     in SynonymStats
-            { ssFlowsWithSynonyms = length flowsWithSynonyms
-            , ssAveragePerFlow = avgSynonyms
-            , ssLanguageStats = languageStats
-            , ssTotalSynonyms = totalSynonyms
-            }
-
--- Comprehensive synonym function removed - synonyms now included directly in flow responses
+findFlowsBySynonym db query =
+    let queryLower = T.toLower query
+        flows = M.elems (dbFlows db)
+    in [f | f <- flows,
+           T.isInfixOf queryLower (T.toLower (flowName f)) ||
+           any (\synonyms -> any (T.isInfixOf queryLower . T.toLower) (S.toList synonyms))
+               (M.elems (flowSynonyms f))]

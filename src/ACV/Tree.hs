@@ -7,6 +7,7 @@ import ACV.Types
 import ACV.UnitConversion (convertExchangeAmount)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.Vector as V
 import Data.Text (Text)
 
 type VisitedSet = S.Set UUID
@@ -22,19 +23,19 @@ isTechnosphereInput _ ex =
 
 -- | Dummy activity to indicate recursion stop
 placeholder :: Activity
-placeholder = Activity "loop-detected" Nothing "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
+placeholder = Activity "Loop detected" ["Loop detected"] M.empty M.empty "N/A" "unit" []
 
 -- | Get converted exchange amount ensuring unit compatibility
 -- Converts exchange amount to the target activity's reference unit for proper scaling
 getConvertedExchangeAmount :: Database -> Exchange -> UUID -> Double
-getConvertedExchangeAmount db exchange targetActivityUUID = 
+getConvertedExchangeAmount db exchange targetActivityUUID =
     let originalAmount = exchangeAmount exchange
         -- Get exchange unit name
         exchangeUnitName = case M.lookup (exchangeUnitId exchange) (dbUnits db) of
             Just unit -> unitName unit
             Nothing -> "unknown"
         -- Get target activity's reference unit (lookup by activity UUID for backward compat)
-        targetReferenceUnit = case findActivityByActivityUUID (dbActivities db) targetActivityUUID of
+        targetReferenceUnit = case findActivityByActivityUUID db targetActivityUUID of
             Just targetActivity -> activityUnit targetActivity
             Nothing -> "unknown"
     in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
@@ -43,15 +44,11 @@ getConvertedExchangeAmount db exchange targetActivityUUID =
 
 
 -- | Version optimisée avec Database complet (avec index)
-buildActivityTreeWithDatabase :: Database -> UUID -> ActivityTree
-buildActivityTreeWithDatabase db = buildActivityTreeWithFlowDBs (dbActivities db) (dbFlows db)
-
--- | Version optimisée avec FlowDB - Implémentation interne
 -- Now uses ProcessId instead of UUID to support multi-product activities
-buildActivityTreeWithFlowDBs :: ActivityDB -> FlowDB -> UUID -> ActivityTree
-buildActivityTreeWithFlowDBs procDB flowDB rootUUID =
+buildActivityTreeWithDatabase :: Database -> UUID -> ActivityTree
+buildActivityTreeWithDatabase db rootUUID =
     -- Find the ProcessId for the root activity UUID
-    case findProcessIdByActivityUUID procDB rootUUID of
+    case findProcessIdByActivityUUID db rootUUID of
         Nothing -> Leaf placeholder
         Just rootProcessId -> go S.empty rootProcessId
   where
@@ -59,18 +56,18 @@ buildActivityTreeWithFlowDBs procDB flowDB rootUUID =
     go seen processId
         | S.member processId seen = Leaf placeholder -- Prevent infinite loop
         | otherwise =
-            case M.lookup processId procDB of
+            case getActivity db processId of
                 Nothing -> Leaf placeholder
                 Just proc ->
                     let newSeen = S.insert processId seen
                         children =
                             [ (exchangeAmount ex, go newSeen targetProcessId)
                             | ex <- exchanges proc
-                            , isTechnosphereInput flowDB ex
+                            , isTechnosphereInput (dbFlows db) ex
                             -- Try to get ProcessId from exchange, fallback to finding by activity UUID
                             , Just targetProcessId <- [exchangeProcessLinkId ex `orElse`
-                                (exchangeActivityLinkId ex >>= findProcessIdByActivityUUID procDB)]
-                            , M.member targetProcessId procDB
+                                (exchangeActivityLinkId ex >>= findProcessIdByActivityUUID db)]
+                            , isValidProcessId db targetProcessId
                             ]
                         -- Force evaluation of children list to avoid thunk buildup in recursive tree
                         !children' = children
@@ -82,6 +79,11 @@ buildActivityTreeWithFlowDBs procDB flowDB rootUUID =
     orElse :: Maybe a -> Maybe a -> Maybe a
     orElse (Just x) _ = Just x
     orElse Nothing y = y
+
+    -- Helper to check if ProcessId is valid
+    isValidProcessId :: Database -> ProcessId -> Bool
+    isValidProcessId database pid =
+        pid >= 0 && fromIntegral pid < V.length (dbActivities database)
 
 
 -- | Build loop-aware tree for SVG export with maximum depth limit
@@ -99,17 +101,17 @@ buildLoopAwareTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int ->
 buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth
     -- Stop at maximum depth
     | depth >= maxDepth =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity -> TreeLoop activityUUID (activityName activity) depth
     -- Detect loop
     | activityUUID `S.member` visited =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity -> TreeLoop activityUUID (activityName activity) depth
     -- Build subtree
     | otherwise =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity ->
                 let visited' = S.insert activityUUID visited
@@ -132,22 +134,22 @@ buildCutoffTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int -> Do
 buildCutoffTreeWithVisited db activityUUID visited depth maxDepth scaleFactor cutoffThreshold
     -- Stop if contribution becomes too small (cutoff pruning)
     | scaleFactor < cutoffThreshold =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Below cutoff threshold" depth
             Just activity -> TreeLoop activityUUID ("Cutoff: " <> activityName activity) depth
     -- Stop at maximum depth
     | depth >= maxDepth =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity -> TreeLoop activityUUID (activityName activity) depth
     -- Detect loop
     | activityUUID `S.member` visited =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity -> TreeLoop activityUUID (activityName activity) depth
     -- Build subtree
     | otherwise =
-        case findActivityByActivityUUID (dbActivities db) activityUUID of
+        case findActivityByActivityUUID db activityUUID of
             Nothing -> TreeLoop activityUUID "Missing Activity" depth
             Just activity ->
                 let visited' = S.insert activityUUID visited

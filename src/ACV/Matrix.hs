@@ -58,6 +58,7 @@ import Control.Exception (catch, SomeException)
 import Control.Monad (forM_, when, unless)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Monad.ST
+import Data.Int (Int32)
 import Data.List (elemIndex, sortOn)
 import qualified Data.Map as M
 import Data.Maybe (fromJust, fromMaybe, mapMaybe)
@@ -165,7 +166,7 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
                 n = mfActivityCount factorization
                 -- Convert system matrix back to technosphere triplets (remove identity entries)
                 techTriples = [(i, j, -val) | (i, j, val) <- systemMatrix, i /= j]
-            return $ solveSparseLinearSystemPETSc techTriples n demandVec
+            return $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples] (fromIntegral n) demandVec
 
         Just (ksp, petscMat, n) -> do
             reportMatrixOperation $ "Using globally cached pre-factorized solver for " ++ show n ++ " activities - ultra-fast solve"
@@ -201,7 +202,7 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
                         -- Fallback to standard solver if cached solver fails
                         let systemMatrix = mfSystemMatrix factorization
                             techTriples = [(i, j, -val) | (i, j, val) <- systemMatrix, i /= j]
-                        return $ toList $ solveSparseLinearSystemPETSc techTriples n demandVec
+                        return $ toList $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples] (fromIntegral n) demandVec
 
             return $ fromList result
 
@@ -347,10 +348,10 @@ computeInventoryMatrix db rootProcessId =
         -- Try to use cached factorization for faster solving
         supplyVec = case dbCachedFactorization db of
             Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
-            Nothing -> solveSparseLinearSystem techTriples activityCount demandVec
+            Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples] (fromIntegral activityCount) demandVec
 
         -- Calculate inventory using sparse biosphere matrix: g = B * supply
-        inventoryVec = applySparseMatrix bioTriples bioFlowCount supplyVec
+        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples] (fromIntegral bioFlowCount) supplyVec
 
         -- Build result map using the stored bioFlowIndex (ensures consistency with bioTriples)
         result = M.fromList [(uuid, inventoryVec U.! idx)
@@ -389,11 +390,14 @@ This vector is used in the fundamental LCA equation: (I - A) * s = f
 
 Uses the pre-built activity index mapping from ProcessId to matrix indices for efficiency.
 -}
-buildDemandVectorFromIndex :: M.Map ProcessId Int -> ProcessId -> Vector
+buildDemandVectorFromIndex :: V.Vector Int32 -> ProcessId -> Vector
 buildDemandVectorFromIndex activityIndex rootProcessId =
-    let n = M.size activityIndex
-        rootIndex = fromMaybe (error $ "FATAL: ProcessId not found in activity index: " ++ show rootProcessId)
-                              (M.lookup rootProcessId activityIndex)
+    let n = V.length activityIndex
+        -- The activityIndex is a direct mapping: ProcessId -> matrix index
+        -- So we just look up the ProcessId (which is an index) in the vector
+        rootIndex = if fromIntegral rootProcessId >= 0 && fromIntegral rootProcessId < n
+                    then fromIntegral $ activityIndex V.! fromIntegral rootProcessId
+                    else error $ "FATAL: ProcessId not found in activity index: " ++ show rootProcessId
      in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
 
 {- |
@@ -466,8 +470,8 @@ precomputeMatrixFactorization techTriples n = do
 
         -- Also store the system matrix for backward compatibility
         let factorization = MatrixFactorization
-                { mfSystemMatrix = systemMatrix
-                , mfActivityCount = n
+                { mfSystemMatrix = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- systemMatrix]
+                , mfActivityCount = fromIntegral n
                 }
 
         return factorization

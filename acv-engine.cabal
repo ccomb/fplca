@@ -52,7 +52,8 @@ executable acv-cli
                      , http-types
                      , network-uri
                      , streaming-commons
-                     , vector 
+                     , vector
+                     , vector-binary-instances
                      , containers
                      , random
                      , petsc-hs

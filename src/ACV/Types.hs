@@ -7,52 +7,24 @@ module ACV.Types where
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Binary (Binary)
+import Data.Vector.Binary () -- Orphan instances for Vector Binary
 import Data.Hashable (Hashable)
+import Data.Int (Int16, Int32)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import GHC.Generics (Generic, Generic1)
 import Text.XML (Instruction (instructionData))
 
 -- | Identifiant universel unique (généralement un UUID EcoSpold)
 type UUID = Text
 
--- | Process identifier based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
--- This ensures each .spold file becomes a distinct process after cut-off allocation
-data ProcessId = ProcessId
-    { activityUUID :: !UUID  -- Activity UUID from filename
-    , productUUID :: !UUID   -- Product UUID from filename
-    }
-    deriving (Eq, Ord, Show, Generic, NFData, Binary, Hashable)
-
--- | Helper functions for ProcessId
-mkProcessId :: UUID -> UUID -> ProcessId
-mkProcessId = ProcessId
-
--- | Convert ProcessId to Text representation for display
-processIdToText :: ProcessId -> Text
-processIdToText (ProcessId actUUID prodUUID) = actUUID <> "_" <> prodUUID
-
--- | Parse ProcessId from filename stem (without extension)
-parseProcessId :: Text -> Maybe ProcessId
-parseProcessId filename = case T.splitOn "_" filename of
-    [actUUID, prodUUID] | not (T.null actUUID) && not (T.null prodUUID) ->
-        Just $ ProcessId actUUID prodUUID
-    _ -> Nothing
-
--- | Extract activity UUID from ProcessId for backward compatibility
-getActivityUUID :: ProcessId -> UUID
-getActivityUUID (ProcessId actUUID _) = actUUID
-
--- | Extract product UUID from ProcessId
-getProductUUID :: ProcessId -> UUID
-getProductUUID (ProcessId _ prodUUID) = prodUUID
-
--- | Create ProcessId from activity UUID (using same UUID for both parts)
--- Temporary function for backward compatibility
-processIdFromActivityUUID :: UUID -> ProcessId
-processIdFromActivityUUID uuid = ProcessId uuid uuid
+-- | Process identifier - compact Int16 index for efficient matrix operations
+-- Maps to (activityUUID, productUUID) via Database.dbProcessIdTable
+-- Based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
+type ProcessId = Int16
 
 -- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
@@ -164,10 +136,9 @@ getAllSynonyms :: Flow -> [Text]
 getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
 
 -- | Activité ACV de base (activité)
+-- Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 data Activity = Activity
-    { activityId :: !UUID -- Identifiant unique de l'activité (backward compatibility)
-    , activityProcessId :: !(Maybe ProcessId) -- New ProcessId field for filename-based identification
-    , activityName :: !Text -- Nom
+    { activityName :: !Text -- Nom
     , activityDescription :: ![Text] -- Description générale (generalComment) par paragraphes
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue comme les flux
     , activityClassification :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
@@ -194,28 +165,14 @@ type FlowDB = M.Map UUID Flow
 -- | Base de données des unités (dédupliquée)
 type UnitDB = M.Map UUID Unit
 
--- | Base de données des activités - keyed by ProcessId to support multi-product activities
+-- | Temporary Map structure used during database loading phase
+-- Maps from (activityUUID, productUUID) pairs extracted from .spold filenames
+-- This is converted to ActivityDB Vector during database construction
+type ActivityMap = M.Map (UUID, UUID) Activity
+
+-- | Base de données des activités - Vector for direct indexing by ProcessId (Int16)
 -- Each spold file (activity_uuid_product_uuid.spold) becomes a separate entry
-type ActivityDB = M.Map ProcessId Activity
-
--- | Find any ProcessId matching an activity UUID
--- Returns the first ProcessId found with the given activity UUID.
--- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds),
--- so we must translate from UUID → ProcessId to handle multi-product activities.
-findProcessIdByActivityUUID :: ActivityDB -> UUID -> Maybe ProcessId
-findProcessIdByActivityUUID activityDB searchUUID =
-    case [pid | (pid, _) <- M.toList activityDB, activityUUID pid == searchUUID] of
-        (pid:_) -> Just pid
-        [] -> Nothing
-
--- | Find activity by activity UUID (returns first matching product)
--- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
--- When multiple products exist for one activity, this returns an arbitrary match.
-findActivityByActivityUUID :: ActivityDB -> UUID -> Maybe Activity
-findActivityByActivityUUID activityDB searchUUID =
-    case [act | (pid, act) <- M.toList activityDB, activityUUID pid == searchUUID] of
-        (act:_) -> Just act
-        [] -> Nothing
+type ActivityDB = V.Vector Activity
 
 -- | Index par nom de activité - permet la recherche par nom (insensible à la casse)
 type NameIndex = M.Map Text [UUID] -- Nom -> Liste des UUIDs des activités
@@ -270,35 +227,100 @@ data Indexes = Indexes
     deriving (Generic, Binary)
 
 -- | Sparse matrix coordinate triplet (row, col, value)
-type SparseTriple = (Int, Int, Double)
+-- Using Int32 for matrix indices to support large databases (up to 2 billion activities)
+type SparseTriple = (Int32, Int32, Double)
 
 -- | Pre-computed matrix factorization for fast inventory calculations
 data MatrixFactorization = MatrixFactorization
     { mfSystemMatrix :: ![SparseTriple] -- Cached (I - A) system matrix
-    , mfActivityCount :: !Int -- Matrix dimension
+    , mfActivityCount :: !Int32 -- Matrix dimension
     } deriving (Generic, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
-    { dbActivities :: !ActivityDB
+    { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
+      dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int16) → (activityUUID, productUUID)
+    , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
+    , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     , -- Pre-computed sparse matrices for efficient LCA calculations
       dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
     , dbBiosphereTriples :: ![SparseTriple] -- B matrix: biosphere flows × activities (sparse)
-    , dbActivityIndex :: !(M.Map ProcessId Int) -- ProcessId → matrix index mapping
+    , dbActivityIndex :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
     , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs (source of truth for indexing)
-    , dbActivityCount :: !Int -- Number of activities (matrix dimension)
-    , dbBiosphereCount :: !Int -- Number of biosphere flows (matrix dimension)
+    , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)
+    , dbBiosphereCount :: !Int32 -- Number of biosphere flows (matrix dimension)
     -- Cached factorization for concurrent inventory calculations (runtime only)
     , dbCachedFactorization :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
     }
     deriving (Generic, Binary)
 
+-- | Helper functions for ProcessId and Database operations
+
+-- | Get activity by ProcessId (direct vector indexing)
+getActivity :: Database -> ProcessId -> Maybe Activity
+getActivity db pid
+    | pid >= 0 && fromIntegral pid < V.length (dbActivities db) =
+        Just $ dbActivities db V.! fromIntegral pid
+    | otherwise = Nothing
+
+-- | Get matrix index for a ProcessId (direct vector indexing)
+getMatrixIndex :: Database -> ProcessId -> Maybe Int32
+getMatrixIndex db pid
+    | pid >= 0 && fromIntegral pid < V.length (dbActivityIndex db) =
+        Just $ dbActivityIndex db V.! fromIntegral pid
+    | otherwise = Nothing
+
+-- | Find ProcessId from UUID pair
+findProcessId :: Database -> UUID -> UUID -> Maybe ProcessId
+findProcessId db actUUID prodUUID =
+    M.lookup (actUUID, prodUUID) (dbProcessIdLookup db)
+
+-- | Find any ProcessId matching an activity UUID
+-- Returns the first ProcessId found with the given activity UUID.
+-- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds),
+-- so we must translate from UUID → ProcessId to handle multi-product activities.
+findProcessIdByActivityUUID :: Database -> UUID -> Maybe ProcessId
+findProcessIdByActivityUUID db searchUUID =
+    case [pid | (pid, (actUUID, _)) <- zip [0..] (V.toList $ dbProcessIdTable db), actUUID == searchUUID] of
+        (pid:_) -> Just (fromIntegral pid :: ProcessId)
+        [] -> Nothing
+
+-- | Find activity by activity UUID (returns first matching product)
+-- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
+-- When multiple products exist for one activity, this returns an arbitrary match.
+findActivityByActivityUUID :: Database -> UUID -> Maybe Activity
+findActivityByActivityUUID db searchUUID = do
+    pid <- findProcessIdByActivityUUID db searchUUID
+    getActivity db pid
+
+-- | Convert ProcessId to UUID pair
+processIdToUUIDs :: Database -> ProcessId -> Maybe (UUID, UUID)
+processIdToUUIDs db pid
+    | pid >= 0 && fromIntegral pid < V.length (dbProcessIdTable db) =
+        Just $ dbProcessIdTable db V.! fromIntegral pid
+    | otherwise = Nothing
+
+-- | Convert ProcessId to Text representation for display (activityUUID_productUUID)
+processIdToText :: Database -> ProcessId -> Text
+processIdToText db pid =
+    case processIdToUUIDs db pid of
+        Just (actUUID, prodUUID) -> actUUID <> "_" <> prodUUID
+        Nothing -> "invalid-process-id-" <> T.pack (show pid)
+
+-- | Parse ProcessId from filename stem (requires Database for lookup)
+parseProcessId :: Database -> Text -> Maybe ProcessId
+parseProcessId db filename = case T.splitOn "_" filename of
+    [actUUID, prodUUID] | not (T.null actUUID) && not (T.null prodUUID) ->
+        findProcessId db actUUID prodUUID
+    _ -> Nothing
+
 -- | Version simplifiée sans index (pour compatibilité)
+-- Used during database loading, before conversion to final Vector structure
 data SimpleDatabase = SimpleDatabase
-    { sdbActivities :: !ActivityDB
+    { sdbActivities :: !ActivityMap  -- Temporary Map structure
     , sdbFlows :: !FlowDB
     , sdbUnits :: !UnitDB
     }
@@ -319,9 +341,8 @@ data CF = CF
     }
 
 -- JSON instances for API compatibility
-instance ToJSON ProcessId
+-- Note: ProcessId is Int16, which already has ToJSON/FromJSON instances
 instance ToJSON Exchange
 instance ToJSON FlowType
 
-instance FromJSON ProcessId
 instance FromJSON Exchange

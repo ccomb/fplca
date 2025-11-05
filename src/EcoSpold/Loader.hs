@@ -39,8 +39,9 @@ import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
+import qualified Data.Text as T
 import System.Directory (doesFileExist, listDirectory)
-import System.FilePath (takeExtension, (</>))
+import System.FilePath (takeBaseName, takeExtension, (</>))
 import Text.Printf (printf)
 
 {-|
@@ -127,7 +128,7 @@ loadAllSpoldsWithFlows dir = do
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
     -- Process one chunk with progress reporting
-    activityChunkWithProgress :: UTCTime -> Int -> (Int, [FilePath]) -> IO (ActivityDB, FlowDB, UnitDB, Int, Int)
+    activityChunkWithProgress :: UTCTime -> Int -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
     activityChunkWithProgress startTime totalChunks (chunkNum, chunk) = do
         chunkStartTime <- getCurrentTime
         let elapsedTime = realToFrac $ diffUTCTime chunkStartTime startTime
@@ -148,8 +149,14 @@ loadAllSpoldsWithFlows dir = do
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
 
-        -- Build maps for this chunk - use ProcessId to preserve all products from multi-output activities
-        let !procMap = M.fromList [(fromMaybe (processIdFromActivityUUID (activityId p)) (activityProcessId p), p) | p <- procs]
+        -- Build maps for this chunk - extract UUID pairs from filenames
+        -- Filenames follow pattern: {activityUUID}_{productUUID}.spold
+        let !procMap = M.fromList $ zipWith (\filepath activity ->
+                let filename = T.pack $ takeBaseName filepath
+                in case T.splitOn "_" filename of
+                    [actUUID, prodUUID] -> ((actUUID, prodUUID), activity)
+                    _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
+                ) chunk procs
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 

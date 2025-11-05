@@ -66,6 +66,16 @@ headOrFail :: String -> [a] -> a
 headOrFail msg [] = error msg
 headOrFail _ (x : _) = x
 
+-- | Parse ProcessId from filename (no Database needed here)
+-- Expects format: activity_uuid_product_uuid.spold
+parseProcessId :: Text -> Maybe ProcessId
+parseProcessId filename = case T.splitOn "_" filename of
+    [_, _] | not (T.null filename) ->
+        -- During parsing we don't have ProcessId yet, just return a placeholder
+        -- The actual ProcessId will be assigned during database construction
+        Just 0  -- Temporary ProcessId, will be replaced during DB construction
+    _ -> Nothing
+
 -- | Memory-optimized parser - forces early evaluation and cleanup
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
 streamParseActivityAndFlowsFromFile path = do
@@ -74,16 +84,14 @@ streamParseActivityAndFlowsFromFile path = do
     let !cursor = fromDocument doc
     -- Extract ProcessId from filename (activity_uuid_product_uuid.spold)
     let filenameBase = T.pack $ takeBaseName path
-    let !processId = case parseProcessId filenameBase of
+    let !processId = case EcoSpold.Parser.parseProcessId filenameBase of
             Just pid -> pid
             Nothing -> error $ "Invalid filename format for ProcessId: " ++ path ++ " (expected: activity_uuid_product_uuid.spold)"
     let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor processId
     -- Apply cut-off strategy (conservative version)
     let !procWithCutoff = applyCutoffStrategy proc
-    -- Preserve the ProcessId after cutoff strategy
-    let !finalProc = procWithCutoff{activityProcessId = Just processId}
     -- Force full evaluation before returning
-    finalProc `seq` flows `seq` units `seq` return (finalProc, flows, units)
+    procWithCutoff `seq` flows `seq` units `seq` return (procWithCutoff, flows, units)
 
 -- | Optimized version of parseActivityWithFlowsAndUnits with better memory management
 parseActivityWithFlowsAndUnitsOptimized :: Cursor -> ProcessId -> (Activity, [Flow], [Unit])
@@ -117,12 +125,14 @@ parseActivityWithFlowsAndUnitsOptimized cursor processId =
             [] -> "unit" -- Default fallback
             (unit : _) -> unit
 
-        -- Use XML activity UUID for backward compatibility, store ProcessId separately
+        -- Use XML activity UUID for backward compatibility
+        -- Note: ProcessId is now just an index, not stored in Activity
         !xmlActivityUUID =
             headOrFail "Missing activity@id or activity@activityId" $
                 (cursor $// element (nsElement "activity") >=> attribute "id")
                     <> (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        !activity = Activity xmlActivityUUID (Just processId) name description synonyms classifications location refUnit exchs
+        -- Activity constructor now takes 7 arguments (removed activityId and activityProcessId)
+        !activity = Activity name description synonyms classifications location refUnit exchs
      in (activity, flows, units)
 
 -- | Memory-optimized exchange parsing with strict evaluation
@@ -166,12 +176,9 @@ parseExchangeWithFlowOptimized cur =
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
         !activityLinkIdText = getAttr cur "activityLinkId"
 
-        -- For now, create ProcessId with same UUID for both activity and product
-        -- TODO: Need to resolve actual product UUID from flow reference
-        !processLinkId =
-            if T.null activityLinkIdText
-                then Nothing
-                else Just $ ProcessId activityLinkIdText activityLinkIdText -- Temporary: use same UUID for both
+        -- For now, we don't have the ProcessId available during parsing
+        -- It will be resolved during database building when we have the full UUID mapping
+        !processLinkId = Nothing  -- Will be resolved during database construction
         !synonyms = parseSynonyms cur
         !flow = Flow fid fname "technosphere" unitId ftype synonyms
         !unit = Unit unitId unitName unitName "" -- Use unitName for both name and symbol, empty comment
