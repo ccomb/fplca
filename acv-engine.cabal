@@ -46,6 +46,7 @@ executable acv-cli
                      , wai-cors
                      , wai-app-static
                      , binary
+                     , zstd
                      , time
                      , hashable
                      , uuid

@@ -34,11 +34,15 @@ import ACV.Types
 import Control.Concurrent.Async
 import Control.Exception (SomeException, catch)
 import Control.Monad
-import Data.Binary (decodeFile, encodeFile)
+import Data.Binary (encode, decode)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import Data.Hashable (hash)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import qualified Data.Vector as V
+import qualified Codec.Compression.Zstd as Zstd
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import qualified Data.Text as T
 import System.Directory (doesFileExist, getFileSize, listDirectory, removeFile)
@@ -241,9 +245,44 @@ Returns Nothing if no matrix cache exists.
 loadCachedDatabaseWithMatrices :: FilePath -> IO (Maybe Database)
 loadCachedDatabaseWithMatrices dataDir = do
     cacheFile <- generateMatrixCacheFilename dataDir
+    let zstdFile = cacheFile ++ ".zst"
+
+    -- Try compressed file first, then fall back to uncompressed for backwards compatibility
+    zstdExists <- doesFileExist zstdFile
     cacheExists <- doesFileExist cacheFile
-    if cacheExists
+
+    if zstdExists
         then do
+            reportCacheInfo zstdFile
+            -- Wrap cache loading in exception handler to prevent crashes
+            catch
+                (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
+                    compressed <- BS.readFile zstdFile
+                    db <- case Zstd.decompress compressed of
+                        Zstd.Skip -> error "Zstd decompression failed: Skip"
+                        Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                        Zstd.Decompress decompressed ->
+                            let !db = decode (BSL.fromStrict decompressed)
+                            in return db
+                    reportCacheOperation $
+                        "Matrix cache loaded: "
+                        ++ show (dbActivityCount db)
+                        ++ " activities, "
+                        ++ show (V.length $ dbTechnosphereTriples db)
+                        ++ " tech entries, "
+                        ++ show (V.length $ dbBiosphereTriples db)
+                        ++ " bio entries (decompressed)"
+                    return (Just db))
+                (\(e :: SomeException) -> do
+                    reportError $ "Compressed cache load failed: " ++ show e
+                    reportCacheOperation "The compressed cache file is corrupted or incompatible"
+                    reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
+                    removeFile zstdFile
+                    reportCacheOperation "Will rebuild database from source files"
+                    return Nothing)
+    else if cacheExists
+        then do
+            reportCacheOperation "Found old uncompressed cache, migrating to compressed format"
             -- Validate cache file before attempting to decode
             isValid <- validateCacheFile cacheFile
             if not isValid
@@ -253,18 +292,21 @@ loadCachedDatabaseWithMatrices dataDir = do
                     return Nothing
                 else do
                     reportCacheInfo cacheFile
-                    -- Wrap cache loading in exception handler to prevent crashes
+                    -- Load old format and delete it (will be saved in new format)
                     catch
-                        (withProgressTiming Cache "Matrix cache load" $ do
-                            !db <- decodeFile cacheFile
+                        (withProgressTiming Cache "Matrix cache load (old format)" $ do
+                            !db <- BSL.readFile cacheFile >>= \bs -> return $! decode bs
                             reportCacheOperation $
                                 "Matrix cache loaded: "
                                 ++ show (dbActivityCount db)
                                 ++ " activities, "
-                                ++ show (length $ dbTechnosphereTriples db)
+                                ++ show (V.length $ dbTechnosphereTriples db)
                                 ++ " tech entries, "
-                                ++ show (length $ dbBiosphereTriples db)
+                                ++ show (V.length $ dbBiosphereTriples db)
                                 ++ " bio entries"
+                            -- Delete old uncompressed cache
+                            removeFile cacheFile
+                            reportCacheOperation "Deleted old uncompressed cache (will be saved in compressed format)"
                             return (Just db))
                         (\(e :: SomeException) -> do
                             reportError $ "Cache load failed: " ++ show e
@@ -289,14 +331,21 @@ Should be called after matrix construction is complete.
 saveCachedDatabaseWithMatrices :: FilePath -> Database -> IO ()
 saveCachedDatabaseWithMatrices dataDir db = do
     cacheFile <- generateMatrixCacheFilename dataDir
-    reportCacheOperation $ "Saving Database with matrices to cache: " ++ cacheFile
-    withProgressTiming Cache "Matrix cache save" $ do
-        encodeFile cacheFile db
+    let zstdFile = cacheFile ++ ".zst"
+    reportCacheOperation $ "Saving Database with matrices to compressed cache: " ++ zstdFile
+    withProgressTiming Cache "Matrix cache save with zstd compression" $ do
+        -- Serialize to ByteString
+        let serialized = encode db
+        -- Compress with zstd (level 3 = good balance of compression and speed)
+        -- Convert lazy to strict for compression, then back to lazy for writing
+        let compressed = Zstd.compress 3 (BSL.toStrict serialized)
+        -- Write compressed data
+        BS.writeFile zstdFile compressed
         reportCacheOperation $
             "Matrix cache saved ("
             ++ show (dbActivityCount db)
             ++ " activities, "
-            ++ show (length $ dbTechnosphereTriples db)
+            ++ show (V.length $ dbTechnosphereTriples db)
             ++ " tech entries, "
-            ++ show (length $ dbBiosphereTriples db)
-            ++ " bio entries)"
+            ++ show (V.length $ dbBiosphereTriples db)
+            ++ " bio entries, compressed)"

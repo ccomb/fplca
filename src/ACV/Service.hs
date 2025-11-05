@@ -178,13 +178,13 @@ computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
                         Nothing -> do
                             -- Fallback: use direct matrix computation if no cached factorization
                             -- Convert Int32 to Int for solveSparseLinearSystem
-                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
                                 activityCountInt = fromIntegral activityCount
                             return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
                     -- Convert Int32 to Int for applySparseMatrix
-                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
                         bioFlowCountInt = fromIntegral bioFlowCount
                         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
@@ -285,13 +285,13 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                         Nothing -> do
                             -- Fallback: use direct matrix computation if no cached factorization
                             -- Convert Int32 to Int for solveSparseLinearSystem
-                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
                                 activityCountInt = fromIntegral activityCount
                             return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
                     -- Convert Int32 to Int for applySparseMatrix
-                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
                         bioFlowCountInt = fromIntegral bioFlowCount
                         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
@@ -736,14 +736,14 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 
         -- Solve (I - A) * supply = demand using PETSc (same as in computeInventoryMatrix)
         -- Convert Int32 to Int for solveSparseLinearSystem
-        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
         activityCountInt = fromIntegral activityCount
         supplyVec = solveSparseLinearSystem techTriplesInt activityCountInt demandVec
         supplyList = toList supplyVec
 
         -- Calculate inventory using biosphere matrix: g = B * supply
         -- Convert Int32 to Int for applySparseMatrix
-        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- bioTriples]
+        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
         bioFlowCountInt = fromIntegral bioFlowCount
         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
         inventoryList = toList inventoryVec
@@ -756,7 +756,7 @@ extractMatrixDebugInfo database targetUUID flowFilter =
                         [ idx | (uuid, idx) <- zip bioFlowUUIDs [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
-                 in filter (\(row, _, _) -> row `elem` matchingFlowIndicesInt32) bioTriples
+                 in V.filter (\(row, _, _) -> row `elem` matchingFlowIndicesInt32) bioTriples
      in MatrixDebugInfo
             { mdActivities = activities
             , mdFlows = flows
@@ -776,8 +776,8 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 data MatrixDebugInfo = MatrixDebugInfo
     { mdActivities :: ActivityDB  -- V.Vector Activity indexed by ProcessId
     , mdFlows :: M.Map UUID Flow
-    , mdTechTriples :: [SparseTriple]
-    , mdBioTriples :: [SparseTriple]
+    , mdTechTriples :: V.Vector SparseTriple
+    , mdBioTriples :: V.Vector SparseTriple
     , mdActivityIndex :: V.Vector Int32  -- ProcessId → matrix column index
     , mdBioFlowUUIDs :: [UUID]
     , mdTargetUUID :: UUID
@@ -869,7 +869,7 @@ exportBiosphereMatrixData filePath debugInfo = do
         -- Convert matrix triplets to CSV rows with REAL contributions
         matrixRows =
             [ csvRow bioTriple
-            | bioTriple@(row, col, value) <- bioTriples
+            | bioTriple@(row, col, value) <- V.toList bioTriples
             , abs value > 1e-20 -- Filter very small values
             ]
 

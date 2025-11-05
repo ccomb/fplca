@@ -77,7 +77,7 @@ main = do
       let techTriples = dbTechnosphereTriples database
           activityCount = dbActivityCount database
           -- Convert Int32 to Int for PETSc functions
-          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples]
+          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
           activityCountInt = fromIntegral activityCount
       reportProgress Info "Pre-computing matrix factorization for fast concurrent inventory calculations"
       factorization <- precomputeMatrixFactorization techTriplesInt activityCountInt
@@ -220,7 +220,7 @@ displayDatabaseStats db stats = do
   reportProgress Info "Performance Characteristics:"
   let techEntries = dbTechnosphereTriples db
       bioEntries = dbBiosphereTriples db
-      totalEntries = length techEntries + length bioEntries
+      totalEntries = V.length techEntries + V.length bioEntries
       totalPossible = statsActivityCount stats * statsActivityCount stats + statsActivityCount stats * statsBiosphereFlows stats
       matrixDensity = if totalPossible > 0 then (fromIntegral totalEntries / fromIntegral totalPossible) * 100 else 0 :: Double
   reportProgress Info $ "  Matrix density: " ++ printf "%.4f%%" matrixDensity ++ " (very sparse - good for performance)"

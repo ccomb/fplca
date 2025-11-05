@@ -232,7 +232,7 @@ type SparseTriple = (Int32, Int32, Double)
 
 -- | Pre-computed matrix factorization for fast inventory calculations
 data MatrixFactorization = MatrixFactorization
-    { mfSystemMatrix :: ![SparseTriple] -- Cached (I - A) system matrix
+    { mfSystemMatrix :: !(V.Vector SparseTriple) -- Cached (I - A) system matrix
     , mfActivityCount :: !Int32 -- Matrix dimension
     } deriving (Generic, Binary)
 
@@ -246,8 +246,8 @@ data Database = Database
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     , -- Pre-computed sparse matrices for efficient LCA calculations
-      dbTechnosphereTriples :: ![SparseTriple] -- A matrix: activities × activities (sparse)
-    , dbBiosphereTriples :: ![SparseTriple] -- B matrix: biosphere flows × activities (sparse)
+      dbTechnosphereTriples :: !(V.Vector SparseTriple) -- A matrix: activities × activities (sparse)
+    , dbBiosphereTriples :: !(V.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse)
     , dbActivityIndex :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
     , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs (source of truth for indexing)
     , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)
