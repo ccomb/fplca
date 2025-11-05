@@ -19,24 +19,25 @@ import qualified Data.Vector as V
 import GHC.Generics (Generic)
 import System.IO.Unsafe (unsafePerformIO)
 
--- | Build complete database with pre-computed sparse matrices
--- Now accepts a Map with (UUID, UUID) keys and converts to Vector internally
+{- | Build complete database with pre-computed sparse matrices
+Now accepts a Map with (UUID, UUID) keys and converts to Vector internally
+-}
 buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> Database
 buildDatabaseWithMatrices activityMap flowDB unitDB =
     let _ = unsafePerformIO $ reportMatrixOperation "Building database with pre-computed sparse matrices"
 
         -- Step 1: Build UUID interning tables from Map keys
         activityKeys = M.keys activityMap
-        sortedKeys = sort activityKeys  -- Ensure deterministic ordering
+        sortedKeys = sort activityKeys -- Ensure deterministic ordering
 
         -- Build forward lookup: ProcessId (Int16) -> (UUID, UUID)
         dbProcessIdTable = V.fromList sortedKeys
 
         -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int16)
-        dbProcessIdLookup = M.fromList $ zip sortedKeys [0..]
+        dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
 
         -- Build fast activity UUID lookup for O(log n) ProcessId resolution
-        activityUUIDLookup = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0..] sortedKeys]
+        activityUUIDLookup = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
 
         -- Convert Map to Vector indexed by ProcessId
         dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
@@ -67,22 +68,24 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                     Just actUUID -> M.lookup actUUID activityUUIDLookup
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
-                            producerIdx = producerPid >>= \pid ->
-                                if pid >= 0 && fromIntegral pid < activityCount
-                                then Just $ fromIntegral pid
-                                else Nothing
+                            producerIdx =
+                                producerPid >>= \pid ->
+                                    if pid >= 0 && fromIntegral pid < activityCount
+                                        then Just $ fromIntegral pid
+                                        else Nothing
                          in case producerIdx of
                                 Just idx ->
                                     let rawValue = exchangeAmount ex
                                         denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                        value = -(rawValue / denom)
+                                        value = rawValue / denom  -- Removed negative sign to fix double negation
                                      in [(idx, j, value) | abs value > 1e-15]
                                 Nothing -> []
 
                 buildActivityTriplets (j, consumerPid) =
                     let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                        refProductAmounts = [ exchangeAmount ex | ex <- exchanges consumerActivity
-                                            , exchangeIsReference ex && not (exchangeIsInput ex) ]
+                        refProductAmounts =
+                            [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex && not (exchangeIsInput ex)
+                            ]
                         normalizationFactor = sum refProductAmounts
                         buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                      in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
@@ -95,12 +98,14 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
         -- CRITICAL: Use sort to ensure deterministic, consistent ordering across runs
         -- Without sort, S.toList can produce different orderings, causing index mismatches
-        bioFlowUUIDs = sort $ S.toList $ S.fromList [exchangeFlowId ex | pid <- [0..fromIntegral activityCount - 1],
-                                                                   let activity = dbActivities V.! fromIntegral pid,
-                                                                   ex <- exchanges activity,
-                                                                   isBiosphereExchange ex]
+        bioFlowUUIDs =
+            sort $
+                S.toList $
+                    S.fromList
+                        [ exchangeFlowId ex | pid <- [0 .. fromIntegral activityCount - 1], let activity = dbActivities V.! fromIntegral pid, ex <- exchanges activity, isBiosphereExchange ex
+                        ]
         bioFlowCount = fromIntegral $ length bioFlowUUIDs :: Int32
-        bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0..]
+        bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0 ..]
 
         !bioTriples =
             let buildBioTriple normalizationFactor j activity ex
@@ -110,16 +115,18 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                             Just i ->
                                 let rawValue = exchangeAmount ex
                                     denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                    value = if exchangeIsInput ex
-                                           then -(rawValue / denom)  -- Resource extraction
-                                           else rawValue / denom      -- Emissions
+                                    value =
+                                        if exchangeIsInput ex
+                                            then -(rawValue / denom) -- Resource extraction
+                                            else rawValue / denom -- Emissions
                                  in [(i, j, value) | abs value > 1e-15]
                             Nothing -> []
 
                 buildActivityBioTriplets (j, pid) =
                     let activity = dbActivities V.! fromIntegral pid
-                        refProductAmounts = [ exchangeAmount ex | ex <- exchanges activity
-                                            , exchangeIsReference ex && not (exchangeIsInput ex) ]
+                        refProductAmounts =
+                            [ exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex && not (exchangeIsInput ex)
+                            ]
                         normalizationFactor = sum refProductAmounts
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in concatMap buildNormalizedBioTriple (exchanges activity)
@@ -130,7 +137,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
         _ = techTriples `seq` bioTriples `seq` unsafePerformIO (reportMatrixOperation "Database with matrices built successfully")
         _ = unsafePerformIO $ reportMatrixOperation ("Final matrix stats: " ++ show (V.length techTriples) ++ " tech entries, " ++ show (V.length bioTriples) ++ " bio entries")
-
      in Database
             { dbProcessIdTable = dbProcessIdTable
             , dbProcessIdLookup = dbProcessIdLookup
@@ -140,7 +146,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
             , dbIndexes = indexes
             , dbTechnosphereTriples = techTriples
             , dbBiosphereTriples = bioTriples
-            , dbActivityIndex = V.generate (fromIntegral activityCount) fromIntegral  -- Identity mapping for compatibility
+            , dbActivityIndex = V.generate (fromIntegral activityCount) fromIntegral -- Identity mapping for compatibility
             , dbBiosphereFlows = bioFlowUUIDs
             , dbActivityCount = activityCount
             , dbBiosphereCount = bioFlowCount
@@ -150,8 +156,8 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 -- Helper function to find ProcessId by activity UUID
 findProcessIdByActivityUUID' :: V.Vector (UUID, UUID) -> UUID -> Maybe ProcessId
 findProcessIdByActivityUUID' processIdTable searchUUID =
-    case [pid | (pid, (actUUID, _)) <- zip [0..] (V.toList processIdTable), actUUID == searchUUID] of
-        (pid:_) -> Just (fromIntegral pid)
+    case [pid | (pid, (actUUID, _)) <- zip [0 ..] (V.toList processIdTable), actUUID == searchUUID] of
+        (pid : _) -> Just (fromIntegral pid)
         [] -> Nothing
 
 -- | Build indexes with ProcessIds
@@ -165,46 +171,65 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
         activityPairs = zip activityUUIDs activities
 
         -- Build indexes using activity UUIDs
-        nameIdx = M.fromListWith (++)
-            [(T.toLower (activityName activity), [uuid]) | (uuid, activity) <- activityPairs]
+        nameIdx =
+            M.fromListWith
+                (++)
+                [(T.toLower (activityName activity), [uuid]) | (uuid, activity) <- activityPairs]
 
-        locationIdx = M.fromListWith (++)
-            [(activityLocation activity, [uuid]) | (uuid, activity) <- activityPairs]
+        locationIdx =
+            M.fromListWith
+                (++)
+                [(activityLocation activity, [uuid]) | (uuid, activity) <- activityPairs]
 
-        flowIdx = M.fromListWith (++)
-            [(exchangeFlowId ex, [uuid]) | (uuid, activity) <- activityPairs,
-                                           ex <- exchanges activity]
+        flowIdx =
+            M.fromListWith
+                (++)
+                [ (exchangeFlowId ex, [uuid]) | (uuid, activity) <- activityPairs, ex <- exchanges activity
+                ]
 
-        unitIdx = M.fromListWith (++)
-            [(activityUnit activity, [uuid]) | (uuid, activity) <- activityPairs]
+        unitIdx =
+            M.fromListWith
+                (++)
+                [(activityUnit activity, [uuid]) | (uuid, activity) <- activityPairs]
 
-        flowCatIdx = M.fromListWith (++)
-            [(flowCategory flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
+        flowCatIdx =
+            M.fromListWith
+                (++)
+                [(flowCategory flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
 
-        flowTypeIdx = M.fromListWith (++)
-            [(flowType flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
+        flowTypeIdx =
+            M.fromListWith
+                (++)
+                [(flowType flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
 
-        exchangeIdx = M.fromListWith (++)
-            [(exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs,
-                                                 ex <- exchanges activity]
+        exchangeIdx =
+            M.fromListWith
+                (++)
+                [ (exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs, ex <- exchanges activity
+                ]
 
-        procExchangeIdx = M.fromListWith (++)
-            [(uuid, exchanges activity) | (uuid, activity) <- activityPairs]
+        procExchangeIdx =
+            M.fromListWith
+                (++)
+                [(uuid, exchanges activity) | (uuid, activity) <- activityPairs]
 
-        refProdIdx = M.fromListWith (++)
-            [(exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs,
-                                                 ex <- exchanges activity,
-                                                 exchangeIsReference ex]
+        refProdIdx =
+            M.fromListWith
+                (++)
+                [ (exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, exchangeIsReference ex
+                ]
 
-        inputIdx = M.fromListWith (++)
-            [(uuid, [ex]) | (uuid, activity) <- activityPairs,
-                           ex <- exchanges activity,
-                           exchangeIsInput ex]
+        inputIdx =
+            M.fromListWith
+                (++)
+                [ (uuid, [ex]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, exchangeIsInput ex
+                ]
 
-        outputIdx = M.fromListWith (++)
-            [(uuid, [ex]) | (uuid, activity) <- activityPairs,
-                           ex <- exchanges activity,
-                           not (exchangeIsInput ex)]
+        outputIdx =
+            M.fromListWith
+                (++)
+                [ (uuid, [ex]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, not (exchangeIsInput ex)
+                ]
      in
         Indexes
             { idxByName = nameIdx
@@ -231,34 +256,39 @@ findActivitiesByFields db nameParam geoParam productParam =
             Nothing -> activities
             Just name ->
                 let nameLower = T.toLower name
-                in [a | a <- activities, T.isInfixOf nameLower (T.toLower (activityName a))]
+                 in [a | a <- activities, T.isInfixOf nameLower (T.toLower (activityName a))]
 
         -- Filter by geography if provided (substring match)
         geoFiltered = case geoParam of
             Nothing -> nameFiltered
             Just geo ->
                 let geoLower = T.toLower geo
-                in [a | a <- nameFiltered, T.isInfixOf geoLower (T.toLower (activityLocation a))]
+                 in [a | a <- nameFiltered, T.isInfixOf geoLower (T.toLower (activityLocation a))]
 
         -- Filter by product if provided (substring match)
         productFiltered = case productParam of
             Nothing -> geoFiltered
             Just product ->
                 let productLower = T.toLower product
-                in [a | a <- geoFiltered,
-                       any (\ex -> exchangeIsReference ex &&
-                                  not (exchangeIsInput ex) &&
-                                  case M.lookup (exchangeFlowId ex) (dbFlows db) of
-                                      Just flow -> T.isInfixOf productLower (T.toLower (flowName flow))
-                                      Nothing -> False) (exchanges a)]
-    in productFiltered
+                 in [ a | a <- geoFiltered, any
+                                                ( \ex ->
+                                                    exchangeIsReference ex
+                                                        && not (exchangeIsInput ex)
+                                                        && case M.lookup (exchangeFlowId ex) (dbFlows db) of
+                                                            Just flow -> T.isInfixOf productLower (T.toLower (flowName flow))
+                                                            Nothing -> False
+                                                )
+                                                (exchanges a)
+                    ]
+     in productFiltered
 
 -- | Search flows by synonym
 findFlowsBySynonym :: Database -> Text -> [Flow]
 findFlowsBySynonym db query =
     let queryLower = T.toLower query
         flows = M.elems (dbFlows db)
-    in [f | f <- flows,
-           T.isInfixOf queryLower (T.toLower (flowName f)) ||
-           any (\synonyms -> any (T.isInfixOf queryLower . T.toLower) (S.toList synonyms))
-               (M.elems (flowSynonyms f))]
+     in [ f | f <- flows, T.isInfixOf queryLower (T.toLower (flowName f))
+                            || any
+                                (\synonyms -> any (T.isInfixOf queryLower . T.toLower) (S.toList synonyms))
+                                (M.elems (flowSynonyms f))
+        ]
