@@ -32,6 +32,7 @@ module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, 
 import ACV.Progress
 import ACV.Types
 import Control.Concurrent.Async
+import Control.Exception (SomeException, catch)
 import Control.Monad
 import Data.Binary (decodeFile, encodeFile)
 import Data.Hashable (hash)
@@ -40,7 +41,7 @@ import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import qualified Data.Text as T
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (doesFileExist, getFileSize, listDirectory, removeFile)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import Text.Printf (printf)
 
@@ -56,10 +57,12 @@ Increment this number when:
 - Changing serialization format or compression
 - Modifying matrix computation algorithms
 
-Current version 8 includes: Matrix pre-computation caching
+Version history:
+- Version 8: Matrix pre-computation caching
+- Version 9: Improved error handling with cache validation and exception catching
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 8
+cacheFormatVersion = 9
 
 
 {-|
@@ -200,6 +203,30 @@ generateMatrixCacheFilename dataDir = do
     return $ "ecoinvent.matrix.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
 {-|
+Validate cache file integrity before attempting to decode.
+
+Checks:
+- File size is reasonable (> 1KB to avoid empty/corrupted files)
+- File exists and is readable
+
+Returns True if cache file appears valid, False otherwise.
+-}
+validateCacheFile :: FilePath -> IO Bool
+validateCacheFile cacheFile = do
+    exists <- doesFileExist cacheFile
+    if not exists
+        then return False
+        else do
+            fileSize <- getFileSize cacheFile
+            -- Cache file should be at least 1KB for a valid database
+            -- Typical size is 100MB-600MB
+            if fileSize < 1024
+                then do
+                    reportCacheOperation $ "Cache file is too small (" ++ show fileSize ++ " bytes), likely corrupted"
+                    return False
+                else return True
+
+{-|
 Load Database with pre-computed matrices from cache (second-tier).
 
 This is the fastest loading method (~0.5s) as it bypasses both
@@ -217,18 +244,35 @@ loadCachedDatabaseWithMatrices dataDir = do
     cacheExists <- doesFileExist cacheFile
     if cacheExists
         then do
-            reportCacheInfo cacheFile
-            withProgressTiming Cache "Matrix cache load" $ do
-                !db <- decodeFile cacheFile
-                reportCacheOperation $
-                    "Matrix cache loaded: "
-                    ++ show (dbActivityCount db)
-                    ++ " activities, "
-                    ++ show (length $ dbTechnosphereTriples db)
-                    ++ " tech entries, "
-                    ++ show (length $ dbBiosphereTriples db)
-                    ++ " bio entries"
-                return (Just db)
+            -- Validate cache file before attempting to decode
+            isValid <- validateCacheFile cacheFile
+            if not isValid
+                then do
+                    reportCacheOperation "Cache file validation failed, deleting and rebuilding"
+                    removeFile cacheFile
+                    return Nothing
+                else do
+                    reportCacheInfo cacheFile
+                    -- Wrap cache loading in exception handler to prevent crashes
+                    catch
+                        (withProgressTiming Cache "Matrix cache load" $ do
+                            !db <- decodeFile cacheFile
+                            reportCacheOperation $
+                                "Matrix cache loaded: "
+                                ++ show (dbActivityCount db)
+                                ++ " activities, "
+                                ++ show (length $ dbTechnosphereTriples db)
+                                ++ " tech entries, "
+                                ++ show (length $ dbBiosphereTriples db)
+                                ++ " bio entries"
+                            return (Just db))
+                        (\(e :: SomeException) -> do
+                            reportError $ "Cache load failed: " ++ show e
+                            reportCacheOperation "The cache file is corrupted or incompatible with the current version"
+                            reportCacheOperation $ "Deleting corrupted cache file: " ++ cacheFile
+                            removeFile cacheFile
+                            reportCacheOperation "Will rebuild database from source files"
+                            return Nothing)
         else do
             reportCacheOperation "No matrix cache found"
             return Nothing
