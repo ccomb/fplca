@@ -96,6 +96,8 @@ loadAllSpoldsWithFlows dir = do
     -- OPTION B: Simple chunking - optimal chunk size with direct parallelism
     loadWithSimpleChunks spoldFiles
   where
+    optimalChunkSize = 500 -- Sweet spot for memory vs parallelism
+
     -- Helper function for unzipping 5-tuples
     unzip5 :: [(a, b, c, d, e)] -> ([a], [b], [c], [d], [e])
     unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a:as, b:bs, c:cs, d:ds, e:es)) ([], [], [], [], [])
@@ -103,14 +105,12 @@ loadAllSpoldsWithFlows dir = do
     -- Simple chunking without complex nested batching
     loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
     loadWithSimpleChunks allFiles = do
-        let optimalChunkSize = 500  -- Sweet spot for memory vs parallelism
         let chunks = chunksOf optimalChunkSize allFiles
-        reportProgress Info $ "Processing " ++ show (length chunks) ++ " chunks of ~" ++ show optimalChunkSize ++ " files each with controlled parallelism"
+        reportProgress Info $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each with controlled parallelism"
 
-        -- Process chunks with controlled parallelism (2 chunks at a time)
+        -- Process chunks sequentially with detailed progress reporting
         startTime <- getCurrentTime
-        let parallelism = 2  -- Process 2 chunks concurrently
-        results <- processChunksInParallel parallelism startTime (length chunks) chunks
+        results <- mapM (activityChunkWithProgress startTime (length chunks)) (zip [1..] chunks)
         let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
@@ -146,12 +146,11 @@ loadAllSpoldsWithFlows dir = do
         reportProgress Info $ printf "Processing chunk %d/%d (%d%%) - %d files [ETA: %s]"
             chunkNum totalChunks progressPercent (length chunk) (formatDuration etaSeconds)
 
-        -- Report memory usage for large chunks (reduced frequency to minimize overhead)
-        when (chunkNum `mod` 10 == 1) $ reportMemoryUsage $ "Chunk " ++ show chunkNum ++ " memory check"
+        -- Report memory usage for large chunks
+        when (chunkNum `mod` 5 == 1) $ reportMemoryUsage $ "Chunk " ++ show chunkNum ++ " memory check"
 
         -- Process files in smaller parallel batches to avoid thread/handle exhaustion
-        let maxConcurrency = 4  -- Conservative: 1x CPU cores to avoid resource contention
-        when (chunkNum == 1) $ reportProgress Info $ "Using " ++ show maxConcurrency ++ " concurrent workers"
+        let maxConcurrency = 4  -- Conservative limit: 1x CPU cores
         chunkResults <- processWithLimitedConcurrency maxConcurrency chunk
         let (!procs, flowLists, unitLists) = unzip3 chunkResults
         let !allFlows = concat flowLists
@@ -177,22 +176,6 @@ loadAllSpoldsWithFlows dir = do
             chunkNum (M.size procMap) (M.size flowMap) (formatDuration chunkDuration) filesPerSec
 
         return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
-
-    -- Process chunks in parallel groups to improve CPU utilization
-    processChunksInParallel :: Int -> UTCTime -> Int -> [[FilePath]] -> IO [(ActivityMap, FlowDB, UnitDB, Int, Int)]
-    processChunksInParallel parallelism startTime totalChunks allChunks = do
-        let numberedChunks = zip [1..] allChunks
-        let chunkGroups = chunksOf parallelism numberedChunks
-        -- Process groups and force evaluation to prevent thunk buildup
-        results <- mapM processGroup chunkGroups
-        let !flatResults = concat results
-        return flatResults
-      where
-        processGroup group = do
-            groupResults <- mapConcurrently (activityChunkWithProgress startTime totalChunks) group
-            -- Force evaluation of results before moving to next group
-            let !forced = groupResults
-            return forced
 
     -- Process files with limited concurrency to prevent resource exhaustion
     processWithLimitedConcurrency :: Int -> [FilePath] -> IO [(Activity, [Flow], [Unit])]
