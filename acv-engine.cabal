@@ -27,6 +27,7 @@ executable acv-cli
                      , text
                      , containers
                      , xml-conduit
+                     , hexml
                      , filepath
                      , directory
                      , mtl
