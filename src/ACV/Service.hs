@@ -279,17 +279,27 @@ combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1
 
 -- | Helper to find ProcessId for an activity by searching the database
 -- This is needed because activities don't store their own ProcessId/UUID
+-- Strategy: match activities by name, location, unit, and first reference product flow
 findProcessIdForActivity :: Database -> Activity -> Maybe ProcessId
 findProcessIdForActivity db activity =
-    -- Search through all activities in the database to find a match
-    -- We compare by name, location, and exchanges as a unique identifier
-    case V.findIndex (\dbActivity ->
-        activityName dbActivity == activityName activity &&
-        activityLocation dbActivity == activityLocation activity &&
-        length (exchanges dbActivity) == length (exchanges activity)
-    ) (dbActivities db) of
-        Just idx -> Just (fromIntegral idx :: ProcessId)
-        Nothing -> Nothing
+    let actName = activityName activity
+        actLoc = activityLocation activity
+        actUnit = activityUnit activity
+        refFlowId = case [exchangeFlowId ex | ex <- exchanges activity, exchangeIsReference ex] of
+            (fid:_) -> Just fid
+            [] -> Nothing
+
+        matchesActivity dbActivity =
+            let dbRefFlowId = case [exchangeFlowId ex | ex <- exchanges dbActivity, exchangeIsReference ex] of
+                    (dbFid:_) -> Just dbFid
+                    [] -> Nothing
+            in activityName dbActivity == actName &&
+               activityLocation dbActivity == actLoc &&
+               activityUnit dbActivity == actUnit &&
+               dbRefFlowId == refFlowId
+
+        matchingIndex = V.findIndex matchesActivity (dbActivities db)
+    in fmap fromIntegral matchingIndex
 
 -- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
 -- For activities, we look up their ProcessId; for loops, we use the bare UUID

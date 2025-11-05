@@ -93,7 +93,9 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
         -- Build biosphere sparse triplets
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
-        bioFlowUUIDs = S.toList $ S.fromList [exchangeFlowId ex | pid <- [0..fromIntegral activityCount - 1],
+        -- CRITICAL: Use sort to ensure deterministic, consistent ordering across runs
+        -- Without sort, S.toList can produce different orderings, causing index mismatches
+        bioFlowUUIDs = sort $ S.toList $ S.fromList [exchangeFlowId ex | pid <- [0..fromIntegral activityCount - 1],
                                                                    let activity = dbActivities V.! fromIntegral pid,
                                                                    ex <- exchanges activity,
                                                                    isBiosphereExchange ex]

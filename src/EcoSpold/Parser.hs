@@ -91,8 +91,6 @@ data ElementContext
     | InIntermediateExchange !IntermediateData
     | InElementaryExchange !ElementaryData
     | InGeneralCommentText !Int  -- Track index
-    | InSynonym !Text  -- Track language
-    | InCompartment !CompartmentData
     | Other
     deriving (Eq)
 
@@ -125,14 +123,6 @@ data ElementaryData = ElementaryData
     }
     deriving (Eq)
 
--- | Compartment parsing data
-data CompartmentData = CompartmentData
-    { cdCompartments :: ![Text]
-    , cdSubcompartments :: ![Text]
-    , cdInSubcompartment :: !Bool
-    }
-    deriving (Eq)
-
 -- | Parsing state accumulator for SAX parsing
 data ParseState = ParseState
     { psActivityName :: !(Maybe Text)
@@ -145,8 +135,8 @@ data ParseState = ParseState
     , psPath :: ![BS.ByteString]  -- Element path stack
     , psContext :: !ElementContext
     , psTextAccum :: ![BS.ByteString]  -- Accumulated text content
-    , psCurrentSynonymLang :: !Text  -- Current synonym language
-    , psCompartmentData :: !CompartmentData  -- Compartment parsing state
+    , psPendingInputGroup :: !Text  -- Pending inputGroup value from child element
+    , psPendingOutputGroup :: !Text  -- Pending outputGroup value from child element
     }
 
 -- | Initial parsing state
@@ -162,8 +152,8 @@ initialParseState = ParseState
     , psPath = []
     , psContext = Other
     , psTextAccum = []
-    , psCurrentSynonymLang = "en"
-    , psCompartmentData = CompartmentData [] [] False
+    , psPendingInputGroup = ""
+    , psPendingOutputGroup = ""
     }
 
 -- | ByteString to Text conversion with UTF-8 decoding
@@ -205,11 +195,7 @@ parseWithXeno xmlContent processId =
                 | isElement tagName "elementaryExchange" =
                     InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty)
                 | isElement tagName "text" && any (isElement "generalComment") (psPath state) = InGeneralCommentText 0
-                | isElement tagName "synonym" = InSynonym "en"
-                | isElement tagName "compartment" =
-                    InCompartment (psCompartmentData state)
-                | isElement tagName "subcompartment" =
-                    InCompartment (psCompartmentData state){cdInSubcompartment = True}
+                -- DON'T switch context for child elements (synonym, compartment, etc) - keep parent exchange context
                 | otherwise = psContext state
         in state{psPath = newPath, psContext = newContext, psTextAccum = []}
 
@@ -238,9 +224,6 @@ parseWithXeno xmlContent processId =
             InGeneralCommentText _ ->
                 let idx = if isElement name "index" then bsToInt value else 0
                 in state{psContext = InGeneralCommentText idx}
-            InSynonym _ ->
-                let lang = if name == "xml:lang" then bsToText value else "en"
-                in state{psContext = InSynonym lang, psCurrentSynonymLang = lang}
             _ ->
                 -- Handle reference unit from intermediateExchange with outputGroup="0"
                 if isElement name "unitName" && any (isElement "intermediateExchange") (psPath state)
@@ -272,12 +255,15 @@ parseWithXeno xmlContent processId =
         | isElement tagName "intermediateExchange" =
             case psContext state of
                 InIntermediateExchange idata ->
-                    let exchange = TechnosphereExchange
+                    -- Use pending group values if attribute values are empty
+                    let finalInputGroup = if T.null (idInputGroup idata) then psPendingInputGroup state else idInputGroup idata
+                        finalOutputGroup = if T.null (idOutputGroup idata) then psPendingOutputGroup state else idOutputGroup idata
+                        exchange = TechnosphereExchange
                             (idFlowId idata)
                             (idAmount idata)
                             (idUnitId idata)
-                            (not $ T.null $ idInputGroup idata)
-                            (idOutputGroup idata == "4" || idOutputGroup idata == "0")
+                            (not $ T.null finalInputGroup)
+                            (finalOutputGroup == "4" || finalOutputGroup == "0")
                             (idActivityLinkId idata)
                             Nothing
                         flow = Flow
@@ -298,12 +284,17 @@ parseWithXeno xmlContent processId =
                         , psUnits = unit : psUnits state
                         , psContext = Other
                         , psTextAccum = []
+                        , psPendingInputGroup = ""
+                        , psPendingOutputGroup = ""
                         }
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "elementaryExchange" =
             case psContext state of
                 InElementaryExchange edata ->
-                    let category = case (edCompartments edata, edSubcompartments edata) of
+                    -- Use pending group values if attribute values are empty
+                    let finalInputGroup = if T.null (edInputGroup edata) then psPendingInputGroup state else edInputGroup edata
+                        finalOutputGroup = if T.null (edOutputGroup edata) then psPendingOutputGroup state else edOutputGroup edata
+                        category = case (edCompartments edata, edSubcompartments edata) of
                             ([], []) -> "unspecified"
                             (comp : _, []) -> comp
                             ([], sub : _) -> sub
@@ -312,7 +303,7 @@ parseWithXeno xmlContent processId =
                             (edFlowId edata)
                             (edAmount edata)
                             (edUnitId edata)
-                            (not $ T.null $ edInputGroup edata)
+                            (not $ T.null finalInputGroup)
                         flow = Flow
                             (edFlowId edata)
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
@@ -331,7 +322,8 @@ parseWithXeno xmlContent processId =
                         , psUnits = unit : psUnits state
                         , psContext = Other
                         , psTextAccum = []
-                        , psCompartmentData = CompartmentData [] [] False
+                        , psPendingInputGroup = ""
+                        , psPendingOutputGroup = ""
                         }
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "text" =
@@ -360,44 +352,35 @@ parseWithXeno xmlContent processId =
                     state{psContext = InElementaryExchange edata{edUnitName = txt}, psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "synonym" =
-            case psContext state of
-                InSynonym lang ->
-                    let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                    in if T.null txt
-                        then state{psContext = Other, psTextAccum = []}
-                        else
-                            -- Update synonyms in current exchange context
-                            let updatedState = case psContext state of
-                                    _ -> state  -- Will handle in parent context
-                            in updatedState{psContext = Other, psTextAccum = []}
-                _ -> state{psPath = tail (psPath state)}
+            -- Synonym text is accumulated but not yet stored in exchange data
+            -- For now just clear text and pop path, keeping parent exchange context
+            state{psPath = tail (psPath state), psTextAccum = []}
+        | isElement tagName "inputGroup" =
+            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
+            -- DON'T change psContext - preserve the parent exchange context
+            in state{psPendingInputGroup = txt, psPath = tail (psPath state), psTextAccum = []}
+        | isElement tagName "outputGroup" =
+            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
+            -- DON'T change psContext - preserve the parent exchange context
+            in state{psPendingOutputGroup = txt, psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "compartment" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                compartData = psCompartmentData state
-                updatedCompartData =
-                    if cdInSubcompartment compartData
-                        then compartData  -- Don't update, we're in subcompartment
-                        else compartData{cdCompartments = txt : cdCompartments compartData}
             in case psContext state of
                 InElementaryExchange edata ->
-                    state
-                        { psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}
-                        , psCompartmentData = updatedCompartData
-                        , psTextAccum = []
-                        }
-                _ -> state{psCompartmentData = updatedCompartData, psPath = tail (psPath state), psTextAccum = []}
+                    -- Store compartment text in exchange data
+                    state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = tail (psPath state), psTextAccum = []}
+                _ ->
+                    -- Not in an elementary exchange, just pop the path
+                    state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "subcompartment" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                compartData = psCompartmentData state
-                updatedCompartData = compartData{cdSubcompartments = txt : cdSubcompartments compartData, cdInSubcompartment = False}
             in case psContext state of
                 InElementaryExchange edata ->
-                    state
-                        { psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}
-                        , psCompartmentData = updatedCompartData
-                        , psTextAccum = []
-                        }
-                _ -> state{psCompartmentData = updatedCompartData, psPath = tail (psPath state), psTextAccum = []}
+                    -- Store subcompartment text in exchange data
+                    state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = tail (psPath state), psTextAccum = []}
+                _ ->
+                    -- Not in an elementary exchange, just pop the path
+                    state{psPath = tail (psPath state), psTextAccum = []}
         | otherwise =
             state{psPath = if null (psPath state) then [] else tail (psPath state)}
 
