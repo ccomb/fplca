@@ -91,33 +91,6 @@ validateProcessIdInMatrixIndex db processId =
         T.pack (show processId) <>
         ". This activity may exist in the database but is not indexed for inventory calculations."
 
--- | Generate a unique identifier for an Activity for tree visualization
--- Since we no longer have activityId, we use activity name + location + reference product
-getProcessIdFromActivity :: Activity -> Text
-getProcessIdFromActivity activity =
-    let name = activityName activity
-        location = activityLocation activity
-        -- Find reference product UUID for uniqueness
-        productId = case getReferenceProductId activity of
-            Just refProdId -> refProdId
-            Nothing -> case getFirstOutputProductId activity of
-                Just firstProdId -> firstProdId
-                Nothing -> "no-product" -- Fallback
-     in name <> "_" <> location <> "_" <> productId
-
--- | Get reference product flow ID from activity
-getReferenceProductId :: Activity -> Maybe Text
-getReferenceProductId activity =
-    case filter exchangeIsReference (exchanges activity) of
-        (refExchange : _) -> Just (exchangeFlowId refExchange)
-        [] -> Nothing
-
--- | Get first output product flow ID from activity
-getFirstOutputProductId :: Activity -> Maybe Text
-getFirstOutputProductId activity =
-    case filter (\ex -> not (exchangeIsInput ex) && isTechnosphereExchange ex) (exchanges activity) of
-        (outputExchange : _) -> Just (exchangeFlowId outputExchange)
-        [] -> Nothing
 
 -- | Rich activity info (returns same format as API)
 getActivityInfo :: Database -> Text -> Either ServiceError Value
@@ -191,8 +164,8 @@ computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
                     return $ Right inventory
 
 -- | Convert raw inventory to structured export format
-convertToInventoryExport :: Database -> Activity -> Inventory -> InventoryExport
-convertToInventoryExport db rootActivity inventory =
+convertToInventoryExport :: Database -> ProcessId -> Activity -> Inventory -> InventoryExport
+convertToInventoryExport db processId rootActivity inventory =
     let
         -- Filter out flows with zero quantities to reduce noise in the results
         inventoryList = M.toList inventory
@@ -223,7 +196,7 @@ convertToInventoryExport db rootActivity inventory =
             InventoryMetadata
                 { imRootActivity =
                     ActivitySummary
-                        (getProcessIdFromActivity rootActivity)
+                        (processIdToText db processId)
                         (activityName rootActivity)
                         (activityLocation rootActivity)
                 , imTotalFlows = length flowDetails
@@ -253,7 +226,7 @@ getActivityInventory db processIdText = do
     validateProcessIdInMatrixIndex db processId
     -- Matrix computation (will not fail if validation passed)
     let inventory = computeInventoryMatrix db processId
-        !inventoryExport = convertToInventoryExport db activity inventory
+        !inventoryExport = convertToInventoryExport db processId activity inventory
     Right $ toJSON inventoryExport
 
 -- | Shared solver-aware activity inventory export for concurrent processing
@@ -295,7 +268,7 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                         bioFlowCountInt = fromIntegral bioFlowCount
                         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
-                        inventoryExport = convertToInventoryExport db activity inventory
+                        inventoryExport = convertToInventoryExport db processId activity inventory
                     return $ Right inventoryExport
 
 -- | Simple stats tracking for tree processing
@@ -304,11 +277,32 @@ data TreeStats = TreeStats Int Int Int -- total, loops, leaves
 combineStats :: TreeStats -> TreeStats -> TreeStats
 combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
 
+-- | Helper to find ProcessId for an activity by searching the database
+-- This is needed because activities don't store their own ProcessId/UUID
+findProcessIdForActivity :: Database -> Activity -> Maybe ProcessId
+findProcessIdForActivity db activity =
+    -- Search through all activities in the database to find a match
+    -- We compare by name, location, and exchanges as a unique identifier
+    case V.findIndex (\dbActivity ->
+        activityName dbActivity == activityName activity &&
+        activityLocation dbActivity == activityLocation activity &&
+        length (exchanges dbActivity) == length (exchanges activity)
+    ) (dbActivities db) of
+        Just idx -> Just (fromIntegral idx :: ProcessId)
+        Nothing -> Nothing
+
 -- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
-getTreeNodeId :: LoopAwareTree -> Text
-getTreeNodeId (TreeLeaf activity) = getProcessIdFromActivity activity
-getTreeNodeId (TreeLoop uuid _ _) = uuid -- Loop references remain as bare UUID for now
-getTreeNodeId (TreeNode activity _) = getProcessIdFromActivity activity
+-- For activities, we look up their ProcessId; for loops, we use the bare UUID
+getTreeNodeId :: Database -> LoopAwareTree -> Text
+getTreeNodeId db (TreeLeaf activity) =
+    case findProcessIdForActivity db activity of
+        Just processId -> processIdToText db processId
+        Nothing -> "unknown-activity"  -- Fallback
+getTreeNodeId _ (TreeLoop uuid _ _) = uuid -- Loop references remain as bare UUID
+getTreeNodeId db (TreeNode activity _) =
+    case findProcessIdForActivity db activity of
+        Just processId -> processIdToText db processId
+        Nothing -> "unknown-activity"  -- Fallback
 
 -- | Count potential children for navigation (technosphere inputs that could be expanded)
 countPotentialChildren :: Database -> Activity -> Int
@@ -328,10 +322,10 @@ extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map 
 extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
     TreeLeaf activity ->
         let childrenCount = countPotentialChildren db activity
-            processId = getProcessIdFromActivity activity
+            processIdText = getTreeNodeId db tree
             node =
                 ExportNode
-                    { enId = processId -- Now ProcessId format
+                    { enId = processIdText -- Now ProcessId format
                     , enName = activityName activity
                     , enDescription = activityDescription activity
                     , enLocation = activityLocation activity
@@ -342,7 +336,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
                     }
-            nodes' = M.insert processId node nodeAcc -- Use ProcessId as key
+            nodes' = M.insert processIdText node nodeAcc -- Use ProcessId as key
          in (nodes', edgeAcc, TreeStats 1 0 1)
     TreeLoop uuid name depth ->
         let node =
@@ -362,7 +356,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
         let childrenCount = countPotentialChildren db activity
-            currentProcessId = getProcessIdFromActivity activity
+            currentProcessId = getTreeNodeId db tree
             parentNode =
                 ExportNode
                     { enId = currentProcessId -- Now ProcessId format
@@ -382,7 +376,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     edge =
                         TreeEdge
                             { teFrom = currentProcessId -- Now ProcessId format
-                            , teTo = getTreeNodeId subtree -- This now returns ProcessId format
+                            , teTo = getTreeNodeId db subtree -- This now returns ProcessId format
                             , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
                             , teQuantity = quantity
                             , teUnit = getUnitNameForFlow (dbUnits db) flow
@@ -472,10 +466,18 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam =
         activityResults =
             map
                 ( \activity ->
-                    ActivitySummary
-                        (getProcessIdFromActivity activity)
-                        (activityName activity)
-                        (activityLocation activity)
+                    case findProcessIdForActivity db activity of
+                        Just processId ->
+                            ActivitySummary
+                                (processIdToText db processId)
+                                (activityName activity)
+                                (activityLocation activity)
+                        Nothing ->
+                            -- Fallback if ProcessId not found
+                            ActivitySummary
+                                "unknown"
+                                (activityName activity)
+                                (activityLocation activity)
                 )
                 pagedResults
      in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
@@ -558,9 +560,10 @@ getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
 getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
     targetActivity <- findActivityByActivityUUID db targetId
+    processId <- findProcessIdForActivity db targetActivity
     return $
         ActivitySummary
-            { prsId = getProcessIdFromActivity targetActivity
+            { prsId = processIdToText db processId
             , prsName = activityName targetActivity
             , prsLocation = activityLocation targetActivity
             }
@@ -584,11 +587,12 @@ getActivitiesUsingFlow db flowUUID =
         Just activityUUIDs ->
             let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
              in [ ActivitySummary
-                    (getProcessIdFromActivity proc)
+                    (processIdToText db processId)
                     (activityName proc)
                     (activityLocation proc)
                 | procUUID <- uniqueUUIDs
                 , Just proc <- [findActivityByActivityUUID db procUUID]
+                , Just processId <- [findProcessIdForActivity db proc]
                 ]
 
 -- | Helper function to get detailed exchanges with filtering

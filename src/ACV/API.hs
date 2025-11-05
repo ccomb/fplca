@@ -8,7 +8,7 @@ module ACV.API where
 import ACV.Matrix (Inventory)
 import ACV.Matrix.SharedSolver (SharedSolver)
 import ACV.Query
-import ACV.Service (getProcessIdFromActivity, getActivityInventoryWithSharedSolver)
+import ACV.Service (getActivityInventoryWithSharedSolver)
 import qualified ACV.Service
 import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
 import ACV.Types
@@ -156,7 +156,11 @@ acvServer db maxTreeDepth sharedSolver =
     searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
     searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
         let activities = findActivitiesByFields db nameParam geoParam productParam
-            activitySummaries = [ActivitySummary (getProcessIdFromActivity activity) (activityName activity) (activityLocation activity) | activity <- activities]
+            activitySummaries =
+                [ ActivitySummary (processIdToText db processId) (activityName activity) (activityLocation activity)
+                | activity <- activities
+                , Just processId <- [ACV.Service.findProcessIdForActivity db activity]
+                ]
         return $ paginateResults activitySummaries limitParam offsetParam
 
     -- LCIA computation
