@@ -229,7 +229,7 @@ parseWithXeno xmlContent processId =
                 if isElement name "unitName" && any (isElement "intermediateExchange") (psPath state)
                     then case psContext state of
                         InIntermediateExchange idata
-                            | idOutputGroup idata == "0" || idOutputGroup idata == "4" ->
+                            | idOutputGroup idata == "0" ->  -- Only outputGroup=0 is reference product
                                 state{psRefUnit = Just (bsToText value)}
                         _ -> state
                     else state
@@ -263,7 +263,7 @@ parseWithXeno xmlContent processId =
                             (idAmount idata)
                             (idUnitId idata)
                             (not $ T.null finalInputGroup)
-                            (finalOutputGroup == "4" || finalOutputGroup == "0")
+                            (finalOutputGroup == "0")  -- Only outputGroup=0 is reference product
                             (idActivityLinkId idata)
                             Nothing
                         flow = Flow

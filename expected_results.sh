@@ -55,7 +55,7 @@ validate_inventory() {
 
 test_nuclear_power_units() {
     echo "🧪 Nuclear Power Plant - Activity Unit Conversions"
-    local activity="11111111-2222-3333-4444-555555555551_nuclear-electricity-uuid"
+    local activity="nuclear-power-uuid_nuclear-electricity-uuid"
     local dataset="SAMPLE.units"
 
     # Test the fixed Radon-222 calculation (our critical regression test)
@@ -69,20 +69,20 @@ test_nuclear_power_units() {
 
 test_steel_mass_conversions() {
     echo "🧪 Steel Production - Mass Unit Conversions"
-    local activity="11111111-2222-3333-4444-555555555552_steel-uuid"
+    local activity="steel-prod-uuid_steel-uuid"
     local dataset="SAMPLE.units"
 
     local failed=0
 
     # Test CO2 emissions (mass unit conversions)
-    # Activity produces 1 tonne steel with 2.0 kg CO2 emissions
-    if ! validate_inventory "Steel-CO2" "$dataset" "$activity" "Carbon dioxide, fossil" "2.0" "kg" 2; then
+    # Activity produces 1 tonne steel with 2000.0 kg CO2 emissions
+    if ! validate_inventory "Steel-CO2" "$dataset" "$activity" "Carbon dioxide, fossil" "2000.0" "kg" 2; then
         failed=1
     fi
 
     # Test particulates (g units - small mass conversion test)
-    # Raw data: 50 g particulates for 1 tonne steel → 0.05 g per kg steel
-    if ! validate_inventory "Steel-Particulates" "$dataset" "$activity" "Particulates, > 10 um" "5.0e-2" "g" 5; then
+    # Raw data: 50000.0 g particulates for 1 tonne steel
+    if ! validate_inventory "Steel-Particulates" "$dataset" "$activity" "Particulates, > 10 um" "50000.0" "g" 5; then
         failed=1
     fi
 
@@ -98,15 +98,13 @@ test_refinery_joint_production() {
 
     # Test CO2 emissions per functional unit (1L gasoline = reference product)
     # Direct emissions: 8.0 kg CO2 for 40.0 L gasoline → 0.2 kg CO2/L
-    # But inventory shows 200.0 kg - scaling issue to investigate
-    if ! validate_inventory "Refinery-CO2" "$dataset" "$activity" "Carbon dioxide, fossil" "200.0" "kg" 5; then
+    if ! validate_inventory "Refinery-CO2" "$dataset" "$activity" "Carbon dioxide, fossil" "0.2" "kg" 5; then
         failed=1
     fi
 
     # Test SO2 emissions per functional unit (1L gasoline)
     # Direct emissions: 0.1 kg SO2 for 40.0 L gasoline → 0.0025 kg SO2/L
-    # But inventory shows 2.5 kg - same scaling issue
-    if ! validate_inventory "Refinery-SO2" "$dataset" "$activity" "Sulfur dioxide" "2.5" "kg" 5; then
+    if ! validate_inventory "Refinery-SO2" "$dataset" "$activity" "Sulfur dioxide" "0.0025" "kg" 5; then
         failed=1
     fi
 
@@ -126,7 +124,7 @@ test_process_switching() {
         failed=1
     fi
 
-    if ! validate_inventory "Switching-VOC" "$switching_dataset" "$chemical_activity" "Chemical B VOC emissions" "8.0e-3" "g" 5; then
+    if ! validate_inventory "Switching-VOC" "$switching_dataset" "$chemical_activity" "Chemical B VOC emissions" "8.0" "g" 5; then
         failed=1
     fi
 
