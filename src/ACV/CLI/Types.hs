@@ -49,6 +49,7 @@ data Command =
     -- No separate synonyms command - synonyms are included in flow responses
   | LCIA Text LCIAOptions                 -- LCIA computation
   | DebugMatrices Text DebugMatricesOptions -- Matrix debugging for activity
+  | ExportMatrices FilePath               -- Export matrices in universal format
   deriving (Eq, Show, Generic)
 
 -- | Server-specific options

@@ -93,6 +93,10 @@ executeCommand (CLIConfig globalOpts cmd) database = do
     DebugMatrices uuid debugOpts ->
       executeDebugMatricesCommand database uuid debugOpts
 
+    -- Matrix export
+    ExportMatrices outputDir ->
+      executeExportMatricesCommand database outputDir
+
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityCommand fmt jsonPathOpt database uuid = do
@@ -224,6 +228,17 @@ executeDebugMatricesCommand database uuid opts = do
       reportProgress Info "Matrix debug export completed"
       reportProgress Info $ "Supply chain data: " ++ debugOutput opts ++ "_supply_chain.csv"
       reportProgress Info $ "Biosphere matrix: " ++ debugOutput opts ++ "_biosphere_matrix.csv"
+
+-- | Execute export matrices command
+executeExportMatricesCommand :: Database -> FilePath -> IO ()
+executeExportMatricesCommand database outputDir = do
+  reportProgress Info $ "Exporting matrices to: " ++ outputDir
+  ACV.Service.exportUniversalMatrixFormat outputDir database
+  reportProgress Info "Matrix export completed"
+  reportProgress Info $ "  - ie_index.csv (activity index)"
+  reportProgress Info $ "  - ee_index.csv (biosphere flow index)"
+  reportProgress Info $ "  - A_public.csv (technosphere matrix)"
+  reportProgress Info $ "  - B_public.csv (biosphere matrix)"
 
 -- | Output result in the specified format
 outputResult :: OutputFormat -> Maybe Text -> Value -> IO ()

@@ -68,6 +68,7 @@ commandParser = subparser
  <> OA.command "flows" (info (searchFlowsParser <**> helper) (progDesc "Search flows"))
  <> OA.command "lcia" (info (lciaParser <**> helper) (progDesc "Compute LCIA scores with characterization method"))
  <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
+ <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
   )
 
 -- | Server command parser
@@ -242,6 +243,12 @@ debugMatricesOptionsParser = do
     )
 
   pure DebugMatricesOptions{..}
+
+-- | Export matrices parser
+exportMatricesParser :: Parser Command
+exportMatricesParser = do
+  outputDir <- argument str (metavar "OUTPUT_DIR" <> help "Output directory for matrix export")
+  pure $ ExportMatrices outputDir
 
 -- | Text reader for UUID arguments
 textReader :: ReadM Text

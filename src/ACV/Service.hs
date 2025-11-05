@@ -19,6 +19,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
@@ -932,3 +933,131 @@ exportBiosphereMatrixData filePath debugInfo = do
 
     putStrLn $ "DEBUG: Writing biosphere matrix with " ++ show (length matrixRows) ++ " entries"
     writeFile filePath csvContent
+-- | Export matrices in universal matrix format (Ecoinvent-compatible)
+-- Creates 4 CSV files: ie_index.csv, ee_index.csv, A_public.csv, B_public.csv
+exportUniversalMatrixFormat :: FilePath -> Database -> IO ()
+exportUniversalMatrixFormat outputDir db = do
+    putStrLn $ "Exporting matrices to universal format in: " ++ outputDir
+
+    -- Export the 4 required files
+    exportIEIndex (outputDir ++ "/ie_index.csv") db
+    exportEEIndex (outputDir ++ "/ee_index.csv") db
+    exportAMatrix (outputDir ++ "/A_public.csv") db
+    exportBMatrix (outputDir ++ "/B_public.csv") db
+
+    putStrLn "Universal matrix export completed"
+
+-- | Export ie_index.csv (Intermediate Exchanges - processes/activities)
+-- Format: activityName;geography;product;unitName;index
+exportIEIndex :: FilePath -> Database -> IO ()
+exportIEIndex filePath db = do
+    let activities = dbActivities db
+        processIdTable = dbProcessIdTable db
+        flows = dbFlows db
+
+        -- Create index entries for each activity
+        rows = V.toList $ V.imap (\idx (actUuid, prodUuid) ->
+                let activity = activities V.! idx
+                    -- Find reference product name
+                    refProduct = case [ex | ex <- exchanges activity, exchangeIsReference ex] of
+                        (ex:_) -> case M.lookup (exchangeFlowId ex) flows of
+                            Just flow -> flowName flow
+                            Nothing -> T.pack (show prodUuid)
+                        [] -> T.pack (show prodUuid)
+                    unit = activityUnit activity
+                in activityName activity <> ";" <>
+                   activityLocation activity <> ";" <>
+                   refProduct <> ";" <>
+                   unit <> ";" <>
+                   T.pack (show idx)
+            ) processIdTable
+
+        header = "activityName;geography;product;unitName;index"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported " ++ show (length rows) ++ " activities to " ++ filePath
+
+-- | Export ee_index.csv (Elementary Exchanges - biosphere flows)
+-- Format: name;compartment;subcompartment;unitName;index
+exportEEIndex :: FilePath -> Database -> IO ()
+exportEEIndex filePath db = do
+    let bioFlowUUIDs = dbBiosphereFlows db
+        flows = dbFlows db
+
+        -- Create index entries for each biosphere flow
+        rows = zipWith (\flowUuid idx ->
+                case M.lookup flowUuid flows of
+                    Just flow ->
+                        let category = flowCategory flow
+                            -- Parse category into compartment/subcompartment
+                            -- Format is typically "compartment/subcompartment" or just "compartment"
+                            (compartment, subcompartment) = case T.splitOn "/" category of
+                                [] -> ("unspecified", "")
+                                [c] -> (T.strip c, "")
+                                (c:s:_) -> (T.strip c, T.strip s)
+                            unit = flowUnitId flow
+                        in flowName flow <> ";" <>
+                           compartment <> ";" <>
+                           subcompartment <> ";" <>
+                           unit <> ";" <>
+                           T.pack (show idx)
+                    Nothing ->
+                        T.pack (show flowUuid) <> ";unknown;;;" <> T.pack (show idx)
+            ) bioFlowUUIDs [0..]
+
+        header = "name;compartment;subcompartment;unitName;index"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported " ++ show (length rows) ++ " biosphere flows to " ++ filePath
+
+-- | Export A_public.csv (Technosphere Matrix)
+-- Format: row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue
+exportAMatrix :: FilePath -> Database -> IO ()
+exportAMatrix filePath db = do
+    let techTriples = dbTechnosphereTriples db
+        activityCount = dbActivityCount db
+
+        -- Add diagonal entries (identity matrix part)
+        diagonalEntries = [T.pack $ show i ++ ";" ++ show i ++ ";1.0;;;;;"
+                          | i <- [0..fromIntegral activityCount - 1]]
+
+        -- Convert off-diagonal triplets to CSV rows
+        -- IMPORTANT: Negate values to match universal matrix sign convention
+        -- (off-diagonal A matrix entries have opposite sign from internal representation)
+        offDiagonalRows = V.foldr (\(row, col, value) acc ->
+                let negValue = -value  -- Flip sign for universal format
+                    rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
+                            show negValue ++ ";;;;;"
+                in rowStr : acc
+            ) [] techTriples
+
+        header = "row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue"
+        -- Combine diagonal and off-diagonal entries
+        allRows = diagonalEntries ++ offDiagonalRows
+        content = T.unlines (header : allRows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported technosphere matrix with " ++ show (length diagonalEntries) ++
+               " diagonal + " ++ show (V.length techTriples) ++ " off-diagonal entries to " ++ filePath
+
+-- | Export B_public.csv (Biosphere Matrix)
+-- Format: row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue
+exportBMatrix :: FilePath -> Database -> IO ()
+exportBMatrix filePath db = do
+    let bioTriples = dbBiosphereTriples db
+
+        -- Convert triplets to CSV rows
+        -- Keep original signs (no negation needed for biosphere matrix)
+        rows = V.foldr (\(row, col, value) acc ->
+                let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
+                            show value ++ ";;;;;"
+                in rowStr : acc
+            ) [] bioTriples
+
+        header = "row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported biosphere matrix with " ++ show (V.length bioTriples) ++ " entries to " ++ filePath
