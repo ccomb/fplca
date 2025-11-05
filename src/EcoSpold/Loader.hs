@@ -93,24 +93,25 @@ loadAllSpoldsWithFlows dir = do
     let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
     reportProgress Info $ "Found " ++ show (length spoldFiles) ++ " .spold files for processing"
 
-    -- OPTION B: Simple chunking - optimal chunk size with direct parallelism
-    loadWithSimpleChunks spoldFiles
+    -- Simple N-worker parallelism: divide files among CPU cores
+    loadWithWorkerParallelism spoldFiles
   where
-    optimalChunkSize = 500 -- Sweet spot for memory vs parallelism
+    numWorkers = 4  -- Number of parallel workers (match CPU cores)
 
     -- Helper function for unzipping 5-tuples
     unzip5 :: [(a, b, c, d, e)] -> ([a], [b], [c], [d], [e])
     unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a:as, b:bs, c:cs, d:ds, e:es)) ([], [], [], [], [])
 
-    -- Simple chunking without complex nested batching
-    loadWithSimpleChunks :: [FilePath] -> IO SimpleDatabase
-    loadWithSimpleChunks allFiles = do
-        let chunks = chunksOf optimalChunkSize allFiles
-        reportProgress Info $ "Processing " ++ show (length chunks) ++ " chunks of " ++ show optimalChunkSize ++ " files each with controlled parallelism"
+    -- Worker-based parallelism: divide files among N workers, all process in parallel
+    loadWithWorkerParallelism :: [FilePath] -> IO SimpleDatabase
+    loadWithWorkerParallelism allFiles = do
+        let workers = distributeFiles numWorkers allFiles
+        reportProgress Info $ printf "Processing %d files with %d parallel workers (%d files per worker)"
+            (length allFiles) numWorkers (length allFiles `div` numWorkers)
 
-        -- Process chunks sequentially with detailed progress reporting
+        -- Process all workers in parallel
         startTime <- getCurrentTime
-        results <- mapM (activityChunkWithProgress startTime (length chunks)) (zip [1..] chunks)
+        results <- mapConcurrently (processWorker startTime) (zip [1..] workers)
         let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
@@ -134,62 +135,51 @@ loadAllSpoldsWithFlows dir = do
         reportMemoryUsage "Final parsing memory usage"
         return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
 
-    -- Process one chunk with progress reporting
-    activityChunkWithProgress :: UTCTime -> Int -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
-    activityChunkWithProgress startTime totalChunks (chunkNum, chunk) = do
-        chunkStartTime <- getCurrentTime
-        let elapsedTime = realToFrac $ diffUTCTime chunkStartTime startTime
-        let progressPercent = round (100.0 * fromIntegral (chunkNum - 1) / fromIntegral totalChunks :: Double) :: Int
-        let avgChunkTime = if chunkNum > 1 then elapsedTime / fromIntegral (chunkNum - 1) else 0
-        let etaSeconds = avgChunkTime * fromIntegral (totalChunks - chunkNum + 1)
+    -- Distribute files evenly among N workers
+    distributeFiles :: Int -> [a] -> [[a]]
+    distributeFiles n xs =
+        let len = length xs
+            baseSize = len `div` n
+            remainder = len `mod` n
+            -- First 'remainder' workers get baseSize+1 files, rest get baseSize
+            sizes = replicate remainder (baseSize + 1) ++ replicate (n - remainder) baseSize
+        in distribute sizes xs
+      where
+        distribute [] _ = []
+        distribute _ [] = []
+        distribute (s:ss) items = take s items : distribute ss (drop s items)
 
-        reportProgress Info $ printf "Processing chunk %d/%d (%d%%) - %d files [ETA: %s]"
-            chunkNum totalChunks progressPercent (length chunk) (formatDuration etaSeconds)
+    -- Process one worker's share of files
+    processWorker :: UTCTime -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
+    processWorker startTime (workerNum, workerFiles) = do
+        workerStartTime <- getCurrentTime
+        reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
-        -- Report memory usage for large chunks
-        when (chunkNum `mod` 5 == 1) $ reportMemoryUsage $ "Chunk " ++ show chunkNum ++ " memory check"
-
-        -- Process files in smaller parallel batches to avoid thread/handle exhaustion
-        let maxConcurrency = 4  -- Conservative limit: 1x CPU cores
-        chunkResults <- processWithLimitedConcurrency maxConcurrency chunk
-        let (!procs, flowLists, unitLists) = unzip3 chunkResults
+        -- Parse all files for this worker
+        workerResults <- mapM streamParseActivityAndFlowsFromFile workerFiles
+        let (!procs, flowLists, unitLists) = unzip3 workerResults
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
 
-        -- Build maps for this chunk - extract UUID pairs from filenames
-        -- Filenames follow pattern: {activityUUID}_{productUUID}.spold
+        -- Build maps for this worker - extract UUID pairs from filenames
         let !procMap = M.fromList $ zipWith (\filepath activity ->
                 let filename = T.pack $ takeBaseName filepath
                 in case T.splitOn "_" filename of
                     [actUUID, prodUUID] -> ((actUUID, prodUUID), activity)
                     _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
-                ) chunk procs
+                ) workerFiles procs
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
-        chunkEndTime <- getCurrentTime
-        let chunkDuration = realToFrac $ diffUTCTime chunkEndTime chunkStartTime
-        let filesPerSec = fromIntegral (length chunk) / chunkDuration
+        workerEndTime <- getCurrentTime
+        let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
+        let filesPerSec = fromIntegral (length workerFiles) / workerDuration
         let rawFlowCount = length allFlows
         let rawUnitCount = length allUnits
-        reportProgress Info $ printf "Chunk %d completed: %d activities, %d flows (%s, %.1f files/sec)"
-            chunkNum (M.size procMap) (M.size flowMap) (formatDuration chunkDuration) filesPerSec
+        reportProgress Info $ printf "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
+            workerNum (M.size procMap) (M.size flowMap) (formatDuration workerDuration) filesPerSec
 
         return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
-
-    -- Process files with limited concurrency to prevent resource exhaustion
-    processWithLimitedConcurrency :: Int -> [FilePath] -> IO [(Activity, [Flow], [Unit])]
-    processWithLimitedConcurrency maxConcur files = do
-        let batches = chunksOf maxConcur files
-        results <- mapM processBatch batches
-        return $ concat results
-      where
-        processBatch batch = mapConcurrently streamParseActivityAndFlowsFromFile batch
-
-    -- Utility function to split list into chunks
-    chunksOf :: Int -> [a] -> [[a]]
-    chunksOf _ [] = []
-    chunksOf n xs = take n xs : chunksOf n (drop n xs)
 
 {-|
 Generate filename for matrix cache (second-tier caching).
