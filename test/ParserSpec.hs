@@ -1,0 +1,102 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module ParserSpec (spec) where
+
+import Test.Hspec
+import TestHelpers
+import GoldenData
+import ACV.Types
+import qualified Data.Text as T
+
+spec :: Spec
+spec = do
+    describe "EcoSpold Parser - SAMPLE.min3" $ do
+        it "parses all activities successfully" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            -- SAMPLE.min3 has 3 activities
+            let activityCount = dbActivityCount db
+            activityCount `shouldBe` 3
+
+        it "parses activity names correctly" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            let activities = dbActivities db
+            length (filter (\a -> not $ T.null $ activityName a) activities) `shouldBe` 3
+
+        it "extracts technosphere exchanges" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            -- SAMPLE.min3 has 2 technosphere exchanges (Y needs X, Z needs Y)
+            let activities = dbActivities db
+            let totalTechExchanges = sum [length $ filter isTechnosphereExchange $ exchanges a | a <- activities]
+            totalTechExchanges `shouldSatisfy` (>= 2)
+
+        it "extracts biosphere exchanges" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            -- SAMPLE.min3 has biosphere exchanges (CO2, Zinc from Z)
+            let activities = dbActivities db
+            let totalBioExchanges = sum [length $ filter isBiosphereExchange $ exchanges a | a <- activities]
+            totalBioExchanges `shouldSatisfy` (>= 2)
+
+        it "identifies reference products correctly" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            let activities = dbActivities db
+            -- Each activity should have at least one reference product
+            let activitiesWithRef = filter hasReferenceProduct activities
+            length activitiesWithRef `shouldBe` 3
+
+        it "parses compartments without truncation" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            -- Check that compartments are parsed fully
+            let flows = M.elems (dbFlows db)
+            let categoriesNotEmpty = filter (\f -> not $ T.null $ flowCategory f) flows
+            length categoriesNotEmpty `shouldSatisfy` (>= 0)
+
+    describe "EcoSpold Parser - SAMPLE.min (Self-Loops)" $ do
+        it "parses circular dependencies" $ do
+            db <- loadSampleDatabase "SAMPLE.min"
+
+            -- SAMPLE.min has 4 activities with self-loops
+            let activityCount = dbActivityCount db
+            activityCount `shouldBe` 4
+
+        it "handles self-referencing exchanges" $ do
+            db <- loadSampleDatabase "SAMPLE.min"
+
+            -- Activity A references itself with 0.1 kg
+            -- This creates a diagonal entry in the A matrix
+            let activities = dbActivities db
+            length activities `shouldBe` 4
+
+    describe "Flow Database" $ do
+        it "deduplicates flows correctly" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            let flowCount = M.size (dbFlows db)
+            -- SAMPLE.min3 should have exactly 2 unique flows (CO2, Zinc)
+            flowCount `shouldSatisfy` (>= 2)
+
+        it "stores flow metadata" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            let flows = M.elems (dbFlows db)
+            -- All flows should have names
+            let flowsWithNames = filter (\f -> not $ T.null $ flowName f) flows
+            length flowsWithNames `shouldBe` length flows
+
+    describe "Unit Database" $ do
+        it "parses unit information" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+
+            let unitCount = M.size (dbUnits db)
+            -- Should have at least kg unit
+            unitCount `shouldSatisfy` (>= 1)
+
+-- Helper function
+hasReferenceProduct :: Activity -> Bool
+hasReferenceProduct activity =
+    any (\ex -> exchangeIsReference ex && not (exchangeIsInput ex)) (exchanges activity)

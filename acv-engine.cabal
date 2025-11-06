@@ -27,7 +27,7 @@ executable acv-cli
                      , text
                      , containers
                      , xml-conduit
-                     , hexml
+                     , xeno
                      , filepath
                      , directory
                      , mtl
@@ -95,14 +95,51 @@ executable acv-cli
 
 test-suite acv-tests
   type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
+  hs-source-dirs:      test, src
   main-is:             Spec.hs
+  other-modules:       TestHelpers
+                     , GoldenData
+                     , MatrixConstructionSpec
+                     , InventorySpec
+                     , ParserSpec
+                     , MatrixExportSpec
+                     , ACV.Types
+                     , ACV.Types.API
+                     , ACV.Query
+                     , ACV.Matrix
+                     , ACV.Matrix.SharedSolver
+                     , ACV.Service
+                     , ACV.Progress
+                     , ACV.UnitConversion
+                     , ACV.CLI.Types
+                     , ACV.Tree
+                     , EcoSpold.Loader
+                     , EcoSpold.Parser
   build-depends:       base >=4.14 && <5
                      , hspec
                      , text
                      , containers
-                     , acv-engine
+                     , vector
+                     , vector-binary-instances
+                     , bytestring
                      , xml-conduit
+                     , xeno
                      , directory
                      , filepath
+                     , temporary
+                     , petsc-hs
+                     , deepseq
+                     , parallel
+                     , binary
+                     , zstd
+                     , time
+                     , hashable
+                     , uuid
+                     , aeson
+                     , mtl
+                     , optparse-applicative
+                     , async
+                     , stm
+                     , xml-types
+                     , conduit
   default-language:    Haskell2010

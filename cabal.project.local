@@ -1,0 +1,8 @@
+ignore-project: False
+tests: True
+extra-include-dirs: /home/dadafkas/projets/ACVEngine/petsc/include
+                    /home/dadafkas/projets/ACVEngine/petsc/arch-linux-c-debug/include
+                    /home/dadafkas/projets/ACVEngine/slepc/include
+                    /home/dadafkas/projets/ACVEngine/slepc/arch-linux-c-debug/include
+extra-lib-dirs: /home/dadafkas/projets/ACVEngine/petsc/arch-linux-c-debug/lib
+                /home/dadafkas/projets/ACVEngine/slepc/arch-linux-c-debug/lib
