@@ -43,7 +43,7 @@ spec = do
                 let offDiagonalEntries = filter (\l -> not (T.isInfixOf ";1.0;" l)) offDiagonalLines
 
                 -- For SAMPLE.min3: Expected -0.6 and -0.4
-                let hasNegative = any (T.isInfixOf "-0.") aMatrixContent
+                let hasNegative = any (T.isInfixOf "-0.") lines
                 hasNegative `shouldBe` True
 
         it "exports B_public.csv with correct signs" $ do

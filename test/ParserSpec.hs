@@ -6,7 +6,9 @@ import Test.Hspec
 import TestHelpers
 import GoldenData
 import ACV.Types
+import qualified Data.Map as M
 import qualified Data.Text as T
+import qualified Data.Vector as V
 
 spec :: Spec
 spec = do
@@ -21,14 +23,14 @@ spec = do
         it "parses activity names correctly" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let activities = dbActivities db
+            let activities = V.toList $ dbActivities db
             length (filter (\a -> not $ T.null $ activityName a) activities) `shouldBe` 3
 
         it "extracts technosphere exchanges" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
             -- SAMPLE.min3 has 2 technosphere exchanges (Y needs X, Z needs Y)
-            let activities = dbActivities db
+            let activities = V.toList $ dbActivities db
             let totalTechExchanges = sum [length $ filter isTechnosphereExchange $ exchanges a | a <- activities]
             totalTechExchanges `shouldSatisfy` (>= 2)
 
@@ -36,14 +38,14 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
 
             -- SAMPLE.min3 has biosphere exchanges (CO2, Zinc from Z)
-            let activities = dbActivities db
+            let activities = V.toList $ dbActivities db
             let totalBioExchanges = sum [length $ filter isBiosphereExchange $ exchanges a | a <- activities]
             totalBioExchanges `shouldSatisfy` (>= 2)
 
         it "identifies reference products correctly" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let activities = dbActivities db
+            let activities = V.toList $ dbActivities db
             -- Each activity should have at least one reference product
             let activitiesWithRef = filter hasReferenceProduct activities
             length activitiesWithRef `shouldBe` 3
@@ -69,7 +71,7 @@ spec = do
 
             -- Activity A references itself with 0.1 kg
             -- This creates a diagonal entry in the A matrix
-            let activities = dbActivities db
+            let activities = V.toList $ dbActivities db
             length activities `shouldBe` 4
 
     describe "Flow Database" $ do
