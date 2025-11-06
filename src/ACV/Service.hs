@@ -113,57 +113,6 @@ getActivityInfo db queryText = do
      in Right $ toJSON activityInfo
 
 -- | Core inventory calculation logic using matrix-based LCA calculations
-computeActivityInventory :: Database -> Text -> Either ServiceError Inventory
-computeActivityInventory db queryText = do
-    (processId, _activity) <- resolveActivityAndProcessId db queryText
-    -- Validate ProcessId exists in matrix index before expensive computation
-    validateProcessIdInMatrixIndex db processId
-    -- Matrix computation (will not fail if validation passed)
-    let inventory = computeInventoryMatrix db processId
-    Right inventory
-
--- | Shared solver-aware inventory calculation for concurrent processing
-computeActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError Inventory)
-computeActivityInventoryWithSharedSolver sharedSolver db queryText = do
-    case resolveActivityAndProcessId db queryText of
-        Left err -> return $ Left err
-        Right (processId, _activity) -> do
-
-            -- Validate ProcessId exists in matrix index before expensive computation
-            case validateProcessIdInMatrixIndex db processId of
-                Left validationErr -> return $ Left validationErr
-                Right () -> do
-                    -- Inline matrix calculation with shared solver to avoid circular dependency
-                    let activityCount = dbActivityCount db
-                        bioFlowCount = dbBiosphereCount db
-                        techTriples = dbTechnosphereTriples db
-                        bioTriples = dbBiosphereTriples db
-                        activityIndex = dbActivityIndex db
-                        bioFlowUUIDs = dbBiosphereFlows db
-                        -- Build demand vector (will not fail after validation)
-                        demandVec = buildDemandVectorFromIndex activityIndex processId
-
-                    -- Use shared solver with MVar synchronization - this is thread-safe
-                    -- The shared solver uses the cached factorization from the database
-                    supplyVec <- case dbCachedFactorization db of
-                        Just _ -> do
-                            -- Use shared solver with cached factorization - thread-safe and fast
-                            solveWithSharedSolver sharedSolver demandVec
-                        Nothing -> do
-                            -- Fallback: use direct matrix computation if no cached factorization
-                            -- Convert Int32 to Int for solveSparseLinearSystem
-                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
-                                activityCountInt = fromIntegral activityCount
-                            return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
-
-                    -- Calculate inventory using sparse biosphere matrix: g = B * supply
-                    -- Convert Int32 to Int for applySparseMatrix
-                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
-                        bioFlowCountInt = fromIntegral bioFlowCount
-                        inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
-                        inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
-                    return $ Right inventory
-
 -- | Convert raw inventory to structured export format
 convertToInventoryExport :: Database -> ProcessId -> Activity -> Inventory -> InventoryExport
 convertToInventoryExport db processId rootActivity inventory =
@@ -444,13 +393,6 @@ getActivityFlowSummaries db activity =
         | exchangeIsInput ex = InputFlow
         | otherwise = OutputFlow
 
--- | Get activity flows as JSON (for CLI)
-getActivityFlows :: Database -> Text -> Either ServiceError Value
-getActivityFlows db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    let flowSummaries = getActivityFlowSummaries db activity
-     in Right $ toJSON flowSummaries
-
 -- | Search flows (returns same format as API)
 searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
 searchFlows _ Nothing _ _ _ = Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False
@@ -624,28 +566,6 @@ getActivityInputDetails db activity = getActivityExchangeDetails db activity exc
 getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
 getActivityOutputDetails db activity = getActivityExchangeDetails db activity (not . exchangeIsInput)
 
--- | Get activity inputs as JSON (for CLI)
-getActivityInputs :: Database -> Text -> Either ServiceError Value
-getActivityInputs db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    let inputDetails = getActivityInputDetails db activity
-     in Right $ toJSON inputDetails
-
--- | Get activity outputs as JSON (for CLI)
-getActivityOutputs :: Database -> Text -> Either ServiceError Value
-getActivityOutputs db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    let outputDetails = getActivityOutputDetails db activity
-     in Right $ toJSON outputDetails
-
--- | Get activity reference product as JSON (for CLI)
-getActivityReferenceProduct :: Database -> Text -> Either ServiceError Value
-getActivityReferenceProduct db queryText = do
-    activity <- resolveActivityByProcessId db queryText
-    case getActivityReferenceProductDetail db activity of
-        Nothing -> Right $ toJSON (Nothing :: Maybe FlowDetail)
-        Just refProduct -> Right $ toJSON refProduct
-
 -- | Get flow info as JSON (for CLI)
 getFlowInfo :: Database -> Text -> Either ServiceError Value
 getFlowInfo db flowId = do
@@ -667,17 +587,6 @@ getFlowActivities db flowId = do
              in Right $ toJSON activities
 
 -- | Get available synonym languages (placeholder)
-getSynonymLanguages :: Database -> Either ServiceError Value
-getSynonymLanguages _ =
-    let languages = ["en", "fr", "de", "it", "es"] :: [Text]
-     in Right $ toJSON languages
-
--- | Get synonym statistics (placeholder)
-getSynonymStats :: Database -> Either ServiceError Value
-getSynonymStats _ =
-    let stats = M.fromList [("total_synonyms" :: Text, 1000 :: Int), ("languages", 5 :: Int)]
-     in Right $ toJSON stats
-
 -- | Compute LCIA scores (placeholder)
 computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
 computeLCIA db queryText methodFile = do
@@ -947,6 +856,14 @@ exportUniversalMatrixFormat outputDir db = do
 
     putStrLn "Universal matrix export completed"
 
+-- | Escape text for CSV output (semicolon delimiter)
+-- Wraps fields containing semicolons or quotes in quotes, doubles internal quotes
+escapeCsvField :: Text -> Text
+escapeCsvField text
+    | T.any (\c -> c == ';' || c == '"' || c == '\n' || c == '\r') text =
+        "\"" <> T.replace "\"" "\"\"" text <> "\""
+    | otherwise = text
+
 -- | Export ie_index.csv (Intermediate Exchanges - processes/activities)
 -- Format: activityName;geography;product;unitName;index
 exportIEIndex :: FilePath -> Database -> IO ()
@@ -965,10 +882,10 @@ exportIEIndex filePath db = do
                             Nothing -> T.pack (show prodUuid)
                         [] -> T.pack (show prodUuid)
                     unit = activityUnit activity
-                in activityName activity <> ";" <>
-                   activityLocation activity <> ";" <>
-                   refProduct <> ";" <>
-                   unit <> ";" <>
+                in escapeCsvField (activityName activity) <> ";" <>
+                   escapeCsvField (activityLocation activity) <> ";" <>
+                   escapeCsvField refProduct <> ";" <>
+                   escapeCsvField unit <> ";" <>
                    T.pack (show idx)
             ) processIdTable
 
@@ -997,13 +914,13 @@ exportEEIndex filePath db = do
                                 [c] -> (T.strip c, "")
                                 (c:s:_) -> (T.strip c, T.strip s)
                             unit = flowUnitId flow
-                        in flowName flow <> ";" <>
-                           compartment <> ";" <>
-                           subcompartment <> ";" <>
-                           unit <> ";" <>
+                        in escapeCsvField (flowName flow) <> ";" <>
+                           escapeCsvField compartment <> ";" <>
+                           escapeCsvField subcompartment <> ";" <>
+                           escapeCsvField unit <> ";" <>
                            T.pack (show idx)
                     Nothing ->
-                        T.pack (show flowUuid) <> ";unknown;;;" <> T.pack (show idx)
+                        escapeCsvField (T.pack (show flowUuid)) <> ";unknown;;;" <> T.pack (show idx)
             ) bioFlowUUIDs [0..]
 
         header = "name;compartment;subcompartment;unitName;index"

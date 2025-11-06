@@ -72,11 +72,8 @@ executable acv-cli
                      , ACV.API
                      , ACV.Service
                      , ACV.UnitConversion
-                     , ACV.Export.CSV
-                     , ACV.Export.ILCD
                      , ACV.CLI.Types
                      , ACV.CLI.Parser
-                     , ACV.CLI.Format
                      , ACV.CLI.Command
                      , EcoSpold.Parser
                      , EcoSpold.Loader

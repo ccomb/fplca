@@ -2,13 +2,13 @@
 
 module ACV.CLI.Command where
 
-import ACV.CLI.Format
 import ACV.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
 import ACV.Progress
 import qualified ACV.Service
 import ACV.Types (Database)
 import Control.Monad (when)
-import Data.Aeson (Value, toJSON)
+import Data.Aeson (Value, toJSON, encode)
+import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -22,6 +22,18 @@ import System.IO (hPutStrLn, stderr)
 
 -- ACV.API imports
 import ACV.API (ACVAPI, acvAPI, acvServer)
+
+-- | Default output format for different command types
+defaultFormat :: Command -> OutputFormat
+defaultFormat (Server _) = JSON       -- Server always returns JSON
+defaultFormat _ = Pretty               -- All other commands default to Pretty
+
+-- | Format output with optional JSONPath for CSV extraction
+formatOutputWithPath :: OutputFormat -> Maybe Text -> Value -> BSL.ByteString
+formatOutputWithPath JSON _ value = encode value
+formatOutputWithPath CSV _ value = encode value  -- Simple JSON for CSV (CLI users can pipe to jq)
+formatOutputWithPath Table _ value = encodePretty value
+formatOutputWithPath Pretty _ value = encodePretty value
 
 -- | Resolve data directory using priority: --data > $DATADIR > current directory
 resolveDataDirectory :: GlobalOptions -> IO FilePath
@@ -101,34 +113,6 @@ executeCommand (CLIConfig globalOpts cmd) database = do
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityCommand fmt jsonPathOpt database uuid = do
   case ACV.Service.getActivityInfo database uuid of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt jsonPathOpt result
-
--- | Execute activity flows command
-executeActivityFlowsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeActivityFlowsCommand fmt jsonPathOpt database uuid = do
-  case ACV.Service.getActivityFlows database uuid of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt jsonPathOpt result
-
--- | Execute activity inputs command
-executeActivityInputsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeActivityInputsCommand fmt jsonPathOpt database uuid = do
-  case ACV.Service.getActivityInputs database uuid of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt jsonPathOpt result
-
--- | Execute activity outputs command
-executeActivityOutputsCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeActivityOutputsCommand fmt jsonPathOpt database uuid = do
-  case ACV.Service.getActivityOutputs database uuid of
-    Left err -> reportServiceError err
-    Right result -> outputResult fmt jsonPathOpt result
-
--- | Execute activity reference product command
-executeActivityReferenceProductCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeActivityReferenceProductCommand fmt jsonPathOpt database uuid = do
-  case ACV.Service.getActivityReferenceProduct database uuid of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
@@ -250,8 +234,4 @@ reportServiceError :: ACV.Service.ServiceError -> IO ()
 reportServiceError err = do
   ACV.Progress.reportError $ "Error: " ++ show err
   exitFailure
-
--- | Report error to stderr (local function to avoid conflict)
-reportCliError :: String -> IO ()
-reportCliError msg = hPutStrLn stderr msg
 
