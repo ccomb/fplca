@@ -17,7 +17,7 @@ executable acv-cli
   main-is:             Main.hs
   hs-source-dirs:      src
   -- for weeder: -fwrite-ide-info -hiedir=.hie
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -fwrite-ide-info -hiedir=.hie
   -- Use environment variables for PETSc/SLEPc paths
   -- Set PETSC_DIR and SLEPC_DIR before building:
   -- export PETSC_DIR=/path/to/petsc
@@ -66,7 +66,6 @@ executable acv-cli
                      , ACV.Tree
                      , ACV.Matrix
                      , ACV.Matrix.SharedSolver
-                     , ACV.PEF
                      , ACV.Progress
                      , ACV.Query
                      , ACV.API
@@ -77,7 +76,6 @@ executable acv-cli
                      , ACV.CLI.Command
                      , EcoSpold.Parser
                      , EcoSpold.Loader
-                     , ILCD.Parser
   default-language:    Haskell2010
 
 --executable test-mumps

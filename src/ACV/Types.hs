@@ -131,10 +131,6 @@ getUnitNameForFlow unitDB flow =
         Just unit -> unitName unit
         Nothing -> "unknown"
 
--- | Get all synonyms across all languages
-getAllSynonyms :: Flow -> [Text]
-getAllSynonyms flow = concatMap S.toList $ M.elems (flowSynonyms flow)
-
 -- | Activité ACV de base (activité)
 -- Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 data Activity = Activity
@@ -264,13 +260,6 @@ getActivity :: Database -> ProcessId -> Maybe Activity
 getActivity db pid
     | pid >= 0 && fromIntegral pid < V.length (dbActivities db) =
         Just $ dbActivities db V.! fromIntegral pid
-    | otherwise = Nothing
-
--- | Get matrix index for a ProcessId (direct vector indexing)
-getMatrixIndex :: Database -> ProcessId -> Maybe Int32
-getMatrixIndex db pid
-    | pid >= 0 && fromIntegral pid < V.length (dbActivityIndex db) =
-        Just $ dbActivityIndex db V.! fromIntegral pid
     | otherwise = Nothing
 
 -- | Find ProcessId from UUID pair

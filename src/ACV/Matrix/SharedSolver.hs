@@ -21,7 +21,6 @@ module ACV.Matrix.SharedSolver (
 
     -- * Solver management
     createSharedSolver,
-    shutdownSharedSolver,
 
     -- * Concurrent solving
     solveWithSharedSolver
@@ -50,11 +49,6 @@ createSharedSolver maybeFactorization techTriples activityCount = do
         Just _ -> reportProgress Info "Shared solver using cached matrix factorization for fast concurrent solves"
         Nothing -> reportProgress Info "Shared solver will use fallback standard solver"
     return $ SharedSolver lock maybeFactorization techTriples activityCount
-
--- | Shutdown shared solver (currently no cleanup needed for KSP)
-shutdownSharedSolver :: SharedSolver -> IO ()
-shutdownSharedSolver _ = do
-    reportProgress Info "Shared solver shutdown complete"
 
 -- | Solve inventory calculation using shared solver with thread synchronization
 solveWithSharedSolver :: SharedSolver -> Vector -> IO Vector

@@ -6,7 +6,6 @@ module ACV.Query where
 
 import ACV.Progress
 import ACV.Types
-import ACV.UnitConversion (normalizeExchangeAmount, normalizedAmountValue)
 import Control.Parallel.Strategies
 import Data.Int (Int32)
 import Data.List (elemIndex, find, partition, sort, sortOn)
@@ -166,13 +165,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
             , dbBiosphereCount = bioFlowCount
             , dbCachedFactorization = Nothing
             }
-
--- Helper function to find ProcessId by activity UUID
-findProcessIdByActivityUUID' :: V.Vector (UUID, UUID) -> UUID -> Maybe ProcessId
-findProcessIdByActivityUUID' processIdTable searchUUID =
-    case [pid | (pid, (actUUID, _)) <- zip [0 ..] (V.toList processIdTable), actUUID == searchUUID] of
-        (pid : _) -> Just (fromIntegral pid)
-        [] -> Nothing
 
 -- | Build indexes with ProcessIds
 buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> FlowDB -> Indexes

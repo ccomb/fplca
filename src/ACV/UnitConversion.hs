@@ -180,38 +180,6 @@ warnUnknownUnit rawUnit =
 classifyUnit :: Text -> Maybe UnitDefinition
 classifyUnit unitName = M.lookup (normalizeUnitKey unitName) unitDefinitionMap
 
-normalizeExchangeAmount :: Text -> Double -> NormalizedAmount
-normalizeExchangeAmount unitName amount =
-    case classifyUnit unitName of
-        Just def ->
-            let canonical = udCanonicalUnit def
-                normalizedAmount = amount * udToReferenceFactor def
-            in NormalizedAmount normalizedAmount canonical
-        Nothing ->
-            let !_ = warnUnknownUnit unitName
-             in UnknownUnitAmount (T.strip unitName) amount
-
-normalizedAmountValue :: NormalizedAmount -> Double
-normalizedAmountValue = naAmount
-
-normalizedUnitText :: NormalizedAmount -> Text
-normalizedUnitText (NormalizedAmount _ canonical) = cuReferenceUnit canonical
-normalizedUnitText (UnknownUnitAmount unit _) = unit
-
-normalizedUnitClass :: NormalizedAmount -> Maybe ExchangeUnitClass
-normalizedUnitClass (NormalizedAmount _ canonical) = Just (cuClass canonical)
-normalizedUnitClass (UnknownUnitAmount _ _) = Nothing
-
-isKnownNormalized :: NormalizedAmount -> Bool
-isKnownNormalized NormalizedAmount{} = True
-isKnownNormalized UnknownUnitAmount{} = False
-
-getUnitInfo :: Text -> Maybe UnitDefinition
-getUnitInfo = classifyUnit
-
-isSupportedUnit :: Text -> Bool
-isSupportedUnit = isJust . classifyUnit
-
 convertExchangeAmount :: Text -> Text -> Double -> Double
 convertExchangeAmount fromUnit toUnit amount =
     case (classifyUnit fromUnit, classifyUnit toUnit) of
@@ -229,63 +197,3 @@ convertExchangeAmount fromUnit toUnit amount =
         (_, Nothing) ->
             let !_ = warnUnknownUnit toUnit
              in amount
-
--- | Statistics tracking for unit conversions during matrix construction.
-data UnitConversionStats = UnitConversionStats
-    { totalExchanges :: !Int
-    , convertedExchanges :: !Int
-    , unknownUnits :: !(S.Set Text)
-    , unitClassCounts :: !(M.Map ExchangeUnitClass Int)
-    }
-    deriving (Show)
-
-emptyStats :: UnitConversionStats
-emptyStats = UnitConversionStats 0 0 S.empty M.empty
-
-updateConversionStats :: UnitConversionStats -> Text -> UnitConversionStats
-updateConversionStats stats unitName =
-    let key = normalizeUnitKey unitName
-        maybeDef = M.lookup key unitDefinitionMap
-        baseStats = stats{totalExchanges = totalExchanges stats + 1}
-    in case maybeDef of
-        Just def ->
-            baseStats
-                { convertedExchanges = convertedExchanges stats + 1
-                , unitClassCounts =
-                    M.insertWith (+) (cuClass $ udCanonicalUnit def) 1 (unitClassCounts stats)
-                }
-        Nothing ->
-            baseStats{unknownUnits = S.insert (T.strip unitName) (unknownUnits stats)}
-
-formatConversionStats :: UnitConversionStats -> [Text]
-formatConversionStats stats =
-    let total = totalExchanges stats
-        converted = convertedExchanges stats
-        percentage :: Int
-        percentage =
-            if total == 0
-                then 0
-                else round (100.0 * fromIntegral converted / fromIntegral total :: Double)
-        header =
-            [ "Unit Conversion Statistics:"
-            , "  Total exchanges: " <> T.pack (show total)
-            , "  Converted exchanges: " <> T.pack (show converted) <> " (" <> T.pack (show percentage) <> "%)"
-            , "  Unit class distribution:"
-            ]
-        classLines =
-            [ "    " <> T.pack (show unitClass) <> ": " <> T.pack (show count)
-            | (unitClass, count) <- M.toList (unitClassCounts stats)
-            ]
-        unknownBlock
-            | S.null (unknownUnits stats) = ["  All units recognized ✓"]
-            | otherwise =
-                let unknownList = take 10 $ S.toList (unknownUnits stats)
-                    remaining = S.size (unknownUnits stats) - length unknownList
-                    moreLine =
-                        if remaining > 0
-                            then ["    ... and " <> T.pack (show remaining) <> " more"]
-                            else []
-                 in ["  Unknown units (" <> T.pack (show $ S.size $ unknownUnits stats) <> "):"]
-                        ++ map ("    " <>) unknownList
-                        ++ moreLine
-     in header ++ classLines ++ unknownBlock

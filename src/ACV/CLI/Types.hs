@@ -23,16 +23,6 @@ data GlobalOptions = GlobalOptions
   , noCache :: Bool              -- Disable caching (--no-cache)
   } deriving (Eq, Show, Generic)
 
--- | Default global options
-defaultGlobalOptions :: GlobalOptions
-defaultGlobalOptions = GlobalOptions
-  { dataDir = Nothing
-  , format = Nothing
-  , jsonPath = Nothing
-  , treeDepth = 2
-  , noCache = False
-  }
-
 -- | Main CLI commands - all top-level for maximum discoverability
 data Command =
     -- Server mode

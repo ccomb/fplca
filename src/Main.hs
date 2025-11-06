@@ -22,8 +22,8 @@ import ACV.CLI.Command
 import ACV.CLI.Parser
 import ACV.CLI.Types
 import ACV.CLI.Types (Command(Server), ServerOptions(..))
-import ACV.Matrix (initializePetscForServer, finalizePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
-import ACV.Matrix.SharedSolver (SharedSolver, createSharedSolver, shutdownSharedSolver)
+import ACV.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
+import ACV.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import ACV.Progress
 import ACV.Query (buildDatabaseWithMatrices)
 import ACV.Types

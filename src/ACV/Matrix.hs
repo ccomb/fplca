@@ -33,22 +33,15 @@ module ACV.Matrix (
     Vector,
     Inventory,
     computeInventoryMatrix,
-    buildDemandVector,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
     fromList,
     toList,
     initializePetscForServer,
-    finalizePetscForServer,
     precomputeMatrixFactorization,
     addFactorizationToDatabase,
     solveSparseLinearSystemWithFactorization,
-    -- Worker-specific functions for thread pool
-    initializePetscForWorker,
-    finalizePetscForWorker,
-    solveSparseLinearSystemForWorker,
-    createFactorizedKspForWorker,
 ) where
 
 import ACV.Progress
@@ -117,21 +110,6 @@ aggregateMatrixEntries entries =
      in [(i, j, val) | ((i, j), val) <- M.toList groupedEntries]
 
 -- Vector operations
-norm2 :: Vector -> Double
-norm2 v = sqrt $ U.sum $ U.map (^ 2) v
-
-dot :: Vector -> Vector -> Double
-dot v1 v2 = U.sum $ U.zipWith (*) v1 v2
-
-scale :: Double -> Vector -> Vector
-scale s = U.map (* s)
-
-vectorAdd :: Vector -> Vector -> Vector
-vectorAdd = U.zipWith (+)
-
-vectorSub :: Vector -> Vector -> Vector
-vectorSub = U.zipWith (-)
-
 fromList :: [Double] -> Vector
 fromList = U.fromList
 
@@ -401,21 +379,6 @@ buildDemandVectorFromIndex activityIndex rootProcessId =
      in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
 
 {- |
-Legacy function for building demand vector.
-
-@deprecated Use 'buildDemandVectorFromIndex' instead, which uses pre-computed indices.
-
-This function builds the activity index on-the-fly, which is inefficient for
-repeated calls. The Database type now includes pre-computed indices.
--}
-buildDemandVector :: ActivityDB -> [UUID] -> UUID -> Vector
-buildDemandVector activities actUUIDs rootUUID =
-    let n = length actUUIDs
-        indexMap = M.fromList $ zip actUUIDs [0 ..]
-        rootIndex = fromMaybe 0 (M.lookup rootUUID indexMap)
-     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
-
-{- |
 Initialize PETSc once for the entire server lifetime.
 This prevents the MPI re-initialization issue by keeping the PETSc/MPI context alive.
 Should be called once during server startup.
@@ -482,141 +445,3 @@ This enables fast concurrent inventory calculations by avoiding repeated factori
 -}
 addFactorizationToDatabase :: Database -> MatrixFactorization -> Database
 addFactorizationToDatabase db factorization = db { dbCachedFactorization = Just factorization }
-
-{- |
-Finalize PETSc when the server shuts down.
-This should be called once during server cleanup.
--}
-finalizePetscForServer :: IO ()
-finalizePetscForServer = do
-    initialized <- readIORef petscInitialized
-    when initialized $ do
-        petscFin  -- Explicitly finalize PETSc/MPI
-        writeIORef petscInitialized False
-
--- ===== WORKER THREAD POOL FUNCTIONS =====
-
-{- |
-Initialize PETSc context for individual worker thread.
-
-Each worker thread gets its own isolated PETSc context to avoid MUMPS thread-safety issues.
-This is the key innovation that enables true concurrent processing while keeping MUMPS.
--}
-initializePetscForWorker :: Int -> IO ()
-initializePetscForWorker workerId = do
-    reportProgress Solver $ "Worker " ++ show workerId ++ " initializing dedicated PETSc/MUMPS context"
-    -- Each worker uses the same global PETSc initialization but operates independently
-    -- The key insight is that each worker thread gets its own matrix/solver instances
-    petscGlobalInit
-    reportProgress Solver $ "Worker " ++ show workerId ++ " PETSc context ready"
-
-{- |
-Cleanup PETSc context for worker thread.
--}
-finalizePetscForWorker :: Int -> IO ()
-finalizePetscForWorker workerId = do
-    reportProgress Solver $ "Worker " ++ show workerId ++ " cleaning up PETSc context"
-    -- Worker cleanup - individual workers don't call petscFin (global resource)
-
-{- |
-Solve sparse linear system using worker's isolated PETSc context.
-
-This is the core function that enables concurrent MUMPS processing. Each worker
-thread creates its own PETSc matrix and solver instances, avoiding the thread-safety
-issues that cause crashes when multiple threads access the same MUMPS solver.
--}
-solveSparseLinearSystemForWorker :: Int -> [(Int, Int, Double)] -> Int -> Vector -> IO Vector
-solveSparseLinearSystemForWorker workerId techTriples n demandVec = do
-    reportProgress Solver $ "Worker " ++ show workerId ++ " solving system for "
-                          ++ show n ++ " activities with isolated MUMPS instance"
-
-    -- Each worker creates its own matrix/solver instances - this is the key to thread safety
-    -- No shared state = no thread-safety issues with MUMPS
-
-    -- Build (I - A) system from sparse triplets
-    let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
-    let systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
-    let allTriples = identityTriples ++ systemTechTriples
-
-    -- Aggregate duplicate entries for proper matrix assembly
-    let aggregatedTriples = aggregateMatrixEntries allTriples
-
-    reportProgress Solver $ "Worker " ++ show workerId ++ " created isolated matrix with "
-                          ++ show (length aggregatedTriples) ++ " entries"
-
-    -- Convert to PETSc format
-    let matrixData = buildPetscMatrixData aggregatedTriples n
-    let rhsData = V.fromList $ map realToFrac $ toList demandVec
-    let nzPattern = ConstNZPR (fromIntegral $ length aggregatedTriples, fromIntegral $ length aggregatedTriples)
-
-    -- Create worker-specific PETSc objects (isolated from other workers)
-    let comm = commWorld
-    result <- withPetscMatrix comm n n MatAij matrixData nzPattern InsertValues $ \mat ->
-        withVecNew comm rhsData $ \rhs -> do
-            let (_, _, _, matMutable) = fromPetscMatrix mat
-
-            -- Each worker gets its own KSP solver instance
-            withProgressTiming Solver ("Worker " ++ show workerId ++ " isolated MUMPS solve") $ do
-                withKsp comm $ \ksp -> do
-                    -- Worker-specific solver setup
-                    kspSetOperators ksp matMutable matMutable
-                    kspSetFromOptions ksp
-                    pc <- kspGetPC ksp
-                    pcSetFromOptions pc
-                    kspSetInitialGuessNonzero ksp False
-                    kspSetUp ksp
-
-                    -- Solve with worker's isolated MUMPS instance
-                    withVecDuplicate rhs $ \solution -> do
-                        kspSolve ksp rhs solution
-                        solutionData <- vecGetVS solution
-                        let solutionList = map realToFrac $ VS.toList solutionData
-                        return solutionList
-
-    reportProgress Solver $ "Worker " ++ show workerId ++ " completed isolated solve"
-    return $ fromList result
-
-{- |
-Create a factorized KSP solver for a worker from technosphere triplets.
-
-This function creates a worker-specific factorized KSP that can be reused for
-multiple solve operations, providing the performance benefits of cached factorization
-while maintaining thread safety through per-worker instances.
-
-Each worker gets its own complete KSP object with pre-computed MUMPS factorization,
-avoiding the thread-safety issues of sharing factorized objects between threads.
--}
-createFactorizedKspForWorker :: Int -> [(Int, Int, Double)] -> Int -> IO KSP
-createFactorizedKspForWorker workerId techTriples n = do
-    reportProgress Solver $ "Worker " ++ show workerId ++ " creating isolated factorized KSP for "
-                          ++ show n ++ " activities"
-
-    -- Build (I - A) system from sparse triplets (same as other functions)
-    let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
-    let systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
-    let allTriples = identityTriples ++ systemTechTriples
-    let aggregatedTriples = aggregateMatrixEntries allTriples
-
-    -- Convert to PETSc format
-    let matrixData = buildPetscMatrixData aggregatedTriples n
-    let nzPattern = ConstNZPR (fromIntegral $ length aggregatedTriples, fromIntegral $ length aggregatedTriples)
-    let comm = commWorld
-
-    -- Create PETSc matrix for this worker
-    mat <- petscMatrixCreate comm n n MatAij matrixData nzPattern InsertValues
-    let (_, _, _, matMutable) = fromPetscMatrix mat
-
-    -- Create and setup KSP solver for this worker
-    ksp <- kspCreate comm
-    kspSetOperators ksp matMutable matMutable
-    kspSetFromOptions ksp  -- Read PETSC_OPTIONS for solver configuration
-    pc <- kspGetPC ksp
-    pcSetFromOptions pc    -- Configure preconditioner (MUMPS options)
-    kspSetInitialGuessNonzero ksp False
-
-    -- Perform factorization during setup (this is the expensive operation)
-    withProgressTiming Solver ("Worker " ++ show workerId ++ " MUMPS factorization") $ do
-        kspSetUp ksp  -- This performs the actual MUMPS factorization
-
-    reportProgress Solver $ "Worker " ++ show workerId ++ " created isolated factorized KSP - ready for fast solves"
-    return ksp

@@ -8,7 +8,7 @@ import ACV.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, com
 import ACV.Matrix.SharedSolver (SharedSolver, solveWithSharedSolver)
 import ACV.Progress
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
-import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
+import ACV.Tree (buildLoopAwareTree)
 import ACV.Types
 import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)

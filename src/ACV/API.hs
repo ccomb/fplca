@@ -10,7 +10,7 @@ import ACV.Matrix.SharedSolver (SharedSolver)
 import ACV.Query
 import ACV.Service (getActivityInventoryWithSharedSolver)
 import qualified ACV.Service
-import ACV.Tree (buildActivityTreeWithDatabase, buildCutoffLoopAwareTree, buildLoopAwareTree)
+import ACV.Tree (buildLoopAwareTree)
 import ACV.Types
 import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson
