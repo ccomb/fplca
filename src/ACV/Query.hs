@@ -20,7 +20,18 @@ import GHC.Generics (Generic)
 import System.IO.Unsafe (unsafePerformIO)
 
 {- | Build complete database with pre-computed sparse matrices
-Now accepts a Map with (UUID, UUID) keys and converts to Vector internally
+
+SIGN CONVENTION:
+- Technosphere triplets are stored as POSITIVE values (input coefficients per unit output)
+- Matrix.hs negates these when constructing (I-A) system matrix for solving
+- The biosphere matrix stores emissions as positive, resource extraction as negative
+- This follows standard LCA convention where A contains positive input coefficients
+
+Matrix Construction:
+- Accepts a Map with (UUID, UUID) keys and converts to Vector internally
+- Builds sparse triplets for technosphere (A) and biosphere (B) matrices
+- Normalizes exchanges by reference product amounts
+- Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
 buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> Database
 buildDatabaseWithMatrices activityMap flowDB unitDB =
@@ -77,7 +88,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                 Just idx ->
                                     let rawValue = exchangeAmount ex
                                         denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                        value = rawValue / denom  -- Removed negative sign to fix double negation
+                                        -- CRITICAL: Store as POSITIVE - Matrix.hs will negate when building (I-A)
+                                        -- Technosphere triplets represent input coefficients (positive values)
+                                        -- The solver constructs (I-A) by negating: systemTechTriples = [(i, j, -value)]
+                                        value = rawValue / denom
                                      in [(idx, j, value) | abs value > 1e-15]
                                 Nothing -> []
 

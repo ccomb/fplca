@@ -1024,12 +1024,11 @@ exportAMatrix filePath db = do
                           | i <- [0..fromIntegral activityCount - 1]]
 
         -- Convert off-diagonal triplets to CSV rows
-        -- IMPORTANT: Negate values to match universal matrix sign convention
-        -- (off-diagonal A matrix entries have opposite sign from internal representation)
+        -- Ecoinvent format exports (I-A), not A, so negate the positive triplets
+        -- techTriples contain positive input coefficients, negate to get (I-A) format
         offDiagonalRows = V.foldr (\(row, col, value) acc ->
-                let negValue = -value  -- Flip sign for universal format
-                    rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
-                            show negValue ++ ";;;;;"
+                let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
+                            show (-value) ++ ";;;;;"  -- Negate to export (I-A) format
                 in rowStr : acc
             ) [] techTriples
 
