@@ -47,7 +47,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
         dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
 
         -- Build fast activity UUID lookup for O(log n) ProcessId resolution
+        -- DEPRECATED: Only uses activity UUID, ignores product UUID in multi-output cases
         activityUUIDLookup = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
+
+        -- NEW: Build activity-product lookup for correct multi-output handling
+        -- Maps (activityUUID, productFlowUUID) -> ProcessId
+        -- This ensures exchanges link to the correct product in multi-output activities
+        activityProductLookup = M.fromList [((actUUID, prodUUID), pid) | (pid, (actUUID, prodUUID)) <- zip [0 ..] sortedKeys]
 
         -- Convert Map to Vector indexed by ProcessId
         dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
@@ -72,10 +78,18 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                     | not (exchangeIsInput ex) = []
                     | exchangeIsReference ex = []
                     | otherwise =
-                        let producerPid = case exchangeProcessLinkId ex of
+                        let -- CRITICAL FIX: Use both activity UUID AND product flow UUID for multi-output support
+                            -- In multi-output activities (e.g., combined heat/power), we need to match
+                            -- the specific product being consumed, not just any product from the activity
+                            producerPid = case exchangeProcessLinkId ex of
                                 Just pid -> Just pid
                                 Nothing -> case exchangeActivityLinkId ex of
-                                    Just actUUID -> M.lookup actUUID activityUUIDLookup
+                                    Just actUUID ->
+                                        -- First try exact match: (activityUUID, productFlowUUID)
+                                        case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
+                                            Just pid -> Just pid
+                                            -- Fallback to activity-only lookup for backward compatibility
+                                            Nothing -> M.lookup actUUID activityUUIDLookup
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
                             producerIdx =

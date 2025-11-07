@@ -258,12 +258,17 @@ parseWithXeno xmlContent processId =
                     -- Use pending group values if attribute values are empty
                     let finalInputGroup = if T.null (idInputGroup idata) then psPendingInputGroup state else idInputGroup idata
                         finalOutputGroup = if T.null (idOutputGroup idata) then psPendingOutputGroup state else idOutputGroup idata
+                        isInput = not $ T.null finalInputGroup
+                        isOutput = T.null finalInputGroup
+                        -- Reference product must be: (1) an output AND (2) outputGroup="0"
+                        -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
+                        isReferenceProduct = isOutput && finalOutputGroup == "0"
                         exchange = TechnosphereExchange
                             (idFlowId idata)
                             (idAmount idata)
                             (idUnitId idata)
-                            (not $ T.null finalInputGroup)
-                            (finalOutputGroup == "0")  -- Only outputGroup=0 is reference product
+                            isInput
+                            isReferenceProduct
                             (idActivityLinkId idata)
                             Nothing
                         flow = Flow
@@ -454,7 +459,17 @@ parseActivityWithFlowsAndUnitsOptimized cursor processId =
         !units = interUnits ++ elemUnits
         description = extractGeneralComment cursor name
         synonyms = M.empty -- TODO: Extract from XML when available
-        classifications = M.empty -- TODO: Extract ISIC, CPC classifications
+        -- Parse classifications (ISIC, CPC, etc.)
+        classifications = M.fromList
+            [ (system, value)
+            | classNode <- cursor $// element (nsElement "classification")
+            , let systemNodes = classNode $/ element (nsElement "classificationSystem") &/ content
+            , let valueNodes = classNode $/ element (nsElement "classificationValue") &/ content
+            , not (null systemNodes || null valueNodes)
+            , let system = T.strip (head systemNodes)
+            , let value = T.strip (head valueNodes)
+            , not (T.null system || T.null value)
+            ]
         refUnit = case cursor
             $// element (nsElement "intermediateExchange")
             >=> attributeIs "outputGroup" "0"
@@ -507,7 +522,11 @@ parseExchangeWithFlowOptimized cur =
 
         -- Determine type based on input/output groups (mutually exclusive)
         !isInput = inputGroup /= ""
-        !isRef = outputGroup == "4" || outputGroup == "0" -- Reference product is flagged with 4 (legacy datasets used 0)
+        !isOutput = not isInput
+        -- Reference product must be: (1) an output AND (2) outputGroup="0"
+        -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
+        -- Note: outputGroup="4" is byproduct allocated, NOT a reference product
+        !isRef = isOutput && outputGroup == "0"
         !ftype = Technosphere
 
         -- Extract activityLinkId for technosphere navigation (required for technosphere)
