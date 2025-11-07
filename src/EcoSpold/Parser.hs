@@ -260,9 +260,12 @@ parseWithXeno xmlContent processId =
                         finalOutputGroup = if T.null (idOutputGroup idata) then psPendingOutputGroup state else idOutputGroup idata
                         isInput = not $ T.null finalInputGroup
                         isOutput = T.null finalInputGroup
-                        -- Reference product must be: (1) an output AND (2) outputGroup="0"
+                        amount = idAmount idata
+                        -- Reference flow identification for both production AND treatment activities:
+                        -- Production: output (no inputGroup) with outputGroup="0" and positive amount
+                        -- Treatment: input (has inputGroup) with negative amount (e.g., waste treatment)
                         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
-                        isReferenceProduct = isOutput && finalOutputGroup == "0"
+                        isReferenceProduct = (isOutput && finalOutputGroup == "0") || (isInput && amount < 0)
                         exchange = TechnosphereExchange
                             (idFlowId idata)
                             (idAmount idata)
@@ -523,10 +526,12 @@ parseExchangeWithFlowOptimized cur =
         -- Determine type based on input/output groups (mutually exclusive)
         !isInput = inputGroup /= ""
         !isOutput = not isInput
-        -- Reference product must be: (1) an output AND (2) outputGroup="0"
+        -- Reference flow identification for both production AND treatment activities:
+        -- Production: output (no inputGroup) with outputGroup="0" and positive amount
+        -- Treatment: input (has inputGroup) with negative amount (e.g., waste treatment)
         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
         -- Note: outputGroup="4" is byproduct allocated, NOT a reference product
-        !isRef = isOutput && outputGroup == "0"
+        !isRef = (isOutput && outputGroup == "0") || (isInput && amount < 0)
         !ftype = Technosphere
 
         -- Extract activityLinkId for technosphere navigation (required for technosphere)

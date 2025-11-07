@@ -76,7 +76,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
             let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
                     | not (isTechnosphereExchange ex) = []
                     | not (exchangeIsInput ex) = []
-                    | exchangeIsReference ex = []
+                    -- CRITICAL FIX: Only skip reference OUTPUTS (implicit in I matrix diagonal)
+                    -- Must INCLUDE reference INPUTS (treatment activities with negative amounts)
+                    -- Skipping treatment refs causes matrix singularity → infinity in solver
+                    | exchangeIsReference ex && not (exchangeIsInput ex) = []
                     | otherwise =
                         let -- CRITICAL FIX: Use both activity UUID AND product flow UUID for multi-output support
                             -- In multi-output activities (e.g., combined heat/power), we need to match

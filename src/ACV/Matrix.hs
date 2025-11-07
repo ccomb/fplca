@@ -253,6 +253,14 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
                             solutionData <- vecGetVS solution
                             let solutionList = VS.toList solutionData
                             let solutionResult = map realToFrac solutionList
+
+                            -- Check for infinity/NaN in solution (indicates singular/ill-conditioned matrix)
+                            let hasInfinity = any (\x -> isInfinite x || isNaN x) solutionResult
+                            when hasInfinity $ do
+                                reportMatrixOperation "ERROR: Solution contains infinity or NaN values"
+                                reportMatrixOperation "Matrix is singular - likely missing reference flows or treatment activities"
+                                reportMatrixOperation "Check: (1) all activities have reference flows, (2) treatment inputs included in matrix"
+
                             return solutionResult
 
         return $ fromList result
