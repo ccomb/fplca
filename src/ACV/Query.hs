@@ -46,11 +46,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
         -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int16)
         dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
 
-        -- Build fast activity UUID lookup for O(log n) ProcessId resolution
-        -- DEPRECATED: Only uses activity UUID, ignores product UUID in multi-output cases
-        activityUUIDLookup = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
-
-        -- NEW: Build activity-product lookup for correct multi-output handling
+        -- Build activity-product lookup for correct multi-output handling
         -- Maps (activityUUID, productFlowUUID) -> ProcessId
         -- This ensures exchanges link to the correct product in multi-output activities
         activityProductLookup = M.fromList [((actUUID, prodUUID), pid) | (pid, (actUUID, prodUUID)) <- zip [0 ..] sortedKeys]
@@ -88,11 +84,19 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                 Just pid -> Just pid
                                 Nothing -> case exchangeActivityLinkId ex of
                                     Just actUUID ->
-                                        -- First try exact match: (activityUUID, productFlowUUID)
+                                        -- Lookup exact activity-product pair for correct multi-output handling
                                         case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
                                             Just pid -> Just pid
-                                            -- Fallback to activity-only lookup for backward compatibility
-                                            Nothing -> M.lookup actUUID activityUUIDLookup
+                                            -- Error: Missing activity-product pair indicates data corruption or missing files
+                                            Nothing -> error $
+                                                "FATAL: Exchange references non-existent activity-product pair:\n"
+                                                ++ "  Activity UUID: " ++ show actUUID ++ "\n"
+                                                ++ "  Product UUID: " ++ show (exchangeFlowId ex) ++ "\n"
+                                                ++ "  Consumer: " ++ show (activityName consumerActivity) ++ "\n"
+                                                ++ "This indicates either:\n"
+                                                ++ "  1. Missing .spold file: " ++ show actUUID ++ "_" ++ show (exchangeFlowId ex) ++ ".spold\n"
+                                                ++ "  2. Data corruption: Exchange has incorrect UUID references\n"
+                                                ++ "  3. Incomplete database load"
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
                             producerIdx =
