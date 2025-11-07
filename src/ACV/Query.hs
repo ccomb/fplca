@@ -113,8 +113,11 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityTriplets (j, consumerPid) =
                     let consumerActivity = dbActivities V.! fromIntegral consumerPid
+                        -- CRITICAL FIX: Include ALL reference flows (both outputs AND inputs) for normalization
+                        -- Treatment activities have reference INPUTS with negative amounts
+                        -- Use absolute values to correctly normalize both production and treatment
                         refProductAmounts =
-                            [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex && not (exchangeIsInput ex)
+                            [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex
                             ]
                         normalizationFactor = sum refProductAmounts
                         buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
@@ -154,8 +157,11 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityBioTriplets (j, pid) =
                     let activity = dbActivities V.! fromIntegral pid
+                        -- CRITICAL FIX: Include ALL reference flows (both outputs AND inputs) for normalization
+                        -- Treatment activities have reference INPUTS with negative amounts
+                        -- Use absolute values to correctly normalize both production and treatment
                         refProductAmounts =
-                            [ exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex && not (exchangeIsInput ex)
+                            [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex
                             ]
                         normalizationFactor = sum refProductAmounts
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
