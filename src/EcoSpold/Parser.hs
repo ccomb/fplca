@@ -161,10 +161,12 @@ bsToText :: BS.ByteString -> Text
 bsToText = TE.decodeUtf8
 
 -- | ByteString to Double conversion
+-- CRITICAL: Fail explicitly on parse error instead of silently returning 0.0
+-- Silent failures can cause zero normalization factors leading to infinities
 bsToDouble :: BS.ByteString -> Double
 bsToDouble bs = case TR.double (bsToText bs) of
     Right (val, _) -> val
-    Left _ -> 0.0
+    Left _ -> error $ "Failed to parse amount from: " ++ show bs
 
 -- | ByteString to Int conversion
 bsToInt :: BS.ByteString -> Int
@@ -187,17 +189,22 @@ parseWithXeno xmlContent processId =
     -- Open tag handler - update path and context
     openTag state tagName =
         let newPath = tagName : psPath state
+            -- CRITICAL FIX: Clear pending fields when entering new exchange to prevent state leakage
+            -- If malformed XML doesn't close properly, pending fields from previous exchange could leak
+            cleanState = if isElement tagName "intermediateExchange" || isElement tagName "elementaryExchange"
+                         then state { psPendingInputGroup = "", psPendingOutputGroup = "" }
+                         else state
             newContext
                 | isElement tagName "activityName" = InActivityName
-                | isElement tagName "shortname" && any (isElement "geography") (psPath state) = InGeographyShortname
+                | isElement tagName "shortname" && any (isElement "geography") (psPath cleanState) = InGeographyShortname
                 | isElement tagName "intermediateExchange" =
                     InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty)
                 | isElement tagName "elementaryExchange" =
                     InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty)
-                | isElement tagName "text" && any (isElement "generalComment") (psPath state) = InGeneralCommentText 0
+                | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
                 -- DON'T switch context for child elements (synonym, compartment, etc) - keep parent exchange context
-                | otherwise = psContext state
-        in state{psPath = newPath, psContext = newContext, psTextAccum = []}
+                | otherwise = psContext cleanState
+        in cleanState{psPath = newPath, psContext = newContext, psTextAccum = []}
 
     -- Attribute handler - extract critical attributes
     attribute state name value =
@@ -619,6 +626,7 @@ readIndexSafe t = case reads (T.unpack t) of
 1. Remove zero-amount production exchanges (co-products)
 2. Assign single non-zero product as reference product
 3. Ensure single-output process structure
+4. VALIDATION: Fail if no reference product can be established
 -}
 applyCutoffStrategy :: Activity -> Activity
 applyCutoffStrategy activity =
@@ -629,7 +637,11 @@ applyCutoffStrategy activity =
             if hasReferenceProduct updatedActivity
                 then updatedActivity -- Keep existing reference products
                 else assignSingleProductAsReference updatedActivity
-     in finalActivity
+        -- CRITICAL VALIDATION: Ensure we have a reference product after all attempts
+     in if hasReferenceProduct finalActivity
+           then finalActivity
+           else error $ "Activity has no reference product after cutoff strategy: "
+                     ++ T.unpack (activityName activity)
 
 -- | Check if activity has any reference product
 hasReferenceProduct :: Activity -> Bool

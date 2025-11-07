@@ -107,7 +107,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                          in case producerIdx of
                                 Just idx ->
                                     let rawValue = exchangeAmount ex
-                                        denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
+                                        -- CRITICAL: Fail on zero normalization instead of fallback to 1.0
+                                        -- Zero normalization indicates missing reference products
+                                        denom = if normalizationFactor > 1e-15
+                                                then normalizationFactor
+                                                else error $ "Zero normalization factor for activity at index "
+                                                          ++ show j ++ " (activity: "
+                                                          ++ T.unpack (activityName consumerActivity) ++ ")"
                                         -- CRITICAL: Store as POSITIVE - Matrix.hs will negate when building (I-A)
                                         -- Technosphere triplets represent input coefficients (positive values)
                                         -- The solver constructs (I-A) by negating: systemTechTriples = [(i, j, -value)]
@@ -151,7 +157,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
                                 let rawValue = exchangeAmount ex
-                                    denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
+                                    -- CRITICAL: Fail on zero normalization instead of fallback to 1.0
+                                    -- Zero normalization indicates missing reference products
+                                    denom = if normalizationFactor > 1e-15
+                                            then normalizationFactor
+                                            else error $ "Zero normalization factor for biosphere at activity index "
+                                                      ++ show j ++ " (activity: "
+                                                      ++ T.unpack (activityName activity) ++ ")"
                                     value =
                                         if exchangeIsInput ex
                                             then -(rawValue / denom) -- Resource extraction
