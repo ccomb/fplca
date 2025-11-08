@@ -208,12 +208,17 @@ parseWithXeno xmlContent processId =
 
     -- Attribute handler - extract critical attributes
     attribute state name value =
-        case psContext state of
+        let -- CRITICAL FIX: Check if we're inside a property element
+            -- Property elements have their own amount/unitId attributes that should NOT overwrite exchange attributes
+            isInsideProperty = any (isElement "property") (psPath state)
+        in case psContext state of
             InIntermediateExchange idata ->
                 let updated
                         | isElement name "intermediateExchangeId" = idata{idFlowId = bsToText value}
-                        | isElement name "amount" = idata{idAmount = bsToDouble value}
-                        | isElement name "unitId" = idata{idUnitId = bsToText value}
+                        -- Only update amount if NOT inside a property element
+                        | isElement name "amount" && not isInsideProperty = idata{idAmount = bsToDouble value}
+                        -- Only update unitId if NOT inside a property element
+                        | isElement name "unitId" && not isInsideProperty = idata{idUnitId = bsToText value}
                         | isElement name "inputGroup" = idata{idInputGroup = bsToText value}
                         | isElement name "outputGroup" = idata{idOutputGroup = bsToText value}
                         | isElement name "activityLinkId" = idata{idActivityLinkId = bsToText value}
@@ -222,8 +227,10 @@ parseWithXeno xmlContent processId =
             InElementaryExchange edata ->
                 let updated
                         | isElement name "elementaryExchangeId" = edata{edFlowId = bsToText value}
-                        | isElement name "amount" = edata{edAmount = bsToDouble value}
-                        | isElement name "unitId" = edata{edUnitId = bsToText value}
+                        -- Only update amount if NOT inside a property element
+                        | isElement name "amount" && not isInsideProperty = edata{edAmount = bsToDouble value}
+                        -- Only update unitId if NOT inside a property element
+                        | isElement name "unitId" && not isInsideProperty = edata{edUnitId = bsToText value}
                         | isElement name "inputGroup" = edata{edInputGroup = bsToText value}
                         | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
                         | otherwise = edata
@@ -352,10 +359,16 @@ parseWithXeno xmlContent processId =
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "name" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+                -- CRITICAL FIX: Only update flow name if <name> is a direct child of exchange
+                -- Check if the parent element (second in path, after "name") is "property"
+                -- psPath = ["name", parent, grandparent, ...]
+                isInsideProperty = case psPath state of
+                    (_:parent:_) -> isElement "property" parent
+                    _ -> False
             in case psContext state of
-                InIntermediateExchange idata ->
+                InIntermediateExchange idata | not isInsideProperty ->
                     state{psContext = InIntermediateExchange idata{idFlowName = txt}, psTextAccum = []}
-                InElementaryExchange edata ->
+                InElementaryExchange edata | not isInsideProperty ->
                     state{psContext = InElementaryExchange edata{edFlowName = txt}, psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "unitName" =
@@ -630,8 +643,11 @@ readIndexSafe t = case reads (T.unpack t) of
 -}
 applyCutoffStrategy :: Activity -> Activity
 applyCutoffStrategy activity =
-    let filteredExchanges = removeZeroAmountCoproducts (exchanges activity)
+    let originalExchanges = exchanges activity
+        originalRefs = filter exchangeIsReference originalExchanges
+        filteredExchanges = removeZeroAmountCoproducts originalExchanges
         updatedActivity = activity{exchanges = filteredExchanges}
+        refsAfterFilter = filter exchangeIsReference filteredExchanges
         -- CONSERVATIVE: Only apply single reference assignment if no reference products exist
         finalActivity =
             if hasReferenceProduct updatedActivity
@@ -641,19 +657,31 @@ applyCutoffStrategy activity =
      in if hasReferenceProduct finalActivity
            then finalActivity
            else error $ "Activity has no reference product after cutoff strategy: "
-                     ++ T.unpack (activityName activity)
+                     ++ T.unpack (activityName activity) ++ "\n"
+                     ++ "  Original exchanges: " ++ show (length originalExchanges) ++ "\n"
+                     ++ "  Original reference products: " ++ show (length originalRefs) ++ "\n"
+                     ++ "  After filtering: " ++ show (length filteredExchanges) ++ "\n"
+                     ++ "  Reference products after filter: " ++ show (length refsAfterFilter)
 
 -- | Check if activity has any reference product
 hasReferenceProduct :: Activity -> Bool
 hasReferenceProduct activity = any exchangeIsReference (exchanges activity)
 
 -- | Remove production exchanges with zero amounts
+-- CRITICAL: ALWAYS keep reference products, even if zero amount
+-- Zero-amount reference products will be caught by normalization validation
 removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
 removeZeroAmountCoproducts exs = filter keepExchange exs
   where
-    keepExchange (TechnosphereExchange _ amount _ False True _ _) = amount /= 0.0 -- Keep non-zero production exchanges
-    keepExchange (TechnosphereExchange _ _ _ _ False _ _) = True -- Keep all non-production technosphere exchanges
-    keepExchange (BiosphereExchange _ _ _ _) = True -- Keep all biosphere exchanges
+
+    -- ALWAYS keep reference products (isRef=True), even if amount is zero
+    keepExchange (TechnosphereExchange _ _ _ False True _ _) = True
+    -- For non-reference outputs (co-products), only keep non-zero amounts
+    keepExchange (TechnosphereExchange _ amount _ False False _ _) = amount /= 0.0
+    -- Keep all inputs
+    keepExchange (TechnosphereExchange _ _ _ True _ _ _) = True
+    -- Keep all biosphere exchanges
+    keepExchange (BiosphereExchange _ _ _ _) = True
     keepExchange _ = True -- Keep everything else
 
 -- | Assign single product as reference product
