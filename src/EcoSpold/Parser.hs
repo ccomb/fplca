@@ -297,7 +297,7 @@ parseWithXeno xmlContent processId =
         | isElement tagName "name" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
                 isInsideProperty = case psPath state of
-                    (_:parent:_) -> isElement "property" parent
+                    (_:parent:_) -> isElement parent "property"
                     _ -> False
             in case psContext state of
                 InIntermediateExchange idata | not isInsideProperty ->
