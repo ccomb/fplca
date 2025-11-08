@@ -91,7 +91,8 @@ exchangeIsReference (BiosphereExchange _ _ _ _) = False -- Biosphere exchanges a
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
-exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _) = Just linkId
+exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _) =
+    if T.null linkId then Nothing else Just linkId
 exchangeActivityLinkId (BiosphereExchange _ _ _ _) = Nothing
 
 -- | Get process link ID (new field)
