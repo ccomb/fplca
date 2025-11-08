@@ -230,6 +230,10 @@ parseWithXeno xmlContent processId =
                             (if T.null (idUnitName idata) then "unit" else idUnitName idata)
                             (if T.null (idUnitName idata) then "unit" else idUnitName idata)
                             ""
+                        -- Set reference unit if this is the reference product
+                        newRefUnit = if isReferenceProduct && not (T.null (idUnitName idata))
+                                     then Just (idUnitName idata)
+                                     else psRefUnit state
                     in state
                         { psExchanges = exchange : psExchanges state
                         , psFlows = flow : psFlows state
@@ -238,6 +242,7 @@ parseWithXeno xmlContent processId =
                         , psTextAccum = []
                         , psPendingInputGroup = ""
                         , psPendingOutputGroup = ""
+                        , psRefUnit = newRefUnit
                         }
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "elementaryExchange" =
@@ -305,10 +310,7 @@ parseWithXeno xmlContent processId =
                     _ -> False
             in case psContext state of
                 InIntermediateExchange idata | not isInsideProperty ->
-                    let newState = state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
-                    in if idOutputGroup idata == "0" || psPendingOutputGroup state == "0"
-                        then newState{psRefUnit = Just txt}
-                        else newState
+                    state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
                 InElementaryExchange edata | not isInsideProperty ->
                     state{psContext = InElementaryExchange edata{edUnitName = txt}, psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
