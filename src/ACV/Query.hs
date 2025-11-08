@@ -111,10 +111,17 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityTriplets (j, consumerPid) =
                     let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                        refProductAmounts =
-                            [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex
-                            ]
-                        normalizationFactor = sum refProductAmounts
+                        -- For normalization, only use reference OUTPUTS (not treatment inputs)
+                        -- Treatment inputs have negative amounts and would incorrectly inflate the normalization factor
+                        refOutputs = [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex, not (exchangeIsInput ex) ]
+                        -- If no outputs (pure treatment), use abs of reference input
+                        refInputs = [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex, exchangeIsInput ex ]
+                        normalizationFactor =
+                            let sumOutputs = sum refOutputs
+                                sumInputs = sum refInputs
+                            in if sumOutputs > 1e-15 then sumOutputs
+                               else if sumInputs > 1e-15 then sumInputs
+                               else 1.0  -- Fallback for activities with no reference products (shouldn't happen)
                         buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                      in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
 
@@ -154,10 +161,14 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityBioTriplets (j, pid) =
                     let activity = dbActivities V.! fromIntegral pid
-                        refProductAmounts =
-                            [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex
-                            ]
-                        normalizationFactor = sum refProductAmounts
+                        refOutputs = [ exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex, not (exchangeIsInput ex) ]
+                        refInputs = [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex, exchangeIsInput ex ]
+                        normalizationFactor =
+                            let sumOutputs = sum refOutputs
+                                sumInputs = sum refInputs
+                            in if sumOutputs > 1e-15 then sumOutputs
+                               else if sumInputs > 1e-15 then sumInputs
+                               else 1.0
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in concatMap buildNormalizedBioTriple (exchanges activity)
 
