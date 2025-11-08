@@ -16,6 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import GHC.Generics (Generic)
+import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 
 {- | Build complete database with pre-computed sparse matrices
@@ -78,7 +79,17 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                 Just pid -> Just pid
                                 Nothing -> case exchangeActivityLinkId ex of
                                     Just actUUID ->
-                                        M.lookup (actUUID, exchangeFlowId ex) activityProductLookup
+                                        case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
+                                            Just pid -> Just pid
+                                            Nothing ->
+                                                let !_ = unsafePerformIO $ hPutStrLn stderr $
+                                                        "[WARNING] Missing activity-product pair referenced by exchange:\n"
+                                                        ++ "  Activity UUID: " ++ T.unpack actUUID ++ "\n"
+                                                        ++ "  Product UUID: " ++ T.unpack (exchangeFlowId ex) ++ "\n"
+                                                        ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
+                                                        ++ "  Expected file: " ++ T.unpack actUUID ++ "_" ++ T.unpack (exchangeFlowId ex) ++ ".spold\n"
+                                                        ++ "  This exchange will be skipped."
+                                                in Nothing
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
                             producerIdx =
