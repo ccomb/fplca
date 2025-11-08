@@ -72,31 +72,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
             let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
                     | not (isTechnosphereExchange ex) = []
                     | not (exchangeIsInput ex) = []
-                    -- CRITICAL FIX: Only skip reference OUTPUTS (implicit in I matrix diagonal)
-                    -- Must INCLUDE reference INPUTS (treatment activities with negative amounts)
-                    -- Skipping treatment refs causes matrix singularity → infinity in solver
                     | exchangeIsReference ex && not (exchangeIsInput ex) = []
                     | otherwise =
-                        let -- CRITICAL FIX: Use both activity UUID AND product flow UUID for multi-output support
-                            -- In multi-output activities (e.g., combined heat/power), we need to match
-                            -- the specific product being consumed, not just any product from the activity
-                            producerPid = case exchangeProcessLinkId ex of
+                        let producerPid = case exchangeProcessLinkId ex of
                                 Just pid -> Just pid
                                 Nothing -> case exchangeActivityLinkId ex of
                                     Just actUUID ->
-                                        -- Lookup exact activity-product pair for correct multi-output handling
-                                        case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
-                                            Just pid -> Just pid
-                                            -- Error: Missing activity-product pair indicates data corruption or missing files
-                                            Nothing -> error $
-                                                "FATAL: Exchange references non-existent activity-product pair:\n"
-                                                ++ "  Activity UUID: " ++ show actUUID ++ "\n"
-                                                ++ "  Product UUID: " ++ show (exchangeFlowId ex) ++ "\n"
-                                                ++ "  Consumer: " ++ show (activityName consumerActivity) ++ "\n"
-                                                ++ "This indicates either:\n"
-                                                ++ "  1. Missing .spold file: " ++ show actUUID ++ "_" ++ show (exchangeFlowId ex) ++ ".spold\n"
-                                                ++ "  2. Data corruption: Exchange has incorrect UUID references\n"
-                                                ++ "  3. Incomplete database load"
+                                        M.lookup (actUUID, exchangeFlowId ex) activityProductLookup
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
                             producerIdx =
@@ -107,25 +89,17 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                          in case producerIdx of
                                 Just idx ->
                                     let rawValue = exchangeAmount ex
-                                        -- CRITICAL: Fail on zero normalization instead of fallback to 1.0
-                                        -- Zero normalization indicates missing reference products
                                         denom = if normalizationFactor > 1e-15
                                                 then normalizationFactor
                                                 else error $ "Zero normalization factor for activity at index "
                                                           ++ show j ++ " (activity: "
                                                           ++ T.unpack (activityName consumerActivity) ++ ")"
-                                        -- CRITICAL: Store as POSITIVE - Matrix.hs will negate when building (I-A)
-                                        -- Technosphere triplets represent input coefficients (positive values)
-                                        -- The solver constructs (I-A) by negating: systemTechTriples = [(i, j, -value)]
                                         value = rawValue / denom
                                      in [(idx, j, value) | abs value > 1e-15]
                                 Nothing -> []
 
                 buildActivityTriplets (j, consumerPid) =
                     let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                        -- CRITICAL FIX: Include ALL reference flows (both outputs AND inputs) for normalization
-                        -- Treatment activities have reference INPUTS with negative amounts
-                        -- Use absolute values to correctly normalize both production and treatment
                         refProductAmounts =
                             [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex
                             ]
@@ -139,8 +113,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
         -- Build biosphere sparse triplets
         _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
-        -- CRITICAL: Use sort to ensure deterministic, consistent ordering across runs
-        -- Without sort, S.toList can produce different orderings, causing index mismatches
         bioFlowUUIDs =
             sort $
                 S.toList $
@@ -157,8 +129,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
                             Just i ->
                                 let rawValue = exchangeAmount ex
-                                    -- CRITICAL: Fail on zero normalization instead of fallback to 1.0
-                                    -- Zero normalization indicates missing reference products
                                     denom = if normalizationFactor > 1e-15
                                             then normalizationFactor
                                             else error $ "Zero normalization factor for biosphere at activity index "
@@ -173,9 +143,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityBioTriplets (j, pid) =
                     let activity = dbActivities V.! fromIntegral pid
-                        -- CRITICAL FIX: Include ALL reference flows (both outputs AND inputs) for normalization
-                        -- Treatment activities have reference INPUTS with negative amounts
-                        -- Use absolute values to correctly normalize both production and treatment
                         refProductAmounts =
                             [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex
                             ]
