@@ -395,22 +395,24 @@ parseWithXeno xmlContent processId =
             -- DON'T change psContext - preserve the parent exchange context
             in state{psPendingOutputGroup = txt, psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "compartment" =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
             in case psContext state of
-                InElementaryExchange edata ->
-                    -- Store compartment text in exchange data
+                InElementaryExchange edata | not (T.null txt) ->
+                    -- CRITICAL FIX: Only store non-empty compartment text
+                    -- XML has nested <compartment> elements: outer wrapper (no text) and inner element (has text)
+                    -- Skipping empty text prevents adding "" from wrapper elements
                     state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = tail (psPath state), psTextAccum = []}
                 _ ->
-                    -- Not in an elementary exchange, just pop the path
+                    -- Empty text or not in exchange - just pop path
                     state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "subcompartment" =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
             in case psContext state of
-                InElementaryExchange edata ->
-                    -- Store subcompartment text in exchange data
+                InElementaryExchange edata | not (T.null txt) ->
+                    -- Only store non-empty subcompartment text (consistency with compartment handling)
                     state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = tail (psPath state), psTextAccum = []}
                 _ ->
-                    -- Not in an elementary exchange, just pop the path
+                    -- Empty text or not in exchange - just pop path
                     state{psPath = tail (psPath state), psTextAccum = []}
         | otherwise =
             state{psPath = if null (psPath state) then [] else tail (psPath state)}
