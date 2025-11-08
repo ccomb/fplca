@@ -257,11 +257,22 @@ parseWithXeno xmlContent processId =
                             (comp : _, []) -> comp
                             ([], sub : _) -> sub
                             (comp : _, sub : _) -> comp <> "/" <> sub
+                        -- Determine if exchange is input (resource extraction)
+                        -- Primary: use inputGroup/outputGroup if present
+                        -- Fallback: use compartment heuristic (natural resource = input, others = output)
+                        isInput = if not (T.null finalInputGroup)
+                                  then True  -- Has explicit inputGroup
+                                  else if not (T.null finalOutputGroup)
+                                  then False  -- Has explicit outputGroup
+                                  else -- Fallback to compartment-based heuristic
+                                      case edCompartments edata of
+                                          (comp : _) | T.toLower comp == "natural resource" -> True
+                                          _ -> False  -- Default to output (emissions)
                         exchange = BiosphereExchange
                             (edFlowId edata)
                             (edAmount edata)
                             (edUnitId edata)
-                            (not $ T.null finalInputGroup)
+                            isInput
                         flow = Flow
                             (edFlowId edata)
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
