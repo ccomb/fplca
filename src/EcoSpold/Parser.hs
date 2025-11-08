@@ -186,7 +186,7 @@ parseWithXeno xmlContent processId =
         let trimmed = BS.dropWhile (== 32) $ BS.dropWhileEnd (== 32) content  -- Trim spaces
         in if BS.null trimmed
             then state
-            else state{psTextAccum = content : psTextAccum state}
+            else state{psTextAccum = trimmed : psTextAccum state}
 
     -- Close tag handler - finalize elements
     closeTag state tagName
