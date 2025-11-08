@@ -14,6 +14,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import System.FilePath (takeBaseName)
+import System.IO (hPutStrLn, stderr)
+import System.IO.Unsafe (unsafePerformIO)
 import qualified Xeno.SAX as X
 
 -- | Parse ProcessId from filename (no Database needed here)
@@ -227,8 +229,13 @@ parseWithXeno xmlContent processId =
                             (idSynonyms idata)
                         unit = Unit
                             (idUnitId idata)
-                            (if T.null (idUnitName idata) then "unit" else idUnitName idata)
-                            (if T.null (idUnitName idata) then "unit" else idUnitName idata)
+                            (if T.null (idUnitName idata)
+                             then let !_ = unsafePerformIO $ hPutStrLn stderr $
+                                          "[WARNING] Missing unit name for intermediate exchange with flow ID: "
+                                          ++ T.unpack (idFlowId idata) ++ " - using 'UNKNOWN_UNIT' placeholder"
+                                  in "UNKNOWN_UNIT"
+                             else idUnitName idata)
+                            (if T.null (idUnitName idata) then "?" else idUnitName idata)
                             ""
                         -- Set reference unit if this is the reference product
                         newRefUnit = if isReferenceProduct && not (T.null (idUnitName idata))
@@ -282,8 +289,13 @@ parseWithXeno xmlContent processId =
                             (edSynonyms edata)
                         unit = Unit
                             (edUnitId edata)
-                            (if T.null (edUnitName edata) then "kg" else edUnitName edata)
-                            (if T.null (edUnitName edata) then "kg" else edUnitName edata)
+                            (if T.null (edUnitName edata)
+                             then let !_ = unsafePerformIO $ hPutStrLn stderr $
+                                          "[WARNING] Missing unit name for elementary exchange with flow ID: "
+                                          ++ T.unpack (edFlowId edata) ++ " - using 'UNKNOWN_UNIT' placeholder"
+                                  in "UNKNOWN_UNIT"
+                             else edUnitName edata)
+                            (if T.null (edUnitName edata) then "?" else edUnitName edata)
                             ""
                     in state
                         { psExchanges = exchange : psExchanges state
@@ -371,7 +383,11 @@ parseWithXeno xmlContent processId =
             description = reverse (psDescription st)  -- Reverse to get correct order
             refUnit = case psRefUnit st of
                 Just u -> u
-                Nothing -> "unit"
+                Nothing ->
+                    let !_ = unsafePerformIO $ hPutStrLn stderr $
+                            "[WARNING] Missing reference unit for activity: " ++ T.unpack name
+                            ++ " - using 'UNKNOWN_UNIT' placeholder"
+                    in "UNKNOWN_UNIT"
             -- Apply cutoff strategy to exchanges
             activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
             activityWithCutoff = applyCutoffStrategy activity
