@@ -14,61 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import System.FilePath (takeBaseName)
-import Text.XML
-import Text.XML.Cursor
 import qualified Xeno.SAX as X
-
--- EcoSpold namespace
-ecoSpoldNS :: Text
-ecoSpoldNS = "http://www.EcoInvent.org/EcoSpold02"
-
--- Helper to create namespaced element name
-nsElement :: Text -> Name
-nsElement name = Name name (Just ecoSpoldNS) Nothing
-
-getAttr :: Cursor -> Text -> Text
-getAttr cur attr =
-    let !name = Name attr Nothing Nothing
-     in case cur $| attribute name of
-            [] -> "" -- Return empty string for missing attributes
-            (x : _) -> x
-
--- | Parse synonyms from XML cursor
-parseSynonyms :: Cursor -> M.Map Text (S.Set Text)
-parseSynonyms cursor =
-    let synonymNodes = cursor $/ element (nsElement "synonym")
-        synonymPairs =
-            [ (lang, text) | node <- synonymNodes, let lang = case node $| attribute "xml:lang" of
-                                                        [] -> "en" -- Default to English
-                                                        (l : _) -> l, let text = case node $/ content of
-                                                                            [] -> ""
-                                                                            (t : _) -> t, not (T.null text)
-            ]
-     in M.fromListWith S.union [(lang, S.singleton text) | (lang, text) <- synonymPairs]
-
--- | Extract compartment category from elementaryExchange cursor
-extractCompartmentCategory :: Cursor -> T.Text
-extractCompartmentCategory cur =
-    let compartmentTexts =
-            cur
-                $// element (nsElement "compartment")
-                &// element (nsElement "compartment")
-                &/ content
-        subcompartmentTexts =
-            cur
-                $// element (nsElement "compartment")
-                &// element (nsElement "subcompartment")
-                &/ content
-     in case (compartmentTexts, subcompartmentTexts) of
-            ([], []) -> "unspecified" -- Fallback if no compartment info
-            (comp : _, []) -> comp -- Just compartment, no subcompartment
-            ([], sub : _) -> sub -- Just subcompartment (shouldn't happen)
-            (comp : _, sub : _) -> comp <> "/" <> sub -- Full hierarchy: "water/ground-, long-term"
-
--- | Safer alternative to head
-headOrFail :: String -> [a] -> a
-headOrFail msg [] = error msg
-headOrFail _ (x : _) = x
 
 -- | Parse ProcessId from filename (no Database needed here)
 -- Expects format: activity_uuid_product_uuid.spold
@@ -161,8 +107,6 @@ bsToText :: BS.ByteString -> Text
 bsToText = TE.decodeUtf8
 
 -- | ByteString to Double conversion
--- CRITICAL: Fail explicitly on parse error instead of silently returning 0.0
--- Silent failures can cause zero normalization factors leading to infinities
 bsToDouble :: BS.ByteString -> Double
 bsToDouble bs = case TR.double (bsToText bs) of
     Right (val, _) -> val
@@ -189,8 +133,6 @@ parseWithXeno xmlContent processId =
     -- Open tag handler - update path and context
     openTag state tagName =
         let newPath = tagName : psPath state
-            -- CRITICAL FIX: Clear pending fields when entering new exchange to prevent state leakage
-            -- If malformed XML doesn't close properly, pending fields from previous exchange could leak
             cleanState = if isElement tagName "intermediateExchange" || isElement tagName "elementaryExchange"
                          then state { psPendingInputGroup = "", psPendingOutputGroup = "" }
                          else state
@@ -206,21 +148,16 @@ parseWithXeno xmlContent processId =
                 | otherwise = psContext cleanState
         in cleanState{psPath = newPath, psContext = newContext, psTextAccum = []}
 
-    -- Attribute handler - extract critical attributes
+    -- Attribute handler - extract attributes
     attribute state name value =
-        let -- CRITICAL FIX: Check if we're currently on a property element
-            -- Property elements have their own amount/unitId attributes that should NOT overwrite exchange attributes
-            -- When processing property attributes, "property" is at the top of the path stack (O(1) check)
-            isInsideProperty = case psPath state of
+        let isInsideProperty = case psPath state of
                 [] -> False
                 (current:_) -> isElement current "property"
         in case psContext state of
             InIntermediateExchange idata ->
                 let updated
                         | isElement name "intermediateExchangeId" = idata{idFlowId = bsToText value}
-                        -- Only update amount if NOT inside a property element
                         | isElement name "amount" && not isInsideProperty = idata{idAmount = bsToDouble value}
-                        -- Only update unitId if NOT inside a property element
                         | isElement name "unitId" && not isInsideProperty = idata{idUnitId = bsToText value}
                         | isElement name "inputGroup" = idata{idInputGroup = bsToText value}
                         | isElement name "outputGroup" = idata{idOutputGroup = bsToText value}
@@ -230,9 +167,7 @@ parseWithXeno xmlContent processId =
             InElementaryExchange edata ->
                 let updated
                         | isElement name "elementaryExchangeId" = edata{edFlowId = bsToText value}
-                        -- Only update amount if NOT inside a property element
                         | isElement name "amount" && not isInsideProperty = edata{edAmount = bsToDouble value}
-                        -- Only update unitId if NOT inside a property element
                         | isElement name "unitId" && not isInsideProperty = edata{edUnitId = bsToText value}
                         | isElement name "inputGroup" = edata{edInputGroup = bsToText value}
                         | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
@@ -354,9 +289,6 @@ parseWithXeno xmlContent processId =
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "name" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                -- CRITICAL FIX: Only update flow name if <name> is a direct child of exchange
-                -- Check if the parent element (second in path, after "name") is "property"
-                -- psPath = ["name", parent, grandparent, ...]
                 isInsideProperty = case psPath state of
                     (_:parent:_) -> isElement "property" parent
                     _ -> False
@@ -368,14 +300,11 @@ parseWithXeno xmlContent processId =
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "unitName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                -- Check if we're inside a property element (same logic as for <name>)
-                -- psPath = ["unitName", parent, grandparent, ...]
                 isInsideProperty = case psPath state of
                     (_:parent:_) -> isElement parent "property"
                     _ -> False
             in case psContext state of
                 InIntermediateExchange idata | not isInsideProperty ->
-                    -- Update the exchange's unit name, and also set reference unit if outputGroup="0"
                     let newState = state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
                     in if idOutputGroup idata == "0" || psPendingOutputGroup state == "0"
                         then newState{psRefUnit = Just txt}
@@ -399,21 +328,15 @@ parseWithXeno xmlContent processId =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
             in case psContext state of
                 InElementaryExchange edata | not (T.null txt) ->
-                    -- CRITICAL FIX: Only store non-empty compartment text
-                    -- XML has nested <compartment> elements: outer wrapper (no text) and inner element (has text)
-                    -- Skipping empty text prevents adding "" from wrapper elements
                     state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = tail (psPath state), psTextAccum = []}
                 _ ->
-                    -- Empty text or not in exchange - just pop path
                     state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "subcompartment" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
             in case psContext state of
                 InElementaryExchange edata | not (T.null txt) ->
-                    -- Only store non-empty subcompartment text (consistency with compartment handling)
                     state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = tail (psPath state), psTextAccum = []}
                 _ ->
-                    -- Empty text or not in exchange - just pop path
                     state{psPath = tail (psPath state), psTextAccum = []}
         | otherwise =
             state{psPath = if null (psPath state) then [] else tail (psPath state)}
@@ -441,208 +364,19 @@ parseWithXeno xmlContent processId =
             units = reverse (psUnits st)
         in (activityWithCutoff, flows, units)
 
--- | Fast xeno-based parser (8-15x faster than xml-conduit)
+-- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
 streamParseActivityAndFlowsFromFile path = do
-    -- Read file as ByteString for xeno
     !xmlContent <- BS.readFile path
 
-    -- Extract ProcessId from filename
     let filenameBase = T.pack $ takeBaseName path
     let !processId = case EcoSpold.Parser.parseProcessId filenameBase of
             Just pid -> pid
             Nothing -> error $ "Invalid filename format for ProcessId: " ++ path
 
-    -- Try xeno parser first (fast path), fall back to xml-conduit on error
     case parseWithXeno xmlContent processId of
         Right result -> return result
-        Left err -> do
-            -- Fallback to xml-conduit for robustness
-            doc <- Text.XML.readFile def path
-            let !cursor = fromDocument doc
-            let (!proc, !flows, !units) = parseActivityWithFlowsAndUnitsOptimized cursor processId
-            let !procWithCutoff = applyCutoffStrategy proc
-            procWithCutoff `seq` flows `seq` units `seq` return (procWithCutoff, flows, units)
-
--- | Optimized version of parseActivityWithFlowsAndUnits with better memory management
-parseActivityWithFlowsAndUnitsOptimized :: Cursor -> ProcessId -> (Activity, [Flow], [Unit])
-parseActivityWithFlowsAndUnitsOptimized cursor processId =
-    let !name =
-            headOrFail "Missing <activityName>" $
-                cursor $// element (nsElement "activityName") &/ content
-        !location = case cursor $// element (nsElement "geography") >=> attribute "location" of
-            [] ->
-                headOrFail "Missing geography shortname" $
-                    cursor $// element (nsElement "shortname") &/ content
-            (x : _) -> x
-
-        -- Activity both types of exchanges
-        !interNodes = cursor $// element (nsElement "intermediateExchange")
-        !elemNodes = cursor $// element (nsElement "elementaryExchange")
-        !interExchsWithFlowsAndUnits = map parseExchangeWithFlowOptimized interNodes
-        !elemExchsWithFlowsAndUnits = map parseElementaryExchangeWithFlowOptimized elemNodes
-        (!interExchs, !interFlows, !interUnits) = unzip3 interExchsWithFlowsAndUnits
-        (!elemExchs, !elemFlows, !elemUnits) = unzip3 elemExchsWithFlowsAndUnits
-        !exchs = interExchs ++ elemExchs
-        !flows = interFlows ++ elemFlows
-        !units = interUnits ++ elemUnits
-        description = extractGeneralComment cursor name
-        synonyms = M.empty -- TODO: Extract from XML when available
-        -- Parse classifications (ISIC, CPC, etc.)
-        classifications = M.fromList
-            [ (system, value)
-            | classNode <- cursor $// element (nsElement "classification")
-            , let systemNodes = classNode $/ element (nsElement "classificationSystem") &/ content
-            , let valueNodes = classNode $/ element (nsElement "classificationValue") &/ content
-            , not (null systemNodes || null valueNodes)
-            , let system = T.strip (head systemNodes)
-            , let value = T.strip (head valueNodes)
-            , not (T.null system || T.null value)
-            ]
-        refUnit = case cursor
-            $// element (nsElement "intermediateExchange")
-            >=> attributeIs "outputGroup" "0" of
-            [] -> "unit" -- Default fallback - no reference product found
-            (refProdCursor : _) ->
-                -- Extract unitName from the reference product exchange
-                case refProdCursor $/ element (nsElement "unitName") &/ content of
-                    [] -> "unit" -- Fallback if unitName element missing
-                    (unit : _) -> unit
-
-        -- Use XML activity UUID for backward compatibility
-        -- Note: ProcessId is now just an index, not stored in Activity
-        !xmlActivityUUID =
-            headOrFail "Missing activity@id or activity@activityId" $
-                (cursor $// element (nsElement "activity") >=> attribute "id")
-                    <> (cursor $// element (nsElement "activity") >=> attribute "activityId")
-        -- Activity constructor now takes 7 arguments (removed activityId and activityProcessId)
-        !activity = Activity name description synonyms classifications location refUnit exchs
-     in (activity, flows, units)
-
--- | Memory-optimized exchange parsing with strict evaluation
-parseExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow, Unit)
-parseExchangeWithFlowOptimized cur =
-    let !fid = getAttr cur "intermediateExchangeId"
-        !amount = read $ T.unpack $ getAttr cur "amount"
-        !unitId = getAttr cur "unitId"
-
-        -- Extract child element content with strict evaluation and safe access
-        !fname = case cur $/ element (nsElement "name") &/ content of
-            [] -> fid -- Use flowId as fallback name to save memory
-            (x : _) -> x
-        !unitName = case cur $/ element (nsElement "unitName") &/ content of
-            [] -> "unit" -- Default unit
-            (x : _) -> x
-
-        -- Extract inputGroup and outputGroup from child elements
-        -- Some datasets keep group flags as attributes, others nest them as child nodes.
-        -- Prefer attributes (correct EcoSpold structure) but fall back to elements.
-        !attrInputGroup = T.strip $ getAttr cur "inputGroup"
-        !attrOutputGroup = T.strip $ getAttr cur "outputGroup"
-        !inputGroup =
-            if not (T.null attrInputGroup)
-                then attrInputGroup
-                else case cur $/ element (nsElement "inputGroup") &/ content of
-                    [] -> ""
-                    (x : _) -> T.strip x
-        !outputGroup =
-            if not (T.null attrOutputGroup)
-                then attrOutputGroup
-                else case cur $/ element (nsElement "outputGroup") &/ content of
-                    [] -> ""
-                    (x : _) -> T.strip x
-
-        -- Determine type based on input/output groups (mutually exclusive)
-        !isInput = inputGroup /= ""
-        !isOutput = not isInput
-        -- Reference flow identification for both production AND treatment activities:
-        -- Production: output (no inputGroup) with outputGroup="0" and positive amount
-        -- Treatment: input (has inputGroup) with negative amount (e.g., waste treatment)
-        -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
-        -- Note: outputGroup="4" is byproduct allocated, NOT a reference product
-        !isRef = (isOutput && outputGroup == "0") || (isInput && amount < 0)
-        !ftype = Technosphere
-
-        -- Extract activityLinkId for technosphere navigation (required for technosphere)
-        !activityLinkIdText = getAttr cur "activityLinkId"
-
-        -- For now, we don't have the ProcessId available during parsing
-        -- It will be resolved during database building when we have the full UUID mapping
-        !processLinkId = Nothing  -- Will be resolved during database construction
-        !synonyms = parseSynonyms cur
-        !flow = Flow fid fname "technosphere" unitId ftype synonyms
-        !unit = Unit unitId unitName unitName "" -- Use unitName for both name and symbol, empty comment
-        !exchange = TechnosphereExchange fid amount unitId isInput isRef activityLinkIdText processLinkId
-     in (exchange, flow, unit)
-
--- | Optimized elementary exchange parsing
-parseElementaryExchangeWithFlowOptimized :: Cursor -> (Exchange, Flow, Unit)
-parseElementaryExchangeWithFlowOptimized cur =
-    let !fid = getAttr cur "elementaryExchangeId"
-        !amount = read $ T.unpack $ getAttr cur "amount"
-        !unitId = getAttr cur "unitId"
-
-        !fname = case cur $/ element (nsElement "name") &/ content of
-            [] -> fid
-            (x : _) -> x
-        !unitName = case cur $/ element (nsElement "unitName") &/ content of
-            [] -> "kg"
-            (x : _) -> x
-
-        !attrInputGroup = T.strip $ getAttr cur "inputGroup"
-        !attrOutputGroup = T.strip $ getAttr cur "outputGroup"
-        !inputGroup =
-            if not (T.null attrInputGroup)
-                then attrInputGroup
-                else case cur $/ element (nsElement "inputGroup") &/ content of
-                    [] -> ""
-                    (x : _) -> T.strip x
-        !outputGroup =
-            if not (T.null attrOutputGroup)
-                then attrOutputGroup
-                else case cur $/ element (nsElement "outputGroup") &/ content of
-                    [] -> ""
-                    (x : _) -> T.strip x
-
-        !isInput = inputGroup /= ""
-        !ftype = Biosphere
-        !category = extractCompartmentCategory cur
-
-        !synonyms = parseSynonyms cur
-        !flow = Flow fid fname category unitId ftype synonyms
-        !unit = Unit unitId unitName unitName "" -- Use unitName for both name and symbol, empty comment
-        !exchange = BiosphereExchange fid amount unitId isInput
-     in (exchange, flow, unit)
-
--- | Extract generalComment text nodes, ordered by index attribute
-extractGeneralComment :: Cursor -> Text -> [Text]
-extractGeneralComment cursor fallbackName =
-    let textNodes =
-            cursor
-                $// element (nsElement "generalComment")
-                &/ element (nsElement "text")
-        -- Extract text content and index attributes
-        textWithIndexes =
-            [ (readIndexSafe idx, content)
-            | textNode <- textNodes
-            , let contentList = textNode $/ content
-            , let content = T.concat contentList
-            , let idx = case textNode $| attribute "index" of
-                    [] -> "0" -- Default index if missing
-                    (x : _) -> x
-            , not (T.null content)
-            ]
-        -- Sort by index and return as list
-        sortedTexts = map snd $ Data.List.sortOn fst textWithIndexes
-     in case sortedTexts of
-            [] -> [fallbackName] -- Fallback to name if no text content
-            texts -> texts -- Return list of text nodes
-
--- | Safely parse index attribute with fallback
-readIndexSafe :: Text -> Int
-readIndexSafe t = case reads (T.unpack t) of
-    [(n, "")] -> n
-    _ -> 0 -- Default to 0 if parsing fails
+        Left err -> error $ "Failed to parse " ++ path ++ ": " ++ err
 
 {- | Apply cut-off strategy
 1. Remove zero-amount production exchanges (co-products)
@@ -657,12 +391,10 @@ applyCutoffStrategy activity =
         filteredExchanges = removeZeroAmountCoproducts originalExchanges
         updatedActivity = activity{exchanges = filteredExchanges}
         refsAfterFilter = filter exchangeIsReference filteredExchanges
-        -- CONSERVATIVE: Only apply single reference assignment if no reference products exist
         finalActivity =
             if hasReferenceProduct updatedActivity
-                then updatedActivity -- Keep existing reference products
+                then updatedActivity
                 else assignSingleProductAsReference updatedActivity
-        -- CRITICAL VALIDATION: Ensure we have a reference product after all attempts
      in if hasReferenceProduct finalActivity
            then finalActivity
            else error $ "Activity has no reference product after cutoff strategy: "
@@ -677,21 +409,14 @@ hasReferenceProduct :: Activity -> Bool
 hasReferenceProduct activity = any exchangeIsReference (exchanges activity)
 
 -- | Remove production exchanges with zero amounts
--- CRITICAL: ALWAYS keep reference products, even if zero amount
--- Zero-amount reference products will be caught by normalization validation
 removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
 removeZeroAmountCoproducts exs = filter keepExchange exs
   where
-
-    -- ALWAYS keep reference products (isRef=True), even if amount is zero
     keepExchange (TechnosphereExchange _ _ _ False True _ _) = True
-    -- For non-reference outputs (co-products), only keep non-zero amounts
     keepExchange (TechnosphereExchange _ amount _ False False _ _) = amount /= 0.0
-    -- Keep all inputs
     keepExchange (TechnosphereExchange _ _ _ True _ _ _) = True
-    -- Keep all biosphere exchanges
     keepExchange (BiosphereExchange _ _ _ _) = True
-    keepExchange _ = True -- Keep everything else
+    keepExchange _ = True
 
 -- | Assign single product as reference product
 assignSingleProductAsReference :: Activity -> Activity

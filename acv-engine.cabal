@@ -26,7 +26,6 @@ executable acv-cli
                      , optparse-applicative
                      , text
                      , containers
-                     , xml-conduit
                      , xeno
                      , filepath
                      , directory
@@ -117,7 +116,6 @@ test-suite acv-tests
                      , vector
                      , vector-binary-instances
                      , bytestring
-                     , xml-conduit
                      , xeno
                      , directory
                      , filepath
