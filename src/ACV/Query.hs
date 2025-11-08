@@ -24,8 +24,9 @@ import System.IO.Unsafe (unsafePerformIO)
 SIGN CONVENTION:
 - Technosphere triplets are stored as POSITIVE values (input coefficients per unit output)
 - Matrix.hs negates these when constructing (I-A) system matrix for solving
-- The biosphere matrix stores emissions as positive, resource extraction as negative
-- This follows standard LCA convention where A contains positive input coefficients
+- The biosphere matrix stores ALL flows as POSITIVE (emissions AND resource extractions)
+- Resource extractions represent "outputs" from nature into the technosphere (positive like emissions)
+- This follows Ecoinvent convention where B matrix contains positive values for all environmental flows
 
 Matrix Construction:
 - Accepts a Map with (UUID, UUID) keys and converts to Vector internally
@@ -152,10 +153,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                             else error $ "Zero normalization factor for biosphere at activity index "
                                                       ++ show j ++ " (activity: "
                                                       ++ T.unpack (activityName activity) ++ ")"
-                                    value =
-                                        if exchangeIsInput ex
-                                            then -(rawValue / denom) -- Resource extraction
-                                            else rawValue / denom -- Emissions
+                                    -- Ecoinvent convention: ALL biosphere flows are positive (both emissions AND resource extractions)
+                                    -- Resource extractions represent "outputs" from nature into the technosphere
+                                    -- NO sign inversion needed - store as positive regardless of input/output status
+                                    value = rawValue / denom
                                  in [(i, j, value) | abs value > 1e-15]
                             Nothing -> []
 
