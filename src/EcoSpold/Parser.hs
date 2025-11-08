@@ -192,10 +192,10 @@ parseWithXeno xmlContent processId =
     closeTag state tagName
         | isElement tagName "activityName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-            in state{psActivityName = Just txt, psContext = Other, psTextAccum = []}
+            in state{psActivityName = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "shortname" && psContext state == InGeographyShortname =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-            in state{psLocation = Just txt, psContext = Other, psTextAccum = []}
+            in state{psLocation = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "intermediateExchange" =
             case psContext state of
                 InIntermediateExchange idata ->
@@ -239,6 +239,7 @@ parseWithXeno xmlContent processId =
                         , psFlows = flow : psFlows state
                         , psUnits = unit : psUnits state
                         , psContext = Other
+                        , psPath = tail (psPath state)
                         , psTextAccum = []
                         , psPendingInputGroup = ""
                         , psPendingOutputGroup = ""
@@ -278,6 +279,7 @@ parseWithXeno xmlContent processId =
                         , psFlows = flow : psFlows state
                         , psUnits = unit : psUnits state
                         , psContext = Other
+                        , psPath = tail (psPath state)
                         , psTextAccum = []
                         , psPendingInputGroup = ""
                         , psPendingOutputGroup = ""
@@ -299,9 +301,9 @@ parseWithXeno xmlContent processId =
                     _ -> False
             in case psContext state of
                 InIntermediateExchange idata | not isInsideProperty ->
-                    state{psContext = InIntermediateExchange idata{idFlowName = txt}, psTextAccum = []}
+                    state{psContext = InIntermediateExchange idata{idFlowName = txt}, psPath = tail (psPath state), psTextAccum = []}
                 InElementaryExchange edata | not isInsideProperty ->
-                    state{psContext = InElementaryExchange edata{edFlowName = txt}, psTextAccum = []}
+                    state{psContext = InElementaryExchange edata{edFlowName = txt}, psPath = tail (psPath state), psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "unitName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
@@ -310,9 +312,9 @@ parseWithXeno xmlContent processId =
                     _ -> False
             in case psContext state of
                 InIntermediateExchange idata | not isInsideProperty ->
-                    state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
+                    state{psContext = InIntermediateExchange idata{idUnitName = txt}, psPath = tail (psPath state), psTextAccum = []}
                 InElementaryExchange edata | not isInsideProperty ->
-                    state{psContext = InElementaryExchange edata{edUnitName = txt}, psTextAccum = []}
+                    state{psContext = InElementaryExchange edata{edUnitName = txt}, psPath = tail (psPath state), psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "synonym" =
             -- Synonym text is accumulated but not yet stored in exchange data
