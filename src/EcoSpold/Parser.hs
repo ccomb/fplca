@@ -241,15 +241,7 @@ parseWithXeno xmlContent processId =
             InGeneralCommentText _ ->
                 let idx = if isElement name "index" then bsToInt value else 0
                 in state{psContext = InGeneralCommentText idx}
-            _ ->
-                -- Handle reference unit from intermediateExchange with outputGroup="0"
-                if isElement name "unitName" && any (isElement "intermediateExchange") (psPath state)
-                    then case psContext state of
-                        InIntermediateExchange idata
-                            | idOutputGroup idata == "0" ->  -- Only outputGroup=0 is reference product
-                                state{psRefUnit = Just (bsToText value)}
-                        _ -> state
-                    else state
+            _ -> state
 
     -- End of opening tag - no action needed for SAX
     endOpen state _tagName = state
@@ -376,10 +368,19 @@ parseWithXeno xmlContent processId =
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "unitName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+                -- Check if we're inside a property element (same logic as for <name>)
+                -- psPath = ["unitName", parent, grandparent, ...]
+                isInsideProperty = case psPath state of
+                    (_:parent:_) -> isElement parent "property"
+                    _ -> False
             in case psContext state of
-                InIntermediateExchange idata ->
-                    state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
-                InElementaryExchange edata ->
+                InIntermediateExchange idata | not isInsideProperty ->
+                    -- Update the exchange's unit name, and also set reference unit if outputGroup="0"
+                    let newState = state{psContext = InIntermediateExchange idata{idUnitName = txt}, psTextAccum = []}
+                    in if idOutputGroup idata == "0" || psPendingOutputGroup state == "0"
+                        then newState{psRefUnit = Just txt}
+                        else newState
+                InElementaryExchange edata | not isInsideProperty ->
                     state{psContext = InElementaryExchange edata{edUnitName = txt}, psTextAccum = []}
                 _ -> state{psPath = tail (psPath state), psTextAccum = []}
         | isElement tagName "synonym" =
@@ -500,10 +501,13 @@ parseActivityWithFlowsAndUnitsOptimized cursor processId =
             ]
         refUnit = case cursor
             $// element (nsElement "intermediateExchange")
-            >=> attributeIs "outputGroup" "0"
-            >=> attribute "unitName" of
-            [] -> "unit" -- Default fallback
-            (unit : _) -> unit
+            >=> attributeIs "outputGroup" "0" of
+            [] -> "unit" -- Default fallback - no reference product found
+            (refProdCursor : _) ->
+                -- Extract unitName from the reference product exchange
+                case refProdCursor $/ element (nsElement "unitName") &/ content of
+                    [] -> "unit" -- Fallback if unitName element missing
+                    (unit : _) -> unit
 
         -- Use XML activity UUID for backward compatibility
         -- Note: ProcessId is now just an index, not stored in Activity
