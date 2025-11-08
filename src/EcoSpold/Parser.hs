@@ -208,9 +208,12 @@ parseWithXeno xmlContent processId =
 
     -- Attribute handler - extract critical attributes
     attribute state name value =
-        let -- CRITICAL FIX: Check if we're inside a property element
+        let -- CRITICAL FIX: Check if we're currently on a property element
             -- Property elements have their own amount/unitId attributes that should NOT overwrite exchange attributes
-            isInsideProperty = any (isElement "property") (psPath state)
+            -- When processing property attributes, "property" is at the top of the path stack (O(1) check)
+            isInsideProperty = case psPath state of
+                [] -> False
+                (current:_) -> isElement current "property"
         in case psContext state of
             InIntermediateExchange idata ->
                 let updated
