@@ -156,7 +156,7 @@ data ExchangeWithUnit = ExchangeWithUnit
 
 -- | Activity information optimized for API responses
 data ActivityForAPI = ActivityForAPI
-    { pfaId :: UUID
+    { pfaId :: Text  -- ProcessId format: "activityUUID_productUUID"
     , pfaName :: Text
     , pfaDescription :: [Text] -- Description par paragraphes
     , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
