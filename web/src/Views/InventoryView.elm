@@ -3,6 +3,7 @@ module Views.InventoryView exposing (viewInventoryPage)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Models.Inventory exposing (InventoryExport, InventoryFlowDetail)
+import Utils.Format as Format
 
 viewInventoryPage : Maybe InventoryExport -> Bool -> Maybe String -> Html msg
 viewInventoryPage maybeInventory loading error =
@@ -105,7 +106,7 @@ viewInventoryRow flowDetail =
                 , small [ class "has-text-grey" ] [ text flowDetail.ifdFlow.flowId ]
                 ]
             ]
-        , td [ class "has-text-right" ] [ text (String.fromFloat flowDetail.ifdQuantity) ]
+        , td [ class "has-text-right" ] [ text (Format.formatScientific flowDetail.ifdQuantity) ]
         , td [] [ text flowDetail.ifdUnitName ]
         , td []
             [ span

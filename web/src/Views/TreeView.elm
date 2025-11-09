@@ -8,6 +8,7 @@ import Models.Activity exposing (ActivityTree, ActivityNode, ActivityEdge, NodeT
 import Svg exposing (Svg, svg, g, circle, text_, path, defs, marker, polygon)
 import Svg.Attributes as SvgA exposing (width, height, viewBox, cx, cy, r, fill, stroke, strokeWidth, textAnchor, fontSize, fontWeight, d, markerEnd, id, markerWidth, markerHeight, refX, refY, orient, points, x, y, class)
 import Svg.Events
+import Utils.Format as Format
 
 
 type Msg
@@ -344,7 +345,7 @@ drawEdge positions sizes edge =
                     , fill "#444"
                     , SvgA.style "background: white; padding: 2px;"
                     ]
-                    [ Svg.text (String.fromFloat edge.quantity ++ " " ++ edge.unit) ]
+                    [ Svg.text (Format.formatScientific edge.quantity ++ " " ++ edge.unit) ]
                 ]
         )
         (Dict.get edge.from positions)
