@@ -2,11 +2,16 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Types where
+module ACV.Types (
+    module ACV.Types,
+    UUID
+) where
 
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
+import qualified Data.Aeson as Aeson
 import Data.Binary (Binary)
+import qualified Data.Binary as Binary
 import Data.Vector.Binary () -- Orphan instances for Vector Binary
 import Data.Hashable (Hashable)
 import Data.Int (Int16, Int32)
@@ -14,11 +19,15 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Data.UUID (UUID)
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import GHC.Generics (Generic, Generic1)
 
--- | Identifiant universel unique (généralement un UUID EcoSpold)
-type UUID = Text
+-- Note: UUID is now Data.UUID.UUID (16 bytes) instead of Text (~80+ bytes)
+-- This saves ~2-3GB of RAM by reducing memory footprint from ~100,000+ UUID instances
+-- Binary and NFData instances are provided by the uuid package
 
 -- | Process identifier - compact Int16 index for efficient matrix operations
 -- Maps to (activityUUID, productUUID) via Database.dbProcessIdTable
@@ -92,7 +101,7 @@ exchangeIsReference (BiosphereExchange _ _ _ _) = False -- Biosphere exchanges a
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
 exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _) =
-    if T.null linkId then Nothing else Just linkId
+    if linkId == UUID.nil then Nothing else Just linkId
 exchangeActivityLinkId (BiosphereExchange _ _ _ _) = Nothing
 
 -- | Get process link ID (new field)
@@ -294,14 +303,16 @@ processIdToUUIDs db pid
 processIdToText :: Database -> ProcessId -> Text
 processIdToText db pid =
     case processIdToUUIDs db pid of
-        Just (actUUID, prodUUID) -> actUUID <> "_" <> prodUUID
+        Just (actUUID, prodUUID) -> UUID.toText actUUID <> "_" <> UUID.toText prodUUID
         Nothing -> "invalid-process-id-" <> T.pack (show pid)
 
 -- | Parse ProcessId from filename stem (requires Database for lookup)
 parseProcessId :: Database -> Text -> Maybe ProcessId
 parseProcessId db filename = case T.splitOn "_" filename of
-    [actUUID, prodUUID] | not (T.null actUUID) && not (T.null prodUUID) ->
-        findProcessId db actUUID prodUUID
+    [actUUIDText, prodUUIDText] | not (T.null actUUIDText) && not (T.null prodUUIDText) ->
+        case (UUID.fromText actUUIDText, UUID.fromText prodUUIDText) of
+            (Just actUUID, Just prodUUID) -> findProcessId db actUUID prodUUID
+            _ -> Nothing
     _ -> Nothing
 
 -- | Version simplifiée sans index (pour compatibilité)

@@ -14,6 +14,7 @@ import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import GHC.Generics (Generic)
 import System.IO (hPutStrLn, stderr)
@@ -88,10 +89,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                                             Nothing ->
                                                 let !_ = unsafePerformIO $ hPutStrLn stderr $
                                                         "[WARNING] Missing activity-product pair referenced by exchange:\n"
-                                                        ++ "  Activity UUID: " ++ T.unpack actUUID ++ "\n"
-                                                        ++ "  Product UUID: " ++ T.unpack (exchangeFlowId ex) ++ "\n"
+                                                        ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
+                                                        ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
                                                         ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
-                                                        ++ "  Expected file: " ++ T.unpack actUUID ++ "_" ++ T.unpack (exchangeFlowId ex) ++ ".spold\n"
+                                                        ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
                                                         ++ "  This exchange will be skipped."
                                                 in Nothing
                                     Nothing -> Nothing

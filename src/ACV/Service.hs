@@ -72,12 +72,15 @@ resolveActivityAndProcessId db queryText =
                 Nothing -> Left $ ActivityNotFound queryText
         Left _ ->
             -- Fallback: try as bare UUID for ECOINVENT data compatibility
-            case findProcessIdByActivityUUID db queryText of
-                Just processId ->
-                    case findActivityByProcessId db processId of
-                        Just activity -> Right (processId, activity)
-                        Nothing -> Left $ ActivityNotFound queryText
-                Nothing -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid) or valid UUID: " <> queryText
+            case UUID.fromText queryText of
+                Just uuid ->
+                    case findProcessIdByActivityUUID db uuid of
+                        Just processId ->
+                            case findActivityByProcessId db processId of
+                                Just activity -> Right (processId, activity)
+                                Nothing -> Left $ ActivityNotFound queryText
+                        Nothing -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid) or valid UUID: " <> queryText
+                Nothing -> Left $ InvalidProcessId $ "Invalid UUID format: " <> queryText
 
 -- | Validate that a ProcessId exists in the matrix activity index
 -- This check ensures we fail fast with clear error messages before expensive matrix operations
@@ -261,7 +264,7 @@ getTreeNodeId db (TreeLeaf activity) =
     case findProcessIdForActivity db activity of
         Just processId -> processIdToText db processId
         Nothing -> "unknown-activity"  -- Fallback
-getTreeNodeId _ (TreeLoop uuid _ _) = uuid -- Loop references remain as bare UUID
+getTreeNodeId _ (TreeLoop uuid _ _) = UUID.toText uuid -- Loop references converted to Text
 getTreeNodeId db (TreeNode activity _) =
     case findProcessIdForActivity db activity of
         Just processId -> processIdToText db processId
@@ -302,20 +305,21 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
             nodes' = M.insert processIdText node nodeAcc -- Use ProcessId as key
          in (nodes', edgeAcc, TreeStats 1 0 1)
     TreeLoop uuid name depth ->
-        let node =
+        let uuidText = UUID.toText uuid
+            node =
                 ExportNode
-                    { enId = uuid -- Keep loop references as bare UUID
+                    { enId = uuidText -- Convert UUID to Text for API
                     , enName = name
                     , enDescription = ["Loop reference"]
                     , enLocation = "N/A"
                     , enUnit = "N/A"
                     , enNodeType = LoopNode
                     , enDepth = depth
-                    , enLoopTarget = Just uuid
+                    , enLoopTarget = Just uuidText
                     , enParentId = parentId
                     , enChildrenCount = 0 -- Loops don't expand
                     }
-            nodes' = M.insert uuid node nodeAcc
+            nodes' = M.insert uuidText node nodeAcc
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
         let childrenCount = countPotentialChildren db activity
@@ -369,12 +373,15 @@ getActivityTree :: Database -> Text -> Int -> Either ServiceError Value
 getActivityTree db queryText maxDepth = do
     (processId, activity) <- resolveActivityAndProcessId db queryText
     -- Get the activity UUID from the processIdText (which is activityUUID_productUUID)
-    let activityUuid = case T.splitOn "_" queryText of
+    let activityUuidText = case T.splitOn "_" queryText of
             (uuid:_) -> uuid
             [] -> queryText  -- Fallback
-        loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
-        treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
-     in Right $ toJSON treeExport
+    case UUID.fromText activityUuidText of
+        Just activityUuid ->
+            let loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
+                treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
+             in Right $ toJSON treeExport
+        Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
 
 -- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int
@@ -571,23 +578,29 @@ getActivityOutputDetails db activity = getActivityExchangeDetails db activity (n
 
 -- | Get flow info as JSON (for CLI)
 getFlowInfo :: Database -> Text -> Either ServiceError Value
-getFlowInfo db flowId = do
-    case M.lookup flowId (dbFlows db) of
-        Nothing -> Left $ FlowNotFound flowId
-        Just flow ->
-            let usageCount = getFlowUsageCount db flowId
-                unitName = getUnitNameForFlow (dbUnits db) flow
-                flowDetail = FlowDetail flow unitName usageCount
-             in Right $ toJSON flowDetail
+getFlowInfo db flowIdText = do
+    case UUID.fromText flowIdText of
+        Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
+        Just flowId ->
+            case M.lookup flowId (dbFlows db) of
+                Nothing -> Left $ FlowNotFound flowIdText
+                Just flow ->
+                    let usageCount = getFlowUsageCount db flowId
+                        unitName = getUnitNameForFlow (dbUnits db) flow
+                        flowDetail = FlowDetail flow unitName usageCount
+                     in Right $ toJSON flowDetail
 
 -- | Get activities that use a specific flow as JSON (for CLI)
 getFlowActivities :: Database -> Text -> Either ServiceError Value
-getFlowActivities db flowId = do
-    case M.lookup flowId (dbFlows db) of
-        Nothing -> Left $ FlowNotFound flowId
-        Just _ ->
-            let activities = getActivitiesUsingFlow db flowId
-             in Right $ toJSON activities
+getFlowActivities db flowIdText = do
+    case UUID.fromText flowIdText of
+        Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
+        Just flowId ->
+            case M.lookup flowId (dbFlows db) of
+                Nothing -> Left $ FlowNotFound flowIdText
+                Just _ ->
+                    let activities = getActivitiesUsingFlow db flowId
+                     in Right $ toJSON activities
 
 -- | Get available synonym languages (placeholder)
 -- | Compute LCIA scores (placeholder)
@@ -612,32 +625,35 @@ exportMatrixDebugData database processIdText opts = do
         Left err -> return $ Left err
         Right (processId, targetActivity) -> do
             -- Extract the activityUUID from processIdText (format: activityUUID_productUUID)
-            let activityUuid = case T.splitOn "_" processIdText of
+            let activityUuidText = case T.splitOn "_" processIdText of
                     (uuid:_) -> uuid
                     [] -> processIdText  -- Fallback
-            -- Extract matrix debugging information (includes all computations)
-            let matrixData = extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
+            case UUID.fromText activityUuidText of
+                Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
+                Just activityUuid -> do
+                    -- Extract matrix debugging information (includes all computations)
+                    let matrixData = extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
 
-            -- Get inventory from matrixData (already computed)
-            let inventoryList = mdInventoryVector matrixData
-            let bioFlowUUIDs = mdBioFlowUUIDs matrixData
-            let inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
+                    -- Get inventory from matrixData (already computed)
+                    let inventoryList = mdInventoryVector matrixData
+                    let bioFlowUUIDs = mdBioFlowUUIDs matrixData
+                    let inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
 
-            -- Proper IO for CSV export
-            putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
-            exportMatrixDebugCSVs (debugOutput opts) matrixData
-            putStrLn $ "DEBUG: CSV export completed"
+                    -- Proper IO for CSV export
+                    putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
+                    exportMatrixDebugCSVs (debugOutput opts) matrixData
+                    putStrLn $ "DEBUG: CSV export completed"
 
-            let summary =
-                    M.fromList
-                        [ ("activity_uuid" :: Text, activityUuid)
-                        , ("activity_name" :: Text, activityName targetActivity)
-                        , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
-                        , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
-                        , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
-                        , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
-                        ]
-            return $ Right $ toJSON summary
+                    let summary =
+                            M.fromList
+                                [ ("activity_uuid" :: Text, UUID.toText activityUuid)
+                                , ("activity_name" :: Text, activityName targetActivity)
+                                , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
+                                , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
+                                , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
+                                , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
+                                ]
+                    return $ Right $ toJSON summary
 
 -- | Extract matrix debug information from Database
 extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> MatrixDebugInfo
@@ -914,7 +930,7 @@ exportEEIndex filePath db = do
                                 [] -> ("unspecified", "")
                                 [c] -> (T.strip c, "")
                                 (c:s:_) -> (T.strip c, T.strip s)
-                            unit = flowUnitId flow
+                            unit = UUID.toText $ flowUnitId flow
                         in escapeCsvField (flowName flow) <> ";" <>
                            escapeCsvField compartment <> ";" <>
                            escapeCsvField subcompartment <> ";" <>

@@ -60,10 +60,13 @@ withValidatedFlow db uuid action = do
     case ACV.Service.validateUUID uuid of
         Left (ACV.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
         Left _ -> throwError err400{errBody = "Invalid request"}
-        Right validUuid ->
-            case M.lookup validUuid (dbFlows db) of
-                Nothing -> throwError err404{errBody = "Flow not found"}
-                Just flow -> action flow
+        Right validUuidText ->
+            case UUID.fromText validUuidText of
+                Nothing -> throwError err400{errBody = "Invalid UUID format"}
+                Just validUuid ->
+                    case M.lookup validUuid (dbFlows db) of
+                        Nothing -> throwError err404{errBody = "Flow not found"}
+                        Just flow -> action flow
 
 -- | API server implementation with multiple focused endpoints
 acvServer :: Database -> Int -> SharedSolver -> Server ACVAPI
@@ -119,11 +122,14 @@ acvServer db maxTreeDepth sharedSolver =
         -- Use CLI --tree-depth option for configurable depth
         -- Default depth limit prevents DOS attacks via deep tree requests
         -- Extract activity UUID from processId (format: activityUUID_productUUID)
-        let activityUuid = case T.splitOn "_" processId of
+        let activityUuidText = case T.splitOn "_" processId of
                 (uuid:_) -> uuid
                 [] -> processId  -- Fallback
-            loopAwareTree = buildLoopAwareTree db activityUuid maxTreeDepth
-        return $ ACV.Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
+        case UUID.fromText activityUuidText of
+            Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
+            Just activityUuid -> do
+                let loopAwareTree = buildLoopAwareTree db activityUuid maxTreeDepth
+                return $ ACV.Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
@@ -137,15 +143,15 @@ acvServer db maxTreeDepth sharedSolver =
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
-    getFlowDetail flowId = withValidatedFlow db flowId $ \flow -> do
-        let usageCount = ACV.Service.getFlowUsageCount db flowId
+    getFlowDetail flowIdText = withValidatedFlow db flowIdText $ \flow -> do
+        let usageCount = ACV.Service.getFlowUsageCount db (flowId flow)
         let unitName = getUnitNameForFlow (dbUnits db) flow
         return $ FlowDetail flow unitName usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Handler [ActivitySummary]
-    getFlowActivities flowId = withValidatedFlow db flowId $ \_ ->
-        return $ ACV.Service.getActivitiesUsingFlow db flowId
+    getFlowActivities flowIdText = withValidatedFlow db flowIdText $ \flow ->
+        return $ ACV.Service.getActivitiesUsingFlow db (flowId flow)
 
     -- Search flows by name or synonym with optional language filtering and pagination
     searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)

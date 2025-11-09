@@ -13,10 +13,33 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
+import qualified Data.UUID as UUID
+import qualified Data.UUID.V5 as UUID5
 import System.FilePath (takeBaseName)
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Xeno.SAX as X
+
+-- | Namespace UUID for generating deterministic UUIDs from invalid text
+-- Using UUID v5 (SHA1-based) with a custom namespace for test data compatibility
+testDataNamespace :: UUID
+testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "acvengine.test")
+
+-- | Helper to safely parse UUID from Text, generating deterministic UUID for invalid formats
+-- This ensures test data with invalid UUIDs like "productX-uuid" get unique UUIDs
+parseUUID :: Text -> UUID
+parseUUID txt = case UUID.fromText txt of
+    Just uuid -> uuid
+    Nothing ->
+        -- Generate deterministic UUID from the text using UUID v5
+        -- This prevents deduplication issues where all invalid UUIDs would map to nil
+        let generatedUUID = UUID5.generateNamed testDataNamespace (BS.unpack $ TE.encodeUtf8 txt)
+            -- Only warn for non-empty invalid UUIDs (empty is expected for optional fields)
+            !_ = if T.null txt
+                 then ()
+                 else unsafePerformIO $ hPutStrLn stderr $
+                      "[WARNING] Invalid UUID format: " ++ T.unpack txt ++ " - generated UUID: " ++ show generatedUUID
+        in generatedUUID
 
 -- | Parse ProcessId from filename (no Database needed here)
 -- Expects format: activity_uuid_product_uuid.spold
@@ -214,22 +237,22 @@ parseWithXeno xmlContent processId =
                         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
                         exchange = TechnosphereExchange
-                            (idFlowId idata)
+                            (parseUUID $ idFlowId idata)
                             (idAmount idata)
-                            (idUnitId idata)
+                            (parseUUID $ idUnitId idata)
                             isInput
                             isReferenceProduct
-                            (idActivityLinkId idata)
+                            (parseUUID $ idActivityLinkId idata)
                             Nothing
                         flow = Flow
-                            (idFlowId idata)
+                            (parseUUID $ idFlowId idata)
                             (if T.null (idFlowName idata) then idFlowId idata else idFlowName idata)
                             "technosphere"
-                            (idUnitId idata)
+                            (parseUUID $ idUnitId idata)
                             Technosphere
                             (idSynonyms idata)
                         unit = Unit
-                            (idUnitId idata)
+                            (parseUUID $ idUnitId idata)
                             (if T.null (idUnitName idata)
                              then let !_ = unsafePerformIO $ hPutStrLn stderr $
                                           "[WARNING] Missing unit name for intermediate exchange with flow ID: "
@@ -277,19 +300,19 @@ parseWithXeno xmlContent processId =
                                           (comp : _) | T.toLower comp == "natural resource" -> True
                                           _ -> False  -- Default to output (emissions)
                         exchange = BiosphereExchange
-                            (edFlowId edata)
+                            (parseUUID $ edFlowId edata)
                             (edAmount edata)
-                            (edUnitId edata)
+                            (parseUUID $ edUnitId edata)
                             isInput
                         flow = Flow
-                            (edFlowId edata)
+                            (parseUUID $ edFlowId edata)
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
                             category
-                            (edUnitId edata)
+                            (parseUUID $ edUnitId edata)
                             Biosphere
                             (edSynonyms edata)
                         unit = Unit
-                            (edUnitId edata)
+                            (parseUUID $ edUnitId edata)
                             (if T.null (edUnitName edata)
                              then let !_ = unsafePerformIO $ hPutStrLn stderr $
                                           "[WARNING] Missing unit name for elementary exchange with flow ID: "

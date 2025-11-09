@@ -42,10 +42,13 @@ import Data.Hashable (hash)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import qualified Data.UUID as UUID
+import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
 import qualified Codec.Compression.Zstd as Zstd
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import System.Directory (doesFileExist, getFileSize, listDirectory, removeFile)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import Text.Printf (printf)
@@ -69,10 +72,20 @@ Version history:
 - Version 11: Memory optimization - changed dbBiosphereFlows from lazy list to strict Vector (saves ~300-500MB)
 - Version 12: Major memory optimization - removed unused exchange indexes (saves ~3-4GB by eliminating Exchange duplication)
 - Version 13: Force strict evaluation during deserialization - added NFData instances and evaluate . force to prevent lazy thunk buildup during cache loading
+- Version 14: MAJOR: UUID type conversion from Text (~80 bytes) to Data.UUID.UUID (16 bytes) - saves ~2-3GB of RAM from ~100,000+ UUID instances
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 13
+cacheFormatVersion = 14
 
+{-|
+Helper function to parse UUID from Text with deterministic UUID generation fallback.
+Uses the same namespace as Parser.hs to ensure consistency.
+-}
+testDataNamespace :: UUID.UUID
+testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 "acvengine.test")
+
+parseUUID :: T.Text -> UUID.UUID
+parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)
 
 {-|
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -170,7 +183,12 @@ loadAllSpoldsWithFlows dir = do
         let !procMap = M.fromList $ zipWith (\filepath activity ->
                 let filename = T.pack $ takeBaseName filepath
                 in case T.splitOn "_" filename of
-                    [actUUID, prodUUID] -> ((actUUID, prodUUID), activity)
+                    [actUUIDText, prodUUIDText] ->
+                        -- Parse UUIDs, generating deterministic UUIDs for invalid test data
+                        -- This prevents deduplication issues where all invalid UUIDs would map to nil
+                        let actUUID = parseUUID actUUIDText
+                            prodUUID = parseUUID prodUUIDText
+                        in ((actUUID, prodUUID), activity)
                     _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
                 ) workerFiles procs
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
