@@ -64,9 +64,10 @@ Increment this number when:
 Version history:
 - Version 8: Matrix pre-computation caching
 - Version 9: Improved error handling with cache validation and exception catching
+- Version 10: Fixed reference product identification to prevent negative inputs from overwriting activity unit
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 9
+cacheFormatVersion = 10
 
 
 {-|

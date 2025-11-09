@@ -207,11 +207,12 @@ parseWithXeno xmlContent processId =
                         isInput = not $ T.null finalInputGroup
                         isOutput = T.null finalInputGroup
                         amount = idAmount idata
-                        -- Reference flow identification for both production AND treatment activities:
-                        -- Production: output (no inputGroup) with outputGroup="0" and positive amount
-                        -- Treatment: input (has inputGroup) with negative amount (e.g., waste treatment)
+                        -- Reference flow identification:
+                        -- Reference products are identified ONLY by outputGroup="0"
+                        -- This works for both normal production (positive amount) and waste treatment (negative amount)
+                        -- Negative inputs (like wastewater discharge) should NOT be considered reference products
                         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
-                        isReferenceProduct = (isOutput && finalOutputGroup == "0") || (isInput && amount < 0)
+                        isReferenceProduct = isOutput && finalOutputGroup == "0"
                         exchange = TechnosphereExchange
                             (idFlowId idata)
                             (idAmount idata)
