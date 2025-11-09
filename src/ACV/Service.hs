@@ -821,7 +821,7 @@ exportBiosphereMatrixData filePath debugInfo = do
             getFlow :: Int -> Maybe Flow
             getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
             getFlowUnit :: Int -> Maybe Text
-            getFlowUnit rowIdx = fmap (T.pack . show . flowUnitId) (getFlow rowIdx)
+            getFlowUnit rowIdx = fmap (getUnitNameForFlow (dbUnits database)) (getFlow rowIdx)
             -- Find ProcessId by searching for matching matrix column index
             getActivityProcessId :: Int -> Maybe ProcessId
             getActivityProcessId colIdx =
