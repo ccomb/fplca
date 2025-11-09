@@ -39,12 +39,12 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> Database
-buildDatabaseWithMatrices activityMap flowDB unitDB =
-    let _ = unsafePerformIO $ reportMatrixOperation "Building database with pre-computed sparse matrices"
+buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> IO Database
+buildDatabaseWithMatrices activityMap flowDB unitDB = do
+    reportMatrixOperation "Building database with pre-computed sparse matrices"
 
-        -- Step 1: Build UUID interning tables from Map keys
-        activityKeys = M.keys activityMap
+    -- Step 1: Build UUID interning tables from Map keys
+    let activityKeys = M.keys activityMap
         sortedKeys = sort activityKeys -- Ensure deterministic ordering
 
         -- Build forward lookup: ProcessId (Int16) -> (UUID, UUID)
@@ -66,16 +66,16 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
         referenceProducts = idxReferenceProducts indexes
 
-        -- Build activity index for matrix construction
-        _ = unsafePerformIO $ reportMatrixOperation "Building activity indexes"
-        activityCount = fromIntegral (V.length dbActivities) :: Int32
+    -- Build activity index for matrix construction
+    reportMatrixOperation "Building activity indexes"
+    let activityCount = fromIntegral (V.length dbActivities) :: Int32
 
-        -- Note: ProcessId is already the matrix index (identity mapping removed for performance)
-        _ = unsafePerformIO $ reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
+    -- Note: ProcessId is already the matrix index (identity mapping removed for performance)
+    reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
 
-        -- Build technosphere sparse triplets
-        _ = unsafePerformIO $ reportMatrixOperation "Building technosphere matrix triplets"
-        !techTriples =
+    -- Build technosphere sparse triplets
+    reportMatrixOperation "Building technosphere matrix triplets"
+    let !techTriples =
             let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
                     | not (isTechnosphereExchange ex) = []
                     | not (exchangeIsInput ex) = []
@@ -156,12 +156,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                      in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
 
                 !result = V.fromList $ concatMap buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
-                _ = unsafePerformIO $ reportMatrixOperation ("Technosphere matrix: " ++ show (V.length result) ++ " non-zero entries")
              in result
 
-        -- Build biosphere sparse triplets
-        _ = unsafePerformIO $ reportMatrixOperation "Building biosphere matrix triplets"
-        bioFlowUUIDs =
+    reportMatrixOperation ("Technosphere matrix: " ++ show (V.length techTriples) ++ " non-zero entries")
+
+    -- Build biosphere sparse triplets
+    reportMatrixOperation "Building biosphere matrix triplets"
+    let bioFlowUUIDs =
             sort $
                 S.toList $
                     S.fromList
@@ -222,12 +223,14 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                      in concatMap buildNormalizedBioTriple (exchanges activity)
 
                 !result = V.fromList $ concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
-                _ = unsafePerformIO $ reportMatrixOperation ("Biosphere matrix: " ++ show (V.length result) ++ " non-zero entries")
              in result
 
-        _ = techTriples `seq` bioTriples `seq` unsafePerformIO (reportMatrixOperation "Database with matrices built successfully")
-        _ = unsafePerformIO $ reportMatrixOperation ("Final matrix stats: " ++ show (V.length techTriples) ++ " tech entries, " ++ show (V.length bioTriples) ++ " bio entries")
-     in Database
+    reportMatrixOperation ("Biosphere matrix: " ++ show (V.length bioTriples) ++ " non-zero entries")
+
+    reportMatrixOperation "Database with matrices built successfully"
+    reportMatrixOperation ("Final matrix stats: " ++ show (V.length techTriples) ++ " tech entries, " ++ show (V.length bioTriples) ++ " bio entries")
+
+    return Database
             { dbProcessIdTable = dbProcessIdTable
             , dbProcessIdLookup = dbProcessIdLookup
             , dbActivities = dbActivities

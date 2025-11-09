@@ -24,7 +24,6 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import System.IO
-import System.IO.Unsafe (unsafePerformIO)
 
 -- | Domain service errors
 data ServiceError
@@ -607,10 +606,10 @@ exportLCIAAsCSV :: Value -> FilePath -> Either ServiceError ()
 exportLCIAAsCSV _ _ = Right ()
 
 -- | Export matrix debug data
-exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> Either ServiceError Value
+exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either ServiceError Value)
 exportMatrixDebugData database processIdText opts = do
     case resolveActivityAndProcessId database processIdText of
-        Left err -> Left err
+        Left err -> return $ Left err
         Right (processId, targetActivity) -> do
             -- Extract the activityUUID from processIdText (format: activityUUID_productUUID)
             let activityUuid = case T.splitOn "_" processIdText of
@@ -624,23 +623,21 @@ exportMatrixDebugData database processIdText opts = do
             let bioFlowUUIDs = mdBioFlowUUIDs matrixData
             let inventory = M.fromList $ zip bioFlowUUIDs inventoryList
 
-            -- FORCE CSV export execution - use deepseq to ensure it runs
-            let !csvResult = unsafePerformIO $ do
-                    putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
-                    exportMatrixDebugCSVs (debugOutput opts) matrixData
-                    putStrLn $ "DEBUG: CSV export completed"
-                    return "CSV_EXPORTED"
+            -- Proper IO for CSV export
+            putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
+            exportMatrixDebugCSVs (debugOutput opts) matrixData
+            putStrLn $ "DEBUG: CSV export completed"
 
             let summary =
                     M.fromList
                         [ ("activity_uuid" :: Text, activityUuid)
                         , ("activity_name" :: Text, activityName targetActivity)
                         , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
-                        , ("matrix_debug_exported" :: Text, T.pack csvResult)
+                        , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
                         , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
                         , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
                         ]
-            Right $ toJSON summary
+            return $ Right $ toJSON summary
 
 -- | Extract matrix debug information from Database
 extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> MatrixDebugInfo

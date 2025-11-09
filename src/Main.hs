@@ -104,7 +104,7 @@ loadDatabase dataDirectory disableCache =
       reportProgress Info "Loading activities with flow deduplication (caching disabled)"
       simpleDb <- loadAllSpoldsWithFlows dataDirectory
       reportProgress Info "Building indexes and pre-computing matrices (no caching)"
-      let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+      !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
       return db
     else do
       reportCacheOperation "Checking for cached Database with matrices"
@@ -118,7 +118,7 @@ loadDatabase dataDirectory disableCache =
           simpleDb <- loadAllSpoldsWithFlows dataDirectory
 
           reportProgress Info "Building indexes and pre-computing matrices for efficient queries"
-          let !db = buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+          !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
 
           reportCacheOperation "Saving Database with matrices to cache for next time"
           saveCachedDatabaseWithMatrices dataDirectory db

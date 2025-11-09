@@ -206,9 +206,10 @@ executeDebugMatricesCommand database uuid opts = do
     Just flowFilter -> reportProgress Info $ "Flow filter: " ++ T.unpack flowFilter
     Nothing -> reportProgress Info "No flow filter specified (all biosphere flows)"
 
-  case ACV.Service.exportMatrixDebugData database uuid opts of
+  result <- ACV.Service.exportMatrixDebugData database uuid opts
+  case result of
     Left err -> reportServiceError err
-    Right result -> do
+    Right _ -> do
       reportProgress Info "Matrix debug export completed"
       reportProgress Info $ "Supply chain data: " ++ debugOutput opts ++ "_supply_chain.csv"
       reportProgress Info $ "Biosphere matrix: " ++ debugOutput opts ++ "_biosphere_matrix.csv"
