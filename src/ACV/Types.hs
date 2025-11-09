@@ -36,7 +36,7 @@ data Unit = Unit
     , unitSymbol :: !Text -- Symbole (e.g. "kg", "MJ")
     , unitComment :: !Text -- Description/commentaire
     }
-    deriving (Generic, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
@@ -47,7 +47,7 @@ data Flow = Flow
     , flowType :: !FlowType -- Type de flux
     , flowSynonyms :: !(M.Map Text (S.Set Text)) -- Synonymes par langue (e.g. "en" -> {"BaP", "benzo[a]pyrene"})
     }
-    deriving (Generic, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Échange dans un activité - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
 data Exchange
@@ -142,7 +142,7 @@ data Activity = Activity
     , activityUnit :: !Text -- Unité de référence
     , exchanges :: ![Exchange] -- Liste des échanges
     }
-    deriving (Generic, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Arbre de calcul ACV (représentation récursive)
 data ActivityTree
@@ -204,6 +204,9 @@ type ActivityOutputIndex = M.Map UUID [Exchange] -- ActivityID -> [Output Exchan
 type ActivityUnitIndex = M.Map Text [UUID] -- Unit -> Liste des UUIDs des activités
 
 -- | Structure d'index complète pour recherches efficaces
+-- Memory optimization: Removed unused exchange indexes that were duplicating 600K Exchange records
+-- across 5 maps (idxExchangeByFlow, idxExchangeByActivity, idxReferenceProducts,
+-- idxInputsByActivity, idxOutputsByActivity) - saves ~3-4GB RAM
 data Indexes = Indexes
     { -- Index au niveau activité
       idxByName :: !NameIndex -- Recherche activités par nom
@@ -213,14 +216,9 @@ data Indexes = Indexes
     -- Index au niveau flux
     , idxFlowByCategory :: !FlowCategoryIndex -- Recherche flux par catégorie
     , idxFlowByType :: !FlowTypeIndex -- Recherche flux par type
-    -- Index au niveau échange
-    , idxExchangeByFlow :: !ExchangeIndex -- Tous les échanges par flux
-    , idxExchangeByActivity :: !ActivityExchangeIndex -- Tous les échanges par activité
-    , idxReferenceProducts :: !ReferenceProductIndex -- Produits de référence
-    , idxInputsByActivity :: !ActivityInputIndex -- Entrées par activité
-    , idxOutputsByActivity :: !ActivityOutputIndex -- Sorties par activité
+    -- Note: Exchange-level indexes removed - exchanges can be accessed directly from Activity.exchanges
     }
-    deriving (Generic, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Sparse matrix coordinate triplet (row, col, value)
 -- Using Int32 for matrix indices to support large databases (up to 2 billion activities)
@@ -230,7 +228,7 @@ type SparseTriple = (Int32, Int32, Double)
 data MatrixFactorization = MatrixFactorization
     { mfSystemMatrix :: !(V.Vector SparseTriple) -- Cached (I - A) system matrix
     , mfActivityCount :: !Int32 -- Matrix dimension
-    } deriving (Generic, Binary)
+    } deriving (Generic, NFData, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
@@ -245,13 +243,13 @@ data Database = Database
       dbTechnosphereTriples :: !(V.Vector SparseTriple) -- A matrix: activities × activities (sparse)
     , dbBiosphereTriples :: !(V.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse)
     , dbActivityIndex :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
-    , dbBiosphereFlows :: ![UUID] -- Ordered list of biosphere flow UUIDs (source of truth for indexing)
+    , dbBiosphereFlows :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
     , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)
     , dbBiosphereCount :: !Int32 -- Number of biosphere flows (matrix dimension)
     -- Cached factorization for concurrent inventory calculations (runtime only)
     , dbCachedFactorization :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
     }
-    deriving (Generic, Binary)
+    deriving (Generic, NFData, Binary)
 
 -- | Helper functions for ProcessId and Database operations
 

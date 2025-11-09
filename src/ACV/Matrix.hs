@@ -323,9 +323,9 @@ computeInventoryMatrix db rootProcessId =
         bioTriples = dbBiosphereTriples db
         activityIndex = dbActivityIndex db
         -- CRITICAL FIX: Rebuild bioFlowIndex from dbBiosphereFlows to ensure consistency
-        -- with the B matrix which was built using indices from the same list.
-        -- Storing both the Map and the list is redundant and error-prone.
-        bioFlowIndex = M.fromList $ zip (dbBiosphereFlows db) [0..]
+        -- with the B matrix which was built using indices from the same vector.
+        -- Storing both the Map and the vector is redundant and error-prone.
+        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0..]
 
         -- Build demand vector (will error if ProcessId not in index - validation happens at service layer)
         demandVec = buildDemandVectorFromIndex activityIndex rootProcessId

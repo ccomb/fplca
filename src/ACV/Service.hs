@@ -220,7 +220,7 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                     let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
                         bioFlowCountInt = fromIntegral bioFlowCount
                         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
-                        inventory = M.fromList $ zip bioFlowUUIDs (toList inventoryVec)
+                        inventory = M.fromList $ zip (V.toList bioFlowUUIDs) (toList inventoryVec)
                         inventoryExport = convertToInventoryExport db processId activity inventory
                     return $ Right inventoryExport
 
@@ -621,7 +621,7 @@ exportMatrixDebugData database processIdText opts = do
             -- Get inventory from matrixData (already computed)
             let inventoryList = mdInventoryVector matrixData
             let bioFlowUUIDs = mdBioFlowUUIDs matrixData
-            let inventory = M.fromList $ zip bioFlowUUIDs inventoryList
+            let inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
 
             -- Proper IO for CSV export
             putStrLn $ "DEBUG: Starting CSV export to " ++ debugOutput opts
@@ -678,7 +678,7 @@ extractMatrixDebugInfo database targetUUID flowFilter =
             Nothing -> bioTriples
             Just filterText ->
                 let matchingFlowIndices =
-                        [ idx | (uuid, idx) <- zip bioFlowUUIDs [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
+                        [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
                  in V.filter (\(row, _, _) -> row `elem` matchingFlowIndicesInt32) bioTriples
@@ -704,7 +704,7 @@ data MatrixDebugInfo = MatrixDebugInfo
     , mdTechTriples :: V.Vector SparseTriple
     , mdBioTriples :: V.Vector SparseTriple
     , mdActivityIndex :: V.Vector Int32  -- ProcessId → matrix column index
-    , mdBioFlowUUIDs :: [UUID]
+    , mdBioFlowUUIDs :: V.Vector UUID
     , mdTargetUUID :: UUID
     , mdTargetProcessId :: ProcessId  -- The ProcessId for the target activity
     , mdDatabase :: Database  -- Database reference for lookups
@@ -812,8 +812,8 @@ exportBiosphereMatrixData filePath debugInfo = do
           where
             getFlowUUID :: Int -> Maybe UUID
             getFlowUUID rowIdx =
-                if rowIdx < length bioFlowUUIDs
-                    then Just (bioFlowUUIDs !! rowIdx)
+                if rowIdx < V.length bioFlowUUIDs
+                    then Just (bioFlowUUIDs V.! rowIdx)
                     else Nothing
             getFlow :: Int -> Maybe Flow
             getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
@@ -922,7 +922,7 @@ exportEEIndex filePath db = do
                            T.pack (show idx)
                     Nothing ->
                         escapeCsvField (T.pack (show flowUuid)) <> ";unknown;;;" <> T.pack (show idx)
-            ) bioFlowUUIDs [0..]
+            ) (V.toList bioFlowUUIDs) [0..]
 
         header = "name;compartment;subcompartment;unitName;index"
         content = T.unlines (header : rows)

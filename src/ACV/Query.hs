@@ -64,8 +64,6 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
         -- Build indexes (now using Vector)
         indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable flowDB
 
-        referenceProducts = idxReferenceProducts indexes
-
     -- Build activity index for matrix construction
     reportMatrixOperation "Building activity indexes"
     let activityCount = fromIntegral (V.length dbActivities) :: Int32
@@ -163,13 +161,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
     -- Build biosphere sparse triplets
     reportMatrixOperation "Building biosphere matrix triplets"
     let bioFlowUUIDs =
-            sort $
+            V.fromList $ sort $
                 S.toList $
                     S.fromList
                         [ exchangeFlowId ex | pid <- [0 .. fromIntegral activityCount - 1], let activity = dbActivities V.! fromIntegral pid, ex <- exchanges activity, isBiosphereExchange ex
                         ]
-        bioFlowCount = fromIntegral $ length bioFlowUUIDs :: Int32
-        bioFlowIndex = M.fromList $ zip bioFlowUUIDs [0 ..]
+        bioFlowCount = fromIntegral $ V.length bioFlowUUIDs :: Int32
+        bioFlowIndex = M.fromList $ zip (V.toList bioFlowUUIDs) [0 ..]
 
         !bioTriples =
             let buildBioTriple normalizationFactor j activity ex
@@ -288,34 +286,10 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
                 (++)
                 [(flowType flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
 
-        exchangeIdx =
-            M.fromListWith
-                (++)
-                [ (exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs, ex <- exchanges activity
-                ]
-
-        procExchangeIdx =
-            M.fromListWith
-                (++)
-                [(uuid, exchanges activity) | (uuid, activity) <- activityPairs]
-
-        refProdIdx =
-            M.fromListWith
-                (++)
-                [ (exchangeFlowId ex, [(uuid, ex)]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, exchangeIsReference ex
-                ]
-
-        inputIdx =
-            M.fromListWith
-                (++)
-                [ (uuid, [ex]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, exchangeIsInput ex
-                ]
-
-        outputIdx =
-            M.fromListWith
-                (++)
-                [ (uuid, [ex]) | (uuid, activity) <- activityPairs, ex <- exchanges activity, not (exchangeIsInput ex)
-                ]
+        -- Memory optimization: Removed exchange indexes (exchangeIdx, procExchangeIdx, refProdIdx,
+        -- inputIdx, outputIdx) that duplicated 600K Exchange records across 5 maps.
+        -- Exchanges can be accessed directly from Activity.exchanges when needed.
+        -- This saves ~3-4GB of RAM on Ecoinvent 3.12.
      in
         Indexes
             { idxByName = nameIdx
@@ -324,11 +298,6 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
             , idxByUnit = unitIdx
             , idxFlowByCategory = flowCatIdx
             , idxFlowByType = flowTypeIdx
-            , idxExchangeByFlow = exchangeIdx
-            , idxExchangeByActivity = procExchangeIdx
-            , idxReferenceProducts = refProdIdx
-            , idxInputsByActivity = inputIdx
-            , idxOutputsByActivity = outputIdx
             }
 
 -- | Search activities by multiple fields (name, geography, product)

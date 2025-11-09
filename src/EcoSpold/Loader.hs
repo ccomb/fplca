@@ -32,7 +32,8 @@ module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, 
 import ACV.Progress
 import ACV.Types
 import Control.Concurrent.Async
-import Control.Exception (SomeException, catch)
+import Control.DeepSeq (force)
+import Control.Exception (SomeException, catch, evaluate)
 import Control.Monad
 import Data.Binary (encode, decode)
 import qualified Data.ByteString as BS
@@ -65,9 +66,12 @@ Version history:
 - Version 8: Matrix pre-computation caching
 - Version 9: Improved error handling with cache validation and exception catching
 - Version 10: Fixed reference product identification to prevent negative inputs from overwriting activity unit
+- Version 11: Memory optimization - changed dbBiosphereFlows from lazy list to strict Vector (saves ~300-500MB)
+- Version 12: Major memory optimization - removed unused exchange indexes (saves ~3-4GB by eliminating Exchange duplication)
+- Version 13: Force strict evaluation during deserialization - added NFData instances and evaluate . force to prevent lazy thunk buildup during cache loading
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 10
+cacheFormatVersion = 13
 
 
 {-|
@@ -252,9 +256,10 @@ loadCachedDatabaseWithMatrices dataDir = do
                     db <- case Zstd.decompress compressed of
                         Zstd.Skip -> error "Zstd decompression failed: Skip"
                         Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
-                        Zstd.Decompress decompressed ->
+                        Zstd.Decompress decompressed -> do
                             let !db = decode (BSL.fromStrict decompressed)
-                            in return db
+                            -- Force full evaluation to prevent lazy thunk buildup
+                            evaluate (force db)
                     reportCacheOperation $
                         "Matrix cache loaded: "
                         ++ show (dbActivityCount db)
@@ -286,7 +291,7 @@ loadCachedDatabaseWithMatrices dataDir = do
                     -- Load old format and delete it (will be saved in new format)
                     catch
                         (withProgressTiming Cache "Matrix cache load (old format)" $ do
-                            !db <- BSL.readFile cacheFile >>= \bs -> return $! decode bs
+                            !db <- BSL.readFile cacheFile >>= \bs -> evaluate (force (decode bs))
                             reportCacheOperation $
                                 "Matrix cache loaded: "
                                 ++ show (dbActivityCount db)
