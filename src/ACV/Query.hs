@@ -31,7 +31,12 @@ SIGN CONVENTION:
 Matrix Construction:
 - Accepts a Map with (UUID, UUID) keys and converts to Vector internally
 - Builds sparse triplets for technosphere (A) and biosphere (B) matrices
-- Normalizes exchanges by reference product amounts
+- Normalizes exchanges by NET reference product amounts (gross output - internal consumption)
+- SELF-LOOPS (internal consumption) are EXCLUDED from matrix triplets but affect normalization
+- Example: Electricity market with 1.0 kWh output and 0.012 kWh internal loss
+  * Normalization factor: 1.0 - 0.012 = 0.988 kWh (net output)
+  * All inputs divided by 0.988, giving ~1.2% increase in coefficients
+  * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
 buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> Database
@@ -107,21 +112,45 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
                                                           ++ show j ++ " (activity: "
                                                           ++ T.unpack (activityName consumerActivity) ++ ")"
                                         value = rawValue / denom
-                                     in [(idx, j, value) | abs value > 1e-15]
+                                        -- Exclude self-loops (internal consumption): idx == j
+                                        -- Self-loops are accounted for in normalization factor but not exported as matrix entries
+                                        -- This matches Ecoinvent's convention where internal losses affect normalization only
+                                     in [(idx, j, value) | abs value > 1e-15, idx /= j]
                                 Nothing -> []
 
                 buildActivityTriplets (j, consumerPid) =
                     let consumerActivity = dbActivities V.! fromIntegral consumerPid
+                        -- Get activity UUID from ProcessId table
+                        (activityUUID, _) = dbProcessIdTable V.! fromIntegral consumerPid
+
                         -- For normalization, only use reference OUTPUTS (not treatment inputs)
                         -- Treatment inputs have negative amounts and would incorrectly inflate the normalization factor
                         refOutputs = [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex, not (exchangeIsInput ex) ]
                         -- If no outputs (pure treatment), use abs of reference input
                         refInputs = [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex, exchangeIsInput ex ]
+
+                        -- Calculate internal consumption (self-loops): technosphere inputs that link back to same activity
+                        -- These represent internal losses (e.g., electricity market losses, heat for process)
+                        internalConsumption = sum [ exchangeAmount ex
+                                                  | ex <- exchanges consumerActivity
+                                                  , isTechnosphereExchange ex
+                                                  , exchangeIsInput ex
+                                                  , not (exchangeIsReference ex)  -- Don't count reference products
+                                                  , case exchangeActivityLinkId ex of
+                                                        Just linkUUID -> linkUUID == activityUUID
+                                                        Nothing -> False
+                                                  ]
+
                         normalizationFactor =
-                            let sumOutputs = sum refOutputs
-                                sumInputs = sum refInputs
-                            in if sumOutputs > 1e-15 then sumOutputs
-                               else if sumInputs > 1e-15 then sumInputs
+                            let grossOutput = sum refOutputs
+                                grossInput = sum refInputs
+                                -- Net output = gross output - internal consumption
+                                -- This matches Ecoinvent's normalization convention for market activities
+                                netOutput = if grossOutput > 1e-15
+                                           then grossOutput - internalConsumption
+                                           else 0.0
+                            in if netOutput > 1e-15 then netOutput
+                               else if grossInput > 1e-15 then grossInput
                                else 1.0  -- Fallback for activities with no reference products (shouldn't happen)
                         buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                      in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
@@ -162,13 +191,32 @@ buildDatabaseWithMatrices activityMap flowDB unitDB =
 
                 buildActivityBioTriplets (j, pid) =
                     let activity = dbActivities V.! fromIntegral pid
+                        -- Get activity UUID from ProcessId table
+                        (activityUUID, _) = dbProcessIdTable V.! fromIntegral pid
+
                         refOutputs = [ exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex, not (exchangeIsInput ex) ]
                         refInputs = [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex, exchangeIsInput ex ]
+
+                        -- Calculate internal consumption (self-loops) same as for technosphere matrix
+                        internalConsumption = sum [ exchangeAmount ex
+                                                  | ex <- exchanges activity
+                                                  , isTechnosphereExchange ex
+                                                  , exchangeIsInput ex
+                                                  , not (exchangeIsReference ex)
+                                                  , case exchangeActivityLinkId ex of
+                                                        Just linkUUID -> linkUUID == activityUUID
+                                                        Nothing -> False
+                                                  ]
+
                         normalizationFactor =
-                            let sumOutputs = sum refOutputs
-                                sumInputs = sum refInputs
-                            in if sumOutputs > 1e-15 then sumOutputs
-                               else if sumInputs > 1e-15 then sumInputs
+                            let grossOutput = sum refOutputs
+                                grossInput = sum refInputs
+                                -- Net output = gross output - internal consumption
+                                netOutput = if grossOutput > 1e-15
+                                           then grossOutput - internalConsumption
+                                           else 0.0
+                            in if netOutput > 1e-15 then netOutput
+                               else if grossInput > 1e-15 then grossInput
                                else 1.0
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in concatMap buildNormalizedBioTriple (exchanges activity)
