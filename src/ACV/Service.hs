@@ -164,9 +164,13 @@ convertToInventoryExport db processId rootActivity inventory =
      in
         InventoryExport metadata flowDetails statistics
 
--- | Determine if a flow represents resource extraction (negative quantity = extraction from environment)
+-- | Determine if a flow represents resource extraction based on flow category
+-- Since B matrix now stores all flows as positive (Ecoinvent convention), we use category instead of sign
+-- Resource extractions have category starting with "natural resource" (e.g., "natural resource/in ground", "natural resource/in water")
 isResourceExtraction :: Flow -> Double -> Bool
-isResourceExtraction flow quantity = quantity < 0 && flowType flow == Biosphere
+isResourceExtraction flow _ =
+    flowType flow == Biosphere &&
+    ("natural resource" `T.isPrefixOf` T.toLower (flowCategory flow))
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> Either ServiceError Value
