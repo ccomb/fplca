@@ -481,7 +481,7 @@ calculateActivityStats activity =
 convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
 convertActivityForAPI db processId activity =
     ActivityForAPI
-        { pfaId = processIdToText db processId
+        { pfaProcessId = processIdToText db processId
         , pfaName = activityName activity
         , pfaDescription = activityDescription activity
         , pfaSynonyms = activitySynonyms activity
