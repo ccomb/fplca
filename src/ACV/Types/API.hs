@@ -252,6 +252,8 @@ instance ToJSON Unit
 instance ToJSON FlowDetail
 
 -- FromJSON instances needed for API conversion
+instance (FromJSON a) => FromJSON (SearchResults a)
+instance FromJSON ActivitySummary
 instance FromJSON ActivityInfo
 instance FromJSON ActivityForAPI
 instance FromJSON ActivityMetadata

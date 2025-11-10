@@ -161,13 +161,14 @@ acvServer db maxTreeDepth sharedSolver =
     -- Search activities by specific fields with pagination and count
     searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
     searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
-        let activities = findActivitiesByFields db nameParam geoParam productParam
-            activitySummaries =
-                [ ActivitySummary (processIdToText db processId) (activityName activity) (activityLocation activity)
-                | activity <- activities
-                , Just processId <- [ACV.Service.findProcessIdForActivity db activity]
-                ]
-        liftIO $ paginateResults activitySummaries limitParam offsetParam
+        -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
+        -- This avoids O(n*m) performance issue where n=results, m=total activities
+        result <- liftIO $ ACV.Service.searchActivities db nameParam geoParam productParam limitParam offsetParam
+        case result of
+            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Right jsonValue -> case fromJSON jsonValue of
+                Success searchResults -> return searchResults
+                Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
 
     -- LCIA computation
     postLCIA :: Text -> LCIARequest -> Handler Value
