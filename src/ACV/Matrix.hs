@@ -143,8 +143,8 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
             let systemMatrix = mfSystemMatrix factorization
                 n = mfActivityCount factorization
                 -- Convert system matrix back to technosphere triplets (remove identity entries)
-                techTriples = V.toList $ V.filter (\(i, j, _) -> i /= j) $ V.map (\(i, j, val) -> (i, j, -val)) systemMatrix
-            return $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples] (fromIntegral n) demandVec
+                techTriples = U.toList $ U.filter (\(SparseTriple i j _) -> i /= j) $ U.map (\(SparseTriple i j val) -> SparseTriple i j (-val)) systemMatrix
+            return $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
 
         Just (ksp, petscMat, n) -> do
             reportMatrixOperation $ "Using globally cached pre-factorized solver for " ++ show n ++ " activities - ultra-fast solve"
@@ -179,8 +179,8 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
                     Nothing -> do
                         -- Fallback to standard solver if cached solver fails
                         let systemMatrix = mfSystemMatrix factorization
-                            techTriples = V.toList $ V.filter (\(i, j, _) -> i /= j) $ V.map (\(i, j, val) -> (i, j, -val)) systemMatrix
-                        return $ toList $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- techTriples] (fromIntegral n) demandVec
+                            techTriples = U.toList $ U.filter (\(SparseTriple i j _) -> i /= j) $ U.map (\(SparseTriple i j val) -> SparseTriple i j (-val)) systemMatrix
+                        return $ toList $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
 
             return $ fromList result
 
@@ -334,10 +334,10 @@ computeInventoryMatrix db rootProcessId =
         -- Try to use cached factorization for faster solving
         supplyVec = case dbCachedFactorization db of
             Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
-            Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples] (fromIntegral activityCount) demandVec
+            Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) demandVec
 
         -- Calculate inventory using sparse biosphere matrix: g = B * supply
-        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
+        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
 
         -- Build result map using the stored bioFlowIndex (ensures consistency with bioTriples)
         result = M.fromList [(uuid, inventoryVec U.! idx)
@@ -441,7 +441,7 @@ precomputeMatrixFactorization techTriples n = do
 
         -- Also store the system matrix for backward compatibility
         let factorization = MatrixFactorization
-                { mfSystemMatrix = V.fromList [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- systemMatrix]
+                { mfSystemMatrix = U.fromList [SparseTriple (fromIntegral i) (fromIntegral j) v | (i, j, v) <- systemMatrix]
                 , mfActivityCount = fromIntegral n
                 }
 

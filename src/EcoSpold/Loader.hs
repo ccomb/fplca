@@ -45,6 +45,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Codec.Compression.Zstd as Zstd
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import qualified Data.Text as T
@@ -73,9 +74,10 @@ Version history:
 - Version 12: Major memory optimization - removed unused exchange indexes (saves ~3-4GB by eliminating Exchange duplication)
 - Version 13: Force strict evaluation during deserialization - added NFData instances and evaluate . force to prevent lazy thunk buildup during cache loading
 - Version 14: MAJOR: UUID type conversion from Text (~80 bytes) to Data.UUID.UUID (16 bytes) - saves ~2-3GB of RAM from ~100,000+ UUID instances
+- Version 15: MAJOR: Sparse triple unboxed optimization - converted from boxed Vector (Int32, Int32, Double) to unboxed VU.Vector SparseTriple with UNPACK pragmas - saves ~25MB and eliminates 800K heap objects from GC tracking
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 14
+cacheFormatVersion = 15
 
 {-|
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -282,9 +284,9 @@ loadCachedDatabaseWithMatrices dataDir = do
                         "Matrix cache loaded: "
                         ++ show (dbActivityCount db)
                         ++ " activities, "
-                        ++ show (V.length $ dbTechnosphereTriples db)
+                        ++ show (VU.length $ dbTechnosphereTriples db)
                         ++ " tech entries, "
-                        ++ show (V.length $ dbBiosphereTriples db)
+                        ++ show (VU.length $ dbBiosphereTriples db)
                         ++ " bio entries (decompressed)"
                     return (Just db))
                 (\(e :: SomeException) -> do
@@ -314,9 +316,9 @@ loadCachedDatabaseWithMatrices dataDir = do
                                 "Matrix cache loaded: "
                                 ++ show (dbActivityCount db)
                                 ++ " activities, "
-                                ++ show (V.length $ dbTechnosphereTriples db)
+                                ++ show (VU.length $ dbTechnosphereTriples db)
                                 ++ " tech entries, "
-                                ++ show (V.length $ dbBiosphereTriples db)
+                                ++ show (VU.length $ dbBiosphereTriples db)
                                 ++ " bio entries"
                             -- Delete old uncompressed cache
                             removeFile cacheFile
@@ -359,7 +361,7 @@ saveCachedDatabaseWithMatrices dataDir db = do
             "Matrix cache saved ("
             ++ show (dbActivityCount db)
             ++ " activities, "
-            ++ show (V.length $ dbTechnosphereTriples db)
+            ++ show (VU.length $ dbTechnosphereTriples db)
             ++ " tech entries, "
-            ++ show (V.length $ dbBiosphereTriples db)
+            ++ show (VU.length $ dbBiosphereTriples db)
             ++ " bio entries, compressed)"

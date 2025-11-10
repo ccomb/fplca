@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module ACV.Types (
     module ACV.Types,
@@ -23,6 +25,10 @@ import qualified Data.Text.Encoding as TE
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector.Generic as VG
+import qualified Data.Vector.Generic.Mutable as VGM
+import qualified Data.Vector.Unboxed.Mutable as VUM
 import GHC.Generics (Generic, Generic1)
 
 -- Note: UUID is now Data.UUID.UUID (16 bytes) instead of Text (~80+ bytes)
@@ -231,11 +237,61 @@ data Indexes = Indexes
 
 -- | Sparse matrix coordinate triplet (row, col, value)
 -- Using Int32 for matrix indices to support large databases (up to 2 billion activities)
-type SparseTriple = (Int32, Int32, Double)
+-- Unboxed to eliminate per-element boxing overhead (~48 bytes → 16 bytes per triple)
+-- With ~800K triples, this saves ~25MB + significant GC pressure
+data SparseTriple = SparseTriple {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32 {-# UNPACK #-} !Double
+    deriving (Eq, Show, Generic)
+
+-- Manual Unbox instance for SparseTriple to enable VU.Vector storage
+newtype instance VU.MVector s SparseTriple = MV_SparseTriple (VU.MVector s (Int32, Int32, Double))
+newtype instance VU.Vector SparseTriple = V_SparseTriple (VU.Vector (Int32, Int32, Double))
+
+instance VGM.MVector VU.MVector SparseTriple where
+    {-# INLINE basicLength #-}
+    {-# INLINE basicUnsafeSlice #-}
+    {-# INLINE basicOverlaps #-}
+    {-# INLINE basicUnsafeNew #-}
+    {-# INLINE basicInitialize #-}
+    {-# INLINE basicUnsafeRead #-}
+    {-# INLINE basicUnsafeWrite #-}
+    basicLength (MV_SparseTriple v) = VGM.basicLength v
+    basicUnsafeSlice i n (MV_SparseTriple v) = MV_SparseTriple $ VGM.basicUnsafeSlice i n v
+    basicOverlaps (MV_SparseTriple v1) (MV_SparseTriple v2) = VGM.basicOverlaps v1 v2
+    basicUnsafeNew n = MV_SparseTriple <$> VGM.basicUnsafeNew n
+    basicInitialize (MV_SparseTriple v) = VGM.basicInitialize v
+    basicUnsafeRead (MV_SparseTriple v) i = do
+        (r, c, val) <- VGM.basicUnsafeRead v i
+        return $ SparseTriple r c val
+    basicUnsafeWrite (MV_SparseTriple v) i (SparseTriple r c val) =
+        VGM.basicUnsafeWrite v i (r, c, val)
+
+instance VG.Vector VU.Vector SparseTriple where
+    {-# INLINE basicUnsafeFreeze #-}
+    {-# INLINE basicUnsafeThaw #-}
+    {-# INLINE basicLength #-}
+    {-# INLINE basicUnsafeSlice #-}
+    {-# INLINE basicUnsafeIndexM #-}
+    basicUnsafeFreeze (MV_SparseTriple v) = V_SparseTriple <$> VG.basicUnsafeFreeze v
+    basicUnsafeThaw (V_SparseTriple v) = MV_SparseTriple <$> VG.basicUnsafeThaw v
+    basicLength (V_SparseTriple v) = VG.basicLength v
+    basicUnsafeSlice i n (V_SparseTriple v) = V_SparseTriple $ VG.basicUnsafeSlice i n v
+    basicUnsafeIndexM (V_SparseTriple v) i = do
+        (r, c, val) <- VG.basicUnsafeIndexM v i
+        return $ SparseTriple r c val
+
+instance VU.Unbox SparseTriple
+
+-- Binary instance for cache serialization (VU.Vector has Binary instance via vector-binary-instances)
+instance Binary SparseTriple where
+    put (SparseTriple r c v) = Binary.put r >> Binary.put c >> Binary.put v
+    get = SparseTriple <$> Binary.get <*> Binary.get <*> Binary.get
+
+-- NFData derived via Generic
+instance NFData SparseTriple
 
 -- | Pre-computed matrix factorization for fast inventory calculations
 data MatrixFactorization = MatrixFactorization
-    { mfSystemMatrix :: !(V.Vector SparseTriple) -- Cached (I - A) system matrix
+    { mfSystemMatrix :: !(VU.Vector SparseTriple) -- Cached (I - A) system matrix (unboxed)
     , mfActivityCount :: !Int32 -- Matrix dimension
     } deriving (Generic, NFData, Binary)
 
@@ -248,9 +304,9 @@ data Database = Database
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
-    , -- Pre-computed sparse matrices for efficient LCA calculations
-      dbTechnosphereTriples :: !(V.Vector SparseTriple) -- A matrix: activities × activities (sparse)
-    , dbBiosphereTriples :: !(V.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse)
+    , -- Pre-computed sparse matrices for efficient LCA calculations (unboxed for memory efficiency)
+      dbTechnosphereTriples :: !(VU.Vector SparseTriple) -- A matrix: activities × activities (sparse, unboxed)
+    , dbBiosphereTriples :: !(VU.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse, unboxed)
     , dbActivityIndex :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
     , dbBiosphereFlows :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
     , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)

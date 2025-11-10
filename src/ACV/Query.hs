@@ -16,6 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import GHC.Generics (Generic)
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
@@ -114,7 +115,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                                         -- Exclude self-loops (internal consumption): idx == j
                                         -- Self-loops are accounted for in normalization factor but not exported as matrix entries
                                         -- This matches Ecoinvent's convention where internal losses affect normalization only
-                                     in [(idx, j, value) | abs value > 1e-15, idx /= j]
+                                     in [SparseTriple idx j value | abs value > 1e-15, idx /= j]
                                 Nothing -> []
 
                 buildActivityTriplets (j, consumerPid) =
@@ -154,10 +155,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                         buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                      in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
 
-                !result = V.fromList $ concatMap buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
+                !result = VU.fromList $ concatMap buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
              in result
 
-    reportMatrixOperation ("Technosphere matrix: " ++ show (V.length techTriples) ++ " non-zero entries")
+    reportMatrixOperation ("Technosphere matrix: " ++ show (VU.length techTriples) ++ " non-zero entries")
 
     -- Build biosphere sparse triplets
     reportMatrixOperation "Building biosphere matrix triplets"
@@ -186,7 +187,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                                     -- Resource extractions represent "outputs" from nature into the technosphere
                                     -- NO sign inversion needed - store as positive regardless of input/output status
                                     value = rawValue / denom
-                                 in [(i, j, value) | abs value > 1e-15]
+                                 in [SparseTriple i j value | abs value > 1e-15]
                             Nothing -> []
 
                 buildActivityBioTriplets (j, pid) =
@@ -221,13 +222,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in concatMap buildNormalizedBioTriple (exchanges activity)
 
-                !result = V.fromList $ concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
+                !result = VU.fromList $ concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
              in result
 
-    reportMatrixOperation ("Biosphere matrix: " ++ show (V.length bioTriples) ++ " non-zero entries")
+    reportMatrixOperation ("Biosphere matrix: " ++ show (VU.length bioTriples) ++ " non-zero entries")
 
     reportMatrixOperation "Database with matrices built successfully"
-    reportMatrixOperation ("Final matrix stats: " ++ show (V.length techTriples) ++ " tech entries, " ++ show (V.length bioTriples) ++ " bio entries")
+    reportMatrixOperation ("Final matrix stats: " ++ show (VU.length techTriples) ++ " tech entries, " ++ show (VU.length bioTriples) ++ " bio entries")
 
     return Database
             { dbProcessIdTable = dbProcessIdTable

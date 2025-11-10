@@ -214,13 +214,13 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                         Nothing -> do
                             -- Fallback: use direct matrix computation if no cached factorization
                             -- Convert Int32 to Int for solveSparseLinearSystem
-                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
                                 activityCountInt = fromIntegral activityCount
                             return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
                     -- Convert Int32 to Int for applySparseMatrix
-                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
+                    let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
                         bioFlowCountInt = fromIntegral bioFlowCount
                         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
                         inventory = M.fromList $ zip (V.toList bioFlowUUIDs) (toList inventoryVec)
@@ -677,14 +677,14 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 
         -- Solve (I - A) * supply = demand using PETSc (same as in computeInventoryMatrix)
         -- Convert Int32 to Int for solveSparseLinearSystem
-        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
+        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
         activityCountInt = fromIntegral activityCount
         supplyVec = solveSparseLinearSystem techTriplesInt activityCountInt demandVec
         supplyList = toList supplyVec
 
         -- Calculate inventory using biosphere matrix: g = B * supply
         -- Convert Int32 to Int for applySparseMatrix
-        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList bioTriples]
+        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
         bioFlowCountInt = fromIntegral bioFlowCount
         inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
         inventoryList = toList inventoryVec
@@ -697,7 +697,7 @@ extractMatrixDebugInfo database targetUUID flowFilter =
                         [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
-                 in V.filter (\(row, _, _) -> row `elem` matchingFlowIndicesInt32) bioTriples
+                 in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples
      in MatrixDebugInfo
             { mdActivities = activities
             , mdFlows = flows
@@ -717,8 +717,8 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 data MatrixDebugInfo = MatrixDebugInfo
     { mdActivities :: ActivityDB  -- V.Vector Activity indexed by ProcessId
     , mdFlows :: M.Map UUID Flow
-    , mdTechTriples :: V.Vector SparseTriple
-    , mdBioTriples :: V.Vector SparseTriple
+    , mdTechTriples :: U.Vector SparseTriple
+    , mdBioTriples :: U.Vector SparseTriple
     , mdActivityIndex :: V.Vector Int32  -- ProcessId → matrix column index
     , mdBioFlowUUIDs :: V.Vector UUID
     , mdTargetUUID :: UUID
@@ -810,11 +810,11 @@ exportBiosphereMatrixData filePath debugInfo = do
         -- Convert matrix triplets to CSV rows with REAL contributions
         matrixRows =
             [ csvRow bioTriple
-            | bioTriple@(row, col, value) <- V.toList bioTriples
+            | bioTriple@(SparseTriple row col value) <- U.toList bioTriples
             , abs value > 1e-20 -- Filter very small values
             ]
 
-        csvRow (row, col, value) =
+        csvRow (SparseTriple row col value) =
             let rowInt = fromIntegral row :: Int
                 colInt = fromIntegral col :: Int
              in [ maybe "unknown" show (getFlowUUID rowInt)
@@ -960,7 +960,7 @@ exportAMatrix filePath db = do
         -- Convert off-diagonal triplets to CSV rows
         -- Ecoinvent format exports (I-A), not A, so negate the positive triplets
         -- techTriples contain positive input coefficients, negate to get (I-A) format
-        offDiagonalRows = V.foldr (\(row, col, value) acc ->
+        offDiagonalRows = U.foldr (\(SparseTriple row col value) acc ->
                 let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
                             show (-value) ++ ";;;;;"  -- Negate to export (I-A) format
                 in rowStr : acc
@@ -973,7 +973,7 @@ exportAMatrix filePath db = do
 
     TIO.writeFile filePath content
     putStrLn $ "Exported technosphere matrix with " ++ show (length diagonalEntries) ++
-               " diagonal + " ++ show (V.length techTriples) ++ " off-diagonal entries to " ++ filePath
+               " diagonal + " ++ show (U.length techTriples) ++ " off-diagonal entries to " ++ filePath
 
 -- | Export B_public.csv (Biosphere Matrix)
 -- Format: row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue
@@ -983,7 +983,7 @@ exportBMatrix filePath db = do
 
         -- Convert triplets to CSV rows
         -- Keep original signs (no negation needed for biosphere matrix)
-        rows = V.foldr (\(row, col, value) acc ->
+        rows = U.foldr (\(SparseTriple row col value) acc ->
                 let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
                             show value ++ ";;;;;"
                 in rowStr : acc
@@ -993,4 +993,4 @@ exportBMatrix filePath db = do
         content = T.unlines (header : rows)
 
     TIO.writeFile filePath content
-    putStrLn $ "Exported biosphere matrix with " ++ show (V.length bioTriples) ++ " entries to " ++ filePath
+    putStrLn $ "Exported biosphere matrix with " ++ show (U.length bioTriples) ++ " entries to " ++ filePath

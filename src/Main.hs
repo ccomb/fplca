@@ -9,6 +9,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as U
 import GHC.Conc (getNumCapabilities)
 import Options.Applicative
 import System.Environment (lookupEnv)
@@ -77,7 +78,7 @@ main = do
       let techTriples = dbTechnosphereTriples database
           activityCount = dbActivityCount database
           -- Convert Int32 to Int for PETSc functions
-          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | (i, j, v) <- V.toList techTriples]
+          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
           activityCountInt = fromIntegral activityCount
       reportProgress Info "Pre-computing matrix factorization for fast concurrent inventory calculations"
       factorization <- precomputeMatrixFactorization techTriplesInt activityCountInt
