@@ -27,7 +27,7 @@ Cache performance (Ecoinvent 3.8 with 18K activities):
 The cache keeps day-to-day execution fast while preserving reproducibility.
 -}
 
-module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices) where
+module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
 
 import ACV.Progress
 import ACV.Types
@@ -334,6 +334,89 @@ loadCachedDatabaseWithMatrices dataDir = do
         else do
             reportCacheOperation "No matrix cache found"
             return Nothing
+
+{-|
+Load Database directly from a specified cache file.
+
+Similar to loadCachedDatabaseWithMatrices but takes an explicit cache file path
+instead of generating it from a data directory. Supports both compressed (.bin.zst)
+and uncompressed (.bin) formats.
+
+This is useful for deploying just the cache file without the original .spold files.
+
+Returns Nothing if the file cannot be loaded.
+-}
+loadDatabaseFromCacheFile :: FilePath -> IO (Maybe Database)
+loadDatabaseFromCacheFile cacheFile = do
+    let ext = takeExtension cacheFile
+    let isCompressed = ext == ".zst"
+
+    -- Validate file exists
+    fileExists <- doesFileExist cacheFile
+    if not fileExists
+        then do
+            reportError $ "Cache file not found: " ++ cacheFile
+            return Nothing
+        else do
+            if isCompressed
+                then loadCompressedCacheFile cacheFile
+                else loadUncompressedCacheFile cacheFile
+
+-- | Load compressed (.bin.zst) cache file
+loadCompressedCacheFile :: FilePath -> IO (Maybe Database)
+loadCompressedCacheFile zstdFile = do
+    reportCacheInfo zstdFile
+    catch
+        (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
+            compressed <- BS.readFile zstdFile
+            db <- case Zstd.decompress compressed of
+                Zstd.Skip -> error "Zstd decompression failed: Skip"
+                Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                Zstd.Decompress decompressed -> do
+                    let !db = decode (BSL.fromStrict decompressed)
+                    -- Force full evaluation to prevent lazy thunk buildup
+                    evaluate (force db)
+            reportCacheOperation $
+                "Matrix cache loaded: "
+                ++ show (dbActivityCount db)
+                ++ " activities, "
+                ++ show (VU.length $ dbTechnosphereTriples db)
+                ++ " tech entries, "
+                ++ show (VU.length $ dbBiosphereTriples db)
+                ++ " bio entries (decompressed)"
+            return (Just db))
+        (\(e :: SomeException) -> do
+            reportError $ "Compressed cache load failed: " ++ show e
+            reportCacheOperation "The compressed cache file is corrupted or incompatible"
+            return Nothing)
+
+-- | Load uncompressed (.bin) cache file
+loadUncompressedCacheFile :: FilePath -> IO (Maybe Database)
+loadUncompressedCacheFile cacheFile = do
+    -- Validate cache file before attempting to decode
+    isValid <- validateCacheFile cacheFile
+    if not isValid
+        then do
+            reportCacheOperation "Cache file validation failed"
+            return Nothing
+        else do
+            reportCacheInfo cacheFile
+            catch
+                (withProgressTiming Cache "Matrix cache load" $ do
+                    !db <- BSL.readFile cacheFile >>= \bs -> evaluate (force (decode bs))
+                    reportCacheOperation $
+                        "Matrix cache loaded: "
+                        ++ show (dbActivityCount db)
+                        ++ " activities, "
+                        ++ show (VU.length $ dbTechnosphereTriples db)
+                        ++ " tech entries, "
+                        ++ show (VU.length $ dbBiosphereTriples db)
+                        ++ " bio entries"
+                    return (Just db))
+                (\(e :: SomeException) -> do
+                    reportError $ "Cache load failed: " ++ show e
+                    reportCacheOperation "The cache file is corrupted or incompatible with the current version"
+                    return Nothing)
 
 {-|
 Save Database with pre-computed matrices to cache (second-tier).

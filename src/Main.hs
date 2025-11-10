@@ -12,8 +12,10 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import GHC.Conc (getNumCapabilities)
 import Options.Applicative
+import qualified System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
+import qualified System.FilePath
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
@@ -29,6 +31,7 @@ import ACV.Progress
 import ACV.Query (buildDatabaseWithMatrices)
 import ACV.Types
 import Data.IORef (newIORef, readIORef, writeIORef)
+import qualified EcoSpold.Loader
 import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
 
 -- For server mode
@@ -98,8 +101,47 @@ main = do
     _ -> executeCommand cliConfig database
 
 -- | Load database with optional caching
+-- Supports three modes:
+-- 1. Direct cache file (.bin or .bin.zst)
+-- 2. Directory with .spold files + caching
+-- 3. Directory with .spold files without caching
 loadDatabase :: FilePath -> Bool -> IO Database
-loadDatabase dataDirectory disableCache =
+loadDatabase dataPath disableCache = do
+  -- Check if dataPath is a direct cache file
+  isDirectCache <- isDirectCacheFile dataPath
+
+  if isDirectCache
+    then loadFromDirectCacheFile dataPath
+    else loadFromDirectory dataPath disableCache
+
+-- | Check if path points to a direct cache file
+isDirectCacheFile :: FilePath -> IO Bool
+isDirectCacheFile path = do
+  exists <- System.Directory.doesFileExist path
+  if exists
+    then do
+      let ext = System.FilePath.takeExtension path
+      let ext2 = System.FilePath.takeExtension (System.FilePath.dropExtension path)
+      -- Check for .bin or .bin.zst
+      return $ ext == ".bin" || (ext == ".zst" && ext2 == ".bin")
+    else return False
+
+-- | Load database directly from cache file
+loadFromDirectCacheFile :: FilePath -> IO Database
+loadFromDirectCacheFile cacheFile = do
+  reportProgress Info $ "Loading database directly from cache file: " ++ cacheFile
+  cachedDb <- EcoSpold.Loader.loadDatabaseFromCacheFile cacheFile
+  case cachedDb of
+    Just db -> do
+      reportProgress Info "Successfully loaded database from cache file"
+      return db
+    Nothing -> do
+      reportError $ "Failed to load cache file: " ++ cacheFile
+      exitFailure
+
+-- | Load database from directory (existing logic)
+loadFromDirectory :: FilePath -> Bool -> IO Database
+loadFromDirectory dataDirectory disableCache =
   if disableCache
     then do
       reportProgress Info "Loading activities with flow deduplication (caching disabled)"
