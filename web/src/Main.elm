@@ -7,23 +7,23 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Url
-import Url.Builder
-import Url.Parser as Parser exposing (Parser, oneOf, string, (</>), parse, top)
-import Models.Activity exposing (ActivityTree, ActivitySummary, SearchResults, activityTreeDecoder, activitySummaryDecoder, searchResultsDecoder)
+import Models.Activity exposing (ActivitySummary, ActivityTree, SearchResults, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.Page exposing (Page(..), Route(..))
-import Views.TreeView as TreeView
-import Views.LeftMenu as LeftMenu
+import Url
+import Url.Builder
+import Url.Parser as Parser exposing ((</>), Parser, oneOf, parse, string, top)
 import Views.ActivitiesView as ActivitiesView
 import Views.InventoryView as InventoryView
+import Views.LeftMenu as LeftMenu
+import Views.TreeView as TreeView
 
 
 main : Program () Model Msg
 main =
     Browser.application
         { init = init
-        , view = \model -> { title = "ACV Engine", body = [view model] }
+        , view = \model -> { title = "ACV Engine", body = [ view model ] }
         , update = update
         , subscriptions = subscriptions
         , onUrlChange = UrlChanged
@@ -35,8 +35,8 @@ type alias Model =
     { key : Nav.Key
     , url : Url.Url
     , currentPage : Page
-    , cachedTrees : Dict.Dict String ActivityTree  -- Cache trees by activity ID
-    , cachedInventories : Dict.Dict String InventoryExport  -- Cache inventories by activity ID
+    , cachedTrees : Dict.Dict String ActivityTree -- Cache trees by activity ID
+    , cachedInventories : Dict.Dict String InventoryExport -- Cache inventories by activity ID
     , currentActivityId : String
     , loading : Bool
     , error : Maybe String
@@ -65,7 +65,10 @@ type Msg
     | UrlChanged Url.Url
 
 
+
 -- URL parsing
+
+
 routeParser : Parser (Route -> a) a
 routeParser =
     oneOf
@@ -100,10 +103,10 @@ routeToPage route =
             ActivitiesPage
 
         ActivityRoute _ ->
-            GraphPage
+            TreePage
 
         ActivityTreeRoute _ ->
-            GraphPage
+            TreePage
 
         ActivityInventoryRoute _ ->
             InventoryPage
@@ -115,24 +118,28 @@ routeToPage route =
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     let
-        route = parseUrl url
-        defaultActivityId = "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
+        route =
+            parseUrl url
 
-        (activityId, shouldLoad, loadType) =
+        defaultActivityId =
+            "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
+
+        ( activityId, shouldLoad, loadType ) =
             case route of
                 ActivityRoute processId ->
-                    (processId, True, "tree")
+                    ( processId, True, "tree" )
 
                 ActivityTreeRoute processId ->
-                    (processId, True, "tree")
+                    ( processId, True, "tree" )
 
                 ActivityInventoryRoute processId ->
-                    (processId, True, "inventory")
+                    ( processId, True, "inventory" )
 
                 _ ->
-                    (defaultActivityId, False, "none")
+                    ( defaultActivityId, False, "none" )
 
-        initialPage = routeToPage route
+        initialPage =
+            routeToPage route
 
         model =
             { key = key
@@ -149,15 +156,19 @@ init _ url key =
             , searchLoading = False
             , hoveredNode = Nothing
             }
+
         cmd =
             if shouldLoad then
                 case loadType of
                     "tree" ->
                         loadActivityTree activityId
+
                     "inventory" ->
                         loadInventoryData activityId
+
                     _ ->
                         Cmd.none
+
             else
                 Cmd.none
     in
@@ -169,7 +180,8 @@ update msg model =
     case msg of
         LoadActivity activityId ->
             let
-                shouldLoad = not (Dict.member activityId model.cachedTrees)
+                shouldLoad =
+                    not (Dict.member activityId model.cachedTrees)
             in
             ( { model
                 | loading = shouldLoad
@@ -178,6 +190,7 @@ update msg model =
               }
             , if shouldLoad then
                 loadActivityTree activityId
+
               else
                 Cmd.none
             )
@@ -201,7 +214,8 @@ update msg model =
 
         LoadInventory activityId ->
             let
-                shouldLoad = not (Dict.member activityId model.cachedInventories)
+                shouldLoad =
+                    not (Dict.member activityId model.cachedInventories)
             in
             ( { model
                 | loading = shouldLoad
@@ -210,6 +224,7 @@ update msg model =
               }
             , if shouldLoad then
                 loadInventoryData activityId
+
               else
                 Cmd.none
             )
@@ -256,6 +271,7 @@ update msg model =
                                       }
                                     , if Dict.member parentId model.cachedTrees then
                                         Cmd.none
+
                                       else
                                         loadActivityTree parentId
                                     )
@@ -270,6 +286,7 @@ update msg model =
                                               }
                                             , if Dict.member parentId model.cachedTrees then
                                                 Cmd.none
+
                                               else
                                                 loadActivityTree parentId
                                             )
@@ -285,10 +302,16 @@ update msg model =
 
         NavigateToPage page ->
             let
-                url = case page of
-                    ActivitiesPage -> "/#activities"
-                    GraphPage -> "/#activity/" ++ model.currentActivityId ++ "/tree"
-                    InventoryPage -> "/#activity/" ++ model.currentActivityId ++ "/inventory"
+                url =
+                    case page of
+                        ActivitiesPage ->
+                            "/#activities"
+
+                        TreePage ->
+                            "/#activity/" ++ model.currentActivityId ++ "/tree"
+
+                        InventoryPage ->
+                            "/#activity/" ++ model.currentActivityId ++ "/inventory"
             in
             ( model, Nav.pushUrl model.key url )
 
@@ -296,6 +319,7 @@ update msg model =
             ( { model | activitiesSearchQuery = query }
             , if String.length query >= 2 then
                 searchActivities query
+
               else
                 Cmd.none
             )
@@ -343,46 +367,60 @@ update msg model =
 
         UrlChanged url ->
             let
-                route = parseUrl url
-                newPage = routeToPage route
-                (newActivityId, needsActivity) =
+                route =
+                    parseUrl url
+
+                newPage =
+                    routeToPage route
+
+                ( newActivityId, needsActivity ) =
                     case route of
                         ActivityRoute processId ->
-                            (processId, True)
+                            ( processId, True )
 
                         ActivityTreeRoute processId ->
-                            (processId, True)
+                            ( processId, True )
 
                         ActivityInventoryRoute processId ->
-                            (processId, True)
+                            ( processId, True )
 
                         _ ->
-                            (model.currentActivityId, False)
+                            ( model.currentActivityId, False )
 
-                shouldLoadTree = needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedTrees)
-                shouldLoadInventory = needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
-                shouldLoad = shouldLoadTree || shouldLoadInventory
+                shouldLoadTree =
+                    needsActivity && newPage == TreePage && not (Dict.member newActivityId model.cachedTrees)
+
+                shouldLoadInventory =
+                    needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
+
+                shouldLoad =
+                    shouldLoadTree || shouldLoadInventory
 
                 updatedModel =
                     { model
-                    | url = url
-                    , currentPage = newPage
-                    , currentActivityId = newActivityId
-                    , loading = shouldLoad
+                        | url = url
+                        , currentPage = newPage
+                        , currentActivityId = newActivityId
+                        , loading = shouldLoad
                     }
 
                 cmd =
                     if shouldLoadTree then
                         loadActivityTree newActivityId
+
                     else if shouldLoadInventory then
                         loadInventoryData newActivityId
+
                     else
                         Cmd.none
             in
             ( updatedModel, cmd )
 
 
+
 -- Navigation helpers
+
+
 routeToUrl : Route -> String
 routeToUrl route =
     case route of
@@ -435,8 +473,8 @@ view model =
                             model.error
                         )
 
-                GraphPage ->
-                    viewGraphPage model
+                TreePage ->
+                    viewTreePage model
 
                 InventoryPage ->
                     InventoryView.viewInventoryPage
@@ -447,9 +485,9 @@ view model =
         ]
 
 
-viewGraphPage : Model -> Html Msg
-viewGraphPage model =
-    div [ class "graph-page" ]
+viewTreePage : Model -> Html Msg
+viewTreePage model =
+    div [ class "tree-page" ]
         [ -- Header with navigation
           nav [ class "navbar is-light" ]
             [ div [ class "navbar-brand" ]
@@ -583,11 +621,12 @@ loadInventoryData activityId =
 searchActivities : String -> Cmd Msg
 searchActivities query =
     Http.get
-        { url = Url.Builder.absolute
-            [ "api", "v1", "search", "activities" ]
-            [ Url.Builder.string "name" query
-            , Url.Builder.int "limit" 20
-            ]
+        { url =
+            Url.Builder.absolute
+                [ "api", "v1", "search", "activities" ]
+                [ Url.Builder.string "name" query
+                , Url.Builder.int "limit" 20
+                ]
         , expect = Http.expectJson ActivitiesSearchResults (searchResultsDecoder activitySummaryDecoder)
         }
 

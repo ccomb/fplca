@@ -1,6 +1,6 @@
 module Views.LeftMenu exposing (viewLeftMenu)
 
-import Html exposing (Html, div, nav, button, span, i, text)
+import Html exposing (Html, button, div, i, nav, span, text)
 import Html.Attributes exposing (class, classList)
 import Html.Events exposing (onClick)
 import Models.Page exposing (Page(..))
@@ -18,7 +18,7 @@ viewLeftMenu currentPage currentActivityId =
             ]
         , div [ class "menu-items" ]
             [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities"
-            , menuItem currentPage GraphPage "fas fa-project-diagram" "Graph"
+            , menuItem currentPage TreePage "fas fa-project-diagram" "Tree"
             , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory"
             ]
         ]
@@ -38,3 +38,4 @@ menuItem currentPage targetPage iconClass label =
             ]
         , span [ class "menu-label" ] [ text label ]
         ]
+
