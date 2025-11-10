@@ -14,3 +14,24 @@ brightway2*
 EF-v3.1/
 *\.bin
 uv.lock
+
+# Debug and profiling files
+debug/
+debug_ecoinvent/
+__pycache__/
+*.prof
+*.hp
+*.aux
+*.eventlog
+*.ps
+*.pyc
+*.pyo
+
+# Cache and temporary files
+*.zst
+fullcode.txt
+cabal.project.local~
+
+# Documentation and notes (except README)
+MEMORY.md
+*.txt
