@@ -108,6 +108,21 @@ acv-cli lcia "12345678-1234-1234-1234-123456789abc" \
   --csv results.csv
 ```
 
+#### 🔧 Matrix Export & Debugging
+
+**Export Matrices (Ecoinvent Universal Format)**
+```bash
+# Export full database matrices in universal format
+acv-cli export-matrices ./output_dir
+```
+
+**Debug Matrices**
+```bash
+# Export targeted matrix slices for debugging
+acv-cli debug-matrices "12345678-1234-1234-1234-123456789abc" \
+  --output ./debug_output
+```
+
 #### 🌐 API Server
 
 **Start Server**
@@ -117,6 +132,9 @@ acv-cli --data ./data server
 
 # Custom port
 acv-cli --data ./data server --port 3000
+
+# Web interface available at http://localhost:8080/
+# API endpoints at http://localhost:8080/api/v1/
 ```
 
 ---
@@ -349,9 +367,10 @@ Performance Characteristics:
 
 ### Memory Management
 - **In-memory processing**: Entire database loaded into RAM for speed
-- **Smart caching**: Automatic disk cache for repeated database loads
-- **Matrix optimization**: Sparse matrix storage for memory efficiency
-- **Lazy evaluation**: On-demand tree construction to reduce memory usage
+- **Smart caching**: Automatic disk cache (~30MB compressed) for instant database reload
+- **Matrix optimization**: Unboxed sparse matrix storage with minimal overhead
+- **Memory optimizations**: UUID interning, unboxed vectors, strict evaluation
+- **Configurable limits**: GHC RTS options to control memory usage (see below)
 
 ### Computation Performance
 - **PETSc integration**: High-performance linear algebra via MUMPS solver
@@ -361,11 +380,48 @@ Performance Characteristics:
 
 ### Scaling Guidelines
 
-| Database Size | RAM Required | Typical Load Time | Tree Computation |
-|---------------|--------------|-------------------|------------------|
-| Sample (3 activities) | 50 MB | < 1 second | < 100ms |
-| EcoInvent 3.9.1 (20k activities) | 8-12 GB | 30-60 seconds | 5-30 seconds |
-| Custom large DB (50k+ activities) | 16+ GB | 2-5 minutes | 30-120 seconds |
+| Database Size | Live Data | Cache Load (RSS) | Cold Start | Cache Time | Tree Solve |
+|---------------|-----------|------------------|------------|------------|------------|
+| Sample (3 activities) | ~10 MB | ~50 MB | ~1s | < 0.1s | < 100ms |
+| EcoInvent 3.11 (25k activities) | ~305 MB | ~500 MB* | ~45s | ~0.5s | 5-15s |
+| Custom large DB (50k+ activities) | ~600 MB | ~1 GB* | ~120s | ~1s | 15-60s |
+
+*With GHC RTS heap cap (`+RTS -M1G`). Without cap, GHC may allocate 5-7GB arena but only use ~300MB live data.
+
+### Memory Control with GHC RTS Options
+
+You can control memory usage using GHC runtime system (RTS) options. Add them after your command:
+
+**Cache Load (Memory-Efficient)**
+```bash
+# Limit heap to 800MB for shared systems
+acv-cli --data ./data activities --limit 5 +RTS -M800M -H256M -A16M -c -RTS
+```
+
+**Cold Start (Performance)**
+```bash
+# Allow larger heap for initial parsing
+acv-cli --no-cache --data ./data activities +RTS -M5G -H2G -A64M -RTS
+```
+
+**Web Server (Balanced)**
+```bash
+# Moderate heap with automatic garbage collection
+acv-cli --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
+```
+
+**RTS Options Explained:**
+- `-M<size>`: Maximum heap size (hard cap, prevents excessive memory use)
+- `-H<size>`: Initial heap size (pre-allocates for performance)
+- `-A<size>`: Allocation area size (nursery for young generation GC)
+- `-c`: Enable compacting GC (reduces memory fragmentation)
+- `-I<sec>`: Idle GC interval (forces cleanup during idle periods)
+
+**Why use RTS options?**
+- GHC pre-allocates large heap (~5-7GB) by default for performance
+- Actual live data is much smaller (~300MB for EcoInvent 3.11)
+- RTS caps prevent memory waste on shared systems
+- No performance penalty when caps are reasonable
 
 ---
 
@@ -396,10 +452,13 @@ acv-cli --format csv --jsonpath "ieFlows" inventory "uuid"  # Inventory flows
 
 **Memory Issues**
 ```bash
-# If running out of memory, try reducing tree depth
+# If running out of memory, cap the heap with RTS options
+acv-cli inventory "uuid" +RTS -M1G -RTS
+
+# Or reduce tree depth for complex calculations
 acv-cli --tree-depth 1 inventory "uuid"
 
-# Or disable caching to free memory
+# Or disable caching during development
 acv-cli --no-cache inventory "uuid"
 ```
 
