@@ -150,18 +150,20 @@ executeFlowActivitiesCommand fmt jsonPathOpt database flowId = do
 -- | Execute search activities command
 executeSearchActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> SearchActivitiesOptions -> IO ()
 executeSearchActivitiesCommand fmt jsonPathOpt database opts = do
-  case ACV.Service.searchActivities database
+  searchResult <- ACV.Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
-         (searchLimit opts) (searchOffset opts) of
+         (searchLimit opts) (searchOffset opts)
+  case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute search flows command
 executeSearchFlowsCommand :: OutputFormat -> Maybe Text -> Database -> SearchFlowsOptions -> IO ()
 executeSearchFlowsCommand fmt jsonPathOpt database opts = do
-  case ACV.Service.searchFlows database
+  searchResult <- ACV.Service.searchFlows database
          (searchQuery opts) (searchLang opts)
-         (searchFlowsLimit opts) (searchFlowsOffset opts) of
+         (searchFlowsLimit opts) (searchFlowsOffset opts)
+  case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 

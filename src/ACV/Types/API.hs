@@ -17,6 +17,7 @@ data SearchResults a = SearchResults
     , srOffset :: Int -- Starting offset for pagination
     , srLimit :: Int -- Maximum number of results requested
     , srHasMore :: Bool -- Whether there are more results available
+    , srSearchTimeMs :: Double -- Search execution time in milliseconds
     }
     deriving (Generic)
 

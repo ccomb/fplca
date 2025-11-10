@@ -21,7 +21,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import GHC.Generics
 import Servant
@@ -167,7 +167,7 @@ acvServer db maxTreeDepth sharedSolver =
                 | activity <- activities
                 , Just processId <- [ACV.Service.findProcessIdForActivity db activity]
                 ]
-        return $ paginateResults activitySummaries limitParam offsetParam
+        liftIO $ paginateResults activitySummaries limitParam offsetParam
 
     -- LCIA computation
     postLCIA :: Text -> LCIARequest -> Handler Value
@@ -177,23 +177,26 @@ acvServer db maxTreeDepth sharedSolver =
         return $ object ["status" .= ("not_implemented" :: Text), "processId" .= processId, "method" .= lciaMethod lciaReq]
 
 -- | Helper function to apply pagination to search results
-paginateResults :: [a] -> Maybe Int -> Maybe Int -> SearchResults a
-paginateResults results limitParam offsetParam =
+paginateResults :: [a] -> Maybe Int -> Maybe Int -> IO (SearchResults a)
+paginateResults results limitParam offsetParam = do
+    startTime <- getCurrentTime
     let totalCount = length results
         limit = min 1000 (maybe 50 id limitParam) -- Default limit: 50, max: 1000
         offset = maybe 0 id offsetParam -- Default offset: 0
         paginatedResults = take limit $ drop offset results
         hasMore = offset + length paginatedResults < totalCount
-     in SearchResults paginatedResults totalCount offset limit hasMore
+    endTime <- getCurrentTime
+    let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
+    return $ SearchResults paginatedResults totalCount offset limit hasMore searchTimeMs
 
 -- | Internal helper for flow search with optional language filtering
 searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-searchFlowsInternal _ Nothing _ _ _ = return $ SearchResults [] 0 0 50 False
+searchFlowsInternal _ Nothing _ _ _ = return $ SearchResults [] 0 0 50 False 0.0
 searchFlowsInternal db (Just query) _langParam limitParam offsetParam = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
         flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
-    return $ paginateResults flowSearchResults limitParam offsetParam
+    liftIO $ paginateResults flowSearchResults limitParam offsetParam
 
 -- | Proxy for the API
 acvAPI :: Proxy ACVAPI

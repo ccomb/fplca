@@ -20,6 +20,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
@@ -404,9 +405,10 @@ getActivityFlowSummaries db activity =
         | otherwise = OutputFlow
 
 -- | Search flows (returns same format as API)
-searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
-searchFlows _ Nothing _ _ _ = Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False
-searchFlows db (Just query) langParam limitParam offsetParam =
+searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
+searchFlows _ Nothing _ _ _ = return $ Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False 0.0
+searchFlows db (Just query) langParam limitParam offsetParam = do
+    startTime <- getCurrentTime
     let lang = maybe "en" id langParam
         limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
@@ -415,11 +417,14 @@ searchFlows db (Just query) langParam limitParam offsetParam =
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
         flowResults = map (\flow -> FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow))) pagedResults
-     in Right $ toJSON $ SearchResults flowResults total offset limit hasMore
+    endTime <- getCurrentTime
+    let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
+    return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
 -- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Either ServiceError Value
-searchActivities db nameParam geoParam productParam limitParam offsetParam =
+searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
+searchActivities db nameParam geoParam productParam limitParam offsetParam = do
+    startTime <- getCurrentTime
     let limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
         allResults = findActivitiesByFields db nameParam geoParam productParam
@@ -443,7 +448,9 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam =
                                 (activityLocation activity)
                 )
                 pagedResults
-     in Right $ toJSON $ SearchResults activityResults total offset limit hasMore
+    endTime <- getCurrentTime
+    let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
+    return $ Right $ toJSON $ SearchResults activityResults total offset limit hasMore searchTimeMs
 
 -- | Calculate extended metadata for an activity
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
