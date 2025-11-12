@@ -269,14 +269,8 @@ update msg model =
                                 Just parentId ->
                                     ( { model
                                         | navigationHistory = List.drop 1 model.navigationHistory
-                                        , currentActivityId = parentId
-                                        , loading = not (Dict.member parentId model.cachedTrees)
                                       }
-                                    , if Dict.member parentId model.cachedTrees then
-                                        Cmd.none
-
-                                      else
-                                        loadActivityTree parentId
+                                    , navigateToActivity model.key parentId
                                     )
 
                                 Nothing ->
@@ -284,14 +278,8 @@ update msg model =
                                         parentId :: rest ->
                                             ( { model
                                                 | navigationHistory = rest
-                                                , currentActivityId = parentId
-                                                , loading = not (Dict.member parentId model.cachedTrees)
                                               }
-                                            , if Dict.member parentId model.cachedTrees then
-                                                Cmd.none
-
-                                              else
-                                                loadActivityTree parentId
+                                            , navigateToActivity model.key parentId
                                             )
 
                                         [] ->
@@ -408,6 +396,7 @@ update msg model =
                         , currentPage = newPage
                         , currentActivityId = newActivityId
                         , loading = shouldLoad
+                        , navigationHistory = model.navigationHistory  -- Preserve navigation history
                     }
 
                 cmd =
@@ -603,17 +592,22 @@ viewTreePage model =
 
 canNavigateToParent : Model -> Bool
 canNavigateToParent model =
-    case Dict.get model.currentActivityId model.cachedTrees of
-        Just tree ->
-            case Dict.get model.currentActivityId tree.nodes of
-                Just currentNode ->
-                    currentNode.parentId /= Nothing || not (List.isEmpty model.navigationHistory)
+    -- First check navigation history (works even before tree is loaded)
+    if not (List.isEmpty model.navigationHistory) then
+        True
+    else
+        -- Otherwise check if current node has a parentId
+        case Dict.get model.currentActivityId model.cachedTrees of
+            Just tree ->
+                case Dict.get model.currentActivityId tree.nodes of
+                    Just currentNode ->
+                        currentNode.parentId /= Nothing
 
-                Nothing ->
-                    False
+                    Nothing ->
+                        False
 
-        Nothing ->
-            False
+            Nothing ->
+                False
 
 
 loadActivityTree : String -> Cmd Msg

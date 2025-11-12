@@ -4,6 +4,7 @@ module Models.Activity exposing
     , ActivityEdge
     , FlowInfo
     , NodeType(..)
+    , EdgeType(..)
     , TreeMetadata
     , ActivitySummary
     , SearchResults
@@ -12,6 +13,7 @@ module Models.Activity exposing
     , activityEdgeDecoder
     , flowInfoDecoder
     , nodeTypeDecoder
+    , edgeTypeDecoder
     , treeMetadataDecoder
     , activitySummaryDecoder
     , searchResultsDecoder
@@ -50,12 +52,21 @@ type alias ActivityNode =
     , loopTarget : Maybe String
     , parentId : Maybe String
     , childrenCount : Int
+    , compartment : Maybe String
     }
 
 
 type NodeType
     = ActivityNodeType
     | LoopNodeType
+    | BiosphereEmissionNodeType
+    | BiosphereResourceNodeType
+
+
+type EdgeType
+    = TechnosphereEdgeType
+    | BiosphereEmissionEdgeType
+    | BiosphereResourceEdgeType
 
 
 type alias ActivityEdge =
@@ -64,6 +75,7 @@ type alias ActivityEdge =
     , flow : FlowInfo
     , quantity : Float
     , unit : String
+    , edgeType : EdgeType
     }
 
 
@@ -125,6 +137,7 @@ activityNodeDecoder =
         |> required "enLoopTarget" (Decode.nullable Decode.string)
         |> required "enParentId" (Decode.nullable Decode.string)
         |> required "enChildrenCount" Decode.int
+        |> required "enCompartment" (Decode.nullable Decode.string)
 
 
 nodeTypeDecoder : Decoder NodeType
@@ -139,6 +152,12 @@ nodeTypeDecoder =
                     "LoopNode" ->
                         Decode.succeed LoopNodeType
 
+                    "BiosphereEmissionNode" ->
+                        Decode.succeed BiosphereEmissionNodeType
+
+                    "BiosphereResourceNode" ->
+                        Decode.succeed BiosphereResourceNodeType
+
                     _ ->
                         Decode.fail ("Unknown node type: " ++ str)
             )
@@ -152,6 +171,27 @@ activityEdgeDecoder =
         |> required "teFlow" flowInfoDecoder
         |> required "teQuantity" Decode.float
         |> required "teUnit" Decode.string
+        |> required "teEdgeType" edgeTypeDecoder
+
+
+edgeTypeDecoder : Decoder EdgeType
+edgeTypeDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                case str of
+                    "TechnosphereEdge" ->
+                        Decode.succeed TechnosphereEdgeType
+
+                    "BiosphereEmissionEdge" ->
+                        Decode.succeed BiosphereEmissionEdgeType
+
+                    "BiosphereResourceEdge" ->
+                        Decode.succeed BiosphereResourceEdgeType
+
+                    _ ->
+                        Decode.fail ("Unknown edge type: " ++ str)
+            )
 
 
 flowInfoDecoder : Decoder FlowInfo

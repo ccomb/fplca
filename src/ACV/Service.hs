@@ -10,7 +10,7 @@ import ACV.Progress
 import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
 import ACV.Tree (buildLoopAwareTree)
 import ACV.Types
-import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int32)
 import qualified Data.List as L
@@ -259,13 +259,17 @@ findProcessIdForActivity db activity =
     in fmap fromIntegral matchingIndex
 
 -- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
--- For activities, we look up their ProcessId; for loops, we use the bare UUID
+-- For all node types, we attempt to return ProcessId format for consistency
 getTreeNodeId :: Database -> LoopAwareTree -> Text
 getTreeNodeId db (TreeLeaf activity) =
     case findProcessIdForActivity db activity of
         Just processId -> processIdToText db processId
         Nothing -> "unknown-activity"  -- Fallback
-getTreeNodeId _ (TreeLoop uuid _ _) = UUID.toText uuid -- Loop references converted to Text
+getTreeNodeId db (TreeLoop uuid _ _) =
+    -- Use ProcessId format for consistency, maintain UUID_UUID format even in fallback
+    case findProcessIdByActivityUUID db uuid of
+        Just processId -> processIdToText db processId
+        Nothing -> UUID.toText uuid <> "_" <> UUID.toText uuid  -- Fallback maintains ProcessId format
 getTreeNodeId db (TreeNode activity _) =
     case findProcessIdForActivity db activity of
         Just processId -> processIdToText db processId
@@ -283,6 +287,60 @@ countPotentialChildren db activity =
         , Just targetUUID <- [exchangeActivityLinkId ex]
         , Just _ <- [findProcessIdByActivityUUID db targetUUID]
         ]
+
+-- | Helper to extract compartment from flow category
+extractCompartment :: Text -> Text
+extractCompartment category =
+    let lowerCategory = T.toLower category
+    in if "air" `T.isInfixOf` lowerCategory
+       then "air"
+       else if "water" `T.isInfixOf` lowerCategory || "aquatic" `T.isInfixOf` lowerCategory
+       then "water"
+       else if "soil" `T.isInfixOf` lowerCategory || "ground" `T.isInfixOf` lowerCategory
+       then "soil"
+       else "other"
+
+-- | Extract biosphere exchanges from an activity and create nodes and edges
+extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge])
+extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
+    let biosphereExchanges = [ex | ex <- exchanges activity, isBiosphereExchange ex]
+        processBiosphere ex (nodeAcc', edgeAcc') =
+            case M.lookup (exchangeFlowId ex) (dbFlows db) of
+                Nothing -> (nodeAcc', edgeAcc')
+                Just flow ->
+                    let flowIdText = UUID.toText (flowId flow)
+                        isEmission = not (exchangeIsInput ex)  -- False = emission, True = resource
+                        nodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
+                        compartment = extractCompartment (flowCategory flow)
+                        biosphereNode = ExportNode
+                            { enId = flowIdText
+                            , enName = flowName flow
+                            , enDescription = [flowCategory flow]
+                            , enLocation = ""
+                            , enUnit = getUnitNameForFlow (dbUnits db) flow
+                            , enNodeType = nodeType
+                            , enDepth = depth
+                            , enLoopTarget = Nothing
+                            , enParentId = Just activityProcessId
+                            , enChildrenCount = 0
+                            , enCompartment = Just compartment
+                            }
+                        nodeAcc'' = M.insert flowIdText biosphereNode nodeAcc'
+                        -- Create edge with correct direction
+                        (edgeFrom, edgeTo, edgeType) = if isEmission
+                            then (activityProcessId, flowIdText, BiosphereEmissionEdge)
+                            else (flowIdText, activityProcessId, BiosphereResourceEdge)
+                        edge = TreeEdge
+                            { teFrom = edgeFrom
+                            , teTo = edgeTo
+                            , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
+                            , teQuantity = exchangeAmount ex
+                            , teUnit = getUnitNameForFlow (dbUnits db) flow
+                            , teEdgeType = edgeType
+                            }
+                        edgeAcc'' = edge : edgeAcc'
+                    in (nodeAcc'', edgeAcc'')
+    in foldr processBiosphere (nodeAcc, edgeAcc) biosphereExchanges
 
 -- | Extract nodes and edges from LoopAwareTree
 extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
@@ -302,14 +360,20 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enLoopTarget = Nothing
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
+                    , enCompartment = Nothing
                     }
             nodes' = M.insert processIdText node nodeAcc -- Use ProcessId as key
-         in (nodes', edgeAcc, TreeStats 1 0 1)
+            -- Add biosphere nodes and edges only for depth 0 (root level)
+            (nodes'', edges') = if depth == 0
+                                then extractBiosphereNodesAndEdges db activity processIdText depth nodes' edgeAcc
+                                else (nodes', edgeAcc)
+         in (nodes'', edges', TreeStats 1 0 1)
     TreeLoop uuid name depth ->
-        let uuidText = UUID.toText uuid
+        let nodeId = getTreeNodeId db tree  -- Use ProcessId format for consistency
+            uuidText = UUID.toText uuid  -- Keep bare UUID for loopTarget
             node =
                 ExportNode
-                    { enId = uuidText -- Convert UUID to Text for API
+                    { enId = nodeId -- Now uses ProcessId format
                     , enName = name
                     , enDescription = ["Loop reference"]
                     , enLocation = "N/A"
@@ -319,8 +383,9 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enLoopTarget = Just uuidText
                     , enParentId = parentId
                     , enChildrenCount = 0 -- Loops don't expand
+                    , enCompartment = Nothing
                     }
-            nodes' = M.insert uuidText node nodeAcc
+            nodes' = M.insert nodeId node nodeAcc  -- Store with ProcessId format key
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
         let childrenCount = countPotentialChildren db activity
@@ -337,6 +402,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enLoopTarget = Nothing
                     , enParentId = parentId
                     , enChildrenCount = childrenCount
+                    , enCompartment = Nothing
                     }
             nodes' = M.insert currentProcessId parentNode nodeAcc -- Use ProcessId as key
             processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
@@ -348,11 +414,16 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                             , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
                             , teQuantity = quantity
                             , teUnit = getUnitNameForFlow (dbUnits db) flow
+                            , teEdgeType = TechnosphereEdge
                             }
                     newStats = combineStats statsAcc childStats
                  in (childNodes, edge : childEdges, newStats)
             (finalNodes, finalEdges, childStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
-         in (finalNodes, finalEdges, childStats)
+            -- Add biosphere nodes and edges only for depth 0 (root level)
+            (finalNodesWithBio, finalEdgesWithBio) = if depth == 0
+                                                      then extractBiosphereNodesAndEdges db activity currentProcessId depth finalNodes finalEdges
+                                                      else (finalNodes, finalEdges)
+         in (finalNodesWithBio, finalEdgesWithBio, childStats)
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport

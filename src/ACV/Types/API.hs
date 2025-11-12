@@ -101,10 +101,14 @@ data ExportNode = ExportNode
     , enLoopTarget :: Maybe Text  -- Changed to Text (ProcessId format)
     , enParentId :: Maybe Text -- Changed to Text (ProcessId format) -- For navigation back up
     , enChildrenCount :: Int -- Number of potential children for expandability
+    , enCompartment :: Maybe Text -- Biosphere compartment (air/water/soil), only for BiosphereNodes
     }
     deriving (Generic)
 
-data NodeType = ActivityNode | LoopNode
+data NodeType = ActivityNode | LoopNode | BiosphereEmissionNode | BiosphereResourceNode
+    deriving (Eq, Show, Generic)
+
+data EdgeType = TechnosphereEdge | BiosphereEmissionEdge | BiosphereResourceEdge
     deriving (Eq, Show, Generic)
 
 data TreeEdge = TreeEdge
@@ -113,6 +117,7 @@ data TreeEdge = TreeEdge
     , teFlow :: FlowInfo
     , teQuantity :: Double
     , teUnit :: Text
+    , teEdgeType :: EdgeType -- Type of edge (technosphere or biosphere)
     }
     deriving (Generic)
 
@@ -234,6 +239,7 @@ instance ToJSON TreeExport
 instance ToJSON TreeMetadata
 instance ToJSON ExportNode
 instance ToJSON NodeType
+instance ToJSON EdgeType
 instance ToJSON TreeEdge
 instance ToJSON FlowInfo
 instance ToJSON FlowRole

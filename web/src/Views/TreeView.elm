@@ -4,9 +4,9 @@ import Dict exposing (Dict)
 import Html exposing (Html, div, h4, p, strong, ul, li)
 import Html.Attributes
 import Html.Events
-import Models.Activity exposing (ActivityTree, ActivityNode, ActivityEdge, NodeType(..))
-import Svg exposing (Svg, svg, g, circle, text_, path, defs, marker, polygon)
-import Svg.Attributes as SvgA exposing (width, height, viewBox, cx, cy, r, fill, stroke, strokeWidth, textAnchor, fontSize, fontWeight, d, markerEnd, id, markerWidth, markerHeight, refX, refY, orient, points, x, y, class)
+import Models.Activity exposing (ActivityTree, ActivityNode, ActivityEdge, NodeType(..), EdgeType(..))
+import Svg exposing (Svg, svg, g, circle, rect, text_, path, defs, marker, polygon, line)
+import Svg.Attributes as SvgA exposing (width, height, viewBox, cx, cy, r, fill, stroke, strokeWidth, textAnchor, fontSize, fontWeight, d, markerEnd, id, markerWidth, markerHeight, refX, refY, orient, points, x, y, class, x1, y1, x2, y2, strokeDasharray)
 import Svg.Events
 import Utils.Format as Format
 
@@ -19,8 +19,8 @@ type Msg
 viewTree : ActivityTree -> Maybe String -> Html Msg
 viewTree activityTree hoveredNodeId =
     let
-        svgWidth = 1200
-        svgHeight = 800
+        svgWidth = 1400
+        svgHeight = 900
         nodePositions = calculateNodePositions activityTree
         nodeSizes = calculateNodeSizes activityTree
     in
@@ -47,6 +47,35 @@ viewTree activityTree hoveredNodeId =
                             []
                         ]
                     ]
+                 , -- Label for biosphere section (top)
+                   text_
+                    [ x "20"
+                    , y "30"
+                    , fontSize "14"
+                    , fontWeight "bold"
+                    , fill "#555"
+                    ]
+                    [ Svg.text "Elementary flows (Biosphere)" ]
+                 , -- Separator line between biosphere and technosphere
+                   line
+                    [ x1 "0"
+                    , y1 "200"
+                    , x2 (String.fromInt svgWidth)
+                    , y2 "200"
+                    , stroke "#ccc"
+                    , strokeWidth "2"
+                    , strokeDasharray "5,5"
+                    ]
+                    []
+                 , -- Label for technosphere section (bottom)
+                   text_
+                    [ x "20"
+                    , y "230"
+                    , fontSize "14"
+                    , fontWeight "bold"
+                    , fill "#555"
+                    ]
+                    [ Svg.text "Intermediate flows (Technosphere)" ]
                  ]
                 ++ drawEdges activityTree.edges nodePositions nodeSizes
                 ++ drawNodes activityTree.nodes nodePositions nodeSizes
@@ -121,9 +150,26 @@ calculateNodePositions : ActivityTree -> Dict String Position
 calculateNodePositions activityTree =
     let
         nodesList = Dict.values activityTree.nodes
-        maxDepth = List.maximum (List.map .depth nodesList) |> Maybe.withDefault 0
 
-        -- Group nodes by depth
+        -- Separate nodes into technosphere (intermediate) and biosphere (elementary)
+        (technosphereNodes, biosphereNodes) =
+            List.partition
+                (\node ->
+                    case node.nodeType of
+                        ActivityNodeType -> True
+                        LoopNodeType -> True
+                        BiosphereEmissionNodeType -> False
+                        BiosphereResourceNodeType -> False
+                )
+                nodesList
+
+        -- Calculate positions for biosphere nodes (at top, grouped horizontally)
+        biosphereStartY = 100  -- Start biosphere section at top
+        biosphereCount = List.length biosphereNodes
+        biosphereXSpacing = if biosphereCount > 1 then 1200 / (toFloat (biosphereCount - 1)) else 0
+        biosphereStartX = 100
+
+        -- Calculate positions for technosphere nodes (by depth, below biosphere)
         nodesByDepth = List.foldl
             (\node acc ->
                 let
@@ -133,15 +179,14 @@ calculateNodePositions activityTree =
                 Dict.insert depth (node :: existingNodes) acc
             )
             Dict.empty
-            nodesList
+            technosphereNodes
 
-        -- Calculate positions for each depth level
-        positions = Dict.foldl
+        technospherePositions = Dict.foldl
             (\depth nodes acc ->
                 let
                     nodeCount = List.length nodes
-                    ySpacing = 600 / (toFloat (Basics.max 1 (nodeCount - 1)))
-                    startY = 100
+                    ySpacing = 400 / (toFloat (Basics.max 1 (nodeCount - 1)))
+                    startY = 300  -- Start technosphere below biosphere
                     xPos = 100 + toFloat depth * 200
                 in
                 List.indexedMap
@@ -157,17 +202,33 @@ calculateNodePositions activityTree =
             )
             Dict.empty
             nodesByDepth
+
+        biospherePositions =
+            List.indexedMap
+                (\index node ->
+                    ( node.id
+                    , { x = biosphereStartX + toFloat index * biosphereXSpacing
+                      , y = biosphereStartY
+                      }
+                    )
+                )
+                biosphereNodes
+            |> Dict.fromList
+
+        -- Merge both position dictionaries
+        allPositions = Dict.union technospherePositions biospherePositions
     in
-    positions
+    allPositions
 
 
 calculateNodeSizes : ActivityTree -> Dict String NodeSize
 calculateNodeSizes activityTree =
     let
         -- Get all quantities from edges to calculate range
-        quantities = List.map .quantity activityTree.edges
+        -- Use absolute values to handle negative quantities
+        quantities = List.map (abs << .quantity) activityTree.edges
 
-        -- Find min and max quantities for scaling
+        -- Find min and max quantities for scaling (now all positive)
         minQuantity = List.minimum quantities |> Maybe.withDefault 0
         maxQuantity = List.maximum quantities |> Maybe.withDefault 1
 
@@ -197,8 +258,10 @@ calculateNodeSizes activityTree =
                 Just quantity ->
                     let
                         -- Use logarithmic scaling for better visualization
+                        -- Use absolute value to handle negative quantities
                         -- Avoid log(0) by adding 1 to all values
-                        logQuantity = logBase 10 (quantity + 1)
+                        absQuantity = abs quantity
+                        logQuantity = logBase 10 (absQuantity + 1)
                         logMax = logBase 10 (maxQuantity + 1)
                         logMin = logBase 10 (minQuantity + 1)
 
@@ -236,35 +299,94 @@ drawNodes nodes positions sizes =
             )
 
 
+-- Helper functions to draw different node shapes
+drawCircle : Position -> NodeSize -> String -> String -> Svg msg
+drawCircle position nodeSize fillColor strokeColor =
+    circle
+        [ cx (String.fromFloat position.x)
+        , cy (String.fromFloat position.y)
+        , r (String.fromFloat nodeSize.radius)
+        , fill fillColor
+        , stroke strokeColor
+        , strokeWidth "2"
+        , SvgA.style "cursor: pointer;"
+        ]
+        []
+
+
+drawSquare : Position -> NodeSize -> String -> String -> Svg msg
+drawSquare position nodeSize fillColor strokeColor =
+    let
+        size = nodeSize.radius * 1.5
+        halfSize = size / 2
+    in
+    rect
+        [ SvgA.x (String.fromFloat (position.x - halfSize))
+        , SvgA.y (String.fromFloat (position.y - halfSize))
+        , SvgA.width (String.fromFloat size)
+        , SvgA.height (String.fromFloat size)
+        , fill fillColor
+        , stroke strokeColor
+        , strokeWidth "2"
+        , SvgA.style "cursor: pointer;"
+        ]
+        []
+
+
+drawDiamond : Position -> NodeSize -> String -> String -> Svg msg
+drawDiamond position nodeSize fillColor strokeColor =
+    let
+        size = nodeSize.radius * 1.5
+        -- Diamond points: top, right, bottom, left
+        top = (position.x, position.y - size)
+        right = (position.x + size, position.y)
+        bottom = (position.x, position.y + size)
+        left = (position.x - size, position.y)
+        pointsStr =
+            String.fromFloat (Tuple.first top) ++ "," ++ String.fromFloat (Tuple.second top) ++ " " ++
+            String.fromFloat (Tuple.first right) ++ "," ++ String.fromFloat (Tuple.second right) ++ " " ++
+            String.fromFloat (Tuple.first bottom) ++ "," ++ String.fromFloat (Tuple.second bottom) ++ " " ++
+            String.fromFloat (Tuple.first left) ++ "," ++ String.fromFloat (Tuple.second left)
+    in
+    polygon
+        [ SvgA.points pointsStr
+        , fill fillColor
+        , stroke strokeColor
+        , strokeWidth "2"
+        , SvgA.style "cursor: pointer;"
+        ]
+        []
+
+
 drawNode : ActivityNode -> Position -> NodeSize -> Svg Msg
 drawNode node position nodeSize =
     let
-        nodeColor = case node.nodeType of
-            ActivityNodeType -> "#e3f2fd"
-            LoopNodeType -> "#fff3e0"
-
-        strokeColor = case node.nodeType of
-            ActivityNodeType -> "#2196f3"
-            LoopNodeType -> "#ff9800"
+        (nodeColor, strokeColor) = case node.nodeType of
+            ActivityNodeType -> ("#e3f2fd", "#2196f3")
+            LoopNodeType -> ("#fff3e0", "#ff9800")
+            BiosphereEmissionNodeType ->
+                -- Color based on compartment
+                case node.compartment of
+                    Just "air" -> ("#e1f5fe", "#03a9f4")  -- Light blue for air
+                    Just "water" -> ("#b3e5fc", "#0277bd")  -- Blue for water
+                    Just "soil" -> ("#d7ccc8", "#6d4c41")  -- Brown for soil
+                    _ -> ("#ffebee", "#e53935")  -- Red for other
+            BiosphereResourceNodeType -> ("#e8f5e9", "#4caf50")  -- Green for resources
 
         textColor = "#333"
+
+        nodeShape = case node.nodeType of
+            ActivityNodeType -> drawCircle position nodeSize nodeColor strokeColor
+            LoopNodeType -> drawCircle position nodeSize nodeColor strokeColor
+            BiosphereEmissionNodeType -> drawDiamond position nodeSize nodeColor strokeColor
+            BiosphereResourceNodeType -> drawSquare position nodeSize nodeColor strokeColor
     in
     g [ Svg.Events.onClick (NodeClicked node.id)
       , Svg.Events.onMouseOver (NodeHovered (Just node.id))
       , Svg.Events.onMouseOut (NodeHovered Nothing)
-      , SvgA.class "node-circle"
+      , SvgA.class "node-shape"
       ]
-        [ -- Main circle
-          circle
-            [ cx (String.fromFloat position.x)
-            , cy (String.fromFloat position.y)
-            , r (String.fromFloat nodeSize.radius)
-            , fill nodeColor
-            , stroke strokeColor
-            , strokeWidth "2"
-            , SvgA.style "cursor: pointer;"
-            ]
-            []
+        [ nodeShape
         , -- Conditional text rendering based on size
           if nodeSize.showText then
             g []
@@ -300,16 +422,17 @@ drawEdges edges positions sizes =
 drawEdge : Dict String Position -> Dict String NodeSize -> ActivityEdge -> Maybe (Svg Msg)
 drawEdge positions sizes edge =
     Maybe.map3
-        (\fromPos toPos fromSize ->
+        (\toPos fromPos toSize ->
             let
-                -- Get the radius of the target node for proper connection
-                toSize = Dict.get edge.to sizes |> Maybe.withDefault { radius = 25, showText = True }
+                -- Get the radius of the source node for proper connection
+                fromSize = Dict.get edge.to sizes |> Maybe.withDefault { radius = 25, showText = True }
 
                 -- Calculate edge connection points using circle radius
-                fromX = fromPos.x + fromSize.radius
-                fromY = fromPos.y
-                toX = toPos.x - toSize.radius
-                toY = toPos.y
+                -- Arrow direction: from child (consumer) to parent (supplier)
+                fromX = toPos.x + toSize.radius
+                fromY = toPos.y
+                toX = fromPos.x - fromSize.radius
+                toY = fromPos.y
 
                 -- Calculate control points for curved line
                 controlX1 = fromX + (toX - fromX) / 3
@@ -348,9 +471,9 @@ drawEdge positions sizes edge =
                     [ Svg.text (Format.formatScientific edge.quantity ++ " " ++ edge.unit) ]
                 ]
         )
-        (Dict.get edge.from positions)
         (Dict.get edge.to positions)
-        (Dict.get edge.from sizes)
+        (Dict.get edge.from positions)
+        (Dict.get edge.to sizes)
 
 
 truncateText : String -> Int -> String
