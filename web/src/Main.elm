@@ -45,6 +45,7 @@ type alias Model =
     , searchResults : Maybe (SearchResults ActivitySummary)
     , searchLoading : Bool
     , hoveredNode : Maybe String
+    , inventorySearchQuery : String
     }
 
 
@@ -61,6 +62,7 @@ type Msg
     | ActivitiesSearchResults (Result Http.Error (SearchResults ActivitySummary))
     | SelectActivity String
     | NodeHovered (Maybe String)
+    | UpdateInventorySearchQuery String
     | LinkClicked Browser.UrlRequest
     | UrlChanged Url.Url
 
@@ -155,6 +157,7 @@ init _ url key =
             , searchResults = Nothing
             , searchLoading = False
             , hoveredNode = Nothing
+            , inventorySearchQuery = ""
             }
 
         cmd =
@@ -357,6 +360,9 @@ update msg model =
         NodeHovered nodeId ->
             ( { model | hoveredNode = nodeId }, Cmd.none )
 
+        UpdateInventorySearchQuery query ->
+            ( { model | inventorySearchQuery = query }, Cmd.none )
+
         LinkClicked urlRequest ->
             case urlRequest of
                 Browser.Internal url ->
@@ -477,10 +483,18 @@ view model =
                     viewTreePage model
 
                 InventoryPage ->
-                    InventoryView.viewInventoryPage
-                        (Dict.get model.currentActivityId model.cachedInventories)
-                        model.loading
-                        model.error
+                    Html.map
+                        (\msg ->
+                            case msg of
+                                InventoryView.UpdateSearchQuery query ->
+                                    UpdateInventorySearchQuery query
+                        )
+                        (InventoryView.viewInventoryPage
+                            (Dict.get model.currentActivityId model.cachedInventories)
+                            model.loading
+                            model.error
+                            model.inventorySearchQuery
+                        )
             ]
         ]
 

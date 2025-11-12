@@ -1,12 +1,16 @@
-module Views.InventoryView exposing (viewInventoryPage)
+module Views.InventoryView exposing (viewInventoryPage, Msg(..))
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
+import Html.Events exposing (..)
 import Models.Inventory exposing (InventoryExport, InventoryFlowDetail)
 import Utils.Format as Format
 
-viewInventoryPage : Maybe InventoryExport -> Bool -> Maybe String -> Html msg
-viewInventoryPage maybeInventory loading error =
+type Msg
+    = UpdateSearchQuery String
+
+viewInventoryPage : Maybe InventoryExport -> Bool -> Maybe String -> String -> Html Msg
+viewInventoryPage maybeInventory loading error searchQuery =
     div [ class "inventory-page" ]
         [ -- Header with navigation
           nav [ class "navbar is-light" ]
@@ -35,7 +39,8 @@ viewInventoryPage maybeInventory loading error =
                     ( _, _, Just inventory ) ->
                         div []
                             [ viewInventoryHeader inventory
-                            , viewInventoryTable inventory.ieFlows
+                            , viewSearchBox searchQuery
+                            , viewInventoryTable (filterFlows searchQuery inventory.ieFlows)
                             ]
 
                     ( _, _, Nothing ) ->
@@ -126,3 +131,56 @@ viewInventoryRow flowDetail =
                 ]
             ]
         ]
+
+viewSearchBox : String -> Html Msg
+viewSearchBox searchQuery =
+    div [ class "box" ]
+        [ div [ class "field" ]
+            [ label [ class "label" ] [ text "Search Flows" ]
+            , div [ class "control has-icons-left" ]
+                [ input
+                    [ class "input"
+                    , type_ "text"
+                    , placeholder "Search by flow name (e.g., \"dioxide carbon\" for flows containing both words)"
+                    , value searchQuery
+                    , onInput UpdateSearchQuery
+                    ]
+                    []
+                , span [ class "icon is-small is-left" ]
+                    [ i [ class "fas fa-search" ] []
+                    ]
+                ]
+            , p [ class "help" ]
+                [ text "Enter multiple words to find flows containing all words (case-insensitive)" ]
+            ]
+        ]
+
+filterFlows : String -> List InventoryFlowDetail -> List InventoryFlowDetail
+filterFlows searchQuery flows =
+    if String.isEmpty (String.trim searchQuery) then
+        flows
+    else
+        let
+            -- Split the search query into words and convert to lowercase
+            searchWords =
+                searchQuery
+                    |> String.toLower
+                    |> String.words
+                    |> List.filter (\w -> not (String.isEmpty w))
+
+            -- Check if a flow matches all search words
+            matchesAllWords flow =
+                let
+                    -- Combine all searchable text from the flow
+                    searchableText =
+                        String.toLower
+                            (flow.ifdFlow.flowName
+                                ++ " "
+                                ++ flow.ifdFlow.flowCategory
+                                ++ " "
+                                ++ flow.ifdUnitName
+                            )
+                in
+                List.all (\word -> String.contains word searchableText) searchWords
+        in
+        List.filter matchesAllWords flows
