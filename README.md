@@ -472,7 +472,7 @@ The CLI validates options before execution:
 
 ## License
 
-MIT License - See LICENSE file for details.
+GNU AFFERO GENERAL PUBLIC LICENSE 3.0 - See LICENSE file for details.
 
 ---
 
