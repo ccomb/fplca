@@ -9,8 +9,8 @@ module TestHelpers (
     findActivityByUUID,
 ) where
 
-import ACV.Types
-import ACV.Query (buildDatabaseWithMatrices)
+import LCA.Types
+import LCA.Query (buildDatabaseWithMatrices)
 import Control.Monad (zipWithM_)
 import qualified Data.Map as M
 import qualified Data.Vector as V

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
-Module      : ACV.Matrix
+Module      : LCA.Matrix
 Description : Matrix-based LCA calculations using PETSc sparse solvers
 
 This module implements matrix-based Life Cycle Assessment (LCA) calculations using
@@ -29,7 +29,7 @@ Performance characteristics:
 - Forward/backward solve: O(n log n)
 - Memory usage: ~50-100 MB for typical Ecoinvent database
 -}
-module ACV.Matrix (
+module LCA.Matrix (
     Vector,
     Inventory,
     computeInventoryMatrix,
@@ -44,9 +44,9 @@ module ACV.Matrix (
     solveSparseLinearSystemWithFactorization,
 ) where
 
-import ACV.Progress
-import ACV.Types
-import ACV.UnitConversion (convertExchangeAmount)
+import LCA.Progress
+import LCA.Types
+import LCA.UnitConversion (convertExchangeAmount)
 import Control.Exception (catch, SomeException)
 import Control.Monad (forM_, when, unless)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)

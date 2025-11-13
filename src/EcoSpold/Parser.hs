@@ -4,7 +4,7 @@
 
 module EcoSpold.Parser (streamParseActivityAndFlowsFromFile) where
 
-import ACV.Types
+import LCA.Types
 import qualified Data.ByteString as BS
 import qualified Data.List
 import qualified Data.Map as M

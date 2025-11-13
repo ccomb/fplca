@@ -1,5 +1,5 @@
 cabal-version:       >=1.10
-name:                acv-engine
+name:                fplca
 version:             0.1.0.0
 build-type:          Simple
 
@@ -13,7 +13,7 @@ description:         Ce projet est un moteur d'évaluation du cycle de vie (ACV)
 
 extra-source-files:  README.md CHANGELOG.md
 
-executable acv-cli
+executable fplca
   main-is:             Main.hs
   hs-source-dirs:      src
   -- for weeder: -fwrite-ide-info -hiedir=.hie
@@ -60,19 +60,19 @@ executable acv-cli
                      , petsc-hs
                      , unix
 
-  other-modules:     ACV.Types
-                     , ACV.Types.API
-                     , ACV.Tree
-                     , ACV.Matrix
-                     , ACV.Matrix.SharedSolver
-                     , ACV.Progress
-                     , ACV.Query
-                     , ACV.API
-                     , ACV.Service
-                     , ACV.UnitConversion
-                     , ACV.CLI.Types
-                     , ACV.CLI.Parser
-                     , ACV.CLI.Command
+  other-modules:     LCA.Types
+                     , LCA.Types.API
+                     , LCA.Tree
+                     , LCA.Matrix
+                     , LCA.Matrix.SharedSolver
+                     , LCA.Progress
+                     , LCA.Query
+                     , LCA.API
+                     , LCA.Service
+                     , LCA.UnitConversion
+                     , LCA.CLI.Types
+                     , LCA.CLI.Parser
+                     , LCA.CLI.Command
                      , EcoSpold.Parser
                      , EcoSpold.Loader
   default-language:    Haskell2010
@@ -97,16 +97,16 @@ test-suite acv-tests
                      , InventorySpec
                      , ParserSpec
                      , MatrixExportSpec
-                     , ACV.Types
-                     , ACV.Types.API
-                     , ACV.Query
-                     , ACV.Matrix
-                     , ACV.Matrix.SharedSolver
-                     , ACV.Service
-                     , ACV.Progress
-                     , ACV.UnitConversion
-                     , ACV.CLI.Types
-                     , ACV.Tree
+                     , LCA.Types
+                     , LCA.Types.API
+                     , LCA.Query
+                     , LCA.Matrix
+                     , LCA.Matrix.SharedSolver
+                     , LCA.Service
+                     , LCA.Progress
+                     , LCA.UnitConversion
+                     , LCA.CLI.Types
+                     , LCA.Tree
                      , EcoSpold.Loader
                      , EcoSpold.Parser
   build-depends:       base >=4.14 && <5

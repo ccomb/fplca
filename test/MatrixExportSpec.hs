@@ -5,8 +5,8 @@ module MatrixExportSpec (spec) where
 import Test.Hspec
 import TestHelpers
 import GoldenData
-import ACV.Types
-import ACV.Service (exportUniversalMatrixFormat)
+import LCA.Types
+import LCA.Service (exportUniversalMatrixFormat)
 import System.IO.Temp (withSystemTempDirectory)
 import System.FilePath ((</>))
 import qualified Data.Text as T

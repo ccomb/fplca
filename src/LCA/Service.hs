@@ -1,16 +1,16 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Service where
+module LCA.Service where
 
-import ACV.CLI.Types (DebugMatricesOptions (..))
-import ACV.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList, fromList)
-import ACV.Matrix.SharedSolver (SharedSolver, solveWithSharedSolver)
-import ACV.Progress
-import ACV.Query (findActivitiesByFields, findFlowsBySynonym)
-import ACV.Tree (buildLoopAwareTree)
-import ACV.Types
-import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.CLI.Types (DebugMatricesOptions (..))
+import LCA.Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, solveSparseLinearSystem, toList, fromList)
+import LCA.Matrix.SharedSolver (SharedSolver, solveWithSharedSolver)
+import LCA.Progress
+import LCA.Query (findActivitiesByFields, findFlowsBySynonym)
+import LCA.Tree (buildLoopAwareTree)
+import LCA.Types
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int32)
 import qualified Data.List as L

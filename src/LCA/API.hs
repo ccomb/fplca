@@ -3,16 +3,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module ACV.API where
+module LCA.API where
 
-import ACV.Matrix (Inventory)
-import ACV.Matrix.SharedSolver (SharedSolver)
-import ACV.Query
-import ACV.Service (getActivityInventoryWithSharedSolver)
-import qualified ACV.Service
-import ACV.Tree (buildLoopAwareTree)
-import ACV.Types
-import ACV.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.Matrix (Inventory)
+import LCA.Matrix.SharedSolver (SharedSolver)
+import LCA.Query
+import LCA.Service (getActivityInventoryWithSharedSolver)
+import qualified LCA.Service
+import LCA.Tree (buildLoopAwareTree)
+import LCA.Types
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -28,7 +28,7 @@ import Servant
 import Control.Monad.IO.Class (liftIO)
 
 -- | API type definition - RESTful design with focused endpoints
-type ACVAPI =
+type LCAAPI =
     "api"
         :> "v1"
         :> ( "activity" :> Capture "processId" Text :> Get '[JSON] ActivityInfo
@@ -48,17 +48,17 @@ type ACVAPI =
 -- | Helper function to validate ProcessId and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
 withValidatedActivity db processId action = do
-    case ACV.Service.resolveActivityByProcessId db processId of
-        Left (ACV.Service.InvalidProcessId errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
-        Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+    case LCA.Service.resolveActivityByProcessId db processId of
+        Left (LCA.Service.InvalidProcessId errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+        Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
         Left _ -> throwError err400{errBody = "Invalid request"}
         Right activity -> action activity
 
 -- | Helper function to validate UUID and lookup flow
 withValidatedFlow :: Database -> Text -> (Flow -> Handler a) -> Handler a
 withValidatedFlow db uuid action = do
-    case ACV.Service.validateUUID uuid of
-        Left (ACV.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
+    case LCA.Service.validateUUID uuid of
+        Left (LCA.Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
         Left _ -> throwError err400{errBody = "Invalid request"}
         Right validUuidText ->
             case UUID.fromText validUuidText of
@@ -69,8 +69,8 @@ withValidatedFlow db uuid action = do
                         Just flow -> action flow
 
 -- | API server implementation with multiple focused endpoints
-acvServer :: Database -> Int -> SharedSolver -> Server ACVAPI
-acvServer db maxTreeDepth sharedSolver =
+lcaServer :: Database -> Int -> SharedSolver -> Server LCAAPI
+lcaServer db maxTreeDepth sharedSolver =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -87,9 +87,9 @@ acvServer db maxTreeDepth sharedSolver =
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
     getActivityInfo processId = do
-        case ACV.Service.getActivityInfo db processId of
-            Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (ACV.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+        case LCA.Service.getActivityInfo db processId of
+            Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Right result -> case fromJSON result of
                 Success activityInfo -> return activityInfo
                 Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
@@ -97,22 +97,22 @@ acvServer db maxTreeDepth sharedSolver =
     -- Activity flows sub-resource
     getActivityFlows :: Text -> Handler [FlowSummary]
     getActivityFlows processId = withValidatedActivity db processId $ \activity ->
-        return $ ACV.Service.getActivityFlowSummaries db activity
+        return $ LCA.Service.getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
     getActivityInputs :: Text -> Handler [ExchangeDetail]
     getActivityInputs processId = withValidatedActivity db processId $ \activity ->
-        return $ ACV.Service.getActivityInputDetails db activity
+        return $ LCA.Service.getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
     getActivityOutputs :: Text -> Handler [ExchangeDetail]
     getActivityOutputs processId = withValidatedActivity db processId $ \activity ->
-        return $ ACV.Service.getActivityOutputDetails db activity
+        return $ LCA.Service.getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
     getActivityReferenceProduct :: Text -> Handler FlowDetail
     getActivityReferenceProduct processId = withValidatedActivity db processId $ \activity -> do
-        case ACV.Service.getActivityReferenceProductDetail db activity of
+        case LCA.Service.getActivityReferenceProductDetail db activity of
             Nothing -> throwError err404{errBody = "No reference product found"}
             Just refProduct -> return refProduct
 
@@ -129,29 +129,29 @@ acvServer db maxTreeDepth sharedSolver =
             Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
             Just activityUuid -> do
                 let loopAwareTree = buildLoopAwareTree db activityUuid maxTreeDepth
-                return $ ACV.Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
+                return $ LCA.Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
     getActivityInventory processId = do
         result <- liftIO $ getActivityInventoryWithSharedSolver sharedSolver db processId
         case result of
-            Left (ACV.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (ACV.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+            Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right inventoryExport -> return inventoryExport
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
     getFlowDetail flowIdText = withValidatedFlow db flowIdText $ \flow -> do
-        let usageCount = ACV.Service.getFlowUsageCount db (flowId flow)
+        let usageCount = LCA.Service.getFlowUsageCount db (flowId flow)
         let unitName = getUnitNameForFlow (dbUnits db) flow
         return $ FlowDetail flow unitName usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Handler [ActivitySummary]
     getFlowActivities flowIdText = withValidatedFlow db flowIdText $ \flow ->
-        return $ ACV.Service.getActivitiesUsingFlow db (flowId flow)
+        return $ LCA.Service.getActivitiesUsingFlow db (flowId flow)
 
     -- Search flows by name or synonym with optional language filtering and pagination
     searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
@@ -163,7 +163,7 @@ acvServer db maxTreeDepth sharedSolver =
     searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
-        result <- liftIO $ ACV.Service.searchActivities db nameParam geoParam productParam limitParam offsetParam
+        result <- liftIO $ LCA.Service.searchActivities db nameParam geoParam productParam limitParam offsetParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right jsonValue -> case fromJSON jsonValue of
@@ -200,5 +200,5 @@ searchFlowsInternal db (Just query) _langParam limitParam offsetParam = do
     liftIO $ paginateResults flowSearchResults limitParam offsetParam
 
 -- | Proxy for the API
-acvAPI :: Proxy ACVAPI
-acvAPI = Proxy
+lcaAPI :: Proxy LCAAPI
+lcaAPI = Proxy

@@ -29,8 +29,8 @@ The cache keeps day-to-day execution fast while preserving reproducibility.
 
 module EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
 
-import ACV.Progress
-import ACV.Types
+import LCA.Progress
+import LCA.Types
 import Control.Concurrent.Async
 import Control.DeepSeq (force)
 import Control.Exception (SomeException, catch, evaluate)

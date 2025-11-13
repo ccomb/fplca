@@ -4,8 +4,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module ACV.Types (
-    module ACV.Types,
+module LCA.Types (
+    module LCA.Types,
     UUID
 ) where
 

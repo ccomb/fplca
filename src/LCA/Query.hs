@@ -2,10 +2,10 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Query where
+module LCA.Query where
 
-import ACV.Progress
-import ACV.Types
+import LCA.Progress
+import LCA.Types
 import Control.Parallel.Strategies
 import Data.Int (Int32)
 import Data.List (elemIndex, find, partition, sort, sortOn)

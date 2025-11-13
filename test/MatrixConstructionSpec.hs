@@ -5,8 +5,8 @@ module MatrixConstructionSpec (spec) where
 import Test.Hspec
 import TestHelpers
 import GoldenData
-import ACV.Types
-import ACV.Query (buildDatabaseWithMatrices)
+import LCA.Types
+import LCA.Query (buildDatabaseWithMatrices)
 import qualified Data.Vector as V
 import qualified Data.Map as M
 

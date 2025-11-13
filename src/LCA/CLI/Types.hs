@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module ACV.CLI.Types where
+module LCA.CLI.Types where
 
 import Data.Text (Text)
 import GHC.Generics

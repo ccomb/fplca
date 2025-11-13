@@ -23,7 +23,7 @@ main : Program () Model Msg
 main =
     Browser.application
         { init = init
-        , view = \model -> { title = "ACV Engine", body = [ view model ] }
+        , view = \model -> { title = "fpLCA", body = [ view model ] }
         , update = update
         , subscriptions = subscriptions
         , onUrlChange = UrlChanged

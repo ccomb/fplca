@@ -1,9 +1,9 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Types.API where
+module LCA.Types.API where
 
-import ACV.Types (Exchange, Flow, UUID, Unit)
+import LCA.Types (Exchange, Flow, UUID, Unit)
 import Data.Aeson
 import qualified Data.Map as M
 import qualified Data.Set as S

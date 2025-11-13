@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {-|
-Module      : ACV.Matrix.SharedSolver
+Module      : LCA.Matrix.SharedSolver
 Description : Shared PETSc solver with thread synchronization for concurrent MUMPS processing
 
 This module implements a simple shared solver approach where a single PETSc context
@@ -15,7 +15,7 @@ Key features:
 - Simple and reliable architecture
 -}
 
-module ACV.Matrix.SharedSolver (
+module LCA.Matrix.SharedSolver (
     -- * Shared solver types
     SharedSolver,
 
@@ -28,9 +28,9 @@ module ACV.Matrix.SharedSolver (
 
 import Control.Concurrent.MVar (MVar, newMVar, takeMVar, putMVar)
 import Control.Exception (bracket, catch, SomeException)
-import ACV.Progress
-import ACV.Types
-import ACV.Matrix (Vector, fromList, solveSparseLinearSystem, solveSparseLinearSystemWithFactorization)
+import LCA.Progress
+import LCA.Types
+import LCA.Matrix (Vector, fromList, solveSparseLinearSystem, solveSparseLinearSystemWithFactorization)
 
 -- | Shared solver with single PETSc context and thread synchronization
 data SharedSolver = SharedSolver

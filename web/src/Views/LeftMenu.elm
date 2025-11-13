@@ -14,7 +14,7 @@ viewLeftMenu : Page -> String -> Html Msg
 viewLeftMenu currentPage currentActivityId =
     nav [ class "left-menu" ]
         [ div [ class "menu-header" ]
-            [ span [ class "title is-5 has-text-white" ] [ text "ACV Engine" ]
+            [ span [ class "title is-5 has-text-white" ] [ text "fpLCA" ]
             ]
         , div [ class "menu-items" ]
             [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities"

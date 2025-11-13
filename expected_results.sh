@@ -16,7 +16,7 @@ validate_inventory() {
     echo "  Validating: $flow_name in $test_name"
 
     # Get actual result (use awk instead of cut to handle quoted CSV fields properly)
-    local result=$(env LD_LIBRARY_PATH="/home/dadafkas/projets/ACVEngine/petsc/arch-linux-c-debug/lib:/home/dadafkas/projets/ACVEngine/slepc/arch-linux-c-debug/lib" \
+    local result=$(env LD_LIBRARY_PATH="/home/dadafkas/projets/fpLCA/petsc/arch-linux-c-debug/lib:/home/dadafkas/projets/fpLCA/slepc/arch-linux-c-debug/lib" \
                   timeout 30s ./run.sh --data "$dataset" inventory "$activity_uuid" --no-cache --format csv --jsonpath 'ieFlows' 2>/dev/null | \
                   grep "$flow_name" | head -1 | awk -F',' '{print $(NF-1)}' 2>/dev/null || echo "")
 

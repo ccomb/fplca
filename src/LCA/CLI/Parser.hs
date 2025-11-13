@@ -1,9 +1,9 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE RecordWildCards #-}
 
-module ACV.CLI.Parser where
+module LCA.CLI.Parser where
 
-import ACV.CLI.Types
+import LCA.CLI.Types
 import Data.Text (Text)
 import qualified Data.Text as T
 import Options.Applicative
@@ -309,14 +309,14 @@ cliParserInfo =
     info
         (cliParser <**> helper)
         ( fullDesc
-            <> progDesc "ACV Engine - Life Cycle Assessment computation engine"
-            <> header "acv-cli - Command-line interface for ACV Engine"
+            <> progDesc "fpLCA - Life Cycle Assessment computation engine"
+            <> header "fplca - Command-line interface for fpLCA"
             <> footer
                 "Examples:\n\
-                \  acv-cli --data ./ecoinvent activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid\n\
-                \  acv-cli --data ./ecoinvent tree aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --depth 3\n\
-                \  acv-cli activities --name electricity --limit 10\n\
-                \  acv-cli inventory aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --format json\n\
-                \  acv-cli lcia aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --method pef.xml --csv results.csv\n\
-                \  acv-cli server --port 8080"
+                \  fplca --data ./ecoinvent activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid\n\
+                \  fplca --data ./ecoinvent tree aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --depth 3\n\
+                \  fplca activities --name electricity --limit 10\n\
+                \  fplca inventory aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --format json\n\
+                \  fplca lcia aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --method pef.xml --csv results.csv\n\
+                \  fplca server --port 8080"
         )

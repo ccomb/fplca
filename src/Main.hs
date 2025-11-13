@@ -20,22 +20,22 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
 
--- ACV Engine imports
-import ACV.CLI.Command
-import ACV.CLI.Parser
-import ACV.CLI.Types
-import ACV.CLI.Types (Command(Server), ServerOptions(..))
-import ACV.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
-import ACV.Matrix.SharedSolver (SharedSolver, createSharedSolver)
-import ACV.Progress
-import ACV.Query (buildDatabaseWithMatrices)
-import ACV.Types
+-- fpLCA imports
+import LCA.CLI.Command
+import LCA.CLI.Parser
+import LCA.CLI.Types
+import LCA.CLI.Types (Command(Server), ServerOptions(..))
+import LCA.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
+import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
+import LCA.Progress
+import LCA.Query (buildDatabaseWithMatrices)
+import LCA.Types
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified EcoSpold.Loader
 import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
 
 -- For server mode
-import ACV.API (ACVAPI, acvAPI, acvServer)
+import LCA.API (LCAAPI, lcaAPI, lcaServer)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
@@ -65,7 +65,7 @@ main = do
   validateAndReportDatabase database
 
   -- Execute the command
-  case ACV.CLI.Types.command cliConfig of
+  case LCA.CLI.Types.command cliConfig of
     Server serverOpts -> do
       let port = serverPort serverOpts
 
@@ -328,7 +328,7 @@ createCombinedApp database maxTreeDepth sharedSolver req respond = do
 
   -- Route API requests to the Servant application
   if C8.pack "/api/" `BS.isPrefixOf` path
-    then serve acvAPI (acvServer database maxTreeDepth sharedSolver) req respond
+    then serve lcaAPI (lcaServer database maxTreeDepth sharedSolver) req respond
     else
       -- For SPA: serve index.html for all non-API routes
       let staticSettings =

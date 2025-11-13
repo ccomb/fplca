@@ -1,9 +1,9 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.UnitConversion where
+module LCA.UnitConversion where
 
-import ACV.Progress (ProgressLevel (Info), reportProgress)
+import LCA.Progress (ProgressLevel (Info), reportProgress)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Maybe (isJust)
 import qualified Data.Map as M

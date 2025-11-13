@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.CLI.Command where
+module LCA.CLI.Command where
 
-import ACV.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
-import ACV.Progress
-import qualified ACV.Service
-import ACV.Types (Database)
+import LCA.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
+import LCA.Progress
+import qualified LCA.Service
+import LCA.Types (Database)
 import Control.Monad (when)
 import Data.Aeson (Value, toJSON, encode)
 import Data.Aeson.Encode.Pretty (encodePretty)
@@ -20,8 +20,8 @@ import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
--- ACV.API imports
-import ACV.API (ACVAPI, acvAPI, acvServer)
+-- LCA.API imports
+import LCA.API (LCAAPI, lcaAPI, lcaServer)
 
 -- | Default output format for different command types
 defaultFormat :: Command -> OutputFormat
@@ -66,7 +66,7 @@ executeCommand (CLIConfig globalOpts cmd) database = do
   case cmd of
     -- Server mode - start web server
     Server serverOpts -> do
-      ACV.Progress.reportError "Server mode should be handled in Main.hs to avoid circular imports"
+      LCA.Progress.reportError "Server mode should be handled in Main.hs to avoid circular imports"
       exitFailure
 
     -- Core resource queries
@@ -112,14 +112,14 @@ executeCommand (CLIConfig globalOpts cmd) database = do
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityCommand fmt jsonPathOpt database uuid = do
-  case ACV.Service.getActivityInfo database uuid of
+  case LCA.Service.getActivityInfo database uuid of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity tree command
 executeActivityTreeCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> Int -> IO ()
 executeActivityTreeCommand fmt jsonPathOpt database uuid depth = do
-  case ACV.Service.getActivityTree database uuid depth of
+  case LCA.Service.getActivityTree database uuid depth of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
@@ -127,7 +127,7 @@ executeActivityTreeCommand fmt jsonPathOpt database uuid depth = do
 executeActivityInventoryCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityInventoryCommand fmt jsonPathOpt database uuid = do
   reportProgress Info $ "Computing inventory for activity: " ++ T.unpack uuid
-  case ACV.Service.getActivityInventory database uuid of
+  case LCA.Service.getActivityInventory database uuid of
     Left err -> reportServiceError err
     Right result -> do
       reportProgress Info "Inventory computation completed"
@@ -136,21 +136,21 @@ executeActivityInventoryCommand fmt jsonPathOpt database uuid = do
 -- | Execute flow info command
 executeFlowCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeFlowCommand fmt jsonPathOpt database flowId = do
-  case ACV.Service.getFlowInfo database flowId of
+  case LCA.Service.getFlowInfo database flowId of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute flow activities command
 executeFlowActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeFlowActivitiesCommand fmt jsonPathOpt database flowId = do
-  case ACV.Service.getFlowActivities database flowId of
+  case LCA.Service.getFlowActivities database flowId of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute search activities command
 executeSearchActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> SearchActivitiesOptions -> IO ()
 executeSearchActivitiesCommand fmt jsonPathOpt database opts = do
-  searchResult <- ACV.Service.searchActivities database
+  searchResult <- LCA.Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
          (searchLimit opts) (searchOffset opts)
   case searchResult of
@@ -160,7 +160,7 @@ executeSearchActivitiesCommand fmt jsonPathOpt database opts = do
 -- | Execute search flows command
 executeSearchFlowsCommand :: OutputFormat -> Maybe Text -> Database -> SearchFlowsOptions -> IO ()
 executeSearchFlowsCommand fmt jsonPathOpt database opts = do
-  searchResult <- ACV.Service.searchFlows database
+  searchResult <- LCA.Service.searchFlows database
          (searchQuery opts) (searchLang opts)
          (searchFlowsLimit opts) (searchFlowsOffset opts)
   case searchResult of
@@ -172,9 +172,9 @@ executeSearchFlowsCommand fmt jsonPathOpt database opts = do
 executeLCIACommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> LCIAOptions -> IO ()
 executeLCIACommand fmt jsonPathOpt database uuid opts = do
   reportProgress Info $ "Computing LCIA for activity: " ++ T.unpack uuid
-  reportProgress Info $ "Using method file: " ++ ACV.CLI.Types.lciaMethod opts
+  reportProgress Info $ "Using method file: " ++ LCA.CLI.Types.lciaMethod opts
 
-  case ACV.Service.computeLCIA database uuid (ACV.CLI.Types.lciaMethod opts) of
+  case LCA.Service.computeLCIA database uuid (LCA.CLI.Types.lciaMethod opts) of
     Left err -> reportServiceError err
     Right result -> do
       reportProgress Info "LCIA computation completed"
@@ -185,16 +185,16 @@ executeLCIACommand fmt jsonPathOpt database uuid opts = do
       -- Export to XML if requested
       case lciaOutput opts of
         Just outputPath -> do
-          case ACV.Service.exportLCIAAsXML result outputPath of
-            Left err -> ACV.Progress.reportError $ "XML export failed: " ++ show err
+          case LCA.Service.exportLCIAAsXML result outputPath of
+            Left err -> LCA.Progress.reportError $ "XML export failed: " ++ show err
             Right _ -> reportProgress Info $ "Results exported to XML: " ++ outputPath
         Nothing -> return ()
 
       -- Export to CSV if requested
       case lciaCSV opts of
         Just csvPath -> do
-          case ACV.Service.exportLCIAAsCSV result csvPath of
-            Left err -> ACV.Progress.reportError $ "CSV export failed: " ++ show err
+          case LCA.Service.exportLCIAAsCSV result csvPath of
+            Left err -> LCA.Progress.reportError $ "CSV export failed: " ++ show err
             Right _ -> reportProgress Info $ "Results exported to CSV: " ++ csvPath
         Nothing -> return ()
 
@@ -208,7 +208,7 @@ executeDebugMatricesCommand database uuid opts = do
     Just flowFilter -> reportProgress Info $ "Flow filter: " ++ T.unpack flowFilter
     Nothing -> reportProgress Info "No flow filter specified (all biosphere flows)"
 
-  result <- ACV.Service.exportMatrixDebugData database uuid opts
+  result <- LCA.Service.exportMatrixDebugData database uuid opts
   case result of
     Left err -> reportServiceError err
     Right _ -> do
@@ -220,7 +220,7 @@ executeDebugMatricesCommand database uuid opts = do
 executeExportMatricesCommand :: Database -> FilePath -> IO ()
 executeExportMatricesCommand database outputDir = do
   reportProgress Info $ "Exporting matrices to: " ++ outputDir
-  ACV.Service.exportUniversalMatrixFormat outputDir database
+  LCA.Service.exportUniversalMatrixFormat outputDir database
   reportProgress Info "Matrix export completed"
   reportProgress Info $ "  - ie_index.csv (activity index)"
   reportProgress Info $ "  - ee_index.csv (biosphere flow index)"
@@ -233,8 +233,8 @@ outputResult fmt jsonPathOpt result = do
   BSL.putStrLn $ formatOutputWithPath fmt jsonPathOpt result
 
 -- | Report service errors to stderr and exit
-reportServiceError :: ACV.Service.ServiceError -> IO ()
+reportServiceError :: LCA.Service.ServiceError -> IO ()
 reportServiceError err = do
-  ACV.Progress.reportError $ "Error: " ++ show err
+  LCA.Progress.reportError $ "Error: " ++ show err
   exitFailure
 

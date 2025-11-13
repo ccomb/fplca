@@ -1,6 +1,6 @@
-# acv-engine
+# fplca
 
-**acv-engine** is a high-performance Life Cycle Assessment (LCA) engine written in Haskell. It runs entirely in memory and provides both a command-line interface and REST API for LCA computations.
+**fplca** is a high-performance Life Cycle Assessment (LCA) engine written in Haskell. It runs entirely in memory and provides both a command-line interface and REST API for LCA computations.
 
 ## Features
 
@@ -52,22 +52,22 @@
 **Search Activities**
 ```bash
 # Find activities by name
-acv-cli --data ./data activities --name "electricity"
+fplca --data ./data activities --name "electricity"
 
 # Geographic filtering
-acv-cli activities --name "transport" --geo "DE" --limit 5
+fplca activities --name "transport" --geo "DE" --limit 5
 
 # Product-based search
-acv-cli activities --product "steel" --limit 10 --offset 20
+fplca activities --product "steel" --limit 10 --offset 20
 ```
 
 **Search Flows**
 ```bash
 # Find flows by keyword
-acv-cli flows --query "carbon dioxide" --limit 5
+fplca flows --query "carbon dioxide" --limit 5
 
 # Language-specific search
-acv-cli flows --query "CO2" --lang "en" --limit 10
+fplca flows --query "CO2" --lang "en" --limit 10
 ```
 
 #### 📊 Activity Analysis
@@ -75,22 +75,22 @@ acv-cli flows --query "CO2" --lang "en" --limit 10
 **Activity Information**
 ```bash
 # Get complete activity details
-acv-cli activity "12345678-1234-1234-1234-123456789abc"
+fplca activity "12345678-1234-1234-1234-123456789abc"
 ```
 
 **Supply Chain Tree**
 ```bash
 # Build dependency tree (default depth: 2)
-acv-cli tree "12345678-1234-1234-1234-123456789abc"
+fplca tree "12345678-1234-1234-1234-123456789abc"
 
 # Custom tree depth
-acv-cli --tree-depth 4 tree "12345678-1234-1234-1234-123456789abc"
+fplca --tree-depth 4 tree "12345678-1234-1234-1234-123456789abc"
 ```
 
 **Life Cycle Inventory**
 ```bash
 # Compute full inventory
-acv-cli inventory "12345678-1234-1234-1234-123456789abc"
+fplca inventory "12345678-1234-1234-1234-123456789abc"
 ```
 
 #### 🧮 Impact Assessment
@@ -98,11 +98,11 @@ acv-cli inventory "12345678-1234-1234-1234-123456789abc"
 **LCIA Computation**
 ```bash
 # Compute impacts with method file
-acv-cli lcia "12345678-1234-1234-1234-123456789abc" \
+fplca lcia "12345678-1234-1234-1234-123456789abc" \
   --method "./methods/PEF_v3.1.xml"
 
 # Export to XML and CSV
-acv-cli lcia "12345678-1234-1234-1234-123456789abc" \
+fplca lcia "12345678-1234-1234-1234-123456789abc" \
   --method "./methods/PEF_v3.1.xml" \
   --output results.xml \
   --csv results.csv
@@ -113,13 +113,13 @@ acv-cli lcia "12345678-1234-1234-1234-123456789abc" \
 **Export Matrices (Ecoinvent Universal Format)**
 ```bash
 # Export full database matrices in universal format
-acv-cli export-matrices ./output_dir
+fplca export-matrices ./output_dir
 ```
 
 **Debug Matrices**
 ```bash
 # Export targeted matrix slices for debugging
-acv-cli debug-matrices "12345678-1234-1234-1234-123456789abc" \
+fplca debug-matrices "12345678-1234-1234-1234-123456789abc" \
   --output ./debug_output
 ```
 
@@ -128,10 +128,10 @@ acv-cli debug-matrices "12345678-1234-1234-1234-123456789abc" \
 **Start Server**
 ```bash
 # Start on default port (8080)
-acv-cli --data ./data server
+fplca --data ./data server
 
 # Custom port
-acv-cli --data ./data server --port 3000
+fplca --data ./data server --port 3000
 
 # Web interface available at http://localhost:8080/
 # API endpoints at http://localhost:8080/api/v1/
@@ -143,7 +143,7 @@ acv-cli --data ./data server --port 3000
 
 ### JSON Format
 ```bash
-acv-cli --format json activities --limit 2
+fplca --format json activities --limit 2
 ```
 ```json
 {
@@ -158,7 +158,7 @@ acv-cli --format json activities --limit 2
 
 ### Pretty Format (Default)
 ```bash
-acv-cli activities --limit 2  # Uses pretty format by default
+fplca activities --limit 2  # Uses pretty format by default
 ```
 ```json
 {
@@ -179,7 +179,7 @@ acv-cli activities --limit 2  # Uses pretty format by default
 
 #### Extract Search Results
 ```bash
-acv-cli --format csv --jsonpath "srResults" activities --limit 5
+fplca --format csv --jsonpath "srResults" activities --limit 5
 ```
 ```csv
 prsId,prsLocation,prsName
@@ -189,7 +189,7 @@ prsId,prsLocation,prsName
 
 #### Extract Activity Exchanges
 ```bash
-acv-cli --format csv --jsonpath "piActivity.pfaExchanges" activity "12345..."
+fplca --format csv --jsonpath "piActivity.pfaExchanges" activity "12345..."
 ```
 ```csv
 ewuFlowName,ewuFlowCategory,ewuUnitName,ewuExchange.techAmount,ewuExchange.techIsInput
@@ -200,7 +200,7 @@ carbon dioxide,air,kg,0.85,false
 
 #### Extract Tree Edges
 ```bash
-acv-cli --format csv --jsonpath "teEdges" tree "12345..."
+fplca --format csv --jsonpath "teEdges" tree "12345..."
 ```
 ```csv
 teFlow.fiName,teFlow.fiCategory,teFrom,teTo,teQuantity,teUnit
@@ -210,7 +210,7 @@ natural gas,technosphere,67890...,11111...,2.5,m3
 
 #### Extract Inventory Flows
 ```bash
-acv-cli --format csv --jsonpath "ieFlows" inventory "12345..."
+fplca --format csv --jsonpath "ieFlows" inventory "12345..."
 ```
 ```csv
 ifdFlow.flowName,ifdFlow.flowCategory,ifdQuantity,ifdUnitName,ifdIsEmission
@@ -251,7 +251,7 @@ When running in server mode, the following endpoints are available:
 ### Example API Usage
 ```bash
 # Start server
-acv-cli --data ./ECOINVENT3.9.1 server --port 8080
+fplca --data ./ECOINVENT3.9.1 server --port 8080
 
 # Search activities
 curl "http://localhost:8080/api/v1/activities?name=electricity&limit=5"
@@ -270,16 +270,16 @@ curl "http://localhost:8080/api/v1/activity/12345.../inventory"
 ### Basic Workflow
 ```bash
 # 1. Search for an activity
-acv-cli --data ./ECOINVENT3.9.1 activities --name "electricity production" --geo "DE" --limit 1
+fplca --data ./ECOINVENT3.9.1 activities --name "electricity production" --geo "DE" --limit 1
 
 # 2. Get the activity UUID from results, then analyze its supply chain
-acv-cli tree "12345678-1234-1234-1234-123456789abc"
+fplca tree "12345678-1234-1234-1234-123456789abc"
 
 # 3. Compute environmental inventory
-acv-cli inventory "12345678-1234-1234-1234-123456789abc"
+fplca inventory "12345678-1234-1234-1234-123456789abc"
 
 # 4. Export tree edges to CSV for further analysis
-acv-cli --format csv --jsonpath "teEdges" tree "12345678-1234-1234-1234-123456789abc" > supply_chain.csv
+fplca --format csv --jsonpath "teEdges" tree "12345678-1234-1234-1234-123456789abc" > supply_chain.csv
 ```
 
 ### Data Analysis Workflows
@@ -287,27 +287,27 @@ acv-cli --format csv --jsonpath "teEdges" tree "12345678-1234-1234-1234-12345678
 **Export Activity Network to CSV**
 ```bash
 # Get all exchanges for detailed analysis
-acv-cli --format csv --jsonpath "piActivity.pfaExchanges" \
+fplca --format csv --jsonpath "piActivity.pfaExchanges" \
   activity "12345678-1234-1234-1234-123456789abc" > exchanges.csv
 ```
 
 **Inventory Analysis**
 ```bash
 # Extract biosphere flows for impact assessment
-acv-cli --format csv --jsonpath "ieFlows" \
+fplca --format csv --jsonpath "ieFlows" \
   inventory "12345678-1234-1234-1234-123456789abc" > inventory.csv
 ```
 
 **Multi-format Output**
 ```bash
 # JSON for programmatic use
-acv-cli --format json inventory "12345..." > inventory.json
+fplca --format json inventory "12345..." > inventory.json
 
 # CSV for spreadsheet analysis
-acv-cli --format csv --jsonpath "ieFlows" inventory "12345..." > inventory.csv
+fplca --format csv --jsonpath "ieFlows" inventory "12345..." > inventory.csv
 
 # Pretty format for human reading
-acv-cli --format pretty inventory "12345..."
+fplca --format pretty inventory "12345..."
 ```
 
 ### Performance Optimization
@@ -315,22 +315,22 @@ acv-cli --format pretty inventory "12345..."
 **Caching**
 ```bash
 # First run builds cache (slower)
-acv-cli --data ./ECOINVENT3.9.1 activities --name "steel"
+fplca --data ./ECOINVENT3.9.1 activities --name "steel"
 
 # Subsequent runs use cache (much faster)
-acv-cli --data ./ECOINVENT3.9.1 activities --name "aluminum"
+fplca --data ./ECOINVENT3.9.1 activities --name "aluminum"
 
 # Disable cache for development
-acv-cli --no-cache --data ./ECOINVENT3.9.1 activities --name "cement"
+fplca --no-cache --data ./ECOINVENT3.9.1 activities --name "cement"
 ```
 
 **Tree Depth Control**
 ```bash
 # Fast shallow analysis
-acv-cli --tree-depth 1 tree "12345..."
+fplca --tree-depth 1 tree "12345..."
 
 # Comprehensive deep analysis (slower but complete)
-acv-cli --tree-depth 5 tree "12345..."
+fplca --tree-depth 5 tree "12345..."
 ```
 
 ---
@@ -395,19 +395,19 @@ You can control memory usage using GHC runtime system (RTS) options. Add them af
 **Cache Load (Memory-Efficient)**
 ```bash
 # Limit heap to 800MB for shared systems
-acv-cli --data ./data activities --limit 5 +RTS -M800M -H256M -A16M -c -RTS
+fplca --data ./data activities --limit 5 +RTS -M800M -H256M -A16M -c -RTS
 ```
 
 **Cold Start (Performance)**
 ```bash
 # Allow larger heap for initial parsing
-acv-cli --no-cache --data ./data activities +RTS -M5G -H2G -A64M -RTS
+fplca --no-cache --data ./data activities +RTS -M5G -H2G -A64M -RTS
 ```
 
 **Web Server (Balanced)**
 ```bash
 # Moderate heap with automatic garbage collection
-acv-cli --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
+fplca --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
 ```
 
 **RTS Options Explained:**
@@ -432,34 +432,34 @@ acv-cli --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
 **CSV Format Errors**
 ```bash
 # ❌ Error: CSV requires JSONPath
-acv-cli --format csv activities
+fplca --format csv activities
 
 # ✅ Correct: Specify JSONPath
-acv-cli --format csv --jsonpath "srResults" activities
+fplca --format csv --jsonpath "srResults" activities
 ```
 
 **Invalid JSONPath**
 ```bash
 # ❌ Error: Path not found
-acv-cli --format csv --jsonpath "invalidPath" activities
+fplca --format csv --jsonpath "invalidPath" activities
 # Output: Error extracting JSONPath 'invalidPath': Path component 'invalidPath' not found
 
 # ✅ Correct paths for each command
-acv-cli --format csv --jsonpath "srResults" activities      # Search results
-acv-cli --format csv --jsonpath "teEdges" tree "uuid"       # Tree edges
-acv-cli --format csv --jsonpath "ieFlows" inventory "uuid"  # Inventory flows
+fplca --format csv --jsonpath "srResults" activities      # Search results
+fplca --format csv --jsonpath "teEdges" tree "uuid"       # Tree edges
+fplca --format csv --jsonpath "ieFlows" inventory "uuid"  # Inventory flows
 ```
 
 **Memory Issues**
 ```bash
 # If running out of memory, cap the heap with RTS options
-acv-cli inventory "uuid" +RTS -M1G -RTS
+fplca inventory "uuid" +RTS -M1G -RTS
 
 # Or reduce tree depth for complex calculations
-acv-cli --tree-depth 1 inventory "uuid"
+fplca --tree-depth 1 inventory "uuid"
 
 # Or disable caching during development
-acv-cli --no-cache inventory "uuid"
+fplca --no-cache inventory "uuid"
 ```
 
 ### Validation Errors

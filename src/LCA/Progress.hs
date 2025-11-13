@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {-|
-Module      : ACV.Progress
+Module      : LCA.Progress
 Description : Unified progress reporting system for the LCA engine
 
 This module provides a unified system for reporting progress during LCA calculations.
@@ -15,7 +15,7 @@ Key features:
 - Stderr-based output that doesn't interfere with JSON responses
 -}
 
-module ACV.Progress (
+module LCA.Progress (
     -- * Progress reporting functions
     reportProgress,
     reportProgressWithTiming,

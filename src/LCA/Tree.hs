@@ -1,10 +1,10 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module ACV.Tree (buildLoopAwareTree) where
+module LCA.Tree (buildLoopAwareTree) where
 
-import ACV.Types
-import ACV.UnitConversion (convertExchangeAmount)
+import LCA.Types
+import LCA.UnitConversion (convertExchangeAmount)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Vector as V

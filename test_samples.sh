@@ -5,7 +5,7 @@
 
 set -e
 
-echo "=== ACV Engine SAMPLE Test Suite ==="
+echo "=== fpLCA SAMPLE Test Suite ==="
 echo "Comprehensive testing of all SAMPLE datasets"
 echo "Using --no-cache to ensure fresh parsing and matrix assembly"
 echo "Includes inventory correctness validation with expected results"
@@ -19,7 +19,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Set library path
-export LD_LIBRARY_PATH="/home/dadafkas/projets/ACVEngine/petsc/arch-linux-c-debug/lib:/home/dadafkas/projets/ACVEngine/slepc/arch-linux-c-debug/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/home/dadafkas/projets/fpLCA/petsc/arch-linux-c-debug/lib:/home/dadafkas/projets/fpLCA/slepc/arch-linux-c-debug/lib:$LD_LIBRARY_PATH"
 
 # Counters
 TOTAL_TESTS=0
@@ -109,7 +109,7 @@ if [ $FAILED_TESTS -eq 0 ]; then
     if source expected_results.sh && run_inventory_validation; then
         echo
         echo -e "${GREEN}✅ COMPLETE SUCCESS!${NC}"
-        echo "ACV Engine is functioning correctly across all test scenarios with correct inventory calculations."
+        echo "fpLCA is functioning correctly across all test scenarios with correct inventory calculations."
         exit 0
     else
         echo
