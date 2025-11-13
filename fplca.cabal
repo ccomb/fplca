@@ -3,13 +3,13 @@ name:                fplca
 version:             0.1.0.0
 build-type:          Simple
 
-license:             MIT
+license:             AGPL-3.0-or-later
 license-file:        LICENSE
 author:              Toi
 maintainer:          toi@example.com
 category:            Life Cycle Assessment
-synopsis:            Moteur ACV en mémoire vive avec export PEF, CSV et ILCD
-description:         Ce projet est un moteur d'évaluation du cycle de vie (ACV) basé sur des fichiers Ecoinvent et PEF, écrit en Haskell.
+synopsis:            In-memory high performance LCA engine
+description:         This project is a Life Cycle Assessment (LCA) engine.
 
 extra-source-files:  README.md CHANGELOG.md
 
