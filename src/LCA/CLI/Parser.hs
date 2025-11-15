@@ -48,9 +48,9 @@ globalOptionsParser = do
         option
             auto
             ( long "tree-depth"
-                <> value 1
+                <> value 2
                 <> metavar "DEPTH"
-                <> help "Maximum tree depth for tree operations (default: 1)"
+                <> help "Maximum tree depth for tree operations (default: 2)"
             )
 
     noCache <-

@@ -41,6 +41,7 @@ type alias Model =
     , cachedInventories : Dict.Dict String InventoryExport -- Cache inventories by activity ID
     , cachedGraphs : Dict.Dict String GraphData -- Cache graphs by activity ID
     , graphViewModel : Maybe GraphView.Model -- Current graph view model
+    , treeViewModel : Maybe TreeView.Model -- Current tree view model
     , graphCutoffInput : String -- Cutoff input as string to allow partial edits like "0."
     , currentActivityId : String
     , loading : Bool
@@ -62,6 +63,7 @@ type Msg
     | LoadGraph String
     | GraphLoaded (Result Http.Error GraphData)
     | GraphViewMsg GraphView.Msg
+    | TreeViewMsg TreeView.Msg
     | UpdateGraphCutoff String
     | NavigateToParent
     | NodeClicked String
@@ -167,6 +169,7 @@ init _ url key =
             , cachedInventories = Dict.empty
             , cachedGraphs = Dict.empty
             , graphViewModel = Nothing
+            , treeViewModel = Nothing
             , graphCutoffInput = "1.0"
             , currentActivityId = activityId
             , loading = shouldLoad
@@ -229,8 +232,13 @@ update msg model =
             )
 
         ActivityLoaded (Ok tree) ->
+            let
+                treeViewModel =
+                    TreeView.init tree
+            in
             ( { model
                 | cachedTrees = Dict.insert model.currentActivityId tree model.cachedTrees
+                , treeViewModel = Just treeViewModel
                 , loading = False
                 , error = Nothing
               }
@@ -323,6 +331,39 @@ update msg model =
                             GraphView.update graphMsg graphModel
                     in
                     ( { model | graphViewModel = Just updatedGraphModel }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        TreeViewMsg treeMsg ->
+            case model.treeViewModel of
+                Just treeModel ->
+                    let
+                        updatedTreeModel =
+                            TreeView.update treeMsg treeModel
+                    in
+                    -- Handle double-click navigation
+                    case treeMsg of
+                        TreeView.NodeDoubleClick nodeId ->
+                            -- Look up the ProcessId from the Int node ID
+                            case Dict.get nodeId treeModel.idMapping of
+                                Just processId ->
+                                    if processId /= model.currentActivityId then
+                                        ( { model
+                                            | treeViewModel = Just updatedTreeModel
+                                            , navigationHistory = model.currentActivityId :: model.navigationHistory
+                                          }
+                                        , navigateToActivity model.key processId
+                                        )
+
+                                    else
+                                        ( { model | treeViewModel = Just updatedTreeModel }, Cmd.none )
+
+                                Nothing ->
+                                    ( { model | treeViewModel = Just updatedTreeModel }, Cmd.none )
+
+                        _ ->
+                            ( { model | treeViewModel = Just updatedTreeModel }, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -557,12 +598,20 @@ navigateToActivity key processId =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    case model.graphViewModel of
-        Just graphModel ->
-            Sub.map GraphViewMsg (GraphView.subscriptions graphModel)
+    Sub.batch
+        [ case model.graphViewModel of
+            Just graphModel ->
+                Sub.map GraphViewMsg (GraphView.subscriptions graphModel)
 
-        Nothing ->
-            Sub.none
+            Nothing ->
+                Sub.none
+        , case model.treeViewModel of
+            Just treeModel ->
+                Sub.map TreeViewMsg (TreeView.subscriptions treeModel)
+
+            Nothing ->
+                Sub.none
+        ]
 
 
 view : Model -> Html Msg
@@ -663,17 +712,14 @@ viewTreePage model =
                                         [ text ("Expandable: " ++ String.fromInt tree.tree.expandableNodes) ]
                                     ]
                                 ]
-                            , -- SVG Tree visualization
-                              Html.map
-                                (\msg ->
-                                    case msg of
-                                        TreeView.NodeClicked nodeId ->
-                                            NodeClicked nodeId
+                            , -- Force-directed Tree visualization
+                              case model.treeViewModel of
+                                Just treeModel ->
+                                    Html.map TreeViewMsg (TreeView.view model.currentActivityId treeModel)
 
-                                        TreeView.NodeHovered maybeNodeId ->
-                                            NodeHovered maybeNodeId
-                                )
-                                (TreeView.viewTree tree model.hoveredNode)
+                                Nothing ->
+                                    div [ class "has-text-centered" ]
+                                        [ text "Initializing tree visualization..." ]
                             ]
 
                     ( _, _, Nothing ) ->

@@ -303,7 +303,12 @@ extractCompartment category =
 -- | Extract biosphere exchanges from an activity and create nodes and edges
 extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge])
 extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
-    let biosphereExchanges = [ex | ex <- exchanges activity, isBiosphereExchange ex]
+    let allBiosphereExchanges = [ex | ex <- exchanges activity, isBiosphereExchange ex]
+        -- Limit to top 50 most significant flows to prevent performance issues with system processes
+        maxBiosphereFlows = 50
+        biosphereExchanges = take maxBiosphereFlows $
+                            L.sortBy (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a)))
+                            allBiosphereExchanges
         processBiosphere ex (nodeAcc', edgeAcc') =
             case M.lookup (exchangeFlowId ex) (dbFlows db) of
                 Nothing -> (nodeAcc', edgeAcc')

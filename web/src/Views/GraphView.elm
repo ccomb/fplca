@@ -5,6 +5,7 @@ import Dict exposing (Dict)
 import ForceDirected
 import Html exposing (Html, div, text)
 import Html.Attributes
+import Html.Events
 import Json.Decode as Decode
 import Models.Graph exposing (GraphData, GraphEdge, GraphNode)
 import Svg exposing (Svg, circle, defs, g, line, marker, polygon, svg, text_)
@@ -21,6 +22,12 @@ type alias Model =
     , drag : Maybe Drag
     , hoveredNode : Maybe Int
     , selectedNode : Maybe Int
+    , viewBoxX : Float
+    , viewBoxY : Float
+    , viewBoxWidth : Float
+    , viewBoxHeight : Float
+    , isPanning : Maybe ( Float, Float )
+    , nodeCountWarning : Maybe String
     }
 
 
@@ -70,6 +77,14 @@ type Msg
     | DragEnd ( Float, Float )
     | NodeHover (Maybe Int)
     | NodeClick Int
+    | ZoomIn
+    | ZoomOut
+    | ResetZoom
+    | AutoFit
+    | StartBackgroundPan ( Float, Float )
+    | MoveBackgroundPan ( Float, Float )
+    | EndBackgroundPan
+    | WheelZoom Float
 
 
 {-| Initialize the graph model with force-directed layout
@@ -143,6 +158,24 @@ init graphData =
 
         simulation =
             ForceDirected.simulation forces
+
+        -- Check if node count is too high
+        nodeCount =
+            List.length nodes
+
+        maxNodes =
+            150
+
+        warning =
+            if nodeCount > maxNodes then
+                Just
+                    ("⚠️ Large graph with "
+                        ++ String.fromInt nodeCount
+                        ++ " nodes may cause performance issues. Consider increasing the cutoff percentage."
+                    )
+
+            else
+                Nothing
     in
     { nodes = nodes
     , edges = edges
@@ -150,6 +183,12 @@ init graphData =
     , drag = Nothing
     , hoveredNode = Nothing
     , selectedNode = Nothing
+    , viewBoxX = 0
+    , viewBoxY = 0
+    , viewBoxWidth = svgWidth
+    , viewBoxHeight = svgHeight
+    , isPanning = Nothing
+    , nodeCountWarning = warning
     }
 
 
@@ -165,6 +204,60 @@ svgHeight =
     900
 
 
+{-| Calculate bounding box of all nodes
+-}
+calculateBoundingBox : List Entity -> { minX : Float, minY : Float, maxX : Float, maxY : Float }
+calculateBoundingBox nodes =
+    let
+        margin =
+            50
+
+        xs =
+            List.map .x nodes
+
+        ys =
+            List.map .y nodes
+
+        -- Get max radius from node values
+        maxValue =
+            nodes
+                |> List.map .value
+                |> List.maximum
+                |> Maybe.withDefault 1
+
+        maxRadius =
+            10 + 30
+
+        minX =
+            (List.minimum xs |> Maybe.withDefault 0) - maxRadius - margin
+
+        maxX =
+            (List.maximum xs |> Maybe.withDefault svgWidth) + maxRadius + margin
+
+        minY =
+            (List.minimum ys |> Maybe.withDefault 0) - maxRadius - margin
+
+        maxY =
+            (List.maximum ys |> Maybe.withDefault svgHeight) + maxRadius + margin
+    in
+    { minX = minX, minY = minY, maxX = maxX, maxY = maxY }
+
+
+{-| Auto-fit viewBox to show all nodes
+-}
+autoFitViewBox : List Entity -> { x : Float, y : Float, width : Float, height : Float }
+autoFitViewBox nodes =
+    let
+        bbox =
+            calculateBoundingBox nodes
+    in
+    { x = bbox.minX
+    , y = bbox.minY
+    , width = bbox.maxX - bbox.minX
+    , height = bbox.maxY - bbox.minY
+    }
+
+
 {-| Update function with force simulation
 -}
 update : Msg -> Model -> Model
@@ -174,31 +267,54 @@ update msg model =
             let
                 ( newSimulation, newNodes ) =
                     ForceDirected.tick model.simulation model.nodes
+
+                -- Check if simulation just completed and auto-fit
+                wasRunning =
+                    not (ForceDirected.isCompleted model.simulation)
+
+                justCompleted =
+                    wasRunning && ForceDirected.isCompleted newSimulation
+
+                updatedModel =
+                    case model.drag of
+                        Nothing ->
+                            { model
+                                | simulation = newSimulation
+                                , nodes = newNodes
+                            }
+
+                        Just drag ->
+                            let
+                                ( dx, dy ) =
+                                    ( Tuple.first drag.currentMousePos - Tuple.first drag.startMousePos
+                                    , Tuple.second drag.currentMousePos - Tuple.second drag.startMousePos
+                                    )
+
+                                ( newX, newY ) =
+                                    ( Tuple.first drag.startNodePos + dx
+                                    , Tuple.second drag.startNodePos + dy
+                                    )
+                            in
+                            { model
+                                | simulation = newSimulation
+                                , nodes = updateNodePosition drag.nodeId ( newX, newY ) newNodes
+                            }
             in
-            case model.drag of
-                Nothing ->
-                    { model
-                        | simulation = newSimulation
-                        , nodes = newNodes
-                    }
+            -- Auto-fit when simulation completes
+            if justCompleted then
+                let
+                    fitBox =
+                        autoFitViewBox updatedModel.nodes
+                in
+                { updatedModel
+                    | viewBoxX = fitBox.x
+                    , viewBoxY = fitBox.y
+                    , viewBoxWidth = fitBox.width
+                    , viewBoxHeight = fitBox.height
+                }
 
-                Just drag ->
-                    let
-                        -- Calculate delta and apply to node
-                        ( dx, dy ) =
-                            ( Tuple.first drag.currentMousePos - Tuple.first drag.startMousePos
-                            , Tuple.second drag.currentMousePos - Tuple.second drag.startMousePos
-                            )
-
-                        ( newX, newY ) =
-                            ( Tuple.first drag.startNodePos + dx
-                            , Tuple.second drag.startNodePos + dy
-                            )
-                    in
-                    { model
-                        | simulation = newSimulation
-                        , nodes = updateNodePosition drag.nodeId ( newX, newY ) newNodes
-                    }
+            else
+                updatedModel
 
         DragStart nodeId mousePos nodePos ->
             { model
@@ -243,6 +359,145 @@ update msg model =
         NodeClick nodeId ->
             { model | selectedNode = Just nodeId }
 
+        ZoomIn ->
+            let
+                zoomFactor =
+                    0.8
+
+                newWidth =
+                    model.viewBoxWidth * zoomFactor
+
+                newHeight =
+                    model.viewBoxHeight * zoomFactor
+
+                centerX =
+                    model.viewBoxX + model.viewBoxWidth / 2
+
+                centerY =
+                    model.viewBoxY + model.viewBoxHeight / 2
+
+                newX =
+                    centerX - newWidth / 2
+
+                newY =
+                    centerY - newHeight / 2
+            in
+            { model
+                | viewBoxX = newX
+                , viewBoxY = newY
+                , viewBoxWidth = newWidth
+                , viewBoxHeight = newHeight
+            }
+
+        ZoomOut ->
+            let
+                zoomFactor =
+                    1.25
+
+                newWidth =
+                    model.viewBoxWidth * zoomFactor
+
+                newHeight =
+                    model.viewBoxHeight * zoomFactor
+
+                centerX =
+                    model.viewBoxX + model.viewBoxWidth / 2
+
+                centerY =
+                    model.viewBoxY + model.viewBoxHeight / 2
+
+                newX =
+                    centerX - newWidth / 2
+
+                newY =
+                    centerY - newHeight / 2
+            in
+            { model
+                | viewBoxX = newX
+                , viewBoxY = newY
+                , viewBoxWidth = newWidth
+                , viewBoxHeight = newHeight
+            }
+
+        ResetZoom ->
+            { model
+                | viewBoxX = 0
+                , viewBoxY = 0
+                , viewBoxWidth = svgWidth
+                , viewBoxHeight = svgHeight
+            }
+
+        AutoFit ->
+            let
+                fitBox =
+                    autoFitViewBox model.nodes
+            in
+            { model
+                | viewBoxX = fitBox.x
+                , viewBoxY = fitBox.y
+                , viewBoxWidth = fitBox.width
+                , viewBoxHeight = fitBox.height
+            }
+
+        StartBackgroundPan mousePos ->
+            { model | isPanning = Just mousePos }
+
+        MoveBackgroundPan mousePos ->
+            case model.isPanning of
+                Just startPos ->
+                    let
+                        dx =
+                            (Tuple.first startPos - Tuple.first mousePos) * (model.viewBoxWidth / svgWidth)
+
+                        dy =
+                            (Tuple.second startPos - Tuple.second mousePos) * (model.viewBoxHeight / svgHeight)
+                    in
+                    { model
+                        | viewBoxX = model.viewBoxX + dx
+                        , viewBoxY = model.viewBoxY + dy
+                        , isPanning = Just mousePos
+                    }
+
+                Nothing ->
+                    model
+
+        EndBackgroundPan ->
+            { model | isPanning = Nothing }
+
+        WheelZoom delta ->
+            let
+                zoomFactor =
+                    if delta < 0 then
+                        0.9
+
+                    else
+                        1.1
+
+                newWidth =
+                    model.viewBoxWidth * zoomFactor
+
+                newHeight =
+                    model.viewBoxHeight * zoomFactor
+
+                centerX =
+                    model.viewBoxX + model.viewBoxWidth / 2
+
+                centerY =
+                    model.viewBoxY + model.viewBoxHeight / 2
+
+                newX =
+                    centerX - newWidth / 2
+
+                newY =
+                    centerY - newHeight / 2
+            in
+            { model
+                | viewBoxX = newX
+                , viewBoxY = newY
+                , viewBoxWidth = newWidth
+                , viewBoxHeight = newHeight
+            }
+
 
 {-| Update a specific node's position (for dragging)
 -}
@@ -262,12 +517,53 @@ updateNodePosition targetId ( x, y ) =
 -}
 view : String -> Model -> Html Msg
 view mainActivityId model =
-    div [ Html.Attributes.style "position" "relative" ]
-        [ svg
+    div
+        [ Html.Attributes.style "position" "relative"
+        , Html.Events.custom "wheel"
+            (Decode.map
+                (\delta ->
+                    { message = WheelZoom delta
+                    , stopPropagation = True
+                    , preventDefault = True
+                    }
+                )
+                (Decode.field "deltaY" Decode.float)
+            )
+        ]
+        ([ case model.nodeCountWarning of
+            Just warning ->
+                div
+                    [ Html.Attributes.class "notification is-warning"
+                    , Html.Attributes.style "margin" "0"
+                    , Html.Attributes.style "border-radius" "0"
+                    ]
+                    [ text warning ]
+
+            Nothing ->
+                text ""
+         , svg
             [ width "100%"
             , height "100%"
-            , viewBox ("0 0 " ++ String.fromFloat svgWidth ++ " " ++ String.fromFloat svgHeight)
-            , SvgA.style "border: 1px solid #ccc; background-color: white; display: block;"
+            , viewBox
+                (String.fromFloat model.viewBoxX
+                    ++ " "
+                    ++ String.fromFloat model.viewBoxY
+                    ++ " "
+                    ++ String.fromFloat model.viewBoxWidth
+                    ++ " "
+                    ++ String.fromFloat model.viewBoxHeight
+                )
+            , SvgA.style "border: 1px solid #ccc; background-color: white; display: block; cursor: grab;"
+            , Svg.Events.custom "mousedown"
+                (Decode.map
+                    (\mousePos ->
+                        { message = StartBackgroundPan mousePos
+                        , stopPropagation = False
+                        , preventDefault = True
+                        }
+                    )
+                    decodeMousePosition
+                )
             ]
             [ defs []
                 [ marker
@@ -288,8 +584,10 @@ view mainActivityId model =
             , drawEdges model.nodes model.edges
             , drawNodes model.nodes model.hoveredNode mainActivityId
             ]
-        , viewTooltip model
-        ]
+         , viewTooltip model
+         , viewZoomControls model
+         ]
+        )
 
 
 {-| Draw all edges
@@ -492,26 +790,88 @@ viewTooltip model =
                         ]
 
 
+{-| View zoom controls
+-}
+viewZoomControls : Model -> Html Msg
+viewZoomControls model =
+    div
+        [ Html.Attributes.style "position" "absolute"
+        , Html.Attributes.style "bottom" "20px"
+        , Html.Attributes.style "right" "20px"
+        , Html.Attributes.style "display" "flex"
+        , Html.Attributes.style "flex-direction" "column"
+        , Html.Attributes.style "gap" "8px"
+        , Html.Attributes.style "background" "white"
+        , Html.Attributes.style "padding" "8px"
+        , Html.Attributes.style "border-radius" "4px"
+        , Html.Attributes.style "box-shadow" "0 2px 8px rgba(0,0,0,0.15)"
+        ]
+        [ Html.button
+            [ Html.Attributes.class "button is-small"
+            , Html.Events.onClick ZoomIn
+            , Html.Attributes.title "Zoom In"
+            , Html.Attributes.style "width" "36px"
+            , Html.Attributes.style "height" "36px"
+            ]
+            [ Html.text "+" ]
+        , Html.button
+            [ Html.Attributes.class "button is-small"
+            , Html.Events.onClick ZoomOut
+            , Html.Attributes.title "Zoom Out"
+            , Html.Attributes.style "width" "36px"
+            , Html.Attributes.style "height" "36px"
+            ]
+            [ Html.text "−" ]
+        , Html.button
+            [ Html.Attributes.class "button is-small"
+            , Html.Events.onClick AutoFit
+            , Html.Attributes.title "Fit to View"
+            , Html.Attributes.style "width" "36px"
+            , Html.Attributes.style "height" "36px"
+            ]
+            [ Html.text "⊡" ]
+        , div
+            [ Html.Attributes.style "font-size" "10px"
+            , Html.Attributes.style "text-align" "center"
+            , Html.Attributes.style "color" "#666"
+            ]
+            [ Html.text (String.fromInt (round ((svgWidth / model.viewBoxWidth) * 100)) ++ "%") ]
+        ]
+
+
 {-| Subscriptions for force simulation and drag
 -}
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    case model.drag of
-        Nothing ->
-            -- If not dragging, subscribe to animation frames for force simulation
+    let
+        animationSub =
             if ForceDirected.isCompleted model.simulation then
                 Sub.none
 
             else
                 Browser.Events.onAnimationFrame (always Tick)
 
-        Just _ ->
-            -- If dragging, subscribe to mouse events and continue simulation
-            Sub.batch
-                [ Browser.Events.onMouseMove (Decode.map DragAt decodeMousePosition)
-                , Browser.Events.onMouseUp (Decode.map DragEnd decodeMousePosition)
-                , Browser.Events.onAnimationFrame (always Tick)
-                ]
+        nodeDragSubs =
+            case model.drag of
+                Just _ ->
+                    [ Browser.Events.onMouseMove (Decode.map DragAt decodeMousePosition)
+                    , Browser.Events.onMouseUp (Decode.map DragEnd decodeMousePosition)
+                    ]
+
+                Nothing ->
+                    []
+
+        panSubs =
+            case model.isPanning of
+                Just _ ->
+                    [ Browser.Events.onMouseMove (Decode.map MoveBackgroundPan decodeMousePosition)
+                    , Browser.Events.onMouseUp (Decode.succeed EndBackgroundPan)
+                    ]
+
+                Nothing ->
+                    []
+    in
+    Sub.batch (animationSub :: (nodeDragSubs ++ panSubs))
 
 
 {-| Decode mouse position from event (relative to SVG element)

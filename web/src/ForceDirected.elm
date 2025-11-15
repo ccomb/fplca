@@ -46,7 +46,7 @@ simulation forces =
         { forces = forces
         , alpha = 1.0
         , alphaDecay = 0.01
-        , iterations = 300
+        , iterations = 150
         }
 
 
@@ -62,16 +62,48 @@ tick (State state) entities =
 
     else
         let
+            -- Maximum velocity to prevent runaway values
+            maxVelocity =
+                1000
+
+            -- Helper to detect and fix invalid numbers (NaN/Infinity)
+            sanitize : Float -> Float -> Float
+            sanitize newValue fallback =
+                if isNaN newValue || isInfinite newValue then
+                    fallback
+
+                else
+                    newValue
+
+            -- Clamp velocity to reasonable bounds
+            clampVelocity : Float -> Float
+            clampVelocity v =
+                clamp -maxVelocity maxVelocity v
+
             -- Apply all forces
             updatedEntities =
                 List.foldl applyForce entities state.forces
                     |> List.map
                         (\entity ->
+                            let
+                                newVx =
+                                    clampVelocity (entity.vx * 0.4)
+
+                                newVy =
+                                    clampVelocity (entity.vy * 0.4)
+
+                                -- Use clamped velocities to prevent Infinity/NaN in positions
+                                newX =
+                                    entity.x + newVx * state.alpha
+
+                                newY =
+                                    entity.y + newVy * state.alpha
+                            in
                             { entity
-                                | x = entity.x + entity.vx * state.alpha
-                                , y = entity.y + entity.vy * state.alpha
-                                , vx = entity.vx * 0.4
-                                , vy = entity.vy * 0.4
+                                | x = sanitize newX 700
+                                , y = sanitize newY 450
+                                , vx = sanitize newVx 0
+                                , vy = sanitize newVy 0
                             }
                         )
 
@@ -215,36 +247,41 @@ applyManyBody strength entities =
 
 applyCenter : Float -> Float -> List (Entity a) -> List (Entity a)
 applyCenter cx cy entities =
-    let
-        count =
-            toFloat (List.length entities)
-
-        ( sumX, sumY ) =
-            List.foldl
-                (\e ( x, y ) -> ( x + e.x, y + e.y ))
-                ( 0, 0 )
-                entities
-
-        avgX =
-            sumX / count
-
-        avgY =
-            sumY / count
-
-        dx =
-            cx - avgX
-
-        dy =
-            cy - avgY
-    in
-    List.map
-        (\e ->
-            { e
-                | vx = e.vx + dx * 0.1
-                , vy = e.vy + dy * 0.1
-            }
-        )
+    -- Guard against empty list to prevent division by zero
+    if List.isEmpty entities then
         entities
+
+    else
+        let
+            count =
+                toFloat (List.length entities)
+
+            ( sumX, sumY ) =
+                List.foldl
+                    (\e ( x, y ) -> ( x + e.x, y + e.y ))
+                    ( 0, 0 )
+                    entities
+
+            avgX =
+                sumX / count
+
+            avgY =
+                sumY / count
+
+            dx =
+                cx - avgX
+
+            dy =
+                cy - avgY
+        in
+        List.map
+            (\e ->
+                { e
+                    | vx = e.vx + dx * 0.1
+                    , vy = e.vy + dy * 0.1
+                }
+            )
+            entities
 
 
 links : List { source : Int, target : Int, distance : Float, strength : Maybe Float } -> Force id
