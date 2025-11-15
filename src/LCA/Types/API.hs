@@ -128,6 +128,33 @@ data FlowInfo = FlowInfo
     }
     deriving (Generic)
 
+-- | Graph export data structures for network visualization
+data GraphExport = GraphExport
+    { geNodes :: [GraphNode]
+    , geEdges :: [GraphEdge]
+    , geUnitGroups :: M.Map Text Text -- Unit to unit group mapping
+    }
+    deriving (Generic)
+
+data GraphNode = GraphNode
+    { gnId :: Int -- Numeric ID for efficient frontend processing
+    , gnLabel :: Text -- Activity name
+    , gnValue :: Double -- Cumulative amount from factorized matrix
+    , gnUnit :: Text -- Unit (kg, MJ, etc.)
+    , gnProcessId :: Text -- Original ProcessId for linking
+    , gnLocation :: Text -- Geography
+    }
+    deriving (Generic)
+
+data GraphEdge = GraphEdge
+    { geSource :: Int -- Source node ID
+    , geTarget :: Int -- Target node ID
+    , geValue :: Double -- Direct flow amount from technosphere matrix
+    , geUnit :: Text -- Flow unit
+    , geFlowName :: Text -- Name of the flow
+    }
+    deriving (Generic)
+
 -- | Lightweight flow information for lists
 data FlowSummary = FlowSummary
     { fsFlow :: Flow -- Core flow data
@@ -256,6 +283,9 @@ instance ToJSON InventoryExport
 instance ToJSON ExchangeDetail
 instance ToJSON Unit
 instance ToJSON FlowDetail
+instance ToJSON GraphExport
+instance ToJSON GraphNode
+instance ToJSON GraphEdge
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a)

@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light only">
     <title>fpLCA</title>
 
     <!-- Bulma CSS -->
@@ -11,68 +12,76 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 
     <style>
-        body {
-            background-color: #f5f5f5;
+        /* Force light mode everywhere */
+        html, body {
+            background-color: white !important;
+            color: #4a4a4a !important;
         }
 
-        .tree-container {
-            background: white;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            overflow: auto;
-            max-width: 100%;
-            max-height: 80vh;
+        .navbar, .box, .table, .card, .panel, .message {
+            background-color: white !important;
+            color: #4a4a4a !important;
         }
 
-        svg {
-            display: block;
-            margin: 0 auto;
+        .title, .subtitle, .label, .menu-label {
+            color: #363636 !important;
         }
 
-        /* Custom scrollbar for tree container */
-        .tree-container::-webkit-scrollbar {
-            width: 12px;
-            height: 12px;
+        input, textarea, select, .input, .textarea, .select select {
+            background-color: white !important;
+            color: #363636 !important;
+            border-color: #dbdbdb !important;
         }
 
-        .tree-container::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 6px;
+        .table tbody tr {
+            background-color: white !important;
+            color: #363636 !important;
         }
 
-        .tree-container::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 6px;
+        .table.is-striped tbody tr:nth-child(even) {
+            background-color: #f5f5f5 !important;
         }
 
-        .tree-container::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
+        .table td, .table th {
+            color: #363636 !important;
         }
 
-        /* Arrow marker definition for SVG edges */
-        #arrowhead {
-            fill: #666;
+        strong, b, .has-text-weight-bold {
+            color: #363636 !important;
         }
 
-        /* Main layout */
         .app-container {
             display: flex;
             min-height: 100vh;
+            background-color: white !important;
         }
 
-        /* Left Menu */
+        .main-content {
+            flex: 1;
+            background-color: white !important;
+        }
+
+        .left-menu {
+            background-color: #f5f5f5 !important;
+        }
+
+        /* Navbar - ensure menu is visible on desktop */
+        .navbar-menu {
+            display: flex !important;
+        }
+
+        .navbar-end {
+            margin-left: auto;
+        }
+
+        /* Left Menu - structure only, no colors */
         .left-menu {
             width: 250px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
             padding: 0;
-            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
-            z-index: 1000;
         }
 
         .menu-header {
             padding: 1.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
             text-align: center;
         }
 
@@ -84,25 +93,9 @@
             display: flex;
             align-items: center;
             padding: 1rem 1.5rem;
-            color: rgba(255, 255, 255, 0.8);
-            text-decoration: none;
-            transition: all 0.3s ease;
             cursor: pointer;
             border: none;
-            background: none;
             width: 100%;
-        }
-
-        .menu-item:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            text-decoration: none;
-        }
-
-        .menu-item.is-active {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border-right: 3px solid white;
         }
 
         .menu-item .icon {
@@ -113,60 +106,6 @@
         .menu-label {
             font-weight: 500;
             font-size: 0.95rem;
-        }
-
-        /* Main Content */
-        .main-content {
-            flex: 1;
-            overflow-x: auto;
-            background: #f8f9fa;
-        }
-
-        /* Activities Page */
-        .activities-page {
-            min-height: 100vh;
-        }
-
-        .activities-page .section:first-child {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            margin-bottom: 0;
-        }
-
-        .activities-page .title,
-        .activities-page .subtitle {
-            color: white;
-        }
-
-        .activities-page .subtitle {
-            opacity: 0.9;
-        }
-
-        /* Activity Cards */
-        .card.is-clickable {
-            cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .card.is-clickable:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-        }
-
-        /* Tree Page */
-        .tree-page {
-            min-height: 100vh;
-        }
-
-        /* Tree visualization enhancements */
-        .node-circle {
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .node-circle:hover {
-            stroke-width: 3px;
-            filter: brightness(1.1);
         }
     </style>
 </head>

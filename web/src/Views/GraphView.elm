@@ -2,6 +2,7 @@ module Views.GraphView exposing (Model, Msg, init, subscriptions, update, view)
 
 import Browser.Events
 import Dict exposing (Dict)
+import ForceDirected
 import Html exposing (Html, div, text)
 import Html.Attributes
 import Json.Decode as Decode
@@ -11,22 +12,26 @@ import Svg.Attributes as SvgA exposing (class, cx, cy, d, fill, fontSize, height
 import Svg.Events
 
 
-{-| Model for the graph visualization - uses circular layout to avoid Force module conflict
+{-| Model for the graph visualization with force-directed layout
 -}
 type alias Model =
     { nodes : List Entity
     , edges : List Link
+    , simulation : ForceDirected.State Int
+    , drag : Maybe Drag
     , hoveredNode : Maybe Int
     , selectedNode : Maybe Int
     }
 
 
-{-| Entity represents a node with fixed circular layout position
+{-| Entity represents a node with position and velocity
 -}
 type alias Entity =
     { id : Int
     , x : Float
     , y : Float
+    , vx : Float
+    , vy : Float
     , value : Float
     , label : String
     , unit : String
@@ -46,32 +51,44 @@ type alias Link =
     }
 
 
+{-| Drag state for interactive node dragging
+-}
+type alias Drag =
+    { startMousePos : ( Float, Float )
+    , currentMousePos : ( Float, Float )
+    , startNodePos : ( Float, Float )
+    , nodeId : Int
+    }
+
+
 {-| Messages for graph interactions
 -}
 type Msg
-    = NodeHover (Maybe Int)
+    = Tick
+    | DragStart Int ( Float, Float ) ( Float, Float ) -- nodeId, mousePos, nodePos
+    | DragAt ( Float, Float )
+    | DragEnd ( Float, Float )
+    | NodeHover (Maybe Int)
     | NodeClick Int
 
 
-{-| Initialize the graph model with circular layout
+{-| Initialize the graph model with force-directed layout
 -}
 init : GraphData -> Model
 init graphData =
     let
-        nodeCount =
-            List.length graphData.nodes
-
-        -- Calculate circular layout positions
+        -- Initialize nodes with random positions
         nodes =
             graphData.nodes
                 |> List.indexedMap
                     (\index gn ->
                         let
+                            -- Use a simple pseudo-random distribution based on index
                             angle =
-                                (toFloat index / toFloat nodeCount) * 2 * pi
+                                (toFloat index * 2.4) * pi
 
                             radius =
-                                min (svgWidth / 2 - 100) (svgHeight / 2 - 100)
+                                100 + (toFloat (modBy 5 index) * 50)
 
                             x =
                                 svgWidth / 2 + radius * cos angle
@@ -82,6 +99,8 @@ init graphData =
                         { id = gn.id
                         , x = x
                         , y = y
+                        , vx = 0
+                        , vy = 0
                         , value = gn.value
                         , label = gn.label
                         , unit = gn.unit
@@ -90,7 +109,7 @@ init graphData =
                         }
                     )
 
-        -- Convert edges
+        -- Convert edges to links
         edges =
             graphData.edges
                 |> List.map
@@ -102,9 +121,32 @@ init graphData =
                         , flowName = ge.flowName
                         }
                     )
+
+        -- Create force simulation
+        links =
+            edges
+                |> List.map
+                    (\edge ->
+                        { source = edge.source
+                        , target = edge.target
+                        , distance = 100
+                        , strength = Nothing
+                        }
+                    )
+
+        forces =
+            [ ForceDirected.links links
+            , ForceDirected.manyBodyStrength -100 <| List.map .id nodes
+            , ForceDirected.center (svgWidth / 2) (svgHeight / 2)
+            ]
+
+        simulation =
+            ForceDirected.simulation forces
     in
     { nodes = nodes
     , edges = edges
+    , simulation = simulation
+    , drag = Nothing
     , hoveredNode = Nothing
     , selectedNode = Nothing
     }
@@ -122,11 +164,78 @@ svgHeight =
     900
 
 
-{-| Update function - static layout so only handles hover and click
+{-| Update function with force simulation
 -}
 update : Msg -> Model -> Model
 update msg model =
     case msg of
+        Tick ->
+            let
+                ( newSimulation, newNodes ) =
+                    ForceDirected.tick model.simulation model.nodes
+            in
+            case model.drag of
+                Nothing ->
+                    { model
+                        | simulation = newSimulation
+                        , nodes = newNodes
+                    }
+
+                Just drag ->
+                    let
+                        -- Calculate delta and apply to node
+                        ( dx, dy ) =
+                            ( Tuple.first drag.currentMousePos - Tuple.first drag.startMousePos
+                            , Tuple.second drag.currentMousePos - Tuple.second drag.startMousePos
+                            )
+
+                        ( newX, newY ) =
+                            ( Tuple.first drag.startNodePos + dx
+                            , Tuple.second drag.startNodePos + dy
+                            )
+                    in
+                    { model
+                        | simulation = newSimulation
+                        , nodes = updateNodePosition drag.nodeId ( newX, newY ) newNodes
+                    }
+
+        DragStart nodeId mousePos nodePos ->
+            { model
+                | drag =
+                    Just
+                        { startMousePos = mousePos
+                        , currentMousePos = mousePos
+                        , startNodePos = nodePos
+                        , nodeId = nodeId
+                        }
+            }
+
+        DragAt mousePos ->
+            case model.drag of
+                Just drag ->
+                    let
+                        -- Calculate delta and apply to node
+                        ( dx, dy ) =
+                            ( Tuple.first mousePos - Tuple.first drag.startMousePos
+                            , Tuple.second mousePos - Tuple.second drag.startMousePos
+                            )
+
+                        ( newX, newY ) =
+                            ( Tuple.first drag.startNodePos + dx
+                            , Tuple.second drag.startNodePos + dy
+                            )
+                    in
+                    { model
+                        | drag = Just { drag | currentMousePos = mousePos }
+                        , nodes = updateNodePosition drag.nodeId ( newX, newY ) model.nodes
+                    }
+
+                Nothing ->
+                    model
+
+        DragEnd _ ->
+            { model | drag = Nothing }
+
         NodeHover maybeId ->
             { model | hoveredNode = maybeId }
 
@@ -134,16 +243,30 @@ update msg model =
             { model | selectedNode = Just nodeId }
 
 
-{-| View function
+{-| Update a specific node's position (for dragging)
 -}
-view : Model -> Html Msg
-view model =
+updateNodePosition : Int -> ( Float, Float ) -> List Entity -> List Entity
+updateNodePosition targetId ( x, y ) =
+    List.map
+        (\node ->
+            if node.id == targetId then
+                { node | x = x, y = y, vx = 0, vy = 0 }
+
+            else
+                node
+        )
+
+
+{-| View function - takes mainActivityId to highlight it without storing in model
+-}
+view : String -> Model -> Html Msg
+view mainActivityId model =
     div [ Html.Attributes.style "position" "relative" ]
         [ svg
-            [ width (String.fromFloat svgWidth)
-            , height (String.fromFloat svgHeight)
+            [ width "100%"
+            , height "100%"
             , viewBox ("0 0 " ++ String.fromFloat svgWidth ++ " " ++ String.fromFloat svgHeight)
-            , SvgA.style "border: 1px solid #ccc"
+            , SvgA.style "border: 1px solid #ccc; background-color: white; display: block;"
             ]
             [ defs []
                 [ marker
@@ -162,7 +285,7 @@ view model =
                     ]
                 ]
             , drawEdges model.nodes model.edges
-            , drawNodes model.nodes model.hoveredNode
+            , drawNodes model.nodes model.hoveredNode mainActivityId
             ]
         , viewTooltip model
         ]
@@ -201,8 +324,8 @@ drawEdges nodes edges =
 
 {-| Draw all nodes
 -}
-drawNodes : List Entity -> Maybe Int -> Svg Msg
-drawNodes nodes hoveredId =
+drawNodes : List Entity -> Maybe Int -> String -> Svg Msg
+drawNodes nodes hoveredId mainActivityId =
     let
         maxValue =
             nodes
@@ -218,20 +341,41 @@ drawNodes nodes hoveredId =
                 isHovered =
                     hoveredId == Just node.id
 
+                isMainActivity =
+                    node.processId == mainActivityId
+
+                nodeColor =
+                    if isHovered then
+                        "#ff9800"
+                    else if isMainActivity then
+                        "#4caf50"  -- Green for main activity
+                    else
+                        "#2196f3"  -- Blue for other activities
+
                 radius =
                     nodeRadius node
             in
             g
-                [ Svg.Events.onMouseOver (NodeHover (Just node.id))
+                [ Svg.Events.custom "mousedown"
+                    (Decode.map
+                        (\mousePos ->
+                            { message = DragStart node.id mousePos ( node.x, node.y )
+                            , stopPropagation = True
+                            , preventDefault = True
+                            }
+                        )
+                        decodeMousePosition
+                    )
+                , Svg.Events.onMouseOver (NodeHover (Just node.id))
                 , Svg.Events.onMouseOut (NodeHover Nothing)
                 , Svg.Events.onClick (NodeClick node.id)
-                , SvgA.style "cursor: pointer;"
+                , SvgA.style "cursor: move;"
                 ]
                 [ circle
                     [ cx (String.fromFloat node.x)
                     , cy (String.fromFloat node.y)
                     , r (String.fromFloat radius)
-                    , fill (if isHovered then "#ff9800" else "#2196f3")
+                    , fill nodeColor
                     , stroke "#fff"
                     , strokeWidth "2"
                     ]
@@ -302,8 +446,32 @@ viewTooltip model =
                         ]
 
 
-{-| Subscriptions - none needed for static layout
+{-| Subscriptions for force simulation and drag
 -}
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
+subscriptions model =
+    case model.drag of
+        Nothing ->
+            -- If not dragging, subscribe to animation frames for force simulation
+            if ForceDirected.isCompleted model.simulation then
+                Sub.none
+
+            else
+                Browser.Events.onAnimationFrame (always Tick)
+
+        Just _ ->
+            -- If dragging, subscribe to mouse events and continue simulation
+            Sub.batch
+                [ Browser.Events.onMouseMove (Decode.map DragAt decodeMousePosition)
+                , Browser.Events.onMouseUp (Decode.map DragEnd decodeMousePosition)
+                , Browser.Events.onAnimationFrame (always Tick)
+                ]
+
+
+{-| Decode mouse position from event (relative to SVG element)
+-}
+decodeMousePosition : Decode.Decoder ( Float, Float )
+decodeMousePosition =
+    Decode.map2 Tuple.pair
+        (Decode.field "offsetX" Decode.float)
+        (Decode.field "offsetY" Decode.float)

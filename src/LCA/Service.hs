@@ -10,7 +10,7 @@ import LCA.Progress
 import LCA.Query (findActivitiesByFields, findFlowsBySynonym)
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
-import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int32)
 import qualified Data.List as L
@@ -454,6 +454,123 @@ getActivityTree db queryText maxDepth = do
                 treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
              in Right $ toJSON treeExport
         Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
+
+-- | Build activity network graph from factorized matrix column
+-- Uses efficient sparse matrix operations to extract connections
+buildActivityGraph :: Database -> SharedSolver -> Text -> Double -> IO (Either ServiceError GraphExport)
+buildActivityGraph db sharedSolver queryText cutoffPercent = do
+    case resolveActivityAndProcessId db queryText of
+        Left err -> return $ Left err
+        Right (processId, _activity) ->
+            case dbCachedFactorization db of
+                Nothing -> return $ Left $ MatrixError "No cached factorization available for graph computation"
+                Just _ -> do
+                    -- Step 1: Get factorized column (cumulative amounts) by solving
+                    let activityIndex = dbActivityIndex db
+                        demandVec = buildDemandVectorFromIndex activityIndex processId
+
+                    -- Solve to get cumulative amounts
+                    supplyVec <- solveWithSharedSolver sharedSolver demandVec
+                    let supplyList = toList supplyVec
+                        totalSupply = sum [abs val | val <- supplyList]
+                        threshold = totalSupply * (cutoffPercent / 100.0)
+
+                    -- Step 2: Filter by cutoff to get significant activities
+                    -- Build list of (ProcessId, cumulative value) for activities above threshold
+                    let significantActivities =
+                            [ (fromIntegral idx :: ProcessId, val)
+                            | (idx, val) <- zip [0..] supplyList
+                            , abs val > threshold
+                            ]
+
+                    -- Step 3: Build node ID mapping (ProcessId -> Int) for frontend efficiency
+                    let nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0..] significantActivities]
+
+                    -- Step 4: Extract direct connections from technosphere matrix
+                    -- For each significant activity, find edges in dbTechnosphereTriples
+                    let techTriples = dbTechnosphereTriples db
+                        activities = dbActivities db
+                        units = dbUnits db
+                        flows = dbFlows db
+
+                        -- Build edges: iterate through sparse triplets
+                        edges =
+                            [ let sourceNodeId = M.lookup (fromIntegral row :: ProcessId) nodeIdMap
+                                  targetNodeId = M.lookup (fromIntegral col :: ProcessId) nodeIdMap
+                                  sourceActivity = if fromIntegral row < V.length activities
+                                                  then Just $ activities V.! fromIntegral row
+                                                  else Nothing
+                                  targetProcessId = fromIntegral col :: ProcessId
+                                  -- Get target activity UUID from process ID table
+                                  targetActivityUUID = case processIdToUUIDs db targetProcessId of
+                                      Just (actUUID, _prodUUID) -> Just actUUID
+                                      Nothing -> Nothing
+                                  -- Get flow information from the source activity's exchanges
+                                  flowInfo = do
+                                      srcAct <- sourceActivity
+                                      targetUUID <- targetActivityUUID
+                                      -- Find the exchange that corresponds to this technosphere connection
+                                      -- Use pattern matching to filter technosphere inputs
+                                      let techExchanges = [ex | ex <- exchanges srcAct,
+                                                                case ex of
+                                                                    TechnosphereExchange _ _ _ isInput isRef _ _ -> isInput && not isRef
+                                                                    _ -> False]
+                                      -- Match by target activity UUID
+                                      case [ex | ex <- techExchanges, exchangeActivityLinkId ex == Just targetUUID] of
+                                          (ex:_) -> M.lookup (exchangeFlowId ex) flows
+                                          [] -> Nothing  -- No matching exchange found
+                                  unitName = case flowInfo of
+                                      Just flow -> getUnitNameForFlow units flow
+                                      Nothing -> "unknown"
+                                  flowNameText = case flowInfo of
+                                      Just flow -> flowName flow
+                                      Nothing -> "Unknown flow"
+                              in case (sourceNodeId, targetNodeId) of
+                                  (Just src, Just tgt) ->
+                                      Just $ GraphEdge src tgt (realToFrac value) unitName flowNameText
+                                  _ -> Nothing
+                            | SparseTriple row col value <- U.toList techTriples
+                            , value /= 0.0
+                            ]
+
+                        validEdges = [e | Just e <- edges]
+
+                    -- Step 5: Build nodes
+                    let nodes =
+                            [ let activity = if fromIntegral pid < V.length activities
+                                            then activities V.! fromIntegral pid
+                                            else error $ "Invalid ProcessId in graph: " ++ show pid
+                                  processIdText = processIdToText db pid
+                              in GraphNode
+                                  { gnId = nodeId
+                                  , gnLabel = activityName activity
+                                  , gnValue = cumulativeVal
+                                  , gnUnit = activityUnit activity
+                                  , gnProcessId = processIdText
+                                  , gnLocation = activityLocation activity
+                                  }
+                            | (nodeId, (pid, cumulativeVal)) <- zip [0..] significantActivities
+                            ]
+
+                    -- Step 6: Build unit groups for normalization
+                    let unitGroups = buildUnitGroups [gnUnit n | n <- nodes]
+
+                    return $ Right $ GraphExport nodes validEdges unitGroups
+
+-- | Classify units into groups for edge width normalization
+buildUnitGroups :: [Text] -> M.Map Text Text
+buildUnitGroups units =
+    M.fromList [(unit, classifyUnit unit) | unit <- L.nub units]
+  where
+    classifyUnit u
+        | u `elem` ["kg", "g", "t", "ton", "metric ton", "Mg"] = "mass"
+        | u `elem` ["m3", "l", "L", "litre", "liter", "dm3"] = "volume"
+        | u `elem` ["MJ", "kWh", "J", "kJ", "GJ", "Wh"] = "energy"
+        | u `elem` ["Bq", "kBq", "MBq"] = "radioactivity"
+        | u `elem` ["m2", "ha", "km2", "m2*a", "m2*year"] = "area"
+        | u `elem` ["m", "km", "mm", "tkm", "vkm", "pkm"] = "distance"
+        | u `elem` ["h", "hr", "hour", "hours", "person*hour"] = "time"
+        | otherwise = "other"
 
 -- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int

@@ -8,6 +8,7 @@ type Route
     | ActivityRoute String -- ProcessId
     | ActivityTreeRoute String -- ProcessId
     | ActivityInventoryRoute String -- ProcessId
+    | ActivityGraphRoute String -- ProcessId
     | NotFoundRoute
 
 
@@ -19,4 +20,5 @@ type Page
     = ActivitiesPage
     | TreePage
     | InventoryPage
+    | GraphPage
 

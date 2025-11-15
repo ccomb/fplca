@@ -8,12 +8,14 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
 import Models.Activity exposing (ActivitySummary, ActivityTree, SearchResults, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
+import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.Page exposing (Page(..), Route(..))
 import Url
 import Url.Builder
 import Url.Parser as Parser exposing ((</>), Parser, oneOf, parse, string, top)
 import Views.ActivitiesView as ActivitiesView
+import Views.GraphView as GraphView
 import Views.InventoryView as InventoryView
 import Views.LeftMenu as LeftMenu
 import Views.TreeView as TreeView
@@ -37,6 +39,9 @@ type alias Model =
     , currentPage : Page
     , cachedTrees : Dict.Dict String ActivityTree -- Cache trees by activity ID
     , cachedInventories : Dict.Dict String InventoryExport -- Cache inventories by activity ID
+    , cachedGraphs : Dict.Dict String GraphData -- Cache graphs by activity ID
+    , graphViewModel : Maybe GraphView.Model -- Current graph view model
+    , graphCutoffInput : String -- Cutoff input as string to allow partial edits like "0."
     , currentActivityId : String
     , loading : Bool
     , error : Maybe String
@@ -54,6 +59,10 @@ type Msg
     | ActivityLoaded (Result Http.Error ActivityTree)
     | LoadInventory String
     | InventoryLoaded (Result Http.Error InventoryExport)
+    | LoadGraph String
+    | GraphLoaded (Result Http.Error GraphData)
+    | GraphViewMsg GraphView.Msg
+    | UpdateGraphCutoff String
     | NavigateToParent
     | NodeClicked String
     | NavigateToPage Page
@@ -78,6 +87,7 @@ routeParser =
         , Parser.map ActivitiesRoute (Parser.s "activities")
         , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
         , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
+        , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
         , Parser.map ActivityRoute (Parser.s "activity" </> string)
         ]
 
@@ -113,6 +123,9 @@ routeToPage route =
         ActivityInventoryRoute _ ->
             InventoryPage
 
+        ActivityGraphRoute _ ->
+            GraphPage
+
         NotFoundRoute ->
             ActivitiesPage
 
@@ -137,6 +150,9 @@ init _ url key =
                 ActivityInventoryRoute processId ->
                     ( processId, True, "inventory" )
 
+                ActivityGraphRoute processId ->
+                    ( processId, True, "graph" )
+
                 _ ->
                     ( defaultActivityId, False, "none" )
 
@@ -149,6 +165,9 @@ init _ url key =
             , currentPage = initialPage
             , cachedTrees = Dict.empty
             , cachedInventories = Dict.empty
+            , cachedGraphs = Dict.empty
+            , graphViewModel = Nothing
+            , graphCutoffInput = "1.0"
             , currentActivityId = activityId
             , loading = shouldLoad
             , error = Nothing
@@ -168,6 +187,13 @@ init _ url key =
 
                     "inventory" ->
                         loadInventoryData activityId
+
+                    "graph" ->
+                        let
+                            cutoff =
+                                String.toFloat model.graphCutoffInput |> Maybe.withDefault 1.0
+                        in
+                        loadGraphData activityId cutoff
 
                     _ ->
                         Cmd.none
@@ -249,6 +275,58 @@ update msg model =
             , Cmd.none
             )
 
+        LoadGraph activityId ->
+            -- Always reload when explicitly requested (e.g., after changing cutoff)
+            let
+                cutoff =
+                    String.toFloat model.graphCutoffInput |> Maybe.withDefault 1.0
+            in
+            ( { model
+                | loading = True
+                , error = Nothing
+                , currentActivityId = activityId
+              }
+            , loadGraphData activityId cutoff
+            )
+
+        GraphLoaded (Ok graphData) ->
+            let
+                graphViewModel =
+                    GraphView.init graphData
+            in
+            ( { model
+                | cachedGraphs = Dict.insert model.currentActivityId graphData model.cachedGraphs
+                , graphViewModel = Just graphViewModel
+                , loading = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        GraphLoaded (Err error) ->
+            ( { model
+                | loading = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        GraphViewMsg graphMsg ->
+            case model.graphViewModel of
+                Just graphModel ->
+                    let
+                        updatedGraphModel =
+                            GraphView.update graphMsg graphModel
+                    in
+                    ( { model | graphViewModel = Just updatedGraphModel }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        UpdateGraphCutoff cutoffStr ->
+            -- Allow any string input, validation happens when loading
+            ( { model | graphCutoffInput = cutoffStr }, Cmd.none )
+
         NodeClicked nodeId ->
             if nodeId /= model.currentActivityId then
                 ( { model
@@ -303,6 +381,9 @@ update msg model =
 
                         InventoryPage ->
                             "/#activity/" ++ model.currentActivityId ++ "/inventory"
+
+                        GraphPage ->
+                            "/#activity/" ++ model.currentActivityId ++ "/graph"
             in
             ( model, Nav.pushUrl model.key url )
 
@@ -378,6 +459,9 @@ update msg model =
                         ActivityInventoryRoute processId ->
                             ( processId, True )
 
+                        ActivityGraphRoute processId ->
+                            ( processId, True )
+
                         _ ->
                             ( model.currentActivityId, False )
 
@@ -387,8 +471,11 @@ update msg model =
                 shouldLoadInventory =
                     needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
 
+                shouldLoadGraph =
+                    needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedGraphs)
+
                 shouldLoad =
-                    shouldLoadTree || shouldLoadInventory
+                    shouldLoadTree || shouldLoadInventory || shouldLoadGraph
 
                 updatedModel =
                     { model
@@ -405,6 +492,13 @@ update msg model =
 
                     else if shouldLoadInventory then
                         loadInventoryData newActivityId
+
+                    else if shouldLoadGraph then
+                        let
+                            cutoff =
+                                String.toFloat updatedModel.graphCutoffInput |> Maybe.withDefault 1.0
+                        in
+                        loadGraphData newActivityId cutoff
 
                     else
                         Cmd.none
@@ -431,6 +525,9 @@ routeToUrl route =
         ActivityInventoryRoute processId ->
             "/#activity/" ++ processId ++ "/inventory"
 
+        ActivityGraphRoute processId ->
+            "/#activity/" ++ processId ++ "/graph"
+
         NotFoundRoute ->
             "/"
 
@@ -441,8 +538,13 @@ navigateToActivity key processId =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
+subscriptions model =
+    case model.graphViewModel of
+        Just graphModel ->
+            Sub.map GraphViewMsg (GraphView.subscriptions graphModel)
+
+        Nothing ->
+            Sub.none
 
 
 view : Model -> Html Msg
@@ -484,62 +586,26 @@ view model =
                             model.error
                             model.inventorySearchQuery
                         )
+
+                GraphPage ->
+                    viewGraphPage model
             ]
         ]
 
 
 viewTreePage : Model -> Html Msg
 viewTreePage model =
+    let
+        activityInfo =
+            Dict.get model.currentActivityId model.cachedTrees
+                |> Maybe.andThen (\tree -> Dict.get model.currentActivityId tree.nodes)
+                |> Maybe.map (\node -> ( node.name, node.location ))
+    in
     div [ class "tree-page" ]
-        [ -- Header with navigation
-          nav [ class "navbar is-light" ]
-            [ div [ class "navbar-brand" ]
-                [ div [ class "navbar-item" ]
-                    [ h1 [ class "title is-4" ] [ text "Activity Tree Navigator" ]
-                    ]
-                ]
-            ]
-        , -- Navigation bar
-          div [ class "section" ]
-            [ div [ class "container" ]
-                [ div [ class "level" ]
-                    [ div [ class "level-left" ]
-                        [ div [ class "level-item" ]
-                            [ button
-                                [ class "button is-primary"
-                                , onClick NavigateToParent
-                                , disabled (not (canNavigateToParent model))
-                                ]
-                                [ span [ class "icon" ] [ i [ class "fas fa-arrow-up" ] [] ]
-                                , span [] [ text "Parent Activity" ]
-                                ]
-                            ]
-                        ]
-                    , div [ class "level-right" ]
-                        [ div [ class "level-item" ]
-                            [ case Dict.get model.currentActivityId model.cachedTrees of
-                                Just tree ->
-                                    case Dict.get model.currentActivityId tree.nodes of
-                                        Just currentNode ->
-                                            div [ class "tags has-addons" ]
-                                                [ span [ class "tag is-dark" ] [ text "Current:" ]
-                                                , span [ class "tag is-info" ] [ text currentNode.name ]
-                                                , span [ class "tag is-light" ] [ text currentNode.location ]
-                                                ]
-
-                                        Nothing ->
-                                            span [ class "tag is-warning" ] [ text "Unknown activity" ]
-
-                                Nothing ->
-                                    span [ class "tag is-light" ] [ text "Loading..." ]
-                            ]
-                        ]
-                    ]
-                ]
-            ]
+        [ viewPageNavbar "Activity Tree Navigator" activityInfo
         , -- Main content
-          div [ class "section" ]
-            [ div [ class "container is-fluid" ]
+          div []
+            [ div []
                 [ case ( model.loading, model.error, Dict.get model.currentActivityId model.cachedTrees ) of
                     ( True, _, _ ) ->
                         div [ class "has-text-centered" ]
@@ -556,35 +622,133 @@ viewTreePage model =
 
                     ( _, _, Just tree ) ->
                         div []
-                            [ -- Tree statistics
-                              div [ class "notification is-info is-light" ]
-                                [ div [ class "columns" ]
-                                    [ div [ class "column" ]
+                            [ -- Navigation and metadata in single banner
+                              div [ class "level" ]
+                                [ div [ class "level-left" ]
+                                    [ div [ class "level-item" ]
+                                        [ button
+                                            [ class "button is-primary"
+                                            , onClick NavigateToParent
+                                            , disabled (not (canNavigateToParent model))
+                                            ]
+                                            [ span [ class "icon" ] [ i [ class "fas fa-arrow-up" ] [] ]
+                                            , span [] [ text "Parent Activity" ]
+                                            ]
+                                        ]
+                                    ]
+                                , div [ class "level-right" ]
+                                    [ div [ class "level-item" ]
                                         [ text ("Total nodes: " ++ String.fromInt tree.tree.totalNodes) ]
-                                    , div [ class "column" ]
+                                    , div [ class "level-item" ]
                                         [ text ("Max depth: " ++ String.fromInt tree.tree.maxDepth) ]
-                                    , div [ class "column" ]
+                                    , div [ class "level-item" ]
                                         [ text ("Expandable: " ++ String.fromInt tree.tree.expandableNodes) ]
                                     ]
                                 ]
                             , -- SVG Tree visualization
-                              div [ class "box" ]
-                                [ Html.map
-                                    (\msg ->
-                                        case msg of
-                                            TreeView.NodeClicked nodeId ->
-                                                NodeClicked nodeId
+                              Html.map
+                                (\msg ->
+                                    case msg of
+                                        TreeView.NodeClicked nodeId ->
+                                            NodeClicked nodeId
 
-                                            TreeView.NodeHovered maybeNodeId ->
-                                                NodeHovered maybeNodeId
-                                    )
-                                    (TreeView.viewTree tree model.hoveredNode)
-                                ]
+                                        TreeView.NodeHovered maybeNodeId ->
+                                            NodeHovered maybeNodeId
+                                )
+                                (TreeView.viewTree tree model.hoveredNode)
                             ]
 
                     ( _, _, Nothing ) ->
                         div [ class "has-text-centered" ]
                             [ text "No data to display" ]
+                ]
+            ]
+        ]
+
+
+viewGraphPage : Model -> Html Msg
+viewGraphPage model =
+    let
+        activityInfo =
+            -- Try to get from graph data first
+            Dict.get model.currentActivityId model.cachedGraphs
+                |> Maybe.andThen
+                    (\graphData ->
+                        List.filter (\node -> node.processId == model.currentActivityId) graphData.nodes
+                            |> List.head
+                            |> Maybe.map (\node -> ( node.label, node.location ))
+                    )
+                |> -- Fallback to tree data if graph data doesn't have it
+                   (\maybeInfo ->
+                        case maybeInfo of
+                            Just info ->
+                                Just info
+
+                            Nothing ->
+                                Dict.get model.currentActivityId model.cachedTrees
+                                    |> Maybe.andThen (\tree -> Dict.get model.currentActivityId tree.nodes)
+                                    |> Maybe.map (\node -> ( node.name, node.location ))
+                   )
+    in
+    div [ class "graph-page" ]
+        [ viewPageNavbar "Activity Network Graph" activityInfo
+        , -- Controls
+          div []
+            [ div []
+                [ div [ class "level" ]
+                    [ div [ class "level-left" ]
+                        [ div [ class "level-item" ]
+                            [ Html.form
+                                [ class "field has-addons"
+                                , onSubmit (LoadGraph model.currentActivityId)
+                                ]
+                                [ div [ class "control" ]
+                                    [ Html.label [ class "label" ] [ text "Cutoff (%)" ]
+                                    , input
+                                        [ class "input"
+                                        , type_ "text"
+                                        , value model.graphCutoffInput
+                                        , onInput UpdateGraphCutoff
+                                        , Html.Attributes.placeholder "e.g., 0.1, 1.0, 5.0"
+                                        ]
+                                        []
+                                    ]
+                                , div [ class "control" ]
+                                    [ button
+                                        [ class "button is-primary"
+                                        , type_ "submit"
+                                        ]
+                                        [ text "Reload Graph" ]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        , -- Main graph content
+          div []
+            [ div []
+                [ case ( model.loading, model.error, model.graphViewModel ) of
+                    ( True, _, _ ) ->
+                        div [ class "has-text-centered" ]
+                            [ div [ class "is-size-3" ] [ text "Loading graph..." ]
+                            , progress [ class "progress is-primary", attribute "max" "100" ] []
+                            ]
+
+                    ( _, Just error, _ ) ->
+                        div [ class "notification is-danger" ]
+                            [ button [ class "delete", onClick (LoadGraph model.currentActivityId) ] []
+                            , strong [] [ text "Error: " ]
+                            , text error
+                            ]
+
+                    ( _, _, Just graphModel ) ->
+                        Html.map GraphViewMsg (GraphView.view model.currentActivityId graphModel)
+
+                    ( _, _, Nothing ) ->
+                        div [ class "has-text-centered" ]
+                            [ text "No graph data available" ]
                 ]
             ]
         ]
@@ -626,6 +790,14 @@ loadInventoryData activityId =
         }
 
 
+loadGraphData : String -> Float -> Cmd Msg
+loadGraphData activityId cutoff =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId ++ "/graph?cutoff=" ++ String.fromFloat cutoff
+        , expect = Http.expectJson GraphLoaded graphDataDecoder
+        }
+
+
 searchActivities : String -> Cmd Msg
 searchActivities query =
     Http.get
@@ -656,3 +828,35 @@ httpErrorToString error =
 
         Http.BadBody body ->
             "Bad body: " ++ body
+
+
+{-| Shared navbar component for all pages
+-}
+viewPageNavbar : String -> Maybe ( String, String ) -> Html Msg
+viewPageNavbar title maybeActivity =
+    nav [ class "navbar is-light" ]
+        [ div [ class "navbar-brand" ]
+            [ div [ class "navbar-item" ]
+                [ h1 [ class "title is-4" ] [ text title ]
+                ]
+            ]
+        , div [ class "navbar-menu is-active" ]
+            [ div [ class "navbar-end" ]
+                (case maybeActivity of
+                    Just ( name, location ) ->
+                        [ div [ class "navbar-item" ]
+                            [ span [ class "title is-4" ] [ text name ]
+                            ]
+                        , div [ class "navbar-item" ]
+                            [ span [ class "subtitle is-6" ] [ text location ]
+                            ]
+                        ]
+
+                    Nothing ->
+                        [ div [ class "navbar-item" ]
+                            [ span [ class "subtitle is-6" ] [ text "Loading..." ]
+                            ]
+                        ]
+                )
+            ]
+        ]

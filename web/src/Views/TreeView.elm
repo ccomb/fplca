@@ -6,7 +6,7 @@ import Html.Attributes
 import Html.Events
 import Models.Activity exposing (ActivityEdge, ActivityNode, ActivityTree, EdgeType(..), NodeType(..))
 import Svg exposing (Svg, circle, defs, g, line, marker, path, polygon, rect, svg, text_)
-import Svg.Attributes as SvgA exposing (class, cx, cy, d, fill, fontSize, fontWeight, height, id, markerEnd, markerHeight, markerWidth, orient, points, r, refX, refY, stroke, strokeDasharray, strokeWidth, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
+import Svg.Attributes as SvgA exposing (class, cx, cy, d, fill, fontSize, fontWeight, height, id, markerEnd, markerHeight, markerWidth, orient, points, r, refX, refY, stroke, strokeDasharray, strokeWidth, style, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
 import Svg.Events
 import Utils.Format as Format
 
@@ -34,9 +34,10 @@ viewTree activityTree hoveredNodeId =
     div []
         [ Html.div [ Html.Attributes.class "tree-container" ]
             [ svg
-                [ width (String.fromInt svgWidth)
-                , height (String.fromInt svgHeight)
+                [ width "100%"
+                , height "100%"
                 , viewBox ("0 0 " ++ String.fromInt svgWidth ++ " " ++ String.fromInt svgHeight)
+                , style "display: block;"
                 ]
                 ([ defs []
                     [ marker

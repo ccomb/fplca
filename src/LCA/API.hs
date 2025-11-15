@@ -12,11 +12,12 @@ import LCA.Service (getActivityInventoryWithSharedSolver)
 import qualified LCA.Service
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
-import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -38,6 +39,7 @@ type LCAAPI =
                 :<|> "activity" :> Capture "processId" Text :> "reference-product" :> Get '[JSON] FlowDetail
                 :<|> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
+                :<|> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
                 :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
@@ -78,6 +80,7 @@ lcaServer db maxTreeDepth sharedSolver =
         :<|> getActivityReferenceProduct
         :<|> getActivityTree
         :<|> getActivityInventory
+        :<|> getActivityGraph
         :<|> getFlowDetail
         :<|> getFlowActivities
         :<|> searchFlows
@@ -140,6 +143,18 @@ lcaServer db maxTreeDepth sharedSolver =
             Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right inventoryExport -> return inventoryExport
+
+    -- Activity graph endpoint for network visualization
+    getActivityGraph :: Text -> Maybe Double -> Handler GraphExport
+    getActivityGraph processId maybeCutoff = do
+        let cutoffPercent = fromMaybe 1.0 maybeCutoff  -- Default to 1% cutoff
+        result <- liftIO $ LCA.Service.buildActivityGraph db sharedSolver processId cutoffPercent
+        case result of
+            Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+            Left (LCA.Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left _ -> throwError err500{errBody = "Internal server error"}
+            Right graphExport -> return graphExport
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail

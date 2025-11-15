@@ -1,4 +1,4 @@
-module Views.InventoryView exposing (viewInventoryPage, Msg(..))
+module Views.InventoryView exposing (Msg(..), viewInventoryPage, viewPageNavbar)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
@@ -6,23 +6,23 @@ import Html.Events exposing (..)
 import Models.Inventory exposing (InventoryExport, InventoryFlowDetail)
 import Utils.Format as Format
 
+
 type Msg
     = UpdateSearchQuery String
 
+
 viewInventoryPage : Maybe InventoryExport -> Bool -> Maybe String -> String -> Html Msg
 viewInventoryPage maybeInventory loading error searchQuery =
+    let
+        activityInfo =
+            maybeInventory
+                |> Maybe.map (\inv -> ( inv.ieMetadata.imRootActivity.prsName, inv.ieMetadata.imRootActivity.prsLocation ))
+    in
     div [ class "inventory-page" ]
-        [ -- Header with navigation
-          nav [ class "navbar is-light" ]
-            [ div [ class "navbar-brand" ]
-                [ div [ class "navbar-item" ]
-                    [ h1 [ class "title is-4" ] [ text "Activity Inventory" ]
-                    ]
-                ]
-            ]
+        [ viewPageNavbar "Activity Inventory" activityInfo
         , -- Main content
-          div [ class "section" ]
-            [ div [ class "container" ]
+          div []
+            [ div []
                 [ case ( loading, error, maybeInventory ) of
                     ( True, _, _ ) ->
                         div [ class "has-text-centered" ]
@@ -49,6 +49,7 @@ viewInventoryPage maybeInventory loading error searchQuery =
                 ]
             ]
         ]
+
 
 viewInventoryHeader : InventoryExport -> Html msg
 viewInventoryHeader inventory =
@@ -80,6 +81,7 @@ viewInventoryHeader inventory =
             ]
         ]
 
+
 viewInventoryTable : List InventoryFlowDetail -> Html msg
 viewInventoryTable flows =
     div [ class "box" ]
@@ -101,6 +103,7 @@ viewInventoryTable flows =
             ]
         ]
 
+
 viewInventoryRow : InventoryFlowDetail -> Html msg
 viewInventoryRow flowDetail =
     tr []
@@ -118,6 +121,7 @@ viewInventoryRow flowDetail =
                 [ class
                     (if flowDetail.ifdIsEmission then
                         "tag is-warning"
+
                      else
                         "tag is-info"
                     )
@@ -125,12 +129,14 @@ viewInventoryRow flowDetail =
                 [ text
                     (if flowDetail.ifdIsEmission then
                         "Emission"
+
                      else
                         "Resource"
                     )
                 ]
             ]
         ]
+
 
 viewSearchBox : String -> Html Msg
 viewSearchBox searchQuery =
@@ -155,10 +161,44 @@ viewSearchBox searchQuery =
             ]
         ]
 
+
+{-| Shared navbar component for all pages
+-}
+viewPageNavbar : String -> Maybe ( String, String ) -> Html msg
+viewPageNavbar title maybeActivity =
+    nav [ class "navbar is-light" ]
+        [ div [ class "navbar-brand" ]
+            [ div [ class "navbar-item" ]
+                [ h1 [ class "title is-4" ] [ text title ]
+                ]
+            ]
+        , div [ class "navbar-menu is-active" ]
+            [ div [ class "navbar-end" ]
+                (case maybeActivity of
+                    Just ( name, location ) ->
+                        [ div [ class "navbar-item" ]
+                            [ span [ class "title is-4" ] [ text name ]
+                            ]
+                        , div [ class "navbar-item" ]
+                            [ span [ class "subtitle is-6" ] [ text location ]
+                            ]
+                        ]
+
+                    Nothing ->
+                        [ div [ class "navbar-item" ]
+                            [ span [ class "subtitle is-6" ] [ text "Loading..." ]
+                            ]
+                        ]
+                )
+            ]
+        ]
+
+
 filterFlows : String -> List InventoryFlowDetail -> List InventoryFlowDetail
 filterFlows searchQuery flows =
     if String.isEmpty (String.trim searchQuery) then
         flows
+
     else
         let
             -- Split the search query into words and convert to lowercase
@@ -184,3 +224,4 @@ filterFlows searchQuery flows =
                 List.all (\word -> String.contains word searchableText) searchWords
         in
         List.filter matchesAllWords flows
+
