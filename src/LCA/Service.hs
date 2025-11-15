@@ -477,11 +477,20 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
 
                     -- Step 2: Filter by cutoff to get significant activities
                     -- Build list of (ProcessId, cumulative value) for activities above threshold
-                    let significantActivities =
+                    -- Always include the root activity (processId) even if below threshold
+                    let allSignificantActivities =
                             [ (fromIntegral idx :: ProcessId, val)
                             | (idx, val) <- zip [0..] supplyList
                             , abs val > threshold
                             ]
+                        -- Ensure root activity is always included
+                        significantActivities =
+                            if processId `elem` map fst allSignificantActivities
+                            then allSignificantActivities
+                            else let rootValue = if fromIntegral processId < length supplyList
+                                                then supplyList !! fromIntegral processId
+                                                else 0.0
+                                in (processId, rootValue) : allSignificantActivities
 
                     -- Step 3: Build node ID mapping (ProcessId -> Int) for frontend efficiency
                     let nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0..] significantActivities]

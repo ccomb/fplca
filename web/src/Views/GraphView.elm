@@ -84,11 +84,12 @@ init graphData =
                     (\index gn ->
                         let
                             -- Use a simple pseudo-random distribution based on index
+                            -- Spread nodes over a larger area
                             angle =
                                 (toFloat index * 2.4) * pi
 
                             radius =
-                                100 + (toFloat (modBy 5 index) * 50)
+                                200 + (toFloat (modBy 7 index) * 100)
 
                             x =
                                 svgWidth / 2 + radius * cos angle
@@ -129,14 +130,14 @@ init graphData =
                     (\edge ->
                         { source = edge.source
                         , target = edge.target
-                        , distance = 100
+                        , distance = 150  -- Increased from 100 for more spacing
                         , strength = Nothing
                         }
                     )
 
         forces =
             [ ForceDirected.links links
-            , ForceDirected.manyBodyStrength -100 <| List.map .id nodes
+            , ForceDirected.manyBodyStrength -300 <| List.map .id nodes  -- Increased repulsion from -100 to -300
             , ForceDirected.center (svgWidth / 2) (svgHeight / 2)
             ]
 
@@ -322,11 +323,56 @@ drawEdges nodes edges =
     g [] (List.map drawEdge edges)
 
 
+{-| Get color for a unit using a color palette
+-}
+getColorForUnit : Dict String String -> String -> String
+getColorForUnit unitColors unit =
+    Dict.get unit unitColors
+        |> Maybe.withDefault "#3273dc"  -- Default blue
+
+
+{-| Build a color map for all unique units
+-}
+buildUnitColorMap : List Entity -> Dict String String
+buildUnitColorMap nodes =
+    let
+        -- Color palette for different units
+        colorPalette =
+            [ "#3273dc"  -- Blue
+            , "#48c774"  -- Green
+            , "#ffdd57"  -- Yellow
+            , "#f14668"  -- Red
+            , "#b5a7d6"  -- Purple
+            , "#f093a2"  -- Pink
+            , "#4ecdc4"  -- Teal
+            , "#ff6b6b"  -- Coral
+            , "#95e1d3"  -- Mint
+            , "#f38181"  -- Salmon
+            ]
+
+        uniqueUnits =
+            nodes
+                |> List.map .unit
+                |> List.sortBy identity
+                |> List.foldl (\u acc -> if List.member u acc then acc else u :: acc) []
+                |> List.reverse
+
+        unitColorPairs =
+            List.map2 (\unit color -> ( unit, color ))
+                uniqueUnits
+                (List.repeat (List.length uniqueUnits) colorPalette |> List.concat)
+    in
+    Dict.fromList unitColorPairs
+
+
 {-| Draw all nodes
 -}
 drawNodes : List Entity -> Maybe Int -> String -> Svg Msg
 drawNodes nodes hoveredId mainActivityId =
     let
+        unitColors =
+            buildUnitColorMap nodes
+
         maxValue =
             nodes
                 |> List.map .value
@@ -346,11 +392,11 @@ drawNodes nodes hoveredId mainActivityId =
 
                 nodeColor =
                     if isHovered then
-                        "#ff9800"
+                        "#ff9800"  -- Orange for hover
                     else if isMainActivity then
-                        "#4caf50"  -- Green for main activity
+                        "#00d1b2"  -- Bulma primary color (turquoise) for main activity
                     else
-                        "#2196f3"  -- Blue for other activities
+                        getColorForUnit unitColors node.unit
 
                 radius =
                     nodeRadius node

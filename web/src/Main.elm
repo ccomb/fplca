@@ -193,7 +193,11 @@ init _ url key =
                             cutoff =
                                 String.toFloat model.graphCutoffInput |> Maybe.withDefault 1.0
                         in
-                        loadGraphData activityId cutoff
+                        -- Load both graph and tree data to get activity name
+                        Cmd.batch
+                            [ loadGraphData activityId cutoff
+                            , loadActivityTree activityId
+                            ]
 
                     _ ->
                         Cmd.none
@@ -474,6 +478,10 @@ update msg model =
                 shouldLoadGraph =
                     needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedGraphs)
 
+                -- Also load tree data for graph page to get activity name
+                shouldLoadTreeForGraph =
+                    shouldLoadGraph && not (Dict.member newActivityId model.cachedTrees)
+
                 shouldLoad =
                     shouldLoadTree || shouldLoadInventory || shouldLoadGraph
 
@@ -497,8 +505,18 @@ update msg model =
                         let
                             cutoff =
                                 String.toFloat updatedModel.graphCutoffInput |> Maybe.withDefault 1.0
+
+                            graphCmd =
+                                loadGraphData newActivityId cutoff
+
+                            treeCmd =
+                                if shouldLoadTreeForGraph then
+                                    loadActivityTree newActivityId
+
+                                else
+                                    Cmd.none
                         in
-                        loadGraphData newActivityId cutoff
+                        Cmd.batch [ graphCmd, treeCmd ]
 
                     else
                         Cmd.none
