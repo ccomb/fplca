@@ -376,13 +376,18 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
     TreeLoop uuid name depth ->
         let nodeId = getTreeNodeId db tree  -- Use ProcessId format for consistency
             uuidText = UUID.toText uuid  -- Keep bare UUID for loopTarget
+            -- Look up the actual activity to get real unit and location
+            maybeActivity = findActivityByActivityUUID db uuid
+            (actualLocation, actualUnit) = case maybeActivity of
+                Just activity -> (activityLocation activity, activityUnit activity)
+                Nothing -> ("N/A", "N/A")  -- Fallback only if activity not found
             node =
                 ExportNode
                     { enId = nodeId -- Now uses ProcessId format
                     , enName = name
                     , enDescription = ["Loop reference"]
-                    , enLocation = "N/A"
-                    , enUnit = "N/A"
+                    , enLocation = actualLocation
+                    , enUnit = actualUnit
                     , enNodeType = LoopNode
                     , enDepth = depth
                     , enLoopTarget = Just uuidText

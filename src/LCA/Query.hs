@@ -55,6 +55,9 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
         -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int16)
         dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
 
+        -- Build activity UUID index: UUID -> ProcessId (for O(1) lookups)
+        dbActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
+
         -- Build activity-product lookup for correct multi-output handling
         -- Maps (activityUUID, productFlowUUID) -> ProcessId
         -- This ensures exchanges link to the correct product in multi-output activities
@@ -233,6 +236,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
     return Database
             { dbProcessIdTable = dbProcessIdTable
             , dbProcessIdLookup = dbProcessIdLookup
+            , dbActivityUUIDIndex = dbActivityUUIDIndex
             , dbActivities = dbActivities
             , dbFlows = flowDB
             , dbUnits = unitDB

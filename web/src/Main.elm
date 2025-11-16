@@ -690,7 +690,7 @@ viewTreePage model =
                     ( _, _, Just tree ) ->
                         div []
                             [ -- Navigation and metadata in single banner
-                              div [ class "level" ]
+                              div [ class "level", style "height" "70px" ]
                                 [ div [ class "level-left" ]
                                     [ div [ class "level-item" ]
                                         [ button
@@ -757,7 +757,7 @@ viewGraphPage model =
     div [ class "graph-page" ]
         [ viewPageNavbar "Activity Network Graph" activityInfo
         , -- Controls
-          div []
+          div [ style "height" "90px" ]
             [ div []
                 [ div [ class "level" ]
                     [ div [ class "level-left" ]
@@ -898,7 +898,7 @@ httpErrorToString error =
 -}
 viewPageNavbar : String -> Maybe ( String, String ) -> Html Msg
 viewPageNavbar title maybeActivity =
-    nav [ class "navbar is-light" ]
+    nav [ class "navbar is-light", style "height" "52px" ]
         [ div [ class "navbar-brand" ]
             [ div [ class "navbar-item" ]
                 [ h1 [ class "title is-4" ] [ text title ]

@@ -300,6 +300,7 @@ data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int16) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
+    , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
@@ -336,16 +337,15 @@ findProcessId db actUUID prodUUID =
 -- so we must translate from UUID → ProcessId to handle multi-product activities.
 findProcessIdByActivityUUID :: Database -> UUID -> Maybe ProcessId
 findProcessIdByActivityUUID db searchUUID =
-    case [pid | (pid, (actUUID, _)) <- zip [0..] (V.toList $ dbProcessIdTable db), actUUID == searchUUID] of
-        (pid:_) -> Just (fromIntegral pid :: ProcessId)
-        [] -> Nothing
+    M.lookup searchUUID (dbActivityUUIDIndex db)
 
 -- | Find activity by activity UUID (returns first matching product)
 -- ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
 -- When multiple products exist for one activity, this returns an arbitrary match.
+-- Uses O(1) Map lookup for efficient resolution
 findActivityByActivityUUID :: Database -> UUID -> Maybe Activity
 findActivityByActivityUUID db searchUUID = do
-    pid <- findProcessIdByActivityUUID db searchUUID
+    pid <- M.lookup searchUUID (dbActivityUUIDIndex db)
     getActivity db pid
 
 -- | Convert ProcessId to UUID pair

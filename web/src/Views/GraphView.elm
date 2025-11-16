@@ -8,9 +8,10 @@ import Html.Attributes
 import Html.Events
 import Json.Decode as Decode
 import Models.Graph exposing (GraphData, GraphEdge, GraphNode)
-import Svg exposing (Svg, circle, defs, g, line, marker, polygon, svg, text_)
-import Svg.Attributes as SvgA exposing (class, cx, cy, d, fill, fontSize, height, id, markerEnd, markerHeight, markerWidth, orient, points, r, refX, refY, stroke, strokeWidth, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
+import Svg exposing (Svg, circle, defs, g, line, marker, polygon, rect, svg, text_)
+import Svg.Attributes as SvgA exposing (class, cx, cy, d, dominantBaseline, fill, fontSize, height, id, markerEnd, markerHeight, markerWidth, orient, points, r, refX, refY, stroke, strokeWidth, style, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
 import Svg.Events
+import Utils.Format as Format
 
 
 {-| Model for the graph visualization with force-directed layout
@@ -145,14 +146,14 @@ init graphData =
                     (\edge ->
                         { source = edge.source
                         , target = edge.target
-                        , distance = 150  -- Increased from 100 for more spacing
+                        , distance = 250 -- Increased for more spacing
                         , strength = Nothing
                         }
                     )
 
         forces =
             [ ForceDirected.links links
-            , ForceDirected.manyBodyStrength -300 <| List.map .id nodes  -- Increased repulsion from -100 to -300
+            , ForceDirected.manyBodyStrength -50000 <| List.map .id nodes -- Strong repulsion to spread nodes
             , ForceDirected.center (svgWidth / 2) (svgHeight / 2)
             ]
 
@@ -519,6 +520,8 @@ view : String -> Model -> Html Msg
 view mainActivityId model =
     div
         [ Html.Attributes.style "position" "relative"
+        , Html.Attributes.style "height" "calc(100vh - 142px)"
+        , Html.Attributes.style "overflow" "hidden"
         , Html.Events.custom "wheel"
             (Decode.map
                 (\delta ->
@@ -530,7 +533,7 @@ view mainActivityId model =
                 (Decode.field "deltaY" Decode.float)
             )
         ]
-        ([ case model.nodeCountWarning of
+        [ case model.nodeCountWarning of
             Just warning ->
                 div
                     [ Html.Attributes.class "notification is-warning"
@@ -541,7 +544,7 @@ view mainActivityId model =
 
             Nothing ->
                 text ""
-         , svg
+        , svg
             [ width "100%"
             , height "100%"
             , viewBox
@@ -584,10 +587,9 @@ view mainActivityId model =
             , drawEdges model.nodes model.edges
             , drawNodes model.nodes model.hoveredNode mainActivityId
             ]
-         , viewTooltip model
-         , viewZoomControls model
-         ]
-        )
+        , viewTooltip model
+        , viewZoomControls model
+        ]
 
 
 {-| Draw all edges
@@ -626,7 +628,11 @@ drawEdges nodes edges =
 getColorForUnit : Dict String String -> String -> String
 getColorForUnit unitColors unit =
     Dict.get unit unitColors
-        |> Maybe.withDefault "#3273dc"  -- Default blue
+        |> Maybe.withDefault "#3273dc"
+
+
+
+-- Default blue
 
 
 {-| Build a color map for all unique units
@@ -636,23 +642,31 @@ buildUnitColorMap nodes =
     let
         -- Color palette for different units
         colorPalette =
-            [ "#3273dc"  -- Blue
-            , "#48c774"  -- Green
-            , "#ffdd57"  -- Yellow
-            , "#f14668"  -- Red
-            , "#b5a7d6"  -- Purple
-            , "#f093a2"  -- Pink
-            , "#4ecdc4"  -- Teal
-            , "#ff6b6b"  -- Coral
-            , "#95e1d3"  -- Mint
-            , "#f38181"  -- Salmon
+            [ "#3273dc" -- Blue
+            , "#48c774" -- Green
+            , "#ffdd57" -- Yellow
+            , "#f14668" -- Red
+            , "#b5a7d6" -- Purple
+            , "#f093a2" -- Pink
+            , "#4ecdc4" -- Teal
+            , "#ff6b6b" -- Coral
+            , "#95e1d3" -- Mint
+            , "#f38181" -- Salmon
             ]
 
         uniqueUnits =
             nodes
                 |> List.map .unit
                 |> List.sortBy identity
-                |> List.foldl (\u acc -> if List.member u acc then acc else u :: acc) []
+                |> List.foldl
+                    (\u acc ->
+                        if List.member u acc then
+                            acc
+
+                        else
+                            u :: acc
+                    )
+                    []
                 |> List.reverse
 
         unitColorPairs =
@@ -690,14 +704,46 @@ drawNodes nodes hoveredId mainActivityId =
 
                 nodeColor =
                     if isHovered then
-                        "#ff9800"  -- Orange for hover
+                        "#ff9800"
+                        -- Orange for hover
+
                     else if isMainActivity then
-                        "#00d1b2"  -- Bulma primary color (turquoise) for main activity
+                        "#00d1b2"
+                        -- Bulma primary color (turquoise) for main activity
+
                     else
                         getColorForUnit unitColors node.unit
 
-                radius =
-                    nodeRadius node
+                strokeColor =
+                    if isHovered then
+                        "#f57c00"
+
+                    else if isMainActivity then
+                        "#00b89c"
+
+                    else
+                        "#666"
+
+                -- Calculate text width with better estimation
+                charWidth =
+                    5.5
+
+                -- Character width estimation
+                padding =
+                    0
+
+                -- No padding
+                textWidth =
+                    toFloat (String.length node.label) * charWidth + padding
+
+                rectHeight =
+                    16.0
+
+                rectX =
+                    node.x - textWidth / 2
+
+                rectY =
+                    node.y - rectHeight / 2
             in
             g
                 [ Svg.Events.custom "mousedown"
@@ -715,26 +761,54 @@ drawNodes nodes hoveredId mainActivityId =
                 , Svg.Events.onClick (NodeClick node.id)
                 , SvgA.style "cursor: move;"
                 ]
-                [ circle
-                    [ cx (String.fromFloat node.x)
-                    , cy (String.fromFloat node.y)
-                    , r (String.fromFloat radius)
+                [ rect
+                    [ SvgA.x (String.fromFloat rectX)
+                    , SvgA.y (String.fromFloat rectY)
+                    , SvgA.width (String.fromFloat textWidth)
+                    , SvgA.height (String.fromFloat rectHeight)
                     , fill nodeColor
-                    , stroke "#fff"
+                    , stroke strokeColor
                     , strokeWidth "2"
+                    , SvgA.rx "3"
                     ]
                     []
                 , text_
                     [ x (String.fromFloat node.x)
-                    , y (String.fromFloat (node.y - radius - 5))
+                    , y (String.fromFloat node.y)
                     , textAnchor "middle"
-                    , fontSize "10"
+                    , dominantBaseline "middle"
+                    , fontSize "11"
                     , fill "#333"
+                    , SvgA.style "pointer-events: none;"
                     ]
-                    [ Svg.text (truncate 30 node.label) ]
+                    [ Svg.text node.label ]
                 ]
     in
     g [] (List.map drawNode nodes)
+
+
+{-| Calculate rectangle width based on text length
+Estimates character width and adds padding
+-}
+calculateRectWidth : String -> Float
+calculateRectWidth text =
+    let
+        charWidth =
+            7.0
+
+        -- Approximate width per character in pixels
+        padding =
+            11.0
+
+        -- Horizontal padding (1em at 11px font size)
+        minWidth =
+            40.0
+
+        -- Minimum rectangle width
+        textWidth =
+            toFloat (String.length text) * charWidth + padding
+    in
+    max minWidth textWidth
 
 
 {-| Truncate text to max length
@@ -780,8 +854,8 @@ viewTooltip model =
                             , text node.location
                             ]
                         , Html.p [ Html.Attributes.style "margin" "0 0 0.25rem 0" ]
-                            [ Html.strong [] [ text "Value: " ]
-                            , text (String.fromFloat node.value ++ " " ++ node.unit)
+                            [ Html.strong [] [ text "Amount: " ]
+                            , text (Format.formatScientific node.value ++ " " ++ node.unit)
                             ]
                         , Html.p [ Html.Attributes.style "margin" "0" ]
                             [ Html.strong [] [ text "Process ID: " ]

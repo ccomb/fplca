@@ -3,13 +3,14 @@ module Views.TreeView exposing (Model, Msg(..), init, subscriptions, update, vie
 import Browser.Events
 import Dict exposing (Dict)
 import ForceDirected
-import Html exposing (Html, div, h4, li, p, strong, text, ul)
+import Html exposing (Html, div, strong, text)
 import Html.Attributes
 import Html.Events
 import Json.Decode as Decode
 import Models.Activity exposing (ActivityNode, ActivityTree, EdgeType(..), NodeType(..))
-import Svg exposing (Svg, circle, defs, g, line, marker, path, polygon, rect, svg, text_)
-import Svg.Attributes as SvgA exposing (class, cx, cy, d, fill, fontSize, fontWeight, height, id, markerEnd, markerHeight, markerWidth, orient, points, r, refX, refY, stroke, strokeWidth, style, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
+import Set exposing (Set)
+import Svg exposing (Svg, defs, g, line, marker, polygon, rect, svg, text_)
+import Svg.Attributes as SvgA exposing (fill, fontSize, height, id, markerEnd, markerHeight, markerWidth, orient, points, refX, refY, stroke, strokeWidth, textAnchor, viewBox, width, x, x1, x2, y, y1, y2)
 import Svg.Events
 import Utils.Format as Format
 
@@ -23,15 +24,15 @@ type alias Model =
     , drag : Maybe Drag
     , hoveredNode : Maybe Int
     , selectedNode : Maybe Int
-    , idMapping : Dict Int String  -- Int → ProcessId String
-    , reverseIdMapping : Dict String Int  -- ProcessId String → Int
-    , activityTree : ActivityTree  -- Keep reference to original tree data
+    , idMapping : Dict Int String -- Int → ProcessId String
+    , reverseIdMapping : Dict String Int -- ProcessId String → Int
+    , activityTree : ActivityTree -- Keep reference to original tree data
     , viewBoxX : Float
     , viewBoxY : Float
     , viewBoxWidth : Float
     , viewBoxHeight : Float
-    , isPanning : Maybe ( Float, Float )  -- Track background pan drag start position
-    , nodeCountWarning : Maybe String  -- Warning if too many nodes
+    , isPanning : Maybe ( Float, Float ) -- Track background pan drag start position
+    , nodeCountWarning : Maybe String -- Warning if too many nodes
     }
 
 
@@ -149,13 +150,13 @@ init activityTree =
                                     -- Same-depth edges should be longer to prevent crossing
                                     distance =
                                         if depthDiff == 1 then
-                                            120
+                                            200
 
                                         else if depthDiff == 0 then
-                                            180
+                                            300
 
                                         else
-                                            200
+                                            350
 
                                     -- Stronger links maintain hierarchy better
                                     strength =
@@ -173,7 +174,7 @@ init activityTree =
 
         forces =
             [ ForceDirected.links links
-            , ForceDirected.manyBodyStrength -150 <| List.map .id entities  -- Reduced from -300 for gentler repulsion
+            , ForceDirected.manyBodyStrength -50000 <| List.map .id entities -- Stronger repulsion to spread nodes
             , ForceDirected.center (svgWidth / 2) (svgHeight / 2)
             ]
 
@@ -241,9 +242,9 @@ createEntitiesWithMapping nodesList =
                     )
                     Dict.empty
 
-        -- Calculate hierarchical position for each node
-        calculatePosition : Int -> ActivityNode -> ( Float, Float )
-        calculatePosition index node =
+        -- Calculate hierarchical position for each node with cycle detection
+        calculatePosition : Set.Set String -> ActivityNode -> ( Float, Float )
+        calculatePosition visited node =
             let
                 centerX =
                     svgWidth / 2
@@ -292,18 +293,26 @@ createEntitiesWithMapping nodesList =
 
                     Just parentId ->
                         let
-                            -- Find parent position
-                            parentNode =
-                                List.filter (\n -> n.id == parentId) nodesList
-                                    |> List.head
-
+                            -- Check if we've already visited this parent (cycle detection)
                             ( parentX, parentY ) =
-                                case parentNode of
-                                    Just parent ->
-                                        calculatePosition 0 parent
+                                if Set.member parentId visited then
+                                    -- Cycle detected, use center as fallback
+                                    ( centerX, centerY )
 
-                                    Nothing ->
-                                        ( centerX, centerY )
+                                else
+                                    -- Find parent position
+                                    let
+                                        parentNode =
+                                            List.filter (\n -> n.id == parentId) nodesList
+                                                |> List.head
+                                    in
+                                    case parentNode of
+                                        Just parent ->
+                                            -- Add current node to visited set before recursing
+                                            calculatePosition (Set.insert node.id visited) parent
+
+                                        Nothing ->
+                                            ( centerX, centerY )
 
                             -- Get siblings (children of same parent)
                             siblings =
@@ -339,7 +348,7 @@ createEntitiesWithMapping nodesList =
                 (\index node ->
                     let
                         ( x, y ) =
-                            calculatePosition index node
+                            calculatePosition Set.empty node
                     in
                     ( index
                     , { id = index
@@ -347,7 +356,7 @@ createEntitiesWithMapping nodesList =
                       , y = y
                       , vx = 0
                       , vy = 0
-                      , value = 1.0  -- Tree doesn't have cumulative values
+                      , value = 1.0 -- Tree doesn't have cumulative values
                       , label = node.name
                       , unit = node.unit
                       , processId = node.id
@@ -708,6 +717,8 @@ view : String -> Model -> Html Msg
 view mainActivityId model =
     div
         [ Html.Attributes.style "position" "relative"
+        , Html.Attributes.style "height" "calc(100vh - 122px)"
+        , Html.Attributes.style "overflow" "hidden"
         , Html.Events.custom "wheel"
             (Decode.map
                 (\delta ->
@@ -719,7 +730,7 @@ view mainActivityId model =
                 (Decode.field "deltaY" Decode.float)
             )
         ]
-        ([ case model.nodeCountWarning of
+        [ case model.nodeCountWarning of
             Just warning ->
                 div
                     [ Html.Attributes.class "notification is-warning"
@@ -730,7 +741,7 @@ view mainActivityId model =
 
             Nothing ->
                 text ""
-         , svg
+        , svg
             [ width "100%"
             , height "100%"
             , viewBox
@@ -773,10 +784,9 @@ view mainActivityId model =
             , drawEdges model.nodes model.edges
             , drawNodes model.nodes model.hoveredNode model.selectedNode mainActivityId
             ]
-         , viewTooltip model
-         , viewZoomControls model
-         ]
-        )
+        , viewTooltip model
+        , viewZoomControls model
+        ]
 
 
 {-| Draw all edges
@@ -824,23 +834,31 @@ buildUnitColorMap : List Entity -> Dict String String
 buildUnitColorMap nodes =
     let
         colorPalette =
-            [ "#3273dc"  -- Blue
-            , "#48c774"  -- Green
-            , "#ffdd57"  -- Yellow
-            , "#f14668"  -- Red
-            , "#b5a7d6"  -- Purple
-            , "#f093a2"  -- Pink
-            , "#4ecdc4"  -- Teal
-            , "#ff6b6b"  -- Coral
-            , "#95e1d3"  -- Mint
-            , "#f38181"  -- Salmon
+            [ "#3273dc" -- Blue
+            , "#48c774" -- Green
+            , "#ffdd57" -- Yellow
+            , "#f14668" -- Red
+            , "#b5a7d6" -- Purple
+            , "#f093a2" -- Pink
+            , "#4ecdc4" -- Teal
+            , "#ff6b6b" -- Coral
+            , "#95e1d3" -- Mint
+            , "#f38181" -- Salmon
             ]
 
         uniqueUnits =
             nodes
                 |> List.map .unit
                 |> List.sortBy identity
-                |> List.foldl (\u acc -> if List.member u acc then acc else u :: acc) []
+                |> List.foldl
+                    (\u acc ->
+                        if List.member u acc then
+                            acc
+
+                        else
+                            u :: acc
+                    )
+                    []
                 |> List.reverse
 
         unitColorPairs =
@@ -922,6 +940,25 @@ drawNodes nodes hoveredId selectedId mainActivityId =
 
                     else
                         "2"
+
+                ( shapeElement, maybeTextElement ) =
+                    drawNodeShape node.nodeType ( node.x, node.y ) radius nodeColor strokeColor selectedStroke node.label
+
+                -- For biosphere nodes (which don't have text inside), show label above
+                labelElement =
+                    case maybeTextElement of
+                        Just textEl ->
+                            textEl
+
+                        Nothing ->
+                            text_
+                                [ x (String.fromFloat node.x)
+                                , y (String.fromFloat (node.y - radius - 5))
+                                , textAnchor "middle"
+                                , fontSize "10"
+                                , fill "#333"
+                                ]
+                                [ Svg.text (truncate 30 node.label) ]
             in
             g
                 [ Svg.Events.custom "mousedown"
@@ -946,46 +983,119 @@ drawNodes nodes hoveredId selectedId mainActivityId =
                     )
                 , SvgA.style "cursor: move;"
                 ]
-                [ drawNodeShape node.nodeType ( node.x, node.y ) radius nodeColor strokeColor selectedStroke
-                , text_
-                    [ x (String.fromFloat node.x)
-                    , y (String.fromFloat (node.y - radius - 5))
-                    , textAnchor "middle"
-                    , fontSize "10"
-                    , fill "#333"
-                    ]
-                    [ Svg.text (truncate 30 node.label) ]
+                [ shapeElement
+                , labelElement
                 ]
     in
     g [] (List.map drawNode nodes)
 
 
 {-| Draw node shape based on nodeType
+For Activity and Loop nodes, returns (shape, Just text) where text should be rendered
+For biosphere nodes, returns (shape, Nothing) since they keep their original shapes
 -}
-drawNodeShape : NodeType -> ( Float, Float ) -> Float -> String -> String -> String -> Svg msg
-drawNodeShape nodeType ( posX, posY ) radius fillColor strokeColor strokeW =
+drawNodeShape : NodeType -> ( Float, Float ) -> Float -> String -> String -> String -> String -> ( Svg msg, Maybe (Svg msg) )
+drawNodeShape nodeType ( posX, posY ) radius fillColor strokeColor strokeW label =
     case nodeType of
         ActivityNodeType ->
-            circle
-                [ cx (String.fromFloat posX)
-                , cy (String.fromFloat posY)
-                , r (String.fromFloat radius)
-                , fill fillColor
-                , stroke strokeColor
-                , strokeWidth strokeW
-                ]
-                []
+            let
+                -- Calculate text width with better estimation
+                charWidth =
+                    5.5
+
+                -- Character width estimation
+                padding =
+                    0
+
+                -- No padding
+                textWidth =
+                    toFloat (String.length label) * charWidth + padding
+
+                rectHeight =
+                    16.0
+
+                rectX =
+                    posX - textWidth / 2
+
+                rectY =
+                    posY - rectHeight / 2
+
+                rectShape =
+                    rect
+                        [ SvgA.x (String.fromFloat rectX)
+                        , SvgA.y (String.fromFloat rectY)
+                        , SvgA.width (String.fromFloat textWidth)
+                        , SvgA.height (String.fromFloat rectHeight)
+                        , fill fillColor
+                        , stroke strokeColor
+                        , strokeWidth strokeW
+                        , SvgA.rx "3"
+                        ]
+                        []
+
+                textElement =
+                    text_
+                        [ x (String.fromFloat posX)
+                        , y (String.fromFloat posY)
+                        , textAnchor "middle"
+                        , SvgA.dominantBaseline "middle"
+                        , fontSize "11"
+                        , fill "#333"
+                        , SvgA.style "pointer-events: none;"
+                        ]
+                        [ Svg.text label ]
+            in
+            ( rectShape, Just textElement )
 
         LoopNodeType ->
-            circle
-                [ cx (String.fromFloat posX)
-                , cy (String.fromFloat posY)
-                , r (String.fromFloat radius)
-                , fill fillColor
-                , stroke strokeColor
-                , strokeWidth strokeW
-                ]
-                []
+            let
+                -- Calculate text width with better estimation
+                charWidth =
+                    5.5
+
+                -- Character width estimation
+                padding =
+                    0
+
+                -- No padding
+                textWidth =
+                    toFloat (String.length label) * charWidth + padding
+
+                rectHeight =
+                    16.0
+
+                rectX =
+                    posX - textWidth / 2
+
+                rectY =
+                    posY - rectHeight / 2
+
+                rectShape =
+                    rect
+                        [ SvgA.x (String.fromFloat rectX)
+                        , SvgA.y (String.fromFloat rectY)
+                        , SvgA.width (String.fromFloat textWidth)
+                        , SvgA.height (String.fromFloat rectHeight)
+                        , fill fillColor
+                        , stroke strokeColor
+                        , strokeWidth strokeW
+                        , SvgA.rx "3"
+                        ]
+                        []
+
+                textElement =
+                    text_
+                        [ x (String.fromFloat posX)
+                        , y (String.fromFloat posY)
+                        , textAnchor "middle"
+                        , SvgA.dominantBaseline "middle"
+                        , fontSize "11"
+                        , fill "#333"
+                        , SvgA.style "pointer-events: none;"
+                        ]
+                        [ Svg.text label ]
+            in
+            ( rectShape, Just textElement )
 
         BiosphereEmissionNodeType ->
             let
@@ -1009,13 +1119,15 @@ drawNodeShape nodeType ( posX, posY ) radius fillColor strokeColor strokeW =
                         ++ ","
                         ++ String.fromFloat posY
             in
-            polygon
+            ( polygon
                 [ SvgA.points pointsStr
                 , fill fillColor
                 , stroke strokeColor
                 , strokeWidth strokeW
                 ]
                 []
+            , Nothing
+            )
 
         BiosphereResourceNodeType ->
             let
@@ -1025,7 +1137,7 @@ drawNodeShape nodeType ( posX, posY ) radius fillColor strokeColor strokeW =
                 halfSize =
                     size / 2
             in
-            rect
+            ( rect
                 [ SvgA.x (String.fromFloat (posX - halfSize))
                 , SvgA.y (String.fromFloat (posY - halfSize))
                 , SvgA.width (String.fromFloat size)
@@ -1035,6 +1147,8 @@ drawNodeShape nodeType ( posX, posY ) radius fillColor strokeColor strokeW =
                 , strokeWidth strokeW
                 ]
                 []
+            , Nothing
+            )
 
 
 {-| Truncate text to max length
@@ -1080,8 +1194,8 @@ viewTooltip model =
                             , text node.location
                             ]
                         , Html.p [ Html.Attributes.style "margin" "0 0 0.25rem 0" ]
-                            [ strong [] [ text "Unit: " ]
-                            , text node.unit
+                            [ strong [] [ text "Amount: " ]
+                            , text (Format.formatScientific node.value ++ " " ++ node.unit)
                             ]
                         , Html.p [ Html.Attributes.style "margin" "0 0 0.25rem 0" ]
                             [ strong [] [ text "Depth: " ]
@@ -1178,7 +1292,6 @@ subscriptions model =
 
                 Nothing ->
                     []
-
     in
     Sub.batch (animationSub :: (nodeDragSubs ++ panSubs))
 
