@@ -593,7 +593,7 @@ routeToUrl route =
 
 navigateToActivity : Nav.Key -> String -> Cmd Msg
 navigateToActivity key processId =
-    Nav.pushUrl key (routeToUrl (ActivityTreeRoute processId))
+    Nav.pushUrl key (routeToUrl (ActivityInventoryRoute processId))
 
 
 subscriptions : Model -> Sub Msg

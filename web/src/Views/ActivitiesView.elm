@@ -17,7 +17,7 @@ viewActivitiesPage searchQuery searchResults searchLoading error =
         [ div [ class "section" ]
             [ div [ class "container" ]
                 [ h2 [ class "title is-3" ] [ text "Search Activities" ]
-                , p [ class "subtitle" ] [ text "Find activities by name and explore their environmental impact trees" ]
+                , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
                 ]
             ]
         , div [ class "section" ]
@@ -107,8 +107,8 @@ viewActivityCard activity =
                         [ class "button is-primary is-fullwidth"
                         , onClick (SelectActivity activity.id)
                         ]
-                        [ span [ class "icon" ] [ Html.i [ class "fas fa-project-diagram" ] [] ]
-                        , span [] [ text "View Tree" ]
+                        [ span [ class "icon" ] [ Html.i [ class "fas fa-list" ] [] ]
+                        , span [] [ text "View Inventory" ]
                         ]
                     ]
                 ]
