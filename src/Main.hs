@@ -39,11 +39,13 @@ import LCA.API (LCAAPI, lcaAPI, lcaServer)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, pathInfo)
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run)
 import Servant
-import WaiAppStatic.Types (StaticSettings, toPiece)
+import WaiAppStatic.Types (StaticSettings, toPiece, unsafeToPiece)
 
 -- | Main entry point for the refactored CLI
 main :: IO ()
@@ -326,19 +328,30 @@ createCombinedApp database maxTreeDepth sharedSolver req respond = do
   putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack fullUrl
   hFlush stdout
 
-  -- Route API requests to the Servant application
+  -- Route requests based on path prefix
   if C8.pack "/api/" `BS.isPrefixOf` path
-    then serve lcaAPI (lcaServer database maxTreeDepth sharedSolver) req respond
-    else
-      -- For SPA: serve index.html for all non-API routes
-      let staticSettings =
-            (defaultWebAppSettings "web/dist")
-              { ssRedirectToIndex = False  -- Don't redirect, serve directly
-              , ssIndices = case toPiece (T.pack "index.html") of
-                  Just piece -> [piece]
-                  Nothing -> []
-              }
-       in staticApp staticSettings req respond
+    then
+      -- API requests go to Servant
+      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver) req respond
+    else if C8.pack "/static/" `BS.isPrefixOf` path
+      then
+        -- Static files: strip /static prefix and serve from web/dist/
+        let strippedPath = BS.drop 7 path  -- Remove "/static" (7 chars), keep the "/"
+            -- Also update pathInfo by removing "static" segment
+            originalPathInfo = pathInfo req
+            newPathInfo = case originalPathInfo of
+              (segment:rest) | segment == T.pack "static" -> rest
+              other -> other
+            staticReq = req { rawPathInfo = strippedPath, pathInfo = newPathInfo }
+            staticSettings = (defaultWebAppSettings "web/dist")
+              { ssIndices = [unsafeToPiece (T.pack "index.html")] }
+         in staticApp staticSettings staticReq respond
+      else
+        -- Everything else: serve index.html for SPA routing
+        let staticSettings = (defaultWebAppSettings "web/dist")
+              { ssIndices = [unsafeToPiece (T.pack "index.html")] }
+            indexReq = req { rawPathInfo = C8.pack "/", pathInfo = [] }
+         in staticApp staticSettings indexReq respond
 
 -- | Validate CLI configuration for consistency
 validateCLIConfig :: CLIConfig -> IO ()

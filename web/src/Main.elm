@@ -13,7 +13,8 @@ import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.Page exposing (Page(..), Route(..))
 import Url
 import Url.Builder
-import Url.Parser as Parser exposing ((</>), Parser, oneOf, parse, string, top)
+import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
+import Url.Parser.Query as Query
 import Views.ActivitiesView as ActivitiesView
 import Views.GraphView as GraphView
 import Views.InventoryView as InventoryView
@@ -52,6 +53,7 @@ type alias Model =
     , searchLoading : Bool
     , hoveredNode : Maybe String
     , inventorySearchQuery : String
+    , skipNextUrlChange : Bool -- Flag to prevent processing self-initiated URL changes
     }
 
 
@@ -82,11 +84,18 @@ type Msg
 -- URL parsing
 
 
+activitiesQueryParser : Query.Parser { name : Maybe String, limit : Maybe Int }
+activitiesQueryParser =
+    Query.map2 (\name limit -> { name = name, limit = limit })
+        (Query.string "name")
+        (Query.int "limit")
+
+
 routeParser : Parser (Route -> a) a
 routeParser =
     oneOf
-        [ Parser.map ActivitiesRoute top
-        , Parser.map ActivitiesRoute (Parser.s "activities")
+        [ Parser.map ActivitiesRoute (top <?> activitiesQueryParser)
+        , Parser.map ActivitiesRoute (Parser.s "activities" <?> activitiesQueryParser)
         , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
         , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
@@ -96,24 +105,15 @@ routeParser =
 
 parseUrl : Url.Url -> Route
 parseUrl url =
-    -- Use fragment instead of path for hash-based routing
-    case url.fragment of
-        Nothing ->
-            ActivitiesRoute
-
-        Just fragment ->
-            case Parser.parse routeParser { url | path = "/" ++ fragment, fragment = Nothing } of
-                Just route ->
-                    route
-
-                Nothing ->
-                    NotFoundRoute
+    -- Use path-based routing directly
+    Parser.parse routeParser url
+        |> Maybe.withDefault NotFoundRoute
 
 
 routeToPage : Route -> Page
 routeToPage route =
     case route of
-        ActivitiesRoute ->
+        ActivitiesRoute _ ->
             ActivitiesPage
 
         ActivityRoute _ ->
@@ -141,25 +141,55 @@ init _ url key =
         defaultActivityId =
             "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
 
-        ( activityId, shouldLoad, loadType ) =
+        routeConfig =
             case route of
+                ActivitiesRoute { name } ->
+                    { activityId = defaultActivityId
+                    , shouldLoad = False
+                    , loadType = "none"
+                    , searchQuery = Maybe.withDefault "" name
+                    }
+
                 ActivityRoute processId ->
-                    ( processId, True, "tree" )
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "tree"
+                    , searchQuery = ""
+                    }
 
                 ActivityTreeRoute processId ->
-                    ( processId, True, "tree" )
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "tree"
+                    , searchQuery = ""
+                    }
 
                 ActivityInventoryRoute processId ->
-                    ( processId, True, "inventory" )
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "inventory"
+                    , searchQuery = ""
+                    }
 
                 ActivityGraphRoute processId ->
-                    ( processId, True, "graph" )
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "graph"
+                    , searchQuery = ""
+                    }
 
-                _ ->
-                    ( defaultActivityId, False, "none" )
+                NotFoundRoute ->
+                    { activityId = defaultActivityId
+                    , shouldLoad = False
+                    , loadType = "none"
+                    , searchQuery = ""
+                    }
 
         initialPage =
             routeToPage route
+
+        shouldSearch =
+            String.length routeConfig.searchQuery >= 2
 
         model =
             { key = key
@@ -171,25 +201,26 @@ init _ url key =
             , graphViewModel = Nothing
             , treeViewModel = Nothing
             , graphCutoffInput = "1.0"
-            , currentActivityId = activityId
-            , loading = shouldLoad
+            , currentActivityId = routeConfig.activityId
+            , loading = routeConfig.shouldLoad
             , error = Nothing
             , navigationHistory = []
-            , activitiesSearchQuery = ""
+            , activitiesSearchQuery = routeConfig.searchQuery
             , searchResults = Nothing
-            , searchLoading = False
+            , searchLoading = shouldSearch
             , hoveredNode = Nothing
             , inventorySearchQuery = ""
+            , skipNextUrlChange = False
             }
 
         cmd =
-            if shouldLoad then
-                case loadType of
+            if routeConfig.shouldLoad then
+                case routeConfig.loadType of
                     "tree" ->
-                        loadActivityTree activityId
+                        loadActivityTree routeConfig.activityId
 
                     "inventory" ->
-                        loadInventoryData activityId
+                        loadInventoryData routeConfig.activityId
 
                     "graph" ->
                         let
@@ -198,12 +229,15 @@ init _ url key =
                         in
                         -- Load both graph and tree data to get activity name
                         Cmd.batch
-                            [ loadGraphData activityId cutoff
-                            , loadActivityTree activityId
+                            [ loadGraphData routeConfig.activityId cutoff
+                            , loadActivityTree routeConfig.activityId
                             ]
 
                     _ ->
                         Cmd.none
+
+            else if shouldSearch then
+                searchActivities routeConfig.searchQuery
 
             else
                 Cmd.none
@@ -416,29 +450,61 @@ update msg model =
 
         NavigateToPage page ->
             let
-                url =
+                route =
                     case page of
                         ActivitiesPage ->
-                            "/#activities"
+                            let
+                                queryName =
+                                    if String.isEmpty model.activitiesSearchQuery then
+                                        Nothing
+                                    else
+                                        Just model.activitiesSearchQuery
+                            in
+                            ActivitiesRoute { name = queryName, limit = Just 20 }
 
                         TreePage ->
-                            "/#activity/" ++ model.currentActivityId ++ "/tree"
+                            ActivityTreeRoute model.currentActivityId
 
                         InventoryPage ->
-                            "/#activity/" ++ model.currentActivityId ++ "/inventory"
+                            ActivityInventoryRoute model.currentActivityId
 
                         GraphPage ->
-                            "/#activity/" ++ model.currentActivityId ++ "/graph"
+                            ActivityGraphRoute model.currentActivityId
             in
-            ( model, Nav.pushUrl model.key url )
+            ( model, Nav.pushUrl model.key (routeToUrl route) )
 
         UpdateSearchQuery query ->
-            ( { model | activitiesSearchQuery = query }
-            , if String.length query >= 2 then
-                searchActivities query
+            let
+                shouldSearch =
+                    String.length query >= 2
 
-              else
-                Cmd.none
+                queryName =
+                    if String.isEmpty query then
+                        Nothing
+
+                    else
+                        Just query
+
+                newRoute =
+                    ActivitiesRoute { name = queryName, limit = Just 20 }
+
+                -- Only update URL when we actually trigger a search
+                -- This prevents losing focus on every keystroke
+                cmds =
+                    if shouldSearch then
+                        Cmd.batch
+                            [ Nav.replaceUrl model.key (routeToUrl newRoute)
+                            , searchActivities query
+                            ]
+
+                    else
+                        Cmd.none
+            in
+            ( { model
+                | activitiesSearchQuery = query
+                , skipNextUrlChange = shouldSearch  -- Skip the UrlChanged event we're about to trigger
+              }
+            , cmds
             )
 
         SearchActivities query ->
@@ -486,83 +552,99 @@ update msg model =
                     ( model, Nav.load href )
 
         UrlChanged url ->
-            let
-                route =
-                    parseUrl url
+            -- Check if we should skip this URL change (it was triggered by us)
+            if model.skipNextUrlChange then
+                ( { model | skipNextUrlChange = False }, Cmd.none )
 
-                newPage =
-                    routeToPage route
+            else
+                let
+                    route =
+                        parseUrl url
 
-                ( newActivityId, needsActivity ) =
-                    case route of
-                        ActivityRoute processId ->
-                            ( processId, True )
+                    newPage =
+                        routeToPage route
 
-                        ActivityTreeRoute processId ->
-                            ( processId, True )
+                    ( newActivityId, needsActivity, searchQuery ) =
+                        case route of
+                            ActivitiesRoute { name } ->
+                                ( model.currentActivityId, False, Maybe.withDefault "" name )
 
-                        ActivityInventoryRoute processId ->
-                            ( processId, True )
+                            ActivityRoute processId ->
+                                ( processId, True, model.activitiesSearchQuery )
 
-                        ActivityGraphRoute processId ->
-                            ( processId, True )
+                            ActivityTreeRoute processId ->
+                                ( processId, True, model.activitiesSearchQuery )
 
-                        _ ->
-                            ( model.currentActivityId, False )
+                            ActivityInventoryRoute processId ->
+                                ( processId, True, model.activitiesSearchQuery )
 
-                shouldLoadTree =
-                    needsActivity && newPage == TreePage && not (Dict.member newActivityId model.cachedTrees)
+                            ActivityGraphRoute processId ->
+                                ( processId, True, model.activitiesSearchQuery )
 
-                shouldLoadInventory =
-                    needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
+                            NotFoundRoute ->
+                                ( model.currentActivityId, False, model.activitiesSearchQuery )
 
-                shouldLoadGraph =
-                    needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedGraphs)
+                    shouldLoadTree =
+                        needsActivity && newPage == TreePage && not (Dict.member newActivityId model.cachedTrees)
 
-                -- Also load tree data for graph page to get activity name
-                shouldLoadTreeForGraph =
-                    shouldLoadGraph && not (Dict.member newActivityId model.cachedTrees)
+                    shouldLoadInventory =
+                        needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
 
-                shouldLoad =
-                    shouldLoadTree || shouldLoadInventory || shouldLoadGraph
+                    shouldLoadGraph =
+                        needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedGraphs)
 
-                updatedModel =
-                    { model
-                        | url = url
-                        , currentPage = newPage
-                        , currentActivityId = newActivityId
-                        , loading = shouldLoad
-                        , navigationHistory = model.navigationHistory  -- Preserve navigation history
-                    }
+                    -- Also load tree data for graph page to get activity name
+                    shouldLoadTreeForGraph =
+                        shouldLoadGraph && not (Dict.member newActivityId model.cachedTrees)
 
-                cmd =
-                    if shouldLoadTree then
-                        loadActivityTree newActivityId
+                    shouldLoad =
+                        shouldLoadTree || shouldLoadInventory || shouldLoadGraph
 
-                    else if shouldLoadInventory then
-                        loadInventoryData newActivityId
+                    shouldSearch =
+                        newPage == ActivitiesPage && String.length searchQuery >= 2
 
-                    else if shouldLoadGraph then
-                        let
-                            cutoff =
-                                String.toFloat updatedModel.graphCutoffInput |> Maybe.withDefault 1.0
+                    updatedModel =
+                        { model
+                            | url = url
+                            , currentPage = newPage
+                            , currentActivityId = newActivityId
+                            , loading = shouldLoad
+                            , navigationHistory = model.navigationHistory  -- Preserve navigation history
+                            , activitiesSearchQuery = searchQuery
+                            , searchLoading = shouldSearch
+                        }
 
-                            graphCmd =
-                                loadGraphData newActivityId cutoff
+                    cmd =
+                        if shouldLoadTree then
+                            loadActivityTree newActivityId
 
-                            treeCmd =
-                                if shouldLoadTreeForGraph then
-                                    loadActivityTree newActivityId
+                        else if shouldLoadInventory then
+                            loadInventoryData newActivityId
 
-                                else
-                                    Cmd.none
-                        in
-                        Cmd.batch [ graphCmd, treeCmd ]
+                        else if shouldSearch then
+                            searchActivities searchQuery
 
-                    else
-                        Cmd.none
-            in
-            ( updatedModel, cmd )
+                        else if shouldLoadGraph then
+                            let
+                                cutoff =
+                                    String.toFloat updatedModel.graphCutoffInput |> Maybe.withDefault 1.0
+
+                                graphCmd =
+                                    loadGraphData newActivityId cutoff
+
+                                treeCmd =
+                                    if shouldLoadTreeForGraph then
+                                        loadActivityTree newActivityId
+
+                                    else
+                                        Cmd.none
+                            in
+                            Cmd.batch [ graphCmd, treeCmd ]
+
+                        else
+                            Cmd.none
+                in
+                ( updatedModel, cmd )
 
 
 
@@ -572,20 +654,35 @@ update msg model =
 routeToUrl : Route -> String
 routeToUrl route =
     case route of
-        ActivitiesRoute ->
-            "/#activities"
+        ActivitiesRoute { name, limit } ->
+            let
+                queryParams =
+                    [ Maybe.map (\n -> "name=" ++ n) name
+                    , Maybe.map (\l -> "limit=" ++ String.fromInt l) limit
+                    ]
+                        |> List.filterMap identity
+                        |> String.join "&"
+
+                queryString =
+                    if String.isEmpty queryParams then
+                        ""
+
+                    else
+                        "?" ++ queryParams
+            in
+            "/activities" ++ queryString
 
         ActivityRoute processId ->
-            "/#activity/" ++ processId
+            "/activity/" ++ processId
 
         ActivityTreeRoute processId ->
-            "/#activity/" ++ processId ++ "/tree"
+            "/activity/" ++ processId ++ "/tree"
 
         ActivityInventoryRoute processId ->
-            "/#activity/" ++ processId ++ "/inventory"
+            "/activity/" ++ processId ++ "/inventory"
 
         ActivityGraphRoute processId ->
-            "/#activity/" ++ processId ++ "/graph"
+            "/activity/" ++ processId ++ "/graph"
 
         NotFoundRoute ->
             "/"
