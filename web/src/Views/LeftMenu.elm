@@ -18,6 +18,7 @@ viewLeftMenu currentPage currentActivityId =
             ]
         , div [ class "menu-items" ]
             [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities"
+            , menuItem currentPage DetailsPage "fas fa-table" "Details"
             , menuItem currentPage TreePage "fas fa-project-diagram" "Tree"
             , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory"
             , menuItem currentPage GraphPage "fas fa-network-wired" "Graph"

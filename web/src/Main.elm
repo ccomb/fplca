@@ -16,6 +16,7 @@ import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
 import Url.Parser.Query as Query
 import Views.ActivitiesView as ActivitiesView
+import Views.DetailsView as DetailsView
 import Views.GraphView as GraphView
 import Views.InventoryView as InventoryView
 import Views.LeftMenu as LeftMenu
@@ -43,6 +44,7 @@ type alias Model =
     , cachedGraphs : Dict.Dict String GraphData -- Cache graphs by activity ID
     , graphViewModel : Maybe GraphView.Model -- Current graph view model
     , treeViewModel : Maybe TreeView.Model -- Current tree view model
+    , detailsViewModel : Maybe DetailsView.Model -- Current details view model
     , graphCutoffInput : String -- Cutoff input as string to allow partial edits like "0."
     , currentActivityId : String
     , loading : Bool
@@ -66,6 +68,7 @@ type Msg
     | GraphLoaded (Result Http.Error GraphData)
     | GraphViewMsg GraphView.Msg
     | TreeViewMsg TreeView.Msg
+    | DetailsViewMsg DetailsView.Msg
     | UpdateGraphCutoff String
     | NavigateToParent
     | NodeClicked String
@@ -96,6 +99,7 @@ routeParser =
     oneOf
         [ Parser.map ActivitiesRoute (top <?> activitiesQueryParser)
         , Parser.map ActivitiesRoute (Parser.s "activities" <?> activitiesQueryParser)
+        , Parser.map ActivityDetailsRoute (Parser.s "activity" </> string </> Parser.s "details")
         , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
         , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
@@ -118,6 +122,9 @@ routeToPage route =
 
         ActivityRoute _ ->
             TreePage
+
+        ActivityDetailsRoute _ ->
+            DetailsPage
 
         ActivityTreeRoute _ ->
             TreePage
@@ -151,6 +158,13 @@ init _ url key =
                     }
 
                 ActivityRoute processId ->
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "tree"
+                    , searchQuery = ""
+                    }
+
+                ActivityDetailsRoute processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "tree"
@@ -200,6 +214,7 @@ init _ url key =
             , cachedGraphs = Dict.empty
             , graphViewModel = Nothing
             , treeViewModel = Nothing
+            , detailsViewModel = Nothing
             , graphCutoffInput = "1.0"
             , currentActivityId = routeConfig.activityId
             , loading = routeConfig.shouldLoad
@@ -269,10 +284,14 @@ update msg model =
             let
                 treeViewModel =
                     TreeView.init tree
+
+                detailsViewModel =
+                    DetailsView.init tree model.currentActivityId
             in
             ( { model
                 | cachedTrees = Dict.insert model.currentActivityId tree model.cachedTrees
                 , treeViewModel = Just treeViewModel
+                , detailsViewModel = Just detailsViewModel
                 , loading = False
                 , error = Nothing
               }
@@ -402,6 +421,27 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        DetailsViewMsg detailsMsg ->
+            case detailsMsg of
+                DetailsView.NavigateToActivity processId ->
+                    ( { model
+                        | navigationHistory = model.currentActivityId :: model.navigationHistory
+                      }
+                    , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute processId))
+                    )
+
+                DetailsView.NavigateBack ->
+                    case model.navigationHistory of
+                        parentId :: rest ->
+                            ( { model
+                                | navigationHistory = rest
+                              }
+                            , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute parentId))
+                            )
+
+                        [] ->
+                            ( model, Cmd.none )
+
         UpdateGraphCutoff cutoffStr ->
             -- Allow any string input, validation happens when loading
             ( { model | graphCutoffInput = cutoffStr }, Cmd.none )
@@ -461,6 +501,9 @@ update msg model =
                                         Just model.activitiesSearchQuery
                             in
                             ActivitiesRoute { name = queryName, limit = Just 20 }
+
+                        DetailsPage ->
+                            ActivityDetailsRoute model.currentActivityId
 
                         TreePage ->
                             ActivityTreeRoute model.currentActivityId
@@ -572,6 +615,9 @@ update msg model =
                             ActivityRoute processId ->
                                 ( processId, True, model.activitiesSearchQuery )
 
+                            ActivityDetailsRoute processId ->
+                                ( processId, True, model.activitiesSearchQuery )
+
                             ActivityTreeRoute processId ->
                                 ( processId, True, model.activitiesSearchQuery )
 
@@ -585,7 +631,7 @@ update msg model =
                                 ( model.currentActivityId, False, model.activitiesSearchQuery )
 
                     shouldLoadTree =
-                        needsActivity && newPage == TreePage && not (Dict.member newActivityId model.cachedTrees)
+                        needsActivity && (newPage == TreePage || newPage == DetailsPage) && not (Dict.member newActivityId model.cachedTrees)
 
                     shouldLoadInventory =
                         needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
@@ -603,6 +649,19 @@ update msg model =
                     shouldSearch =
                         newPage == ActivitiesPage && String.length searchQuery >= 2
 
+                    -- Re-initialize detailsViewModel when navigating to DetailsPage with cached data
+                    newDetailsViewModel =
+                        if newPage == DetailsPage then
+                            case Dict.get newActivityId model.cachedTrees of
+                                Just cachedTree ->
+                                    Just (DetailsView.init cachedTree newActivityId)
+
+                                Nothing ->
+                                    model.detailsViewModel
+
+                        else
+                            model.detailsViewModel
+
                     updatedModel =
                         { model
                             | url = url
@@ -612,6 +671,7 @@ update msg model =
                             , navigationHistory = model.navigationHistory  -- Preserve navigation history
                             , activitiesSearchQuery = searchQuery
                             , searchLoading = shouldSearch
+                            , detailsViewModel = newDetailsViewModel
                         }
 
                     cmd =
@@ -675,6 +735,9 @@ routeToUrl route =
         ActivityRoute processId ->
             "/activity/" ++ processId
 
+        ActivityDetailsRoute processId ->
+            "/activity/" ++ processId ++ "/details"
+
         ActivityTreeRoute processId ->
             "/activity/" ++ processId ++ "/tree"
 
@@ -734,6 +797,9 @@ view model =
                             model.error
                         )
 
+                DetailsPage ->
+                    viewDetailsPage model
+
                 TreePage ->
                     viewTreePage model
 
@@ -755,6 +821,38 @@ view model =
                     viewGraphPage model
             ]
         ]
+
+
+viewDetailsPage : Model -> Html Msg
+viewDetailsPage model =
+    div [ class "details-page-container" ]
+        [ case ( model.loading, model.error, model.detailsViewModel ) of
+            ( True, _, _ ) ->
+                div [ class "has-text-centered" ]
+                    [ div [ class "is-size-3" ] [ text "Loading..." ]
+                    , progress [ class "progress is-primary", attribute "max" "100" ] []
+                    ]
+
+            ( _, Just error, _ ) ->
+                div [ class "notification is-danger" ]
+                    [ button [ class "delete", onClick (LoadActivity model.currentActivityId) ] []
+                    , strong [] [ text "Error: " ]
+                    , text error
+                    ]
+
+            ( _, _, Just detailsModel ) ->
+                Html.map DetailsViewMsg
+                    (DetailsView.view detailsModel (canNavigateBack model))
+
+            ( _, _, Nothing ) ->
+                div [ class "has-text-centered" ]
+                    [ text "Loading details..." ]
+        ]
+
+
+canNavigateBack : Model -> Bool
+canNavigateBack model =
+    not (List.isEmpty model.navigationHistory)
 
 
 viewTreePage : Model -> Html Msg

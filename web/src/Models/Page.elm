@@ -6,6 +6,7 @@ module Models.Page exposing (Page(..), Route(..))
 type Route
     = ActivitiesRoute { name : Maybe String, limit : Maybe Int }
     | ActivityRoute String -- ProcessId
+    | ActivityDetailsRoute String -- ProcessId
     | ActivityTreeRoute String -- ProcessId
     | ActivityInventoryRoute String -- ProcessId
     | ActivityGraphRoute String -- ProcessId
@@ -18,6 +19,7 @@ type Route
 
 type Page
     = ActivitiesPage
+    | DetailsPage
     | TreePage
     | InventoryPage
     | GraphPage
