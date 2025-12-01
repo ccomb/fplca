@@ -67,27 +67,29 @@ viewHeader activityName location canNavigateBack =
     div [ class "box" ]
         [ div [ class "level" ]
             [ div [ class "level-left" ]
-                [ div [ class "level-item" ]
+                ([ if canNavigateBack then
+                    div [ class "level-item" ]
+                        [ button
+                            [ class "button is-primary"
+                            , onClick NavigateBack
+                            ]
+                            [ span [ class "icon" ]
+                                [ i [ class "fas fa-arrow-left" ] []
+                                ]
+                            , span [] [ text "Previous Activity" ]
+                            ]
+                        ]
+
+                   else
+                    text ""
+                 , div [ class "level-item" ]
                     [ div []
                         [ h1 [ class "title is-4" ] [ text activityName ]
                         , p [ class "subtitle is-6 has-text-grey" ] [ text location ]
                         ]
                     ]
-                ]
-            , div [ class "level-right" ]
-                [ div [ class "level-item" ]
-                    [ button
-                        [ class "button is-primary"
-                        , onClick NavigateBack
-                        , disabled (not canNavigateBack)
-                        ]
-                        [ span [ class "icon" ]
-                            [ i [ class "fas fa-arrow-left" ] []
-                            ]
-                        , span [] [ text "Previous Activity" ]
-                        ]
-                    ]
-                ]
+                 ]
+                )
             ]
         ]
 
