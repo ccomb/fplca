@@ -1,4 +1,4 @@
-module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges, viewProductsExchanges)
+module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges, viewProductsExchanges, viewNaturalResourcesExchanges, viewEmissionsExchanges)
 
 import Dict exposing (Dict)
 import Html exposing (..)
@@ -343,6 +343,138 @@ viewBiosphereExchanges exchanges =
             )
 
 
+{-| View emissions grouped by main compartment (air, water, soil) with sub-compartments within each
+-}
+viewEmissionsExchanges : List ActivityExchange -> Html msg
+viewEmissionsExchanges exchanges =
+    if List.isEmpty exchanges then
+        p [ class "has-text-grey" ] [ text "No emissions" ]
+
+    else
+        let
+            -- Group by main compartment first
+            groupedByMain =
+                groupExchangesByCompartment exchanges
+
+            -- For each main compartment, group by sub-compartment
+            airSubgroups =
+                groupBySubcompartment groupedByMain.air
+
+            waterSubgroups =
+                groupBySubcompartment groupedByMain.water
+
+            soilSubgroups =
+                groupBySubcompartment groupedByMain.soil
+
+            otherSubgroups =
+                groupBySubcompartment groupedByMain.other
+
+            -- Build columns for compartments that have data
+            columns =
+                [ ( "Air", airSubgroups )
+                , ( "Water", waterSubgroups )
+                , ( "Soil", soilSubgroups )
+                , ( "Other", otherSubgroups )
+                ]
+                    |> List.filter (\( _, subgroups ) -> not (List.isEmpty subgroups))
+        in
+        div [ class "columns is-desktop is-multiline" ]
+            (columns
+                |> List.map
+                    (\( mainName, subgroups ) ->
+                        div [ class "column" ]
+                            [ viewEmissionCompartmentWithSubgroups mainName subgroups ]
+                    )
+            )
+
+
+{-| Group exchanges by their sub-compartment (extracted from flowCategory)
+-}
+groupBySubcompartment : List ActivityExchange -> List ( String, List ActivityExchange )
+groupBySubcompartment exchanges =
+    let
+        getSubcompartment exchange =
+            let
+                parts =
+                    String.split "/" exchange.flowCategory
+            in
+            case parts of
+                _ :: rest ->
+                    String.join "/" rest
+                        |> (\s ->
+                                if String.isEmpty s then
+                                    "unspecified"
+
+                                else
+                                    s
+                           )
+
+                [] ->
+                    "unspecified"
+
+        addToGroup exchange groups =
+            let
+                subcomp =
+                    getSubcompartment exchange
+            in
+            case Dict.get subcomp groups of
+                Just items ->
+                    Dict.insert subcomp (exchange :: items) groups
+
+                Nothing ->
+                    Dict.insert subcomp [ exchange ] groups
+
+        grouped =
+            List.foldl addToGroup Dict.empty exchanges
+    in
+    Dict.toList grouped
+        |> List.map
+            (\( name, items ) ->
+                ( name, List.sortBy (\e -> -(abs e.amount)) items )
+            )
+        |> List.sortBy (\( _, items ) -> -(List.length items))
+
+
+{-| View a main compartment column with sub-compartment tables
+-}
+viewEmissionCompartmentWithSubgroups : String -> List ( String, List ActivityExchange ) -> Html msg
+viewEmissionCompartmentWithSubgroups mainName subgroups =
+    div []
+        [ h3 [ class "title is-5 has-text-grey mb-3" ] [ text mainName ]
+        , div []
+            (subgroups
+                |> List.map
+                    (\( subName, items ) ->
+                        viewSubcompartmentTable subName items
+                    )
+            )
+        ]
+
+
+{-| View a table for a sub-compartment
+-}
+viewSubcompartmentTable : String -> List ActivityExchange -> Html msg
+viewSubcompartmentTable subName exchanges =
+    div [ class "mb-4" ]
+        [ h4 [ class "subtitle is-6 has-text-grey-dark mb-2" ] [ text subName ]
+        , div [ class "table-container" ]
+            [ table [ class "table is-striped is-fullwidth is-narrow" ]
+                [ thead []
+                    [ tr []
+                        [ th [] [ text "Flow" ]
+                        , th [ class "has-text-right" ] [ text "Quantity" ]
+                        , th [] [ text "Unit" ]
+                        ]
+                    ]
+                , tbody []
+                    (exchanges
+                        |> List.map viewExchangeFlowRow
+                    )
+                ]
+            ]
+        ]
+
+
 {-| View products (reference product + co-products) without box wrapper (for use in tabs)
 -}
 viewProductsExchanges : List ActivityExchange -> Html msg
@@ -386,6 +518,106 @@ viewProductRow exchange =
             [ text (Format.formatScientific exchange.amount) ]
         , td [] [ text exchange.unitName ]
         ]
+
+
+{-| View natural resources grouped by subcompartment (biotic, water, land, etc.)
+-}
+viewNaturalResourcesExchanges : List ActivityExchange -> Html msg
+viewNaturalResourcesExchanges exchanges =
+    if List.isEmpty exchanges then
+        p [ class "has-text-grey" ] [ text "No natural resources" ]
+
+    else
+        let
+            grouped =
+                groupResourcesBySubcompartment exchanges
+
+            -- Only show subcompartments that have data
+            compartments =
+                [ ( "Biotic", grouped.biotic )
+                , ( "In water", grouped.inWater )
+                , ( "In ground", grouped.inGround )
+                , ( "In air", grouped.inAir )
+                , ( "Land", grouped.land )
+                , ( "Other", grouped.other )
+                ]
+                    |> List.filter (\( _, items ) -> not (List.isEmpty items))
+        in
+        div [ class "columns is-desktop is-multiline" ]
+            (compartments
+                |> List.map
+                    (\( name, items ) ->
+                        div [ class "column" ]
+                            [ viewExchangeCompartmentColumn name items ]
+                    )
+            )
+
+
+type alias ResourceCompartmentGroups =
+    { biotic : List ActivityExchange
+    , inWater : List ActivityExchange
+    , inGround : List ActivityExchange
+    , inAir : List ActivityExchange
+    , land : List ActivityExchange
+    , other : List ActivityExchange
+    }
+
+
+groupResourcesBySubcompartment : List ActivityExchange -> ResourceCompartmentGroups
+groupResourcesBySubcompartment exchanges =
+    let
+        getSubcompartment exchange =
+            -- Extract subcompartment from flowCategory like "natural resource/in water"
+            let
+                category =
+                    String.toLower exchange.flowCategory
+
+                -- Look for the part after the last "/"
+                parts =
+                    String.split "/" category
+            in
+            case List.reverse parts of
+                last :: _ ->
+                    String.trim last
+
+                [] ->
+                    ""
+
+        categorizeExchange exchange groups =
+            let
+                subcompartment =
+                    getSubcompartment exchange
+            in
+            if String.contains "biotic" subcompartment then
+                { groups | biotic = exchange :: groups.biotic }
+
+            else if String.contains "water" subcompartment then
+                { groups | inWater = exchange :: groups.inWater }
+
+            else if String.contains "ground" subcompartment then
+                { groups | inGround = exchange :: groups.inGround }
+
+            else if String.contains "air" subcompartment then
+                { groups | inAir = exchange :: groups.inAir }
+
+            else if String.contains "land" subcompartment then
+                { groups | land = exchange :: groups.land }
+
+            else
+                { groups | other = exchange :: groups.other }
+    in
+    List.foldl categorizeExchange
+        { biotic = [], inWater = [], inGround = [], inAir = [], land = [], other = [] }
+        exchanges
+        |> (\groups ->
+                { biotic = List.sortBy (\e -> -(abs e.amount)) groups.biotic
+                , inWater = List.sortBy (\e -> -(abs e.amount)) groups.inWater
+                , inGround = List.sortBy (\e -> -(abs e.amount)) groups.inGround
+                , inAir = List.sortBy (\e -> -(abs e.amount)) groups.inAir
+                , land = List.sortBy (\e -> -(abs e.amount)) groups.land
+                , other = List.sortBy (\e -> -(abs e.amount)) groups.other
+                }
+           )
 
 
 viewExchangeCompartmentColumn : String -> List ActivityExchange -> Html msg

@@ -1005,7 +1005,7 @@ viewExchangeTabs model activityInfo =
             [ ul []
                 [ viewExchangeTabItem UpstreamTab model.currentExchangeTab ("Upstream activities (" ++ String.fromInt upstreamCount ++ ")") (upstreamCount > 0)
                 , viewExchangeTabItem EmissionsTab model.currentExchangeTab ("Direct emissions (" ++ String.fromInt emissionCount ++ ")") (emissionCount > 0)
-                , viewExchangeTabItem ConsumptionsTab model.currentExchangeTab ("Direct consumptions (" ++ String.fromInt consumptionCount ++ ")") (consumptionCount > 0)
+                , viewExchangeTabItem ConsumptionsTab model.currentExchangeTab ("Natural resources (" ++ String.fromInt consumptionCount ++ ")") (consumptionCount > 0)
                 , viewExchangeTabItem ProductsTab model.currentExchangeTab ("Products (" ++ String.fromInt productCount ++ ")") (productCount > 0)
                 ]
             ]
@@ -1014,10 +1014,10 @@ viewExchangeTabs model activityInfo =
                 DetailsView.viewUpstreamExchanges upstreamExchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
 
             EmissionsTab ->
-                DetailsView.viewBiosphereExchanges emissionExchanges
+                DetailsView.viewEmissionsExchanges emissionExchanges
 
             ConsumptionsTab ->
-                DetailsView.viewBiosphereExchanges consumptionExchanges
+                DetailsView.viewNaturalResourcesExchanges consumptionExchanges
 
             ProductsTab ->
                 DetailsView.viewProductsExchanges productExchanges
@@ -1026,21 +1026,39 @@ viewExchangeTabs model activityInfo =
 
 viewExchangeTabItem : ExchangeTab -> ExchangeTab -> String -> Bool -> Html Msg
 viewExchangeTabItem tab currentTab label isEnabled =
+    let
+        isActive =
+            currentTab == tab
+    in
     li
         [ classList
-            [ ( "is-active", currentTab == tab )
+            [ ( "is-active", isActive )
             ]
         ]
-        [ if isEnabled then
+        [ if isActive then
+            -- Active tab: white text on black background
             a
                 [ href "#"
+                , style "background-color" "#363636"
+                , style "color" "white"
+                , style "border-color" "#363636"
+                , preventDefaultOn "click" (Json.Decode.succeed ( SwitchExchangeTab tab, True ))
+                ]
+                [ text label ]
+
+          else if isEnabled then
+            -- Inactive enabled tab: dark grey text
+            a
+                [ href "#"
+                , style "color" "#4a4a4a"
                 , preventDefaultOn "click" (Json.Decode.succeed ( SwitchExchangeTab tab, True ))
                 ]
                 [ text label ]
 
           else
+            -- Disabled tab: light grey text
             a
-                [ class "has-text-grey-light"
+                [ style "color" "#b5b5b5"
                 , style "cursor" "not-allowed"
                 , style "pointer-events" "none"
                 ]
