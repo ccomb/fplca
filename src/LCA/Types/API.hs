@@ -184,6 +184,8 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuFlowName :: Text -- Name of the flow being exchanged
     , ewuFlowCategory :: Text -- Category/compartment (for biosphere) or "technosphere"
     , ewuTargetActivity :: Maybe Text -- For technosphere: name of target activity
+    , ewuTargetLocation :: Maybe Text -- For technosphere: location of target activity
+    , ewuTargetProcessId :: Maybe Text -- For technosphere: ProcessId for navigation (activityUUID_productUUID)
     }
     deriving (Generic)
 

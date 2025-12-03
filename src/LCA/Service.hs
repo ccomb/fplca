@@ -437,11 +437,14 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
-convertToTreeExport db rootProcessId maxDepth tree =
-    let (nodes, edges, stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
+convertToTreeExport db _rootProcessId maxDepth tree =
+    let (nodes, edges, _stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
+        -- Use the actual root node ID from the tree, not the passed parameter
+        -- This ensures tmRootId always matches a key in the nodes map
+        actualRootId = getTreeNodeId db tree
         metadata =
             TreeMetadata
-                { tmRootId = rootProcessId -- Now ProcessId format
+                { tmRootId = actualRootId -- Use actual computed root ID
                 , tmMaxDepth = maxDepth
                 , tmTotalNodes = M.size nodes
                 , tmLoopNodes = length [() | (_, node) <- M.toList nodes, enNodeType node == LoopNode]
@@ -714,12 +717,15 @@ convertActivityForAPI db processId activity =
   where
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
-            targetActivityInfo = case exchange of
+            (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
                 TechnosphereExchange _ _ _ _ _ linkId _ ->
                     case findActivityByActivityUUID db linkId of
-                        Just targetActivity -> Just (activityName targetActivity)
-                        Nothing -> Nothing
-                BiosphereExchange _ _ _ _ -> Nothing
+                        Just targetActivity ->
+                            let maybeProcessId = findProcessIdByActivityUUID db linkId
+                                processIdText = fmap (processIdToText db) maybeProcessId
+                            in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
+                        Nothing -> (Nothing, Nothing, Nothing)
+                BiosphereExchange _ _ _ _ -> (Nothing, Nothing, Nothing)
          in ExchangeWithUnit
                 { ewuExchange = exchange
                 , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
@@ -729,7 +735,9 @@ convertActivityForAPI db processId activity =
                         True -> "technosphere"
                         False -> flowCategory flow -- This will now include compartment info like "water/ground-, long-term"
                     Nothing -> "unknown"
-                , ewuTargetActivity = targetActivityInfo
+                , ewuTargetActivity = targetActivityName
+                , ewuTargetLocation = targetActivityLocation
+                , ewuTargetProcessId = targetProcessId
                 }
 
 -- | Get target activity for technosphere navigation
