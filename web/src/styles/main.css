@@ -41,3 +41,16 @@
     font-weight: 500;
     font-size: 0.95rem;
 }
+
+/* Lab items styling - grey text */
+.menu-item.is-lab {
+    color: #7a7a7a;
+}
+
+.menu-item.is-lab:hover {
+    color: #4a4a4a;
+}
+
+.menu-item.is-lab.is-active {
+    color: #363636;
+}

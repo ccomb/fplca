@@ -1,4 +1,4 @@
-module Models.Page exposing (Page(..), Route(..))
+module Models.Page exposing (ExchangeTab(..), Page(..), Route(..))
 
 -- Route definitions for URL parsing
 
@@ -6,8 +6,8 @@ module Models.Page exposing (Page(..), Route(..))
 type Route
     = ActivitiesRoute { name : Maybe String, limit : Maybe Int }
     | ActivityRoute String -- ProcessId
-    | ActivityDetailsRoute String -- ProcessId
-    | ActivityTreeRoute String -- ProcessId
+    | ActivityDetailsRoute String -- ProcessId (table view)
+    | ActivityTreeRoute String -- ProcessId (tree view)
     | ActivityInventoryRoute String -- ProcessId
     | ActivityGraphRoute String -- ProcessId
     | NotFoundRoute
@@ -23,4 +23,13 @@ type Page
     | TreePage
     | InventoryPage
     | GraphPage
+
+
+-- Sub-tab selection for Table view exchanges
+
+
+type ExchangeTab
+    = UpstreamTab
+    | EmissionsTab
+    | ConsumptionsTab
 
