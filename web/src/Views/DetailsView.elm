@@ -1,4 +1,4 @@
-module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges)
+module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges, viewProductsExchanges)
 
 import Dict exposing (Dict)
 import Html exposing (..)
@@ -341,6 +341,51 @@ viewBiosphereExchanges exchanges =
                             [ viewExchangeCompartmentColumn name items ]
                     )
             )
+
+
+{-| View products (reference product + co-products) without box wrapper (for use in tabs)
+-}
+viewProductsExchanges : List ActivityExchange -> Html msg
+viewProductsExchanges exchanges =
+    if List.isEmpty exchanges then
+        p [ class "has-text-grey" ] [ text "No products" ]
+
+    else
+        div [ class "table-container" ]
+            [ table [ class "table is-striped is-fullwidth" ]
+                [ thead []
+                    [ tr []
+                        [ th [] [ text "Product" ]
+                        , th [ class "has-text-right" ] [ text "Quantity" ]
+                        , th [] [ text "Unit" ]
+                        ]
+                    ]
+                , tbody []
+                    (exchanges
+                        |> List.sortBy (\ex -> if ex.isReference then 0 else 1)
+                        |> List.map viewProductRow
+                    )
+                ]
+            ]
+
+
+viewProductRow : ActivityExchange -> Html msg
+viewProductRow exchange =
+    tr []
+        [ td []
+            [ if exchange.isReference then
+                span []
+                    [ strong [] [ text exchange.flowName ]
+                    , span [ class "tag is-success is-light ml-2" ] [ text "Reference" ]
+                    ]
+
+              else
+                text exchange.flowName
+            ]
+        , td [ class "has-text-right" ]
+            [ text (Format.formatScientific exchange.amount) ]
+        , td [] [ text exchange.unitName ]
+        ]
 
 
 viewExchangeCompartmentColumn : String -> List ActivityExchange -> Html msg

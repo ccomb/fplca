@@ -974,14 +974,19 @@ viewActivityHeaderWithDoc activityInfo canGoBack =
 viewExchangeTabs : Model -> Models.Activity.ActivityInfo -> Html Msg
 viewExchangeTabs model activityInfo =
     let
+        -- Upstream: technosphere inputs that are not reference products
         upstreamExchanges =
-            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType) activityInfo.exchanges
+            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && ex.isInput && not ex.isReference) activityInfo.exchanges
 
         emissionExchanges =
             List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereEmissionType) activityInfo.exchanges
 
         consumptionExchanges =
             List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
+
+        -- Products: technosphere outputs (reference product + co-products)
+        productExchanges =
+            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && not ex.isInput) activityInfo.exchanges
 
         upstreamCount =
             List.length upstreamExchanges
@@ -991,6 +996,9 @@ viewExchangeTabs model activityInfo =
 
         consumptionCount =
             List.length consumptionExchanges
+
+        productCount =
+            List.length productExchanges
     in
     div [ class "box" ]
         [ div [ class "tabs is-boxed" ]
@@ -998,6 +1006,7 @@ viewExchangeTabs model activityInfo =
                 [ viewExchangeTabItem UpstreamTab model.currentExchangeTab ("Upstream activities (" ++ String.fromInt upstreamCount ++ ")") (upstreamCount > 0)
                 , viewExchangeTabItem EmissionsTab model.currentExchangeTab ("Direct emissions (" ++ String.fromInt emissionCount ++ ")") (emissionCount > 0)
                 , viewExchangeTabItem ConsumptionsTab model.currentExchangeTab ("Direct consumptions (" ++ String.fromInt consumptionCount ++ ")") (consumptionCount > 0)
+                , viewExchangeTabItem ProductsTab model.currentExchangeTab ("Products (" ++ String.fromInt productCount ++ ")") (productCount > 0)
                 ]
             ]
         , case model.currentExchangeTab of
@@ -1009,6 +1018,9 @@ viewExchangeTabs model activityInfo =
 
             ConsumptionsTab ->
                 DetailsView.viewBiosphereExchanges consumptionExchanges
+
+            ProductsTab ->
+                DetailsView.viewProductsExchanges productExchanges
         ]
 
 

@@ -32,4 +32,5 @@ type ExchangeTab
     = UpstreamTab
     | EmissionsTab
     | ConsumptionsTab
+    | ProductsTab
 

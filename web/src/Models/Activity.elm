@@ -129,6 +129,7 @@ type alias ActivityExchange =
     , amount : Float
     , activityLinkId : Maybe String
     , isReference : Bool
+    , isInput : Bool
     }
 
 
@@ -281,6 +282,7 @@ activityExchangeDecoder =
         |> optional "ewuExchange" exchangeAmountDecoder 0.0
         |> required "ewuTargetProcessId" (Decode.nullable Decode.string)
         |> optional "ewuExchange" exchangeIsReferenceDecoder False
+        |> optional "ewuExchange" exchangeIsInputDecoder False
 
 
 exchangeTypeDecoder : Decoder ExchangeType
@@ -333,6 +335,23 @@ exchangeIsReferenceDecoder =
                 case tag of
                     "TechnosphereExchange" ->
                         Decode.field "techIsReference" Decode.bool
+
+                    _ ->
+                        Decode.succeed False
+            )
+
+
+exchangeIsInputDecoder : Decoder Bool
+exchangeIsInputDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "TechnosphereExchange" ->
+                        Decode.field "techIsInput" Decode.bool
+
+                    "BiosphereExchange" ->
+                        Decode.field "bioIsInput" Decode.bool
 
                     _ ->
                         Decode.succeed False
