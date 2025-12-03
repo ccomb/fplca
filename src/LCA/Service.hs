@@ -704,7 +704,10 @@ calculateActivityStats activity =
 -- Note: This function requires the ProcessId to get the activity UUID
 convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
 convertActivityForAPI db processId activity =
-    ActivityForAPI
+    let allProducts = case processIdToUUIDs db processId of
+            Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
+            Nothing -> []
+    in ActivityForAPI
         { pfaProcessId = processIdToText db processId
         , pfaName = activityName activity
         , pfaDescription = activityDescription activity
@@ -713,6 +716,7 @@ convertActivityForAPI db processId activity =
         , pfaLocation = activityLocation activity
         , pfaUnit = activityUnit activity
         , pfaReferenceProduct = getReferenceProductName (dbFlows db) activity
+        , pfaAllProducts = allProducts
         , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
         }
   where
@@ -747,6 +751,30 @@ getReferenceProductName flows activity =
     case [ex | ex <- exchanges activity, exchangeIsReference ex] of
         (ex : _) -> fmap flowName (M.lookup (exchangeFlowId ex) flows)
         [] -> Nothing
+
+-- | Get all products (ProcessIds) for an activity UUID using the products index
+getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
+getAllProductsForActivity db activityUUID =
+    case M.lookup activityUUID (dbActivityProductsIndex db) of
+        Just processIds ->
+            [ ActivitySummary
+                { prsId = processIdToText db pid
+                , prsName = getProductName db pid
+                , prsLocation = maybe "" activityLocation (findActivityByProcessId db pid)
+                }
+            | pid <- processIds
+            ]
+        Nothing -> []
+  where
+    -- Get product name from reference exchange flow
+    getProductName :: Database -> ProcessId -> Text
+    getProductName db' pid =
+        case findActivityByProcessId db' pid of
+            Just activity ->
+                case getReferenceProductName (dbFlows db') activity of
+                    Just name -> name
+                    Nothing -> activityName activity
+            Nothing -> "Unknown"
 
 -- | Get target activity for technosphere navigation
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary

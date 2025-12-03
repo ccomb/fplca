@@ -115,6 +115,7 @@ type alias ActivityInfo =
     , description : List String
     , classifications : Dict String String
     , referenceProduct : Maybe String
+    , allProducts : List ActivitySummary
     , exchanges : List ActivityExchange
     }
 
@@ -266,6 +267,7 @@ activityInfoDecoder =
             |> required "pfaDescription" (Decode.list Decode.string)
             |> required "pfaClassifications" (Decode.dict Decode.string)
             |> required "pfaReferenceProduct" (Decode.nullable Decode.string)
+            |> required "pfaAllProducts" (Decode.list activitySummaryDecoder)
             |> required "pfaExchanges" (Decode.list activityExchangeDecoder)
         )
 

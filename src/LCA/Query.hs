@@ -58,6 +58,9 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
         -- Build activity UUID index: UUID -> ProcessId (for O(1) lookups)
         dbActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
 
+        -- Build activity products index: UUID -> [ProcessId] (for multi-product activities)
+        dbActivityProductsIndex = M.fromListWith (++) [(actUUID, [pid]) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
+
         -- Build activity-product lookup for correct multi-output handling
         -- Maps (activityUUID, productFlowUUID) -> ProcessId
         -- This ensures exchanges link to the correct product in multi-output activities
@@ -237,6 +240,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
             { dbProcessIdTable = dbProcessIdTable
             , dbProcessIdLookup = dbProcessIdLookup
             , dbActivityUUIDIndex = dbActivityUUIDIndex
+            , dbActivityProductsIndex = dbActivityProductsIndex
             , dbActivities = dbActivities
             , dbFlows = flowDB
             , dbUnits = unitDB

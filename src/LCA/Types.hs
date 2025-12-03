@@ -301,6 +301,7 @@ data Database = Database
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int16) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
     , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
+    , dbActivityProductsIndex :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB

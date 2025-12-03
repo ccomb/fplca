@@ -199,6 +199,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaLocation :: Text
     , pfaUnit :: Text -- Unité de référence
     , pfaReferenceProduct :: Maybe Text -- Name of the reference product (output)
+    , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     }
     deriving (Generic)

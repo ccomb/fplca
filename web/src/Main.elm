@@ -984,9 +984,9 @@ viewExchangeTabs model activityInfo =
         consumptionExchanges =
             List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
 
-        -- Products: technosphere outputs (reference product + co-products)
-        productExchanges =
-            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && not ex.isInput) activityInfo.exchanges
+        -- Products: all products from same activityUUID (from backend)
+        allProducts =
+            activityInfo.allProducts
 
         upstreamCount =
             List.length upstreamExchanges
@@ -998,7 +998,7 @@ viewExchangeTabs model activityInfo =
             List.length consumptionExchanges
 
         productCount =
-            List.length productExchanges
+            List.length allProducts
     in
     div [ class "box" ]
         [ div [ class "tabs is-boxed" ]
@@ -1020,7 +1020,7 @@ viewExchangeTabs model activityInfo =
                 DetailsView.viewNaturalResourcesExchanges consumptionExchanges
 
             ProductsTab ->
-                DetailsView.viewProductsExchanges productExchanges
+                DetailsView.viewAllProducts allProducts model.currentActivityId (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
         ]
 
 

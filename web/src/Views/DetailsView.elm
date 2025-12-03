@@ -1,10 +1,10 @@
-module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges, viewProductsExchanges, viewNaturalResourcesExchanges, viewEmissionsExchanges)
+module Views.DetailsView exposing (Model, Msg(..), init, view, viewContent, viewActivityInfoContent, viewUpstreamExchanges, viewBiosphereExchanges, viewProductsExchanges, viewNaturalResourcesExchanges, viewEmissionsExchanges, viewAllProducts)
 
 import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
-import Models.Activity exposing (ActivityEdge, ActivityExchange, ActivityInfo, ActivityNode, ActivityTree, EdgeType(..), ExchangeType(..), NodeType(..))
+import Models.Activity exposing (ActivityEdge, ActivityExchange, ActivityInfo, ActivityNode, ActivitySummary, ActivityTree, EdgeType(..), ExchangeType(..), NodeType(..))
 import Utils.Format as Format
 
 
@@ -517,6 +517,59 @@ viewProductRow exchange =
         , td [ class "has-text-right" ]
             [ text (Format.formatScientific exchange.amount) ]
         , td [] [ text exchange.unitName ]
+        ]
+
+
+{-| View all products from all spold files with the same activityUUID
+-}
+viewAllProducts : List ActivitySummary -> String -> (String -> msg) -> Html msg
+viewAllProducts products currentProcessId onNavigate =
+    if List.isEmpty products then
+        p [ class "has-text-grey" ] [ text "No products" ]
+
+    else
+        div [ class "table-container" ]
+            [ table [ class "table is-striped is-fullwidth" ]
+                [ thead []
+                    [ tr []
+                        [ th [] [ text "Product" ]
+                        , th [] [ text "Location" ]
+                        ]
+                    ]
+                , tbody []
+                    (products
+                        |> List.map (viewAllProductRow currentProcessId onNavigate)
+                    )
+                ]
+            ]
+
+
+viewAllProductRow : String -> (String -> msg) -> ActivitySummary -> Html msg
+viewAllProductRow currentProcessId onNavigate product =
+    let
+        isCurrent =
+            product.id == currentProcessId
+    in
+    tr
+        [ classList [ ( "is-selected", isCurrent ) ]
+        , style "cursor" (if isCurrent then "default" else "pointer")
+        , if isCurrent then
+            class ""
+
+          else
+            onClick (onNavigate product.id)
+        ]
+        [ td []
+            [ if isCurrent then
+                span []
+                    [ strong [] [ text product.name ]
+                    , span [ class "tag is-info is-light ml-2" ] [ text "Current" ]
+                    ]
+
+              else
+                a [ href "#" ] [ text product.name ]
+            ]
+        , td [] [ text product.location ]
         ]
 
 
