@@ -7,10 +7,11 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivitySummary, ActivityTree, SearchResults, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
+import Json.Decode
+import Models.Activity exposing (ActivityInfo, ActivitySummary, ActivityTree, SearchResults, activityInfoDecoder, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
-import Models.Page exposing (Page(..), Route(..))
+import Models.Page exposing (ExchangeTab(..), Page(..), Route(..))
 import Url
 import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
@@ -39,7 +40,9 @@ type alias Model =
     { key : Nav.Key
     , url : Url.Url
     , currentPage : Page
-    , cachedTrees : Dict.Dict String ActivityTree -- Cache trees by activity ID
+    , currentExchangeTab : ExchangeTab -- Current sub-tab for exchanges (upstream/emissions/consumptions)
+    , cachedTrees : Dict.Dict String ActivityTree -- Cache trees by activity ID (for tree tab)
+    , cachedActivityInfo : Dict.Dict String ActivityInfo -- Cache activity info by activity ID (for table tab)
     , cachedInventories : Dict.Dict String InventoryExport -- Cache inventories by activity ID
     , cachedGraphs : Dict.Dict String GraphData -- Cache graphs by activity ID
     , graphViewModel : Maybe GraphView.Model -- Current graph view model
@@ -62,6 +65,8 @@ type alias Model =
 type Msg
     = LoadActivity String
     | ActivityLoaded (Result Http.Error ActivityTree)
+    | LoadActivityInfo String
+    | ActivityInfoLoaded (Result Http.Error ActivityInfo)
     | LoadInventory String
     | InventoryLoaded (Result Http.Error InventoryExport)
     | LoadGraph String
@@ -69,6 +74,7 @@ type Msg
     | GraphViewMsg GraphView.Msg
     | TreeViewMsg TreeView.Msg
     | DetailsViewMsg DetailsView.Msg
+    | SwitchExchangeTab ExchangeTab
     | UpdateGraphCutoff String
     | NavigateToParent
     | NodeClicked String
@@ -109,7 +115,6 @@ routeParser =
 
 parseUrl : Url.Url -> Route
 parseUrl url =
-    -- Use path-based routing directly
     Parser.parse routeParser url
         |> Maybe.withDefault NotFoundRoute
 
@@ -121,7 +126,7 @@ routeToPage route =
             ActivitiesPage
 
         ActivityRoute _ ->
-            TreePage
+            DetailsPage
 
         ActivityDetailsRoute _ ->
             DetailsPage
@@ -160,14 +165,14 @@ init _ url key =
                 ActivityRoute processId ->
                     { activityId = processId
                     , shouldLoad = True
-                    , loadType = "tree"
+                    , loadType = "details"
                     , searchQuery = ""
                     }
 
                 ActivityDetailsRoute processId ->
                     { activityId = processId
                     , shouldLoad = True
-                    , loadType = "tree"
+                    , loadType = "details"
                     , searchQuery = ""
                     }
 
@@ -209,7 +214,9 @@ init _ url key =
             { key = key
             , url = url
             , currentPage = initialPage
+            , currentExchangeTab = UpstreamTab
             , cachedTrees = Dict.empty
+            , cachedActivityInfo = Dict.empty
             , cachedInventories = Dict.empty
             , cachedGraphs = Dict.empty
             , graphViewModel = Nothing
@@ -231,6 +238,9 @@ init _ url key =
         cmd =
             if routeConfig.shouldLoad then
                 case routeConfig.loadType of
+                    "details" ->
+                        loadActivityInfo routeConfig.activityId
+
                     "tree" ->
                         loadActivityTree routeConfig.activityId
 
@@ -299,6 +309,40 @@ update msg model =
             )
 
         ActivityLoaded (Err error) ->
+            ( { model
+                | loading = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        LoadActivityInfo activityId ->
+            let
+                shouldLoad =
+                    not (Dict.member activityId model.cachedActivityInfo)
+            in
+            ( { model
+                | loading = shouldLoad
+                , error = Nothing
+                , currentActivityId = activityId
+              }
+            , if shouldLoad then
+                loadActivityInfo activityId
+
+              else
+                Cmd.none
+            )
+
+        ActivityInfoLoaded (Ok activityInfo) ->
+            ( { model
+                | cachedActivityInfo = Dict.insert model.currentActivityId activityInfo model.cachedActivityInfo
+                , loading = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        ActivityInfoLoaded (Err error) ->
             ( { model
                 | loading = False
                 , error = Just (httpErrorToString error)
@@ -406,7 +450,7 @@ update msg model =
                                             | treeViewModel = Just updatedTreeModel
                                             , navigationHistory = model.currentActivityId :: model.navigationHistory
                                           }
-                                        , navigateToActivity model.key processId
+                                        , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute processId))
                                         )
 
                                     else
@@ -442,6 +486,9 @@ update msg model =
                         [] ->
                             ( model, Cmd.none )
 
+        SwitchExchangeTab tab ->
+            ( { model | currentExchangeTab = tab }, Cmd.none )
+
         UpdateGraphCutoff cutoffStr ->
             -- Allow any string input, validation happens when loading
             ( { model | graphCutoffInput = cutoffStr }, Cmd.none )
@@ -451,7 +498,7 @@ update msg model =
                 ( { model
                     | navigationHistory = model.currentActivityId :: model.navigationHistory
                   }
-                , navigateToActivity model.key nodeId
+                , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute nodeId))
                 )
 
             else
@@ -467,7 +514,7 @@ update msg model =
                                     ( { model
                                         | navigationHistory = List.drop 1 model.navigationHistory
                                       }
-                                    , navigateToActivity model.key parentId
+                                    , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute parentId))
                                     )
 
                                 Nothing ->
@@ -476,7 +523,7 @@ update msg model =
                                             ( { model
                                                 | navigationHistory = rest
                                               }
-                                            , navigateToActivity model.key parentId
+                                            , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute parentId))
                                             )
 
                                         [] ->
@@ -607,82 +654,96 @@ update msg model =
                     newPage =
                         routeToPage route
 
-                    ( newActivityId, needsActivity, searchQuery ) =
+                    routeInfo =
                         case route of
                             ActivitiesRoute { name } ->
-                                ( model.currentActivityId, False, Maybe.withDefault "" name )
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = Maybe.withDefault "" name }
 
                             ActivityRoute processId ->
-                                ( processId, True, model.activitiesSearchQuery )
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
                             ActivityDetailsRoute processId ->
-                                ( processId, True, model.activitiesSearchQuery )
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
                             ActivityTreeRoute processId ->
-                                ( processId, True, model.activitiesSearchQuery )
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
                             ActivityInventoryRoute processId ->
-                                ( processId, True, model.activitiesSearchQuery )
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
                             ActivityGraphRoute processId ->
-                                ( processId, True, model.activitiesSearchQuery )
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
                             NotFoundRoute ->
-                                ( model.currentActivityId, False, model.activitiesSearchQuery )
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
 
+                    -- For DetailsPage: load activity info
+                    shouldLoadActivityInfo =
+                        routeInfo.needsActivity
+                            && newPage
+                            == DetailsPage
+                            && not (Dict.member routeInfo.activityId model.cachedActivityInfo)
+
+                    -- For TreePage: load tree data
                     shouldLoadTree =
-                        needsActivity && (newPage == TreePage || newPage == DetailsPage) && not (Dict.member newActivityId model.cachedTrees)
+                        routeInfo.needsActivity
+                            && newPage
+                            == TreePage
+                            && not (Dict.member routeInfo.activityId model.cachedTrees)
 
                     shouldLoadInventory =
-                        needsActivity && newPage == InventoryPage && not (Dict.member newActivityId model.cachedInventories)
+                        routeInfo.needsActivity && newPage == InventoryPage && not (Dict.member routeInfo.activityId model.cachedInventories)
 
                     shouldLoadGraph =
-                        needsActivity && newPage == GraphPage && not (Dict.member newActivityId model.cachedGraphs)
+                        routeInfo.needsActivity && newPage == GraphPage && not (Dict.member routeInfo.activityId model.cachedGraphs)
 
                     -- Also load tree data for graph page to get activity name
                     shouldLoadTreeForGraph =
-                        shouldLoadGraph && not (Dict.member newActivityId model.cachedTrees)
+                        shouldLoadGraph && not (Dict.member routeInfo.activityId model.cachedTrees)
 
                     shouldLoad =
-                        shouldLoadTree || shouldLoadInventory || shouldLoadGraph
+                        shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph
 
                     shouldSearch =
-                        newPage == ActivitiesPage && String.length searchQuery >= 2
+                        newPage == ActivitiesPage && String.length routeInfo.searchQuery >= 2
 
-                    -- Re-initialize detailsViewModel when navigating to DetailsPage with cached data
-                    newDetailsViewModel =
-                        if newPage == DetailsPage then
-                            case Dict.get newActivityId model.cachedTrees of
+                    -- Re-initialize view models when navigating to TreePage with cached tree data
+                    newTreeViewModel =
+                        if newPage == TreePage then
+                            case Dict.get routeInfo.activityId model.cachedTrees of
                                 Just cachedTree ->
-                                    Just (DetailsView.init cachedTree newActivityId)
+                                    Just (TreeView.init cachedTree)
 
                                 Nothing ->
-                                    model.detailsViewModel
+                                    model.treeViewModel
 
                         else
-                            model.detailsViewModel
+                            model.treeViewModel
 
                     updatedModel =
                         { model
                             | url = url
                             , currentPage = newPage
-                            , currentActivityId = newActivityId
+                            , currentActivityId = routeInfo.activityId
                             , loading = shouldLoad
-                            , navigationHistory = model.navigationHistory  -- Preserve navigation history
-                            , activitiesSearchQuery = searchQuery
+                            , navigationHistory = model.navigationHistory
+                            , activitiesSearchQuery = routeInfo.searchQuery
                             , searchLoading = shouldSearch
-                            , detailsViewModel = newDetailsViewModel
+                            , treeViewModel = newTreeViewModel
                         }
 
                     cmd =
-                        if shouldLoadTree then
-                            loadActivityTree newActivityId
+                        if shouldLoadActivityInfo then
+                            loadActivityInfo routeInfo.activityId
+
+                        else if shouldLoadTree then
+                            loadActivityTree routeInfo.activityId
 
                         else if shouldLoadInventory then
-                            loadInventoryData newActivityId
+                            loadInventoryData routeInfo.activityId
 
                         else if shouldSearch then
-                            searchActivities searchQuery
+                            searchActivities routeInfo.searchQuery
 
                         else if shouldLoadGraph then
                             let
@@ -690,11 +751,11 @@ update msg model =
                                     String.toFloat updatedModel.graphCutoffInput |> Maybe.withDefault 1.0
 
                                 graphCmd =
-                                    loadGraphData newActivityId cutoff
+                                    loadGraphData routeInfo.activityId cutoff
 
                                 treeCmd =
                                     if shouldLoadTreeForGraph then
-                                        loadActivityTree newActivityId
+                                        loadActivityTree routeInfo.activityId
 
                                     else
                                         Cmd.none
@@ -826,27 +887,152 @@ view model =
 viewDetailsPage : Model -> Html Msg
 viewDetailsPage model =
     div [ class "details-page-container" ]
-        [ case ( model.loading, model.error, model.detailsViewModel ) of
-            ( True, _, _ ) ->
+        [ case ( model.loading, model.error ) of
+            ( True, _ ) ->
                 div [ class "has-text-centered" ]
                     [ div [ class "is-size-3" ] [ text "Loading..." ]
                     , progress [ class "progress is-primary", attribute "max" "100" ] []
                     ]
 
-            ( _, Just error, _ ) ->
+            ( _, Just err ) ->
                 div [ class "notification is-danger" ]
-                    [ button [ class "delete", onClick (LoadActivity model.currentActivityId) ] []
+                    [ button [ class "delete", onClick (LoadActivityInfo model.currentActivityId) ] []
                     , strong [] [ text "Error: " ]
-                    , text error
+                    , text err
                     ]
 
-            ( _, _, Just detailsModel ) ->
-                Html.map DetailsViewMsg
-                    (DetailsView.view detailsModel (canNavigateBack model))
+            ( False, Nothing ) ->
+                case Dict.get model.currentActivityId model.cachedActivityInfo of
+                    Just activityInfo ->
+                        div []
+                            [ viewActivityHeaderWithDoc activityInfo (canNavigateBack model)
+                            , viewExchangeTabs model activityInfo
+                            ]
 
-            ( _, _, Nothing ) ->
-                div [ class "has-text-centered" ]
-                    [ text "Loading details..." ]
+                    Nothing ->
+                        div [ class "has-text-centered" ]
+                            [ text "Loading activity data..." ]
+        ]
+
+
+viewActivityHeaderWithDoc : Models.Activity.ActivityInfo -> Bool -> Html Msg
+viewActivityHeaderWithDoc activityInfo canGoBack =
+    let
+        hasDescription =
+            not (List.isEmpty activityInfo.description)
+    in
+    div [ class "box", style "margin-bottom" "0" ]
+        [ -- Title and location on same line
+          div [ class "level", style "margin-bottom" "0" ]
+            [ div [ class "level-left" ]
+                ([ if canGoBack then
+                    div [ class "level-item" ]
+                        [ button
+                            [ class "button is-primary"
+                            , onClick (DetailsViewMsg DetailsView.NavigateBack)
+                            ]
+                            [ span [ class "icon" ]
+                                [ i [ class "fas fa-arrow-left" ] []
+                                ]
+                            , span [] [ text "Previous Activity" ]
+                            ]
+                        ]
+
+                   else
+                    text ""
+                 , div [ class "level-item" ]
+                    [ h1 [ class "title is-4", style "margin-bottom" "0" ]
+                        (case activityInfo.referenceProduct of
+                            Just product ->
+                                [ text activityInfo.name
+                                , span [ style "color" "#888", style "margin" "0 0.5rem" ] [ text "→" ]
+                                , span [ style "font-weight" "normal" ] [ text product ]
+                                ]
+
+                            Nothing ->
+                                [ text activityInfo.name ]
+                        )
+                    ]
+                 , div [ class "level-item" ]
+                    [ span [ class "tag is-light" ] [ text activityInfo.location ]
+                    ]
+                 ]
+                )
+            ]
+        , -- Description below
+          if hasDescription then
+            div [ style "font-size" "0.85rem", style "line-height" "1.4", style "margin-top" "0.5rem" ]
+                (activityInfo.description
+                    |> List.map (\para -> p [ style "margin-bottom" "0.25rem" ] [ text para ])
+                )
+
+          else
+            text ""
+        ]
+
+
+viewExchangeTabs : Model -> Models.Activity.ActivityInfo -> Html Msg
+viewExchangeTabs model activityInfo =
+    let
+        upstreamExchanges =
+            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType) activityInfo.exchanges
+
+        emissionExchanges =
+            List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereEmissionType) activityInfo.exchanges
+
+        consumptionExchanges =
+            List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
+
+        upstreamCount =
+            List.length upstreamExchanges
+
+        emissionCount =
+            List.length emissionExchanges
+
+        consumptionCount =
+            List.length consumptionExchanges
+    in
+    div [ class "box" ]
+        [ div [ class "tabs is-boxed" ]
+            [ ul []
+                [ viewExchangeTabItem UpstreamTab model.currentExchangeTab ("Upstream activities (" ++ String.fromInt upstreamCount ++ ")") (upstreamCount > 0)
+                , viewExchangeTabItem EmissionsTab model.currentExchangeTab ("Direct emissions (" ++ String.fromInt emissionCount ++ ")") (emissionCount > 0)
+                , viewExchangeTabItem ConsumptionsTab model.currentExchangeTab ("Direct consumptions (" ++ String.fromInt consumptionCount ++ ")") (consumptionCount > 0)
+                ]
+            ]
+        , case model.currentExchangeTab of
+            UpstreamTab ->
+                DetailsView.viewUpstreamExchanges upstreamExchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
+
+            EmissionsTab ->
+                DetailsView.viewBiosphereExchanges emissionExchanges
+
+            ConsumptionsTab ->
+                DetailsView.viewBiosphereExchanges consumptionExchanges
+        ]
+
+
+viewExchangeTabItem : ExchangeTab -> ExchangeTab -> String -> Bool -> Html Msg
+viewExchangeTabItem tab currentTab label isEnabled =
+    li
+        [ classList
+            [ ( "is-active", currentTab == tab )
+            ]
+        ]
+        [ if isEnabled then
+            a
+                [ href "#"
+                , preventDefaultOn "click" (Json.Decode.succeed ( SwitchExchangeTab tab, True ))
+                ]
+                [ text label ]
+
+          else
+            a
+                [ class "has-text-grey-light"
+                , style "cursor" "not-allowed"
+                , style "pointer-events" "none"
+                ]
+                [ text label ]
         ]
 
 
@@ -1038,6 +1224,14 @@ loadActivityTree activityId =
     Http.get
         { url = "/api/v1/activity/" ++ activityId ++ "/tree"
         , expect = Http.expectJson ActivityLoaded activityTreeDecoder
+        }
+
+
+loadActivityInfo : String -> Cmd Msg
+loadActivityInfo activityId =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId
+        , expect = Http.expectJson ActivityInfoLoaded activityInfoDecoder
         }
 
 

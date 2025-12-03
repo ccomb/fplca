@@ -8,6 +8,9 @@ module Models.Activity exposing
     , TreeMetadata
     , ActivitySummary
     , SearchResults
+    , ActivityInfo
+    , ActivityExchange
+    , ExchangeType(..)
     , activityTreeDecoder
     , activityNodeDecoder
     , activityEdgeDecoder
@@ -17,6 +20,7 @@ module Models.Activity exposing
     , treeMetadataDecoder
     , activitySummaryDecoder
     , searchResultsDecoder
+    , activityInfoDecoder
     )
 
 import Dict exposing (Dict)
@@ -100,6 +104,38 @@ type alias SearchResults a =
     , limit : Int
     , hasMore : Bool
     }
+
+
+-- Activity Info (from /api/v1/activity/{id} endpoint)
+
+
+type alias ActivityInfo =
+    { name : String
+    , location : String
+    , description : List String
+    , classifications : Dict String String
+    , referenceProduct : Maybe String
+    , exchanges : List ActivityExchange
+    }
+
+
+type alias ActivityExchange =
+    { flowName : String
+    , targetActivity : Maybe String
+    , targetLocation : Maybe String
+    , unitName : String
+    , flowCategory : String
+    , exchangeType : ExchangeType
+    , amount : Float
+    , activityLinkId : Maybe String
+    , isReference : Bool
+    }
+
+
+type ExchangeType
+    = TechnosphereExchangeType
+    | BiosphereEmissionType
+    | BiosphereResourceType
 
 
 -- JSON Decoders
@@ -218,3 +254,86 @@ searchResultsDecoder itemDecoder =
         |> required "srOffset" Decode.int
         |> required "srLimit" Decode.int
         |> required "srHasMore" Decode.bool
+
+
+activityInfoDecoder : Decoder ActivityInfo
+activityInfoDecoder =
+    Decode.field "piActivity" <|
+        (Decode.succeed ActivityInfo
+            |> required "pfaName" Decode.string
+            |> required "pfaLocation" Decode.string
+            |> required "pfaDescription" (Decode.list Decode.string)
+            |> required "pfaClassifications" (Decode.dict Decode.string)
+            |> required "pfaReferenceProduct" (Decode.nullable Decode.string)
+            |> required "pfaExchanges" (Decode.list activityExchangeDecoder)
+        )
+
+
+activityExchangeDecoder : Decoder ActivityExchange
+activityExchangeDecoder =
+    Decode.succeed ActivityExchange
+        |> required "ewuFlowName" Decode.string
+        |> required "ewuTargetActivity" (Decode.nullable Decode.string)
+        |> required "ewuTargetLocation" (Decode.nullable Decode.string)
+        |> required "ewuUnitName" Decode.string
+        |> required "ewuFlowCategory" Decode.string
+        |> optional "ewuExchange" exchangeTypeDecoder TechnosphereExchangeType
+        |> optional "ewuExchange" exchangeAmountDecoder 0.0
+        |> required "ewuTargetProcessId" (Decode.nullable Decode.string)
+        |> optional "ewuExchange" exchangeIsReferenceDecoder False
+
+
+exchangeTypeDecoder : Decoder ExchangeType
+exchangeTypeDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "TechnosphereExchange" ->
+                        Decode.succeed TechnosphereExchangeType
+
+                    "BiosphereExchange" ->
+                        Decode.field "bioIsInput" Decode.bool
+                            |> Decode.andThen
+                                (\isInput ->
+                                    if isInput then
+                                        Decode.succeed BiosphereResourceType
+
+                                    else
+                                        Decode.succeed BiosphereEmissionType
+                                )
+
+                    _ ->
+                        Decode.fail ("Unknown exchange type: " ++ tag)
+            )
+
+
+exchangeAmountDecoder : Decoder Float
+exchangeAmountDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "TechnosphereExchange" ->
+                        Decode.field "techAmount" Decode.float
+
+                    "BiosphereExchange" ->
+                        Decode.field "bioAmount" Decode.float
+
+                    _ ->
+                        Decode.fail ("Unknown exchange type for amount: " ++ tag)
+            )
+
+
+exchangeIsReferenceDecoder : Decoder Bool
+exchangeIsReferenceDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "TechnosphereExchange" ->
+                        Decode.field "techIsReference" Decode.bool
+
+                    _ ->
+                        Decode.succeed False
+            )
