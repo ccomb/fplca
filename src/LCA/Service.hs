@@ -712,6 +712,7 @@ convertActivityForAPI db processId activity =
         , pfaClassifications = activityClassification activity
         , pfaLocation = activityLocation activity
         , pfaUnit = activityUnit activity
+        , pfaReferenceProduct = getReferenceProductName (dbFlows db) activity
         , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
         }
   where
@@ -739,6 +740,13 @@ convertActivityForAPI db processId activity =
                 , ewuTargetLocation = targetActivityLocation
                 , ewuTargetProcessId = targetProcessId
                 }
+
+-- | Get reference product name from activity exchanges
+getReferenceProductName :: M.Map UUID Flow -> Activity -> Maybe Text
+getReferenceProductName flows activity =
+    case [ex | ex <- exchanges activity, exchangeIsReference ex] of
+        (ex : _) -> fmap flowName (M.lookup (exchangeFlowId ex) flows)
+        [] -> Nothing
 
 -- | Get target activity for technosphere navigation
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary

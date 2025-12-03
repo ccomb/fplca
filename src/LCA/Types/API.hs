@@ -198,6 +198,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
     , pfaLocation :: Text
     , pfaUnit :: Text -- Unité de référence
+    , pfaReferenceProduct :: Maybe Text -- Name of the reference product (output)
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     }
     deriving (Generic)
