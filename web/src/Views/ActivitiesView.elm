@@ -1,7 +1,7 @@
 module Views.ActivitiesView exposing (viewActivitiesPage, Msg(..))
 
-import Html exposing (Html, div, input, text, h2, p, span, button)
-import Html.Attributes exposing (class, placeholder, value, type_, disabled)
+import Html exposing (Html, a, button, div, input, table, tbody, td, text, th, thead, tr, h2, p, span)
+import Html.Attributes exposing (class, href, placeholder, style, value, type_, disabled)
 import Html.Events exposing (onInput, onClick)
 import Models.Activity exposing (ActivitySummary, SearchResults)
 
@@ -9,10 +9,11 @@ import Models.Activity exposing (ActivitySummary, SearchResults)
 type Msg
     = UpdateSearchQuery String
     | SelectActivity String
+    | LoadMore
 
 
-viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Maybe String -> Html Msg
-viewActivitiesPage searchQuery searchResults searchLoading error =
+viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Html Msg
+viewActivitiesPage searchQuery searchResults searchLoading loadingMore error =
     div [ class "activities-page" ]
         [ div [ class "section" ]
             [ div [ class "container" ]
@@ -30,7 +31,7 @@ viewActivitiesPage searchQuery searchResults searchLoading error =
 
                     Nothing ->
                         text ""
-                , viewSearchResults searchResults searchLoading
+                , viewSearchResults searchResults searchLoading loadingMore
                 ]
             ]
         ]
@@ -56,20 +57,20 @@ searchInput query isLoading =
         ]
 
 
-viewSearchResults : Maybe (SearchResults ActivitySummary) -> Bool -> Html Msg
-viewSearchResults maybeResults isLoading =
+viewSearchResults : Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Html Msg
+viewSearchResults maybeResults isLoading loadingMore =
     case ( isLoading, maybeResults ) of
-        ( True, _ ) ->
+        ( True, Nothing ) ->
             div [ class "has-text-centered" ]
                 [ div [ class "is-size-5 has-text-grey" ] [ text "Searching..." ]
                 ]
 
-        ( False, Nothing ) ->
+        ( _, Nothing ) ->
             div [ class "has-text-centered" ]
                 [ div [ class "is-size-5 has-text-grey" ] [ text "Enter at least 2 characters to search" ]
                 ]
 
-        ( False, Just results ) ->
+        ( _, Just results ) ->
             if List.isEmpty results.results then
                 div [ class "has-text-centered" ]
                     [ div [ class "is-size-5 has-text-grey" ] [ text "No activities found" ]
@@ -78,39 +79,44 @@ viewSearchResults maybeResults isLoading =
                 div []
                     [ div [ class "mb-4" ]
                         [ span [ class "tag is-info is-light" ]
-                            [ text (String.fromInt results.totalCount ++ " activities found")
+                            [ text (String.fromInt (List.length results.results) ++ " / " ++ String.fromInt results.totalCount ++ " activities")
                             ]
                         ]
-                    , div [ class "columns is-multiline" ]
-                        (List.map viewActivityCard results.results)
+                    , div [ class "table-container" ]
+                        [ table [ class "table is-striped is-hoverable is-fullwidth" ]
+                            [ thead []
+                                [ tr []
+                                    [ th [] [ text "Activity Name" ]
+                                    , th [] [ text "Location" ]
+                                    ]
+                                ]
+                            , tbody []
+                                (List.map viewActivityRow results.results)
+                            ]
+                        ]
+                    , if results.hasMore then
+                        div [ class "has-text-centered mt-4" ]
+                            [ button
+                                [ class (if loadingMore then "button is-primary is-loading" else "button is-primary")
+                                , onClick LoadMore
+                                , disabled loadingMore
+                                ]
+                                [ text "Load more" ]
+                            ]
+                      else
+                        text ""
                     ]
 
 
-viewActivityCard : ActivitySummary -> Html Msg
-viewActivityCard activity =
-    div [ class "column is-half" ]
-        [ div [ class "card is-clickable" ]
-            [ div [ class "card-content" ]
-                [ div [ class "media" ]
-                    [ div [ class "media-left" ]
-                        [ span [ class "icon is-large" ]
-                            [ Html.i [ class "fas fa-industry fa-2x has-text-primary" ] []
-                            ]
-                        ]
-                    , div [ class "media-content" ]
-                        [ p [ class "title is-5" ] [ text activity.name ]
-                        , p [ class "subtitle is-6 has-text-grey" ] [ text activity.location ]
-                        ]
-                    ]
-                , div [ class "buttons" ]
-                    [ button
-                        [ class "button is-primary is-fullwidth"
-                        , onClick (SelectActivity activity.id)
-                        ]
-                        [ span [ class "icon" ] [ Html.i [ class "fas fa-list" ] [] ]
-                        , span [] [ text "View Inventory" ]
-                        ]
-                    ]
-                ]
+viewActivityRow : ActivitySummary -> Html Msg
+viewActivityRow activity =
+    tr
+        [ class "is-clickable"
+        , style "cursor" "pointer"
+        , onClick (SelectActivity activity.id)
+        ]
+        [ td []
+            [ a [ href "#", class "has-text-link" ] [ text activity.name ]
             ]
+        , td [] [ text activity.location ]
         ]

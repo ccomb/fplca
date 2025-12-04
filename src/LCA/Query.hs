@@ -311,17 +311,22 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
             }
 
 -- | Search activities by multiple fields (name, geography, product)
+-- Multi-word search: each word must match either name OR location (AND logic)
 findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
 findActivitiesByFields db nameParam geoParam productParam =
     let activities = V.toList (dbActivities db)
-        indexes = dbIndexes db
 
-        -- Filter by name if provided (substring match)
+        -- Filter by name: split into words, each word must match name OR location
         nameFiltered = case nameParam of
             Nothing -> activities
             Just name ->
-                let nameLower = T.toLower name
-                 in [a | a <- activities, T.isInfixOf nameLower (T.toLower (activityName a))]
+                let words = filter (not . T.null) $ T.words (T.toLower name)
+                    -- Check if all words match (each word must be in name OR location)
+                    matchesAllWords a =
+                        let nameLower = T.toLower (activityName a)
+                            locationLower = T.toLower (activityLocation a)
+                         in all (\w -> T.isInfixOf w nameLower || T.isInfixOf w locationLower) words
+                 in [a | a <- activities, matchesAllWords a]
 
         -- Filter by geography if provided (substring match)
         geoFiltered = case geoParam of

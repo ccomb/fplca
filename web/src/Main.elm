@@ -56,6 +56,7 @@ type alias Model =
     , activitiesSearchQuery : String
     , searchResults : Maybe (SearchResults ActivitySummary)
     , searchLoading : Bool
+    , loadingMore : Bool
     , hoveredNode : Maybe String
     , inventorySearchQuery : String
     , skipNextUrlChange : Bool -- Flag to prevent processing self-initiated URL changes
@@ -82,6 +83,8 @@ type Msg
     | UpdateSearchQuery String
     | SearchActivities String
     | ActivitiesSearchResults (Result Http.Error (SearchResults ActivitySummary))
+    | LoadMoreActivities
+    | MoreActivitiesLoaded (Result Http.Error (SearchResults ActivitySummary))
     | SelectActivity String
     | NodeHovered (Maybe String)
     | UpdateInventorySearchQuery String
@@ -230,6 +233,7 @@ init _ url key =
             , activitiesSearchQuery = routeConfig.searchQuery
             , searchResults = Nothing
             , searchLoading = shouldSearch
+            , loadingMore = False
             , hoveredNode = Nothing
             , inventorySearchQuery = ""
             , skipNextUrlChange = False
@@ -606,6 +610,7 @@ update msg model =
             ( { model
                 | searchResults = Just results
                 , searchLoading = False
+                , loadingMore = False
                 , error = Nothing
               }
             , Cmd.none
@@ -615,6 +620,48 @@ update msg model =
             ( { model
                 | searchResults = Nothing
                 , searchLoading = False
+                , loadingMore = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        LoadMoreActivities ->
+            case model.searchResults of
+                Just results ->
+                    let
+                        newOffset =
+                            results.offset + results.limit
+                    in
+                    ( { model | loadingMore = True }
+                    , searchActivitiesWithOffset model.activitiesSearchQuery newOffset results.limit
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        MoreActivitiesLoaded (Ok newResults) ->
+            case model.searchResults of
+                Just existingResults ->
+                    ( { model
+                        | searchResults =
+                            Just
+                                { existingResults
+                                    | results = existingResults.results ++ newResults.results
+                                    , offset = newResults.offset
+                                    , hasMore = newResults.hasMore
+                                }
+                        , loadingMore = False
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( { model | loadingMore = False }, Cmd.none )
+
+        MoreActivitiesLoaded (Err error) ->
+            ( { model
+                | loadingMore = False
                 , error = Just (httpErrorToString error)
               }
             , Cmd.none
@@ -814,7 +861,7 @@ routeToUrl route =
 
 navigateToActivity : Nav.Key -> String -> Cmd Msg
 navigateToActivity key processId =
-    Nav.pushUrl key (routeToUrl (ActivityInventoryRoute processId))
+    Nav.pushUrl key (routeToUrl (ActivityDetailsRoute processId))
 
 
 subscriptions : Model -> Sub Msg
@@ -850,11 +897,15 @@ view model =
 
                                 ActivitiesView.SelectActivity activityId ->
                                     SelectActivity activityId
+
+                                ActivitiesView.LoadMore ->
+                                    LoadMoreActivities
                         )
                         (ActivitiesView.viewActivitiesPage
                             model.activitiesSearchQuery
                             model.searchResults
                             model.searchLoading
+                            model.loadingMore
                             model.error
                         )
 
@@ -1291,6 +1342,20 @@ searchActivities query =
                 , Url.Builder.int "limit" 20
                 ]
         , expect = Http.expectJson ActivitiesSearchResults (searchResultsDecoder activitySummaryDecoder)
+        }
+
+
+searchActivitiesWithOffset : String -> Int -> Int -> Cmd Msg
+searchActivitiesWithOffset query offset limit =
+    Http.get
+        { url =
+            Url.Builder.absolute
+                [ "api", "v1", "search", "activities" ]
+                [ Url.Builder.string "name" query
+                , Url.Builder.int "limit" limit
+                , Url.Builder.int "offset" offset
+                ]
+        , expect = Http.expectJson MoreActivitiesLoaded (searchResultsDecoder activitySummaryDecoder)
         }
 
 
