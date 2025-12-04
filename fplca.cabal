@@ -5,8 +5,8 @@ build-type:          Simple
 
 license:             AGPL-3.0-or-later
 license-file:        LICENSE
-author:              Toi
-maintainer:          toi@example.com
+author:              Christophe Combelles
+maintainer:          ccomb@free.fr
 category:            Life Cycle Assessment
 synopsis:            In-memory high performance LCA engine
 description:         This project is a Life Cycle Assessment (LCA) engine.
@@ -59,6 +59,7 @@ executable fplca
                      , random
                      , petsc-hs
                      , unix
+                     , base64-bytestring
 
   other-modules:     LCA.Types
                      , LCA.Types.API
@@ -68,6 +69,7 @@ executable fplca
                      , LCA.Progress
                      , LCA.Query
                      , LCA.API
+                     , LCA.Auth
                      , LCA.Service
                      , LCA.UnitConversion
                      , LCA.CLI.Types

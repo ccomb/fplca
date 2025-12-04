@@ -133,6 +133,11 @@ fplca --data ./data server
 # Custom port
 fplca --data ./data server --port 3000
 
+# With password protection (HTTP Basic Auth)
+fplca --data ./data server --password mysecret
+# Or via environment variable
+FPLCA_PASSWORD=mysecret fplca --data ./data server
+
 # Web interface available at http://localhost:8080/
 # API endpoints at http://localhost:8080/api/v1/
 ```

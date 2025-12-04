@@ -45,6 +45,7 @@ data Command =
 -- | Server-specific options
 data ServerOptions = ServerOptions
   { serverPort :: Int           -- Server port (--port)
+  , serverPassword :: Maybe String  -- Password for HTTP Basic Auth (--password or FPLCA_PASSWORD)
   } deriving (Eq, Show, Generic)
 
 -- | Activity sub-commands (kept for flow activities only now)

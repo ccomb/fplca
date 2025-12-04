@@ -21,6 +21,7 @@ import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
 
 -- fpLCA imports
+import LCA.Auth (basicAuthMiddleware)
 import LCA.CLI.Command
 import LCA.CLI.Parser
 import LCA.CLI.Types
@@ -93,12 +94,23 @@ main = do
       reportProgress Info "Creating shared solver with cached factorization"
       sharedSolver <- createSharedSolver (dbCachedFactorization databaseWithFactorization) techTriplesInt activityCountInt
 
+      -- Get password from CLI or env var
+      password <- case serverPassword serverOpts of
+        Just pwd -> return (Just pwd)
+        Nothing -> lookupEnv "FPLCA_PASSWORD"
+
       reportProgress Info $ "Starting API server on port " ++ show port
       reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+      case password of
+        Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+        Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
       reportProgress Info "Web interface available at: http://localhost/"
 
-      let combinedApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver
-      run port combinedApp
+      let baseApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver
+          finalApp = case password of
+            Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
+            Nothing -> baseApp
+      run port finalApp
 
     _ -> executeCommand cliConfig database
 

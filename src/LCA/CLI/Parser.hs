@@ -99,6 +99,13 @@ serverOptionsParser = do
                 <> metavar "PORT"
                 <> help "Server port (default: 8080)"
             )
+    serverPassword <-
+        optional $
+            strOption
+                ( long "password"
+                    <> metavar "PASSWORD"
+                    <> help "Password for HTTP Basic Auth (or set FPLCA_PASSWORD env var)"
+                )
     pure ServerOptions{..}
 
 -- | Activity command parser (basic info only now)
