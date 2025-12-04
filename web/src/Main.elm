@@ -211,7 +211,7 @@ init _ url key =
             routeToPage route
 
         shouldSearch =
-            String.length routeConfig.searchQuery >= 2
+            not (String.isEmpty routeConfig.searchQuery)
 
         model =
             { key = key
@@ -569,9 +569,6 @@ update msg model =
 
         UpdateSearchQuery query ->
             let
-                shouldSearch =
-                    String.length query >= 2
-
                 queryName =
                     if String.isEmpty query then
                         Nothing
@@ -582,24 +579,34 @@ update msg model =
                 newRoute =
                     ActivitiesRoute { name = queryName, limit = Just 20 }
 
-                -- Only update URL when we actually trigger a search
-                -- This prevents losing focus on every keystroke
+                -- Search if query is not empty, clear results if empty
                 cmds =
-                    if shouldSearch then
+                    if String.isEmpty query then
+                        Cmd.batch
+                            [ Nav.replaceUrl model.key (routeToUrl newRoute)
+                            ]
+
+                    else
                         Cmd.batch
                             [ Nav.replaceUrl model.key (routeToUrl newRoute)
                             , searchActivities query
                             ]
 
+                newModel =
+                    if String.isEmpty query then
+                        { model
+                            | activitiesSearchQuery = query
+                            , searchResults = Nothing
+                            , skipNextUrlChange = True
+                        }
+
                     else
-                        Cmd.none
+                        { model
+                            | activitiesSearchQuery = query
+                            , skipNextUrlChange = True
+                        }
             in
-            ( { model
-                | activitiesSearchQuery = query
-                , skipNextUrlChange = shouldSearch  -- Skip the UrlChanged event we're about to trigger
-              }
-            , cmds
-            )
+            ( newModel, cmds )
 
         SearchActivities query ->
             ( { model | searchLoading = True, error = Nothing }
@@ -752,7 +759,7 @@ update msg model =
                         shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph
 
                     shouldSearch =
-                        newPage == ActivitiesPage && String.length routeInfo.searchQuery >= 2
+                        newPage == ActivitiesPage && not (String.isEmpty routeInfo.searchQuery)
 
                     -- Re-initialize view models when navigating to TreePage with cached tree data
                     newTreeViewModel =

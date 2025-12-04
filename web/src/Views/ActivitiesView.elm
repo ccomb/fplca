@@ -66,9 +66,7 @@ viewSearchResults maybeResults isLoading loadingMore =
                 ]
 
         ( _, Nothing ) ->
-            div [ class "has-text-centered" ]
-                [ div [ class "is-size-5 has-text-grey" ] [ text "Enter at least 2 characters to search" ]
-                ]
+            text ""
 
         ( _, Just results ) ->
             if List.isEmpty results.results then
