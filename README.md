@@ -11,14 +11,14 @@
 - **🚀 High Performance**: In-memory processing with PETSc linear algebra
 - **🌐 REST API**: HTTP server with comprehensive endpoints
 - **💾 Smart Caching**: Automatic caching for fast repeated queries
-- **📋 EcoSpold Support**: Native .spold file format parsing (EcoInvent)
+- **📋 EcoSpold2 Support**: Native .spold file format parsing (Ecoinvent)
 
 ---
 
 ## Overview & Capabilities
 
 ### Core LCA Functions
-- **Load EcoSpold databases** (.spold files from EcoInvent)
+- **Load EcoSpold2 databases** (.spold files from Ecoinvent)
 - **Build process dependency trees** with circular dependency handling
 - **Compute life cycle inventories** (LCI) via matrix operations
 - **Apply characterization methods** for impact assessment (LCIA)

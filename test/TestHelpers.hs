@@ -27,7 +27,7 @@ loadSampleDatabase sampleName = loadSampleDatabaseWithPath sampleName
 -- | Load database from a specific path
 loadSampleDatabaseWithPath :: String -> IO Database
 loadSampleDatabaseWithPath path = do
-    simpleDb <- loadAllSpoldsWithFlows path
+    simpleDb <- loadAllSpoldsWithFlows ("test-data/" ++ path)
     buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
 
 -- | Check if two floating point numbers are within tolerance

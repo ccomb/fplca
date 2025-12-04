@@ -8,6 +8,7 @@ import GoldenData
 import LCA.Types
 import LCA.Query (buildDatabaseWithMatrices)
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map as M
 
 spec :: Spec
@@ -19,15 +20,15 @@ spec = do
             -- Matrix.hs line 232 negates when building (I-A)
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let techTriples = V.toList (dbTechnosphereTriples db)
+            let techTriples = VU.toList (dbTechnosphereTriples db)
 
             -- Verify all technosphere triplets are POSITIVE
             -- Expected: Y needs 0.6 from X, Z needs 0.4 from Y
-            let positiveTriplets = filter (\(_, _, v) -> v > 0) techTriples
+            let positiveTriplets = filter (\(SparseTriple _ _ v) -> v > 0) techTriples
             length positiveTriplets `shouldBe` length techTriples
 
             -- Verify specific expected values
-            let sortedTriplets = V.toList (dbTechnosphereTriples db)
+            let sortedTriplets = VU.toList (dbTechnosphereTriples db)
             length sortedTriplets `shouldSatisfy` (>= 2)
 
         it "normalizes exchanges by reference product amount" $ do
@@ -35,7 +36,7 @@ spec = do
 
             -- Load activity X which outputs 1.0 kg
             -- Check that technosphere inputs are normalized
-            let techTriples = V.toList (dbTechnosphereTriples db)
+            let techTriples = VU.toList (dbTechnosphereTriples db)
 
             -- Should have at least 2 technosphere exchanges
             length techTriples `shouldSatisfy` (>= 2)
@@ -44,13 +45,13 @@ spec = do
         it "stores emissions as POSITIVE values" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let bioTriples = V.toList (dbBiosphereTriples db)
+            let bioTriples = VU.toList (dbBiosphereTriples db)
 
             -- Expected: 2 biosphere flows (CO2 and Zinc)
             length bioTriples `shouldSatisfy` (>= 2)
 
             -- All biosphere values should be positive for emissions
-            let emissionTriplets = filter (\(_, _, v) -> v > 0) bioTriples
+            let emissionTriplets = filter (\(SparseTriple _ _ v) -> v > 0) bioTriples
             length emissionTriplets `shouldSatisfy` (>= 2)
 
         it "builds biosphere matrix with correct dimensions" $ do
@@ -82,16 +83,16 @@ spec = do
         it "filters values below threshold (1e-15)" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let techTriples = V.toList (dbTechnosphereTriples db)
+            let techTriples = VU.toList (dbTechnosphereTriples db)
 
             -- All values should be > 1e-15
-            all (\(_, _, v) -> abs v > 1.0e-15) techTriples `shouldBe` True
+            all (\(SparseTriple _ _ v) -> abs v > 1.0e-15) techTriples `shouldBe` True
 
         it "excludes diagonal entries from technosphere triplets" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let techTriples = V.toList (dbTechnosphereTriples db)
+            let techTriples = VU.toList (dbTechnosphereTriples db)
 
             -- Diagonal entries (self-loops) are excluded in simple SAMPLE.min3
-            let diagonalEntries = filter (\(i, j, _) -> i == j) techTriples
+            let diagonalEntries = filter (\(SparseTriple i j _) -> i == j) techTriples
             length diagonalEntries `shouldBe` 0
