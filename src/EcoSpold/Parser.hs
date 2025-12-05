@@ -5,6 +5,7 @@
 module EcoSpold.Parser (streamParseActivityAndFlowsFromFile) where
 
 import LCA.Types
+import EcoSpold.Common (bsToText, bsToDouble, bsToInt, isElement)
 import qualified Data.ByteString as BS
 import qualified Data.List
 import qualified Data.Map as M
@@ -12,7 +13,6 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import System.FilePath (takeBaseName)
@@ -126,27 +126,6 @@ initialParseState = ParseState
     , psPendingInputGroup = ""
     , psPendingOutputGroup = ""
     }
-
--- | ByteString to Text conversion with UTF-8 decoding
-bsToText :: BS.ByteString -> Text
-bsToText = TE.decodeUtf8
-
--- | ByteString to Double conversion
-bsToDouble :: BS.ByteString -> Double
-bsToDouble bs = case TR.double (bsToText bs) of
-    Right (val, _) -> val
-    Left _ -> error $ "Failed to parse amount from: " ++ show bs
-
--- | ByteString to Int conversion
-bsToInt :: BS.ByteString -> Int
-bsToInt bs = case TR.decimal (bsToText bs) of
-    Right (val, _) -> val
-    Left _ -> 0
-
--- | Check if element name matches (with or without namespace prefix)
-isElement :: BS.ByteString -> BS.ByteString -> Bool
-isElement tagName expected =
-    tagName == expected || BS.isSuffixOf (":" `BS.append` expected) tagName
 
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String (Activity, [Flow], [Unit])

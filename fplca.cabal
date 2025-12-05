@@ -75,6 +75,7 @@ executable fplca
                      , LCA.CLI.Types
                      , LCA.CLI.Parser
                      , LCA.CLI.Command
+                     , EcoSpold.Common
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
                      , EcoSpold.Loader
@@ -110,6 +111,7 @@ test-suite acv-tests
                      , LCA.UnitConversion
                      , LCA.CLI.Types
                      , LCA.Tree
+                     , EcoSpold.Common
                      , EcoSpold.Loader
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
