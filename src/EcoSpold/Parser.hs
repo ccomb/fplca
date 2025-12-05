@@ -244,6 +244,7 @@ parseWithXeno xmlContent processId =
                             isReferenceProduct
                             (parseUUID $ idActivityLinkId idata)
                             Nothing
+                            ""  -- EcoSpold2: no per-exchange location
                         flow = Flow
                             (parseUUID $ idFlowId idata)
                             (if T.null (idFlowName idata) then idFlowId idata else idFlowName idata)
@@ -304,6 +305,7 @@ parseWithXeno xmlContent processId =
                             (edAmount edata)
                             (parseUUID $ edUnitId edata)
                             isInput
+                            ""  -- EcoSpold2: no per-exchange location
                         flow = Flow
                             (parseUUID $ edFlowId edata)
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
@@ -467,11 +469,10 @@ hasReferenceProduct activity = any exchangeIsReference (exchanges activity)
 removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
 removeZeroAmountCoproducts exs = filter keepExchange exs
   where
-    keepExchange (TechnosphereExchange _ _ _ False True _ _) = True
-    keepExchange (TechnosphereExchange _ amount _ False False _ _) = amount /= 0.0
-    keepExchange (TechnosphereExchange _ _ _ True _ _ _) = True
-    keepExchange (BiosphereExchange _ _ _ _) = True
-    keepExchange _ = True
+    keepExchange (TechnosphereExchange _ _ _ False True _ _ _) = True
+    keepExchange (TechnosphereExchange _ amount _ False False _ _ _) = amount /= 0.0
+    keepExchange (TechnosphereExchange _ _ _ True _ _ _ _) = True
+    keepExchange (BiosphereExchange _ _ _ _ _) = True
 
 -- | Assign single product as reference product
 assignSingleProductAsReference :: Activity -> Activity
@@ -488,7 +489,7 @@ assignSingleProductAsReference activity =
 
 -- | Check if exchange is production exchange (output, non-reference)
 isProductionExchange :: Exchange -> Bool
-isProductionExchange (TechnosphereExchange _ _ _ False _ _ _) = True -- Output technosphere = production
+isProductionExchange (TechnosphereExchange _ _ _ False _ _ _ _) = True -- Output technosphere = production
 isProductionExchange _ = False
 
 -- | Update reference product flag for the specified exchange
@@ -499,12 +500,12 @@ updateReferenceProduct target current
 
 -- | Mark exchange as reference product
 markAsReference :: Exchange -> Exchange
-markAsReference (TechnosphereExchange fid amt uid isInput _ linkId procLink) =
-    TechnosphereExchange fid amt uid isInput True linkId procLink
+markAsReference (TechnosphereExchange fid amt uid isInp _ linkId procLink loc) =
+    TechnosphereExchange fid amt uid isInp True linkId procLink loc
 markAsReference ex = ex -- No change for biosphere exchanges
 
 -- | Unmark exchange as reference product
 unmarkAsReference :: Exchange -> Exchange
-unmarkAsReference (TechnosphereExchange fid amt uid isInput _ linkId procLink) =
-    TechnosphereExchange fid amt uid isInput False linkId procLink
+unmarkAsReference (TechnosphereExchange fid amt uid isInp _ linkId procLink loc) =
+    TechnosphereExchange fid amt uid isInp False linkId procLink loc
 unmarkAsReference ex = ex -- No change for biosphere exchanges

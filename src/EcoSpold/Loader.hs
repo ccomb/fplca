@@ -33,6 +33,7 @@ import LCA.Progress
 import LCA.Types
 import Control.Concurrent.Async
 import Control.DeepSeq (force)
+import Data.Char (toLower)
 import Control.Exception (SomeException, catch, evaluate)
 import Control.Monad
 import Data.Binary (encode, decode)
@@ -48,10 +49,13 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Codec.Compression.Zstd as Zstd
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
+import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import System.Directory (doesFileExist, getFileSize, listDirectory, removeFile)
 import System.FilePath (takeBaseName, takeExtension, (</>))
+import System.IO (hPutStrLn, stderr)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
 
 {-|
@@ -77,7 +81,7 @@ Version history:
 - Version 15: MAJOR: Sparse triple unboxed optimization - converted from boxed Vector (Int32, Int32, Double) to unboxed VU.Vector SparseTriple with UNPACK pragmas - saves ~25MB and eliminates 800K heap objects from GC tracking
 -}
 cacheFormatVersion :: Int
-cacheFormatVersion = 15
+cacheFormatVersion = 16  -- v16: Added techLocation/bioLocation fields to Exchange types
 
 {-|
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -88,6 +92,106 @@ testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encode
 
 parseUUID :: T.Text -> UUID.UUID
 parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)
+
+-- | Namespace for EcoSpold1 UUID generation
+ecospold1Namespace :: UUID.UUID
+ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 "ecospold1.ecoinvent.org")
+
+-- | Generate activity UUID from activity name and location (for EcoSpold1)
+generateActivityUUIDFromActivity :: Activity -> UUID.UUID
+generateActivityUUIDFromActivity act =
+    let key = activityName act <> ":" <> activityLocation act
+    in UUID5.generateNamed ecospold1Namespace (BS.unpack $ T.encodeUtf8 key)
+
+-- | Get reference product UUID from activity exchanges
+getReferenceProductUUID :: Activity -> UUID.UUID
+getReferenceProductUUID act =
+    case filter exchangeIsReference (exchanges act) of
+        (ref:_) -> exchangeFlowId ref
+        [] -> UUID.nil  -- No reference product found
+
+-- | Type alias for supplier lookup index
+type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
+
+-- | Normalize text for matching: lowercase and strip whitespace
+normalizeText :: T.Text -> T.Text
+normalizeText = T.toLower . T.strip
+
+-- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
+-- For each activity, we index it by its reference product name + activity location
+buildSupplierIndex :: ActivityMap -> FlowDB -> SupplierIndex
+buildSupplierIndex activities flowDb = M.fromList
+    [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
+    | ((actUUID, prodUUID), act) <- M.toList activities
+    , ex <- exchanges act
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+    ]
+
+-- | Fix EcoSpold1 activity links by resolving supplier references
+-- Uses (flowName, flowLocation) to look up the correct supplier activity
+fixEcoSpold1ActivityLinks :: SimpleDatabase -> IO SimpleDatabase
+fixEcoSpold1ActivityLinks db = do
+    let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)
+    reportProgress Info $ printf "Built supplier index with %d entries for activity linking" (M.size supplierIndex)
+
+    -- Count and report statistics
+    let (fixedActivities, linkStats) = fixAllActivities supplierIndex (sdbFlows db) (sdbActivities db)
+    let (totalLinks, foundLinks, missingLinks) = linkStats
+
+    reportProgress Info $ printf "Activity linking: %d/%d resolved (%.1f%%), %d unresolved"
+        foundLinks totalLinks
+        (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
+        missingLinks
+
+    return $ db { sdbActivities = fixedActivities }
+
+-- | Fix all activities and return statistics
+fixAllActivities :: SupplierIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+fixAllActivities idx flowDb activities =
+    let results = M.map (\act -> fixActivityExchanges idx flowDb act) activities
+        statsList = map snd $ M.elems results
+        totalLinks = sum $ map (\(t, _, _) -> t) statsList
+        foundLinks = sum $ map (\(_, f, _) -> f) statsList
+        missingLinks = sum $ map (\(_, _, m) -> m) statsList
+        fixedActivities = M.map fst results
+    in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+
+-- | Fix activity exchanges and return (fixed activity, (total, found, missing))
+fixActivityExchanges :: SupplierIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+fixActivityExchanges idx flowDb act =
+    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink idx flowDb (activityName act)) (exchanges act)
+        totalLinks = sum $ map (\(t, _, _) -> t) stats
+        foundLinks = sum $ map (\(_, f, _) -> f) stats
+        missingLinks = sum $ map (\(_, _, m) -> m) stats
+    in (act { exchanges = fixedExchanges }, (totalLinks, foundLinks, missingLinks))
+
+-- | Fix a single exchange's activity link
+-- Returns (fixed exchange, (total attempts, found, missing))
+fixExchangeLink :: SupplierIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLink idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+    | isInp && not (T.null loc) =  -- Only fix technosphere inputs with location
+        case M.lookup fid flowDb of
+            Just flow ->
+                let key = (normalizeText (flowName flow), loc)
+                in case M.lookup key idx of
+                    Just (actUUID, prodUUID) ->
+                        -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
+                        -- This is critical because the matrix lookup uses (activityLinkId, flowId) as the key
+                        (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
+                    Nothing -> do
+                        -- Supplier not found - log warning
+                        let !_ = unsafePerformIO $ hPutStrLn stderr $
+                                "[WARNING] No supplier found for technosphere input:\n" ++
+                                "  Flow: \"" ++ T.unpack (flowName flow) ++ "\"\n" ++
+                                "  Location: \"" ++ T.unpack loc ++ "\"\n" ++
+                                "  Consumer: \"" ++ T.unpack consumerName ++ "\""
+                        (ex, (1, 0, 1))
+            Nothing ->
+                -- Flow not in database - shouldn't happen but be safe
+                (ex, (1, 0, 1))
+    | otherwise = (ex, (0, 0, 0))  -- Not a linkable exchange
+fixExchangeLink _ _ _ ex = (ex, (0, 0, 0))  -- BiosphereExchange - no linking needed
 
 {-|
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -110,11 +214,21 @@ loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
 loadAllSpoldsWithFlows dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
-    let spoldFiles = [dir </> f | f <- files, takeExtension f == ".spold"]
-    reportProgress Info $ "Found " ++ show (length spoldFiles) ++ " .spold files for processing"
+    -- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files
+    let spold2Files = [dir </> f | f <- files, takeExtension f == ".spold"]
+    let spold1Files = [dir </> f | f <- files, map toLower (takeExtension f) == ".xml"]
+
+    -- Determine which format to use based on what's found
+    let (spoldFiles, formatName, isEcoSpold1) = case (spold2Files, spold1Files) of
+            ([], []) -> error $ "No EcoSpold files found in directory: " ++ dir
+            ([], xs) -> (xs, "EcoSpold1 (.XML)", True)
+            (xs, []) -> (xs, "EcoSpold2 (.spold)", False)
+            (xs, _)  -> (xs, "EcoSpold2 (.spold)", False)  -- Prefer EcoSpold2 if both present
+
+    reportProgress Info $ "Found " ++ show (length spoldFiles) ++ " " ++ formatName ++ " files for processing"
 
     -- Simple N-worker parallelism: divide files among CPU cores
-    loadWithWorkerParallelism spoldFiles
+    loadWithWorkerParallelism spoldFiles isEcoSpold1
   where
     numWorkers = 4  -- Number of parallel workers (match CPU cores)
 
@@ -123,15 +237,15 @@ loadAllSpoldsWithFlows dir = do
     unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a:as, b:bs, c:cs, d:ds, e:es)) ([], [], [], [], [])
 
     -- Worker-based parallelism: divide files among N workers, all process in parallel
-    loadWithWorkerParallelism :: [FilePath] -> IO SimpleDatabase
-    loadWithWorkerParallelism allFiles = do
+    loadWithWorkerParallelism :: [FilePath] -> Bool -> IO SimpleDatabase
+    loadWithWorkerParallelism allFiles isEcoSpold1 = do
         let workers = distributeFiles numWorkers allFiles
         reportProgress Info $ printf "Processing %d files with %d parallel workers (%d files per worker)"
             (length allFiles) numWorkers (length allFiles `div` numWorkers)
 
         -- Process all workers in parallel
         startTime <- getCurrentTime
-        results <- mapConcurrently (processWorker startTime) (zip [1..] workers)
+        results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1..] workers)
         let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
@@ -153,7 +267,12 @@ loadAllSpoldsWithFlows dir = do
         reportProgress Info $ printf "  Units: %d unique (%.1f%% deduplication from %d raw)"
             (M.size finalUnitMap) unitDeduplication totalRawUnits
         reportMemoryUsage "Final parsing memory usage"
-        return $ SimpleDatabase finalProcMap finalFlowMap finalUnitMap
+
+        -- For EcoSpold1: fix activity links using supplier lookup table
+        let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
+        if isEcoSpold1
+            then fixEcoSpold1ActivityLinks simpleDb
+            else return simpleDb
 
     -- Distribute files evenly among N workers
     distributeFiles :: Int -> [a] -> [[a]]
@@ -170,28 +289,42 @@ loadAllSpoldsWithFlows dir = do
         distribute (s:ss) items = take s items : distribute ss (drop s items)
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
-    processWorker startTime (workerNum, workerFiles) = do
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
+    processWorker startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
-        -- Parse all files for this worker
-        workerResults <- mapM streamParseActivityAndFlowsFromFile workerFiles
+        -- Parse all files for this worker using appropriate parser
+        let parseFile = if isEcoSpold1
+                        then streamParseActivityAndFlowsFromFile1
+                        else streamParseActivityAndFlowsFromFile
+        workerResults <- mapM parseFile workerFiles
         let (!procs, flowLists, unitLists) = unzip3 workerResults
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
 
         -- Build maps for this worker - extract UUID pairs from filenames
+        -- For EcoSpold1: generate UUIDs from numeric dataset number
+        -- For EcoSpold2: parse UUIDs from filename (activityUUID_productUUID.spold)
         let !procMap = M.fromList $ zipWith (\filepath activity ->
-                let filename = T.pack $ takeBaseName filepath
-                in case T.splitOn "_" filename of
-                    [actUUIDText, prodUUIDText] ->
-                        -- Parse UUIDs, generating deterministic UUIDs for invalid test data
-                        -- This prevents deduplication issues where all invalid UUIDs would map to nil
-                        let actUUID = parseUUID actUUIDText
-                            prodUUID = parseUUID prodUUIDText
-                        in ((actUUID, prodUUID), activity)
-                    _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
+                if isEcoSpold1
+                then
+                    -- EcoSpold1: Generate activity UUID from name and location
+                    -- Get the reference product UUID from exchanges
+                    let actUUID = generateActivityUUIDFromActivity activity
+                        prodUUID = getReferenceProductUUID activity
+                    in ((actUUID, prodUUID), activity)
+                else
+                    -- EcoSpold2: Parse UUIDs from filename
+                    let filename = T.pack $ takeBaseName filepath
+                    in case T.splitOn "_" filename of
+                        [actUUIDText, prodUUIDText] ->
+                            -- Parse UUIDs, generating deterministic UUIDs for invalid test data
+                            -- This prevents deduplication issues where all invalid UUIDs would map to nil
+                            let actUUID = parseUUID actUUIDText
+                                prodUUID = parseUUID prodUUIDText
+                            in ((actUUID, prodUUID), activity)
+                        _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
                 ) workerFiles procs
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
@@ -217,8 +350,11 @@ Uses separate filename pattern: "ecoinvent.matrix.v{VERSION}.{HASH}.bin"
 generateMatrixCacheFilename :: FilePath -> IO FilePath
 generateMatrixCacheFilename dataDir = do
     files <- listDirectory dataDir
-    let spoldFiles = [f | f <- files, takeExtension f == ".spold"]
-    let filesHash = abs $ hash (show (dataDir, spoldFiles)) -- Hash both directory path and file list
+    -- Include both EcoSpold1 and EcoSpold2 files in hash
+    let spold2Files = [f | f <- files, takeExtension f == ".spold"]
+    let spold1Files = [f | f <- files, map toLower (takeExtension f) == ".xml"]
+    let allSpoldFiles = spold2Files ++ spold1Files
+    let filesHash = abs $ hash (show (dataDir, allSpoldFiles)) -- Hash both directory path and file list
     return $ "ecoinvent.matrix.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
 {-|

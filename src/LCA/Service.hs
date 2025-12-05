@@ -535,7 +535,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                       -- Use pattern matching to filter technosphere inputs
                                       let techExchanges = [ex | ex <- exchanges srcAct,
                                                                 case ex of
-                                                                    TechnosphereExchange _ _ _ isInput isRef _ _ -> isInput && not isRef
+                                                                    TechnosphereExchange _ _ _ isInput isRef _ _ _ -> isInput && not isRef
                                                                     _ -> False]
                                       -- Match by target activity UUID
                                       case [ex | ex <- techExchanges, exchangeActivityLinkId ex == Just targetUUID] of
@@ -723,14 +723,14 @@ convertActivityForAPI db processId activity =
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
-                TechnosphereExchange _ _ _ _ _ linkId _ ->
+                TechnosphereExchange _ _ _ _ _ linkId _ _ ->
                     case findActivityByActivityUUID db linkId of
                         Just targetActivity ->
                             let maybeProcessId = findProcessIdByActivityUUID db linkId
                                 processIdText = fmap (processIdToText db) maybeProcessId
                             in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
                         Nothing -> (Nothing, Nothing, Nothing)
-                BiosphereExchange _ _ _ _ -> (Nothing, Nothing, Nothing)
+                BiosphereExchange _ _ _ _ _ -> (Nothing, Nothing, Nothing)
          in ExchangeWithUnit
                 { ewuExchange = exchange
                 , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange

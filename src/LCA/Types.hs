@@ -74,51 +74,58 @@ data Exchange
         , techIsReference :: !Bool -- True if reference product (main output)
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
+        , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
         , bioAmount :: !Double -- Quantity exchanged
         , bioUnitId :: !UUID -- Unit of measurement
         , bioIsInput :: !Bool -- True for resource extraction, False for emissions
+        , bioLocation :: !Text -- Exchange location (EcoSpold1) or "" (EcoSpold2)
         }
     deriving (Generic, NFData, Binary)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
-exchangeFlowId (TechnosphereExchange fid _ _ _ _ _ _) = fid
-exchangeFlowId (BiosphereExchange fid _ _ _) = fid
+exchangeFlowId (TechnosphereExchange fid _ _ _ _ _ _ _) = fid
+exchangeFlowId (BiosphereExchange fid _ _ _ _) = fid
 
 exchangeAmount :: Exchange -> Double
-exchangeAmount (TechnosphereExchange _ amt _ _ _ _ _) = amt
-exchangeAmount (BiosphereExchange _ amt _ _) = amt
+exchangeAmount (TechnosphereExchange _ amt _ _ _ _ _ _) = amt
+exchangeAmount (BiosphereExchange _ amt _ _ _) = amt
 
 exchangeUnitId :: Exchange -> UUID
-exchangeUnitId (TechnosphereExchange _ _ uid _ _ _ _) = uid
-exchangeUnitId (BiosphereExchange _ _ uid _) = uid
+exchangeUnitId (TechnosphereExchange _ _ uid _ _ _ _ _) = uid
+exchangeUnitId (BiosphereExchange _ _ uid _ _) = uid
 
 exchangeIsInput :: Exchange -> Bool
-exchangeIsInput (TechnosphereExchange _ _ _ isInput _ _ _) = isInput
-exchangeIsInput (BiosphereExchange _ _ _ isInput) = isInput
+exchangeIsInput (TechnosphereExchange _ _ _ isInp _ _ _ _) = isInp
+exchangeIsInput (BiosphereExchange _ _ _ isInp _) = isInp
 
 exchangeIsReference :: Exchange -> Bool
-exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _) = isRef
-exchangeIsReference (BiosphereExchange _ _ _ _) = False -- Biosphere exchanges are never reference products
+exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _ _) = isRef
+exchangeIsReference (BiosphereExchange _ _ _ _ _) = False -- Biosphere exchanges are never reference products
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
-exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _) =
+exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _ _) =
     if linkId == UUID.nil then Nothing else Just linkId
-exchangeActivityLinkId (BiosphereExchange _ _ _ _) = Nothing
+exchangeActivityLinkId (BiosphereExchange _ _ _ _ _) = Nothing
 
 -- | Get process link ID (new field)
 exchangeProcessLinkId :: Exchange -> Maybe ProcessId
-exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId) = processLinkId
-exchangeProcessLinkId (BiosphereExchange _ _ _ _) = Nothing
+exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId _) = processLinkId
+exchangeProcessLinkId (BiosphereExchange _ _ _ _ _) = Nothing
+
+-- | Get exchange location (for EcoSpold1 supplier lookup)
+exchangeLocation :: Exchange -> Text
+exchangeLocation (TechnosphereExchange _ _ _ _ _ _ _ loc) = loc
+exchangeLocation (BiosphereExchange _ _ _ _ loc) = loc
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
-isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _) = True
-isTechnosphereExchange (BiosphereExchange _ _ _ _) = False
+isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _ _) = True
+isTechnosphereExchange (BiosphereExchange _ _ _ _ _) = False
 
 -- | Check if exchange is biosphere
 isBiosphereExchange :: Exchange -> Bool
