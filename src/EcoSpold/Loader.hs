@@ -241,7 +241,6 @@ loadAllSpoldsWithFlows path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: FilePath -> IO SimpleDatabase
 loadSimaProCSV csvPath = do
-    reportProgress Info $ "Loading SimaPro CSV file: " ++ csvPath
     (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvPath
 
     -- Build ActivityMap with generated ProcessIds
@@ -251,11 +250,6 @@ loadSimaProCSV csvPath = do
             [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
             | (_, act) <- activityList
             ]
-
-    reportProgress Info $ printf "SimaPro parsing completed:"
-    reportProgress Info $ printf "  Activities: %d processes" (length activities)
-    reportProgress Info $ printf "  Flows: %d unique" (M.size flowDB)
-    reportProgress Info $ printf "  Units: %d unique" (M.size unitDB)
 
     -- Build initial database
     let simpleDb = SimpleDatabase procMap flowDB unitDB

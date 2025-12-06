@@ -17,6 +17,7 @@ module SimaPro.Parser
     ) where
 
 import LCA.Types
+import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import qualified Data.ByteString as BS
@@ -665,9 +666,9 @@ parseSimaProCSV path = do
     finalAcc <- evaluate $ foldl' processLine initialAcc lines'
     let blocks = reverse (paBlocks finalAcc)
 
-    -- Convert all blocks to activities (one activity per product)
-    let converted = concatMap processBlockToActivity blocks
-        activities = map (\(a,_,_) -> a) converted
+    -- Convert all blocks to activities (one activity per product) - PARALLEL
+    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity) blocks
+    let activities = map (\(a,_,_) -> a) converted
         allFlows = concatMap (\(_,f,_) -> f) converted
         allUnits = concatMap (\(_,_,u) -> u) converted
 
