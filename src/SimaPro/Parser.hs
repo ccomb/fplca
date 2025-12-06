@@ -360,7 +360,8 @@ processLine acc@ParseAcc{..} line
     -- End of block
     | T.strip line == "End" =
         let block = paCurrentBlock
-            isValid = not (T.null (pbName block))
+            -- A block is valid if it has at least one product (process name not required)
+            isValid = not (null (pbProducts block))
         in acc { paState = BetweenBlocks
                , paBlocks = if isValid then block : paBlocks else paBlocks
                , paCurrentBlock = emptyProcessBlock
@@ -485,46 +486,34 @@ extractLocation name =
                 _ -> (name, "")
         _ -> (name, "")
 
--- | Convert ProcessBlock to Activity
-processBlockToActivity :: ProcessBlock -> (Activity, [Flow], [Unit])
+-- | Convert ProcessBlock to list of Activities (one per product)
+-- This matches EcoSpold behavior where multi-product processes create multiple activities
+processBlockToActivity :: ProcessBlock -> [(Activity, [Flow], [Unit])]
 processBlockToActivity ProcessBlock{..} =
-    let -- Extract location from name if not specified
-        (cleanName, locFromName) = extractLocation pbName
-        -- Always prefer product name (full) over process name (may be truncated at 80 chars in SimaPro CSV)
-        finalName = case pbProducts of
-            (p:_) -> prName p  -- Product names are not truncated
-            _ -> cleanName     -- Fallback to process name if no products
+    let -- Extract location from process name if not specified
+        (_, locFromName) = extractLocation pbName
         location = if T.null pbLocation then locFromName else pbLocation
 
-        -- Generate activity UUID
-        activityUUID = generateActivityUUID pbIdentifier
-
-        -- Get reference product
-        refUnit = case pbProducts of
-            (p:_) -> prUnit p
-            _ -> ""
-
-        -- Convert products to exchanges
-        productExchanges = map (productToExchange True) pbProducts
+        -- Convert avoided products (shared across all activities)
         avoidedExchanges = map (productToExchange False) pbAvoidedProducts
 
-        -- Convert technosphere inputs
+        -- Convert technosphere inputs (shared across all activities)
         techExchanges = concatMap (techRowToExchange True) (pbMaterials ++ pbElectricity)
         wasteExchanges = concatMap (techRowToExchange False) pbWasteToTreatment
 
-        -- Convert biosphere exchanges
+        -- Convert biosphere exchanges (shared across all activities)
         resourceExchanges = map (bioRowToExchange True "resource") pbResources
         airExchanges = map (bioRowToExchange False "air") pbEmissionsAir
         waterExchanges = map (bioRowToExchange False "water") pbEmissionsWater
         soilExchanges = map (bioRowToExchange False "soil") pbEmissionsSoil
         wasteFlowExchanges = map (bioRowToExchange False "waste") pbFinalWaste
 
-        allExchanges = productExchanges ++ avoidedExchanges ++
-                       techExchanges ++ wasteExchanges ++
-                       resourceExchanges ++ airExchanges ++ waterExchanges ++
-                       soilExchanges ++ wasteFlowExchanges
+        sharedExchanges = avoidedExchanges ++
+                          techExchanges ++ wasteExchanges ++
+                          resourceExchanges ++ airExchanges ++ waterExchanges ++
+                          soilExchanges ++ wasteFlowExchanges
 
-        -- Collect flows and units
+        -- Collect all flows and units (shared)
         allFlows = collectFlows (pbProducts ++ pbAvoidedProducts)
                                 (pbMaterials ++ pbElectricity ++ pbWasteToTreatment)
                                 (pbResources ++ pbEmissionsAir ++ pbEmissionsWater ++
@@ -534,17 +523,22 @@ processBlockToActivity ProcessBlock{..} =
                                 (pbResources ++ pbEmissionsAir ++ pbEmissionsWater ++
                                  pbEmissionsSoil ++ pbFinalWaste)
 
-        activity = Activity
-            { activityName = finalName
-            , activityDescription = if T.null pbComment then [] else [pbComment]
-            , activitySynonyms = M.empty
-            , activityClassification = M.empty
-            , activityLocation = location
-            , activityUnit = refUnit
-            , exchanges = allExchanges
-            }
+        -- Create one activity per product
+        makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
+        makeActivity prod =
+            let productExchange = productToExchange True prod
+                activity = Activity
+                    { activityName = prName prod
+                    , activityDescription = if T.null pbComment then [] else [pbComment]
+                    , activitySynonyms = M.empty
+                    , activityClassification = M.empty
+                    , activityLocation = location
+                    , activityUnit = prUnit prod
+                    , exchanges = productExchange : sharedExchanges
+                    }
+            in (activity, allFlows, allUnits)
 
-    in (activity, allFlows, allUnits)
+    in map makeActivity pbProducts
 
 -- | Convert product row to exchange
 productToExchange :: Bool -> ProductRow -> Exchange
@@ -665,8 +659,8 @@ parseSimaProCSV path = do
     finalAcc <- evaluate $ foldl' processLine initialAcc lines'
     let blocks = reverse (paBlocks finalAcc)
 
-    -- Convert all blocks to activities
-    let converted = map processBlockToActivity blocks
+    -- Convert all blocks to activities (one activity per product)
+    let converted = concatMap processBlockToActivity blocks
         activities = map (\(a,_,_) -> a) converted
         allFlows = concatMap (\(_,f,_) -> f) converted
         allUnits = concatMap (\(_,_,u) -> u) converted
