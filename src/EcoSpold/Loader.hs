@@ -50,9 +50,10 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Codec.Compression.Zstd as Zstd
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1)
+import qualified SimaPro.Parser as SimaPro
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import System.Directory (doesFileExist, getFileSize, listDirectory, removeFile)
+import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
@@ -110,8 +111,12 @@ getReferenceProductUUID act =
         (ref:_) -> exchangeFlowId ref
         [] -> UUID.nil  -- No reference product found
 
--- | Type alias for supplier lookup index
+-- | Type alias for supplier lookup index (with location)
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
+
+-- | Type alias for name-only supplier lookup (for SimaPro)
+-- Maps normalizedProductName → (activityUUID, productUUID)
+type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID)
 
 -- | Normalize text for matching: lowercase and strip whitespace
 normalizeText :: T.Text -> T.Text
@@ -122,6 +127,17 @@ normalizeText = T.toLower . T.strip
 buildSupplierIndex :: ActivityMap -> FlowDB -> SupplierIndex
 buildSupplierIndex activities flowDb = M.fromList
     [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
+    | ((actUUID, prodUUID), act) <- M.toList activities
+    , ex <- exchanges act
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+    ]
+
+-- | Build name-only supplier index for SimaPro linking
+-- Uses only the normalized product name (no location required)
+buildSupplierIndexByName :: ActivityMap -> FlowDB -> NameOnlyIndex
+buildSupplierIndexByName activities flowDb = M.fromList
+    [ (normalizeText (flowName flow), (actUUID, prodUUID))
     | ((actUUID, prodUUID), act) <- M.toList activities
     , ex <- exchanges act
     , exchangeIsReference ex
@@ -211,7 +227,109 @@ Performance characteristics:
 Used when no cache exists or caching is disabled.
 -}
 loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
-loadAllSpoldsWithFlows dir = do
+loadAllSpoldsWithFlows path = do
+    -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
+    isFile <- doesFileExist path
+    isDir <- doesDirectoryExist path
+
+    if isFile && map toLower (takeExtension path) == ".csv"
+        then loadSimaProCSV path
+        else if isDir
+            then loadEcoSpoldDirectory path
+            else error $ "Path is neither a CSV file nor a directory: " ++ path
+
+-- | Load SimaPro CSV file
+loadSimaProCSV :: FilePath -> IO SimpleDatabase
+loadSimaProCSV csvPath = do
+    reportProgress Info $ "Loading SimaPro CSV file: " ++ csvPath
+    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvPath
+
+    -- Build ActivityMap with generated ProcessIds
+    -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
+    let activityList = zip [0..] activities
+        procMap = M.fromList
+            [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
+            | (_, act) <- activityList
+            ]
+
+    reportProgress Info $ printf "SimaPro parsing completed:"
+    reportProgress Info $ printf "  Activities: %d processes" (length activities)
+    reportProgress Info $ printf "  Flows: %d unique" (M.size flowDB)
+    reportProgress Info $ printf "  Units: %d unique" (M.size unitDB)
+
+    -- Build initial database
+    let simpleDb = SimpleDatabase procMap flowDB unitDB
+
+    -- Fix activity links using supplier lookup (same as EcoSpold1)
+    fixSimaProActivityLinks simpleDb
+
+-- | Fix SimaPro activity links by resolving supplier references
+-- Uses name-only matching (no location required) for SimaPro technosphere inputs
+fixSimaProActivityLinks :: SimpleDatabase -> IO SimpleDatabase
+fixSimaProActivityLinks db = do
+    let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbFlows db)
+    reportProgress Info $ printf "Built name-only supplier index with %d entries for SimaPro linking" (M.size nameIndex)
+
+    -- Count and report statistics
+    let (fixedActivities, linkStats) = fixAllActivitiesByName nameIndex (sdbFlows db) (sdbActivities db)
+    let (totalLinks, foundLinks, missingLinks) = linkStats
+
+    reportProgress Info $ printf "SimaPro activity linking: %d/%d resolved (%.1f%%), %d unresolved"
+        foundLinks totalLinks
+        (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
+        missingLinks
+
+    return $ db { sdbActivities = fixedActivities }
+
+-- | Fix all activities using name-only matching
+fixAllActivitiesByName :: NameOnlyIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+fixAllActivitiesByName idx flowDb activities =
+    let results = M.map (\act -> fixActivityExchangesByName idx flowDb act) activities
+        statsList = map snd $ M.elems results
+        totalLinks = sum $ map (\(t, _, _) -> t) statsList
+        foundLinks = sum $ map (\(_, f, _) -> f) statsList
+        missingLinks = sum $ map (\(_, _, m) -> m) statsList
+        fixedActivities = M.map fst results
+    in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+
+-- | Fix activity exchanges using name-only matching
+fixActivityExchangesByName :: NameOnlyIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+fixActivityExchangesByName idx flowDb act =
+    let (fixedExchanges, stats) = unzip $ map (fixExchangeLinkByName idx flowDb (activityName act)) (exchanges act)
+        totalLinks = sum $ map (\(t, _, _) -> t) stats
+        foundLinks = sum $ map (\(_, f, _) -> f) stats
+        missingLinks = sum $ map (\(_, _, m) -> m) stats
+    in (act { exchanges = fixedExchanges }, (totalLinks, foundLinks, missingLinks))
+
+-- | Fix a single exchange's activity link using name-only matching
+-- Returns (fixed exchange, (total attempts, found, missing))
+fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+    | isInp =  -- All technosphere inputs (no location check!)
+        case M.lookup fid flowDb of
+            Just flow ->
+                let key = normalizeText (flowName flow)
+                in case M.lookup key idx of
+                    Just (actUUID, prodUUID) ->
+                        -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
+                        (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
+                    Nothing -> do
+                        -- Supplier not found - log warning (only first few)
+                        let !_ = unsafePerformIO $ hPutStrLn stderr $
+                                "[WARNING] No supplier found for technosphere input:\n" ++
+                                "  Flow: \"" ++ T.unpack (flowName flow) ++ "\"\n" ++
+                                "  Location: \"" ++ T.unpack loc ++ "\"\n" ++
+                                "  Consumer: \"" ++ T.unpack consumerName ++ "\""
+                        (ex, (1, 0, 1))
+            Nothing ->
+                -- Flow not in database - shouldn't happen but be safe
+                (ex, (1, 0, 1))
+    | otherwise = (ex, (0, 0, 0))  -- Not a linkable exchange (outputs/references)
+fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0))  -- BiosphereExchange - no linking needed
+
+-- | Load EcoSpold files from directory
+loadEcoSpoldDirectory :: FilePath -> IO SimpleDatabase
+loadEcoSpoldDirectory dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
     -- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files
@@ -346,15 +464,26 @@ Matrix caches store pre-computed sparse matrices (technosphere A,
 biosphere B) enabling direct LCA solving without matrix construction.
 
 Uses separate filename pattern: "ecoinvent.matrix.v{VERSION}.{HASH}.bin"
+
+For files (e.g., SimaPro CSV), uses the file path in the hash.
+For directories (e.g., EcoSpold), uses directory + file list in hash.
 -}
 generateMatrixCacheFilename :: FilePath -> IO FilePath
-generateMatrixCacheFilename dataDir = do
-    files <- listDirectory dataDir
-    -- Include both EcoSpold1 and EcoSpold2 files in hash
-    let spold2Files = [f | f <- files, takeExtension f == ".spold"]
-    let spold1Files = [f | f <- files, map toLower (takeExtension f) == ".xml"]
-    let allSpoldFiles = spold2Files ++ spold1Files
-    let filesHash = abs $ hash (show (dataDir, allSpoldFiles)) -- Hash both directory path and file list
+generateMatrixCacheFilename path = do
+    isFile <- doesFileExist path
+    filesHash <- if isFile
+        then do
+            -- For single files (SimaPro CSV), use file path and size for hash
+            fileSize <- getFileSize path
+            return $ abs $ hash (show (path, fileSize))
+        else do
+            -- For directories (EcoSpold), use directory + file list
+            files <- listDirectory path
+            -- Include both EcoSpold1 and EcoSpold2 files in hash
+            let spold2Files = [f | f <- files, takeExtension f == ".spold"]
+            let spold1Files = [f | f <- files, map toLower (takeExtension f) == ".xml"]
+            let allSpoldFiles = spold2Files ++ spold1Files
+            return $ abs $ hash (show (path, allSpoldFiles))
     return $ "ecoinvent.matrix.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
 {-|

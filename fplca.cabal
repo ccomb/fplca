@@ -79,6 +79,7 @@ executable fplca
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
                      , EcoSpold.Loader
+                     , SimaPro.Parser
   default-language:    Haskell2010
 
 --executable test-mumps
