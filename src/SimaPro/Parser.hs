@@ -28,8 +28,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
+import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
+import System.IO (hPutStrLn, stderr)
+import Text.Printf (printf)
 
 -- ============================================================================
 -- Configuration Types
@@ -272,7 +275,7 @@ parseAmount decimalSep txt
 
 -- | Split a CSV line by delimiter (simple, doesn't handle quoted fields)
 splitCSV :: Char -> Text -> [Text]
-splitCSV delim = T.splitOn (T.singleton delim)
+splitCSV delim = T.split (== delim)
 
 -- | Parse a product row
 parseProductRow :: SimaProConfig -> Text -> Maybe ProductRow
@@ -643,6 +646,9 @@ collectUnits products techs bios =
 -- Handles Windows-1252/Latin-1 encoding common in SimaPro exports
 parseSimaProCSV :: FilePath -> IO ([Activity], FlowDB, UnitDB)
 parseSimaProCSV path = do
+    hPutStrLn stderr $ "Loading SimaPro CSV file: " ++ path
+    startTime <- getCurrentTime
+
     -- Read as ByteString and split into lines (more efficient than Text for 9M lines)
     rawContent <- BS.readFile path
     let bsLines = BS8.lines rawContent
@@ -670,9 +676,16 @@ parseSimaProCSV path = do
         unitDB = M.fromList [(unitId u, u) | u <- allUnits]
 
     -- Force evaluation before returning
-    _ <- evaluate (length activities)
-    _ <- evaluate (M.size flowDB)
-    _ <- evaluate (M.size unitDB)
+    let !numActivities = length activities
+    let !numFlows = M.size flowDB
+    let !numUnits = M.size unitDB
+
+    endTime <- getCurrentTime
+    let duration = realToFrac (diffUTCTime endTime startTime) :: Double
+    hPutStrLn stderr $ printf "SimaPro parsing completed in %.2fs:" duration
+    hPutStrLn stderr $ printf "  Activities: %d processes" numActivities
+    hPutStrLn stderr $ printf "  Flows: %d unique" numFlows
+    hPutStrLn stderr $ printf "  Units: %d unique" numUnits
 
     return (activities, flowDB, unitDB)
   where
