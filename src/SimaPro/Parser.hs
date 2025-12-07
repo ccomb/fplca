@@ -22,6 +22,7 @@ import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
+import Data.Char (toLower)
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -32,6 +33,7 @@ import qualified Data.Text.Encoding.Error as TEE
 import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
+import qualified Data.Vector as V
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
@@ -174,7 +176,7 @@ data SectionType
 -- | Parser state
 data ParseState
     = InHeader
-    | InProcessMeta !Text  -- Current metadata key being read
+    | InProcessMeta !BS.ByteString  -- Current metadata key being read
     | InSection !SectionType
     | BetweenBlocks
     deriving (Show, Eq)
@@ -193,40 +195,41 @@ data ParseAcc = ParseAcc
 -- ============================================================================
 
 -- | Parse a header line like "{key: value}" or "{value}"
-parseHeaderLine :: Text -> Maybe (Text, Text)
+parseHeaderLine :: BS.ByteString -> Maybe (BS.ByteString, BS.ByteString)
 parseHeaderLine line
-    | T.isPrefixOf "{" line && T.isSuffixOf "}" line =
-        let content = T.dropEnd 1 (T.drop 1 line)
-        in case T.breakOn ": " content of
-            (key, rest) | not (T.null rest) -> Just (T.strip key, T.strip (T.drop 2 rest))
-            _ -> Just (T.strip content, "")
+    | BS8.isPrefixOf "{" line && BS8.isSuffixOf "}" line =
+        let content = BS8.init (BS8.tail line)
+        in case BS8.breakSubstring ": " content of
+            (key, rest) | not (BS.null rest) -> Just (BS8.strip key, BS8.strip (BS.drop 2 rest))
+            _ -> Just (BS8.strip content, "")
     | otherwise = Nothing
 
--- | Update config from header line
-updateConfigFromHeader :: SimaProConfig -> Text -> Text -> SimaProConfig
-updateConfigFromHeader cfg key value = case T.toLower key of
-    k | "simapro" `T.isPrefixOf` k -> cfg { spVersion = key }
+-- | Update config from header line (takes ByteString, stores Text)
+updateConfigFromHeader :: SimaProConfig -> BS.ByteString -> BS.ByteString -> SimaProConfig
+updateConfigFromHeader cfg key value = case BS8.map toLower key of
+    k | "simapro" `BS8.isPrefixOf` k -> cfg { spVersion = decodeBS key }
     "processes" -> cfg { spFileType = "processes" }
     "methods" -> cfg { spFileType = "methods" }
     "product stages" -> cfg { spFileType = "product stages" }
     "csv separator" -> cfg { spDelimiter = parseDelimiter value }
-    "decimal separator" -> cfg { spDecimal = if T.null value then ',' else T.head value }
-    "short date format" -> cfg { spDateFormat = value }
+    "decimal separator" -> cfg { spDecimal = if BS.null value then ',' else BS8.head value }
+    "short date format" -> cfg { spDateFormat = decodeBS value }
     _ -> cfg
   where
-    parseDelimiter v = case T.toLower v of
+    parseDelimiter v = case BS8.map toLower v of
         "semicolon" -> ';'
         "comma" -> ','
         "tab" -> '\t'
         _ -> ';'
+    decodeBS = TE.decodeUtf8With TEE.lenientDecode
 
 -- ============================================================================
 -- Section Detection
 -- ============================================================================
 
--- | Detect section type from line
-detectSection :: Text -> Maybe SectionType
-detectSection line = case T.strip line of
+-- | Detect section type from line (ByteString)
+detectSection :: BS.ByteString -> Maybe SectionType
+detectSection line = case BS8.strip line of
     "Products" -> Just SecProducts
     "Avoided products" -> Just SecAvoidedProducts
     "Materials/fuels" -> Just SecMaterials
@@ -244,8 +247,8 @@ detectSection line = case T.strip line of
     "Economic issues" -> Just SecNone
     _ -> Nothing
 
--- | Known metadata keys in process block
-isMetadataKey :: Text -> Bool
+-- | Known metadata keys in process block (ByteString)
+isMetadataKey :: BS.ByteString -> Bool
 isMetadataKey key = key `elem`
     [ "Category type", "Process identifier", "Type", "Process name"
     , "Status", "Time period", "Geography", "Technology"
@@ -258,95 +261,100 @@ isMetadataKey key = key `elem`
     ]
 
 -- ============================================================================
--- Row Parsing
+-- Row Parsing (ByteString based, decode to Text only when storing)
 -- ============================================================================
 
--- | Parse amount with configurable decimal separator
-parseAmount :: Char -> Text -> Double
-parseAmount decimalSep txt
-    | T.null txt = 0.0
+-- | Decode ByteString to Text (lenient UTF-8)
+decodeBS :: BS.ByteString -> Text
+decodeBS = TE.decodeUtf8With TEE.lenientDecode
+{-# INLINE decodeBS #-}
+
+-- | Parse amount with configurable decimal separator (ByteString)
+parseAmount :: Char -> BS.ByteString -> Double
+parseAmount decimalSep bs
+    | BS.null bs = 0.0
     | otherwise =
         let normalized = if decimalSep == ','
-                         then T.replace "," "." txt
-                         else txt
-        in case reads (T.unpack normalized) of
+                         then BS8.map (\c -> if c == ',' then '.' else c) bs
+                         else bs
+        in case reads (BS8.unpack normalized) of
             [(val, "")] -> val
             [(val, _)] -> val  -- Allow trailing characters
             _ -> 0.0
 
--- | Split a CSV line by delimiter (simple, doesn't handle quoted fields)
-splitCSV :: Char -> Text -> [Text]
-splitCSV delim = T.split (== delim)
+-- | Split a CSV line by delimiter (ByteString)
+splitCSV :: Char -> BS.ByteString -> [BS.ByteString]
+splitCSV delim = BS8.split delim
 
--- | Parse a product row
-parseProductRow :: SimaProConfig -> Text -> Maybe ProductRow
+-- | Parse a product row (ByteString input, Text output)
+parseProductRow :: SimaProConfig -> BS.ByteString -> Maybe ProductRow
 parseProductRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
     in case fields of
         (name:unit:amount:alloc:waste:cat:rest) -> Just ProductRow
-            { prName = T.strip name
-            , prUnit = T.strip unit
-            , prAmount = parseAmount (spDecimal cfg) (T.strip amount)
-            , prAllocation = parseAmount (spDecimal cfg) (T.strip alloc)
-            , prWasteType = T.strip waste
-            , prCategory = T.strip cat
-            , prComment = T.intercalate ";" rest
+            { prName = decodeBS (BS8.strip name)
+            , prUnit = decodeBS (BS8.strip unit)
+            , prAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , prAllocation = parseAmount (spDecimal cfg) (BS8.strip alloc)
+            , prWasteType = decodeBS (BS8.strip waste)
+            , prCategory = decodeBS (BS8.strip cat)
+            , prComment = decodeBS (BS8.intercalate ";" rest)
             }
         _ -> Nothing
 
--- | Parse a technosphere exchange row
-parseTechRow :: SimaProConfig -> Text -> Maybe TechExchangeRow
+-- | Parse a technosphere exchange row (ByteString input, Text output)
+parseTechRow :: SimaProConfig -> BS.ByteString -> Maybe TechExchangeRow
 parseTechRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
     in case fields of
         (name:unit:amount:unc:_:_:_:rest) -> Just TechExchangeRow
-            { terName = T.strip name
-            , terUnit = T.strip unit
-            , terAmount = parseAmount (spDecimal cfg) (T.strip amount)
-            , terUncertainty = T.strip unc
-            , terComment = T.intercalate ";" rest
+            { terName = decodeBS (BS8.strip name)
+            , terUnit = decodeBS (BS8.strip unit)
+            , terAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , terUncertainty = decodeBS (BS8.strip unc)
+            , terComment = decodeBS (BS8.intercalate ";" rest)
             }
         (name:unit:amount:rest) -> Just TechExchangeRow
-            { terName = T.strip name
-            , terUnit = T.strip unit
-            , terAmount = parseAmount (spDecimal cfg) (T.strip amount)
+            { terName = decodeBS (BS8.strip name)
+            , terUnit = decodeBS (BS8.strip unit)
+            , terAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
             , terUncertainty = ""
-            , terComment = T.intercalate ";" rest
+            , terComment = decodeBS (BS8.intercalate ";" rest)
             }
         _ -> Nothing
 
--- | Parse a biosphere exchange row
-parseBioRow :: SimaProConfig -> Text -> Maybe BioExchangeRow
+-- | Parse a biosphere exchange row (ByteString input, Text output)
+parseBioRow :: SimaProConfig -> BS.ByteString -> Maybe BioExchangeRow
 parseBioRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
     in case fields of
         (name:compartment:unit:amount:unc:_:_:_:rest) -> Just BioExchangeRow
-            { berName = T.strip name
-            , berCompartment = T.strip compartment
-            , berUnit = T.strip unit
-            , berAmount = parseAmount (spDecimal cfg) (T.strip amount)
-            , berUncertainty = T.strip unc
-            , berComment = T.intercalate ";" rest
+            { berName = decodeBS (BS8.strip name)
+            , berCompartment = decodeBS (BS8.strip compartment)
+            , berUnit = decodeBS (BS8.strip unit)
+            , berAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , berUncertainty = decodeBS (BS8.strip unc)
+            , berComment = decodeBS (BS8.intercalate ";" rest)
             }
         (name:compartment:unit:amount:rest) -> Just BioExchangeRow
-            { berName = T.strip name
-            , berCompartment = T.strip compartment
-            , berUnit = T.strip unit
-            , berAmount = parseAmount (spDecimal cfg) (T.strip amount)
+            { berName = decodeBS (BS8.strip name)
+            , berCompartment = decodeBS (BS8.strip compartment)
+            , berUnit = decodeBS (BS8.strip unit)
+            , berAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
             , berUncertainty = ""
-            , berComment = T.intercalate ";" rest
+            , berComment = decodeBS (BS8.intercalate ";" rest)
             }
         _ -> Nothing
 
 -- ============================================================================
--- State Machine Processing
+-- State Machine Processing (ByteString based)
 -- ============================================================================
 
--- | Process a single line
-processLine :: ParseAcc -> Text -> ParseAcc
+-- | Process a single line (ByteString)
+processLine :: ParseAcc -> BS.ByteString -> ParseAcc
 processLine acc@ParseAcc{..} line
     -- Empty line handling
-    | T.null (T.strip line) = case paState of
+    | BS.null (BS8.strip line) = case paState of
         InProcessMeta _ -> acc { paState = BetweenBlocks }
         InSection _ -> acc { paState = BetweenBlocks }
         _ -> acc
@@ -356,13 +364,13 @@ processLine acc@ParseAcc{..} line
         acc { paConfig = updateConfigFromHeader paConfig key value }
 
     -- Process block start
-    | T.strip line == "Process" =
+    | BS8.strip line == "Process" =
         acc { paState = BetweenBlocks
             , paCurrentBlock = emptyProcessBlock
             }
 
     -- End of block
-    | T.strip line == "End" =
+    | BS8.strip line == "End" =
         let block = paCurrentBlock
             -- A block is valid if it has at least one product (process name not required)
             isValid = not (null (pbProducts block))
@@ -376,13 +384,13 @@ processLine acc@ParseAcc{..} line
         acc { paState = InSection sec }
 
     -- In a section, parse row
-    | InSection sec <- paState, not (T.null (T.strip line)) =
+    | InSection sec <- paState, not (BS.null (BS8.strip line)) =
         acc { paCurrentBlock = addRowToBlock paConfig sec line paCurrentBlock }
 
     -- Metadata key-value pairs
-    | paState == BetweenBlocks || isMetadataKey (T.strip line) =
-        if isMetadataKey (T.strip line)
-        then acc { paState = InProcessMeta (T.strip line) }
+    | paState == BetweenBlocks || isMetadataKey (BS8.strip line) =
+        if isMetadataKey (BS8.strip line)
+        then acc { paState = InProcessMeta (BS8.strip line) }
         else case paState of
             InProcessMeta key -> acc { paCurrentBlock = setMetadata key line paCurrentBlock
                                      , paState = BetweenBlocks
@@ -397,8 +405,8 @@ processLine acc@ParseAcc{..} line
 
     | otherwise = acc { paLineNum = paLineNum + 1 }
 
--- | Add a row to the appropriate list in the block
-addRowToBlock :: SimaProConfig -> SectionType -> Text -> ProcessBlock -> ProcessBlock
+-- | Add a row to the appropriate list in the block (ByteString)
+addRowToBlock :: SimaProConfig -> SectionType -> BS.ByteString -> ProcessBlock -> ProcessBlock
 addRowToBlock cfg sec line block = case sec of
     SecProducts -> case parseProductRow cfg line of
         Just row -> block { pbProducts = row : pbProducts block }
@@ -432,19 +440,19 @@ addRowToBlock cfg sec line block = case sec of
         Nothing -> block
     _ -> block
 
--- | Set metadata field in block
-setMetadata :: Text -> Text -> ProcessBlock -> ProcessBlock
+-- | Set metadata field in block (ByteString key, decode value to Text)
+setMetadata :: BS.ByteString -> BS.ByteString -> ProcessBlock -> ProcessBlock
 setMetadata key value block = case key of
-    "Category type" -> block { pbCategoryType = T.strip value }
-    "Process identifier" -> block { pbIdentifier = T.strip value }
-    "Type" -> block { pbType = T.strip value }
-    "Process name" -> block { pbName = T.strip value }
-    "Status" -> block { pbStatus = T.strip value }
-    "Time period" -> block { pbTimePeriod = T.strip value }
-    "Geography" -> block { pbLocation = T.strip value }
-    "Technology" -> block { pbTechnology = T.strip value }
-    "Record" -> block { pbRecord = T.strip value }
-    "Comment" -> block { pbComment = T.strip value }
+    "Category type" -> block { pbCategoryType = decodeBS (BS8.strip value) }
+    "Process identifier" -> block { pbIdentifier = decodeBS (BS8.strip value) }
+    "Type" -> block { pbType = decodeBS (BS8.strip value) }
+    "Process name" -> block { pbName = decodeBS (BS8.strip value) }
+    "Status" -> block { pbStatus = decodeBS (BS8.strip value) }
+    "Time period" -> block { pbTimePeriod = decodeBS (BS8.strip value) }
+    "Geography" -> block { pbLocation = decodeBS (BS8.strip value) }
+    "Technology" -> block { pbTechnology = decodeBS (BS8.strip value) }
+    "Record" -> block { pbRecord = decodeBS (BS8.strip value) }
+    "Comment" -> block { pbComment = decodeBS (BS8.strip value) }
     _ -> block
 
 -- ============================================================================
@@ -650,11 +658,12 @@ parseSimaProCSV path = do
     hPutStrLn stderr $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
 
-    -- Read as ByteString and split into lines (more efficient than Text for 9M lines)
+    -- Read as ByteString and split into lines
+    -- Process ByteStrings directly - only decode to Text when storing values
     rawContent <- BS.readFile path
     let bsLines = BS8.lines rawContent
-        -- Decode each line to Text on demand (lazy), stripping Windows \r
-        lines' = map decodeLine bsLines
+        -- Strip Windows \r from ByteStrings (fast, no allocation)
+        lines' = map stripCR bsLines
         initialAcc = ParseAcc
             { paConfig = defaultConfig
             , paState = InHeader
@@ -662,7 +671,7 @@ parseSimaProCSV path = do
             , paBlocks = []
             , paLineNum = 0
             }
-    -- Use strict foldl' to process lines
+    -- Use strict foldl' to process lines (ByteString directly)
     finalAcc <- evaluate $ foldl' processLine initialAcc lines'
     let blocks = reverse (paBlocks finalAcc)
 
@@ -690,8 +699,9 @@ parseSimaProCSV path = do
 
     return (activities, flowDB, unitDB)
   where
-    -- Decode a ByteString line to Text, handling Windows line endings
-    decodeLine :: BS.ByteString -> Text
-    decodeLine bs =
-        let decoded = TE.decodeUtf8With TEE.lenientDecode bs
-        in T.dropWhileEnd (== '\r') decoded
+    -- Strip Windows \r from ByteString (fast, often no-op)
+    stripCR :: BS.ByteString -> BS.ByteString
+    stripCR bs
+        | BS.null bs = bs
+        | BS8.last bs == '\r' = BS8.init bs
+        | otherwise = bs
