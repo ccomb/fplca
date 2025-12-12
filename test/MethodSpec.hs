@@ -3,13 +3,18 @@
 module MethodSpec (spec) where
 
 import Test.Hspec
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
+import LCA.LCIA (computeLCIAScore)
+import LCA.Method.Mapping (MatchStrategy(..))
 import LCA.Method.Parser
 import LCA.Method.Types
 import LCA.SynonymDB
+import LCA.Types (Flow(..), FlowType(..))
 
 spec :: Spec
 spec = do
@@ -194,7 +199,78 @@ spec = do
                         ]
                 parseMethodBytes xml `shouldSatisfy` isLeft
 
+    describe "LCIA Score Computation" $ do
+        describe "computeLCIAScore" $ do
+            it "computes score as sum of inventory * CF for mapped flows" $ do
+                let co2Uuid = UUID.fromWords 1 2 3 4
+                    ch4Uuid = UUID.fromWords 5 6 7 8
+                    -- Inventory: CO2 = 10 kg, CH4 = 2 kg
+                    inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
+                    -- Method: CO2 CF = 1.0, CH4 CF = 28.0
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0
+                    co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
+                    ch4Flow = mkTestFlow ch4Uuid "Methane"
+                    mappings = [ (co2CF, Just (co2Flow, ByUUID))
+                               , (ch4CF, Just (ch4Flow, ByUUID))
+                               ]
+                -- Score = 10*1 + 2*28 = 10 + 56 = 66
+                computeLCIAScore inventory mappings `shouldBe` 66.0
+
+            it "ignores unmapped flows" $ do
+                let co2Uuid = UUID.fromWords 1 2 3 4
+                    ch4Uuid = UUID.fromWords 5 6 7 8
+                    inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0
+                    co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
+                    mappings = [ (co2CF, Just (co2Flow, ByUUID))
+                               , (ch4CF, Nothing)  -- CH4 not mapped
+                               ]
+                -- Score = 10*1 = 10 (CH4 ignored because not mapped)
+                computeLCIAScore inventory mappings `shouldBe` 10.0
+
+            it "returns 0 for flows not in inventory" $ do
+                let co2Uuid = UUID.fromWords 1 2 3 4
+                    n2oUuid = UUID.fromWords 9 10 11 12
+                    -- Inventory has only CO2
+                    inventory = M.fromList [(co2Uuid, 10.0)]
+                    -- Method has N2O that's not in inventory
+                    n2oCF = MethodCF n2oUuid "Dinitrogen monoxide" Output 265.0
+                    n2oFlow = mkTestFlow n2oUuid "Dinitrogen monoxide"
+                    mappings = [ (n2oCF, Just (n2oFlow, ByName)) ]
+                -- Score = 0 (N2O not in inventory)
+                computeLCIAScore inventory mappings `shouldBe` 0.0
+
+            it "handles negative inventory values (resource extraction)" $ do
+                let oilUuid = UUID.fromWords 11 12 13 14
+                    -- Resource extraction has negative sign in inventory
+                    inventory = M.fromList [(oilUuid, -5.0)]
+                    oilCF = MethodCF oilUuid "Crude oil" Input 42.0
+                    oilFlow = mkTestFlow oilUuid "Crude oil"
+                    mappings = [ (oilCF, Just (oilFlow, ByUUID)) ]
+                -- Score = -5 * 42 = -210 (negative = resource depletion)
+                computeLCIAScore inventory mappings `shouldBe` (-210.0)
+
+            it "returns 0 for empty mappings" $ do
+                let inventory = M.fromList [(UUID.fromWords 1 2 3 4, 100.0)]
+                computeLCIAScore inventory [] `shouldBe` 0.0
+
 -- Helper for testing Either values
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
+
+-- Helper to create a test Flow
+mkTestFlow :: UUID.UUID -> T.Text -> Flow
+mkTestFlow uuid name = Flow
+    { flowId = uuid
+    , flowName = name
+    , flowUnitId = UUID.nil
+    , flowType = Biosphere
+    , flowCategory = "air"
+    , flowSubcompartment = Nothing
+    , flowCAS = Nothing
+    , flowSubstanceId = Nothing
+    , flowSynonyms = M.empty
+    }

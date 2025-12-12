@@ -228,9 +228,12 @@ parseWithXeno xmlContent processId =
                             (parseUUID $ idFlowId idata)
                             (if T.null (idFlowName idata) then idFlowId idata else idFlowName idata)
                             "technosphere"
+                            Nothing  -- subcompartment
                             (parseUUID $ idUnitId idata)
                             Technosphere
                             (idSynonyms idata)
+                            Nothing  -- CAS
+                            Nothing  -- substanceId
                         unit = Unit
                             (parseUUID $ idUnitId idata)
                             (if T.null (idUnitName idata)
@@ -285,13 +288,20 @@ parseWithXeno xmlContent processId =
                             (parseUUID $ edUnitId edata)
                             isInput
                             ""  -- EcoSpold2: no per-exchange location
+                        -- Get subcompartment from the list (first entry if any)
+                        subcompartment = case edSubcompartments edata of
+                            (s:_) | not (T.null s) -> Just s
+                            _ -> Nothing
                         flow = Flow
                             (parseUUID $ edFlowId edata)
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
                             category
+                            subcompartment
                             (parseUUID $ edUnitId edata)
                             Biosphere
                             (edSynonyms edata)
+                            Nothing  -- CAS - not in EcoSpold2 data
+                            Nothing  -- substanceId - to be filled later
                         unit = Unit
                             (parseUUID $ edUnitId edata)
                             (if T.null (edUnitName edata)

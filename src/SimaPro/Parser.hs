@@ -612,25 +612,34 @@ collectFlows products techs bios =
         { flowId = generateFlowUUID prName "" prUnit
         , flowName = prName
         , flowCategory = prCategory
+        , flowSubcompartment = Nothing
         , flowUnitId = generateUnitUUID prUnit
         , flowType = Technosphere
         , flowSynonyms = M.empty
+        , flowCAS = Nothing
+        , flowSubstanceId = Nothing
         }
     techToFlow TechExchangeRow{..} = Flow
         { flowId = generateFlowUUID terName "" terUnit
         , flowName = terName
         , flowCategory = ""
+        , flowSubcompartment = Nothing
         , flowUnitId = generateUnitUUID terUnit
         , flowType = Technosphere
         , flowSynonyms = M.empty
+        , flowCAS = Nothing
+        , flowSubstanceId = Nothing
         }
     bioToFlow BioExchangeRow{..} = Flow
         { flowId = generateFlowUUID berName berCompartment berUnit
         , flowName = berName
         , flowCategory = berCompartment
+        , flowSubcompartment = Nothing  -- SimaPro uses combined compartment string
         , flowUnitId = generateUnitUUID berUnit
         , flowType = Biosphere
         , flowSynonyms = M.empty
+        , flowCAS = Nothing
+        , flowSubstanceId = Nothing
         }
 
 -- | Collect units from all exchange types

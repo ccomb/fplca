@@ -5,14 +5,15 @@
 
 module LCA.API where
 
+import qualified LCA.Matrix
 import LCA.Matrix (Inventory)
 import LCA.Matrix.SharedSolver (SharedSolver)
+import LCA.LCIA (computeLCIAScore)
 import LCA.Method.Mapping (mapMethodFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
 import LCA.Method.Parser (parseMethodFile)
 import LCA.Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import LCA.SynonymDB (SynonymDB, emptySynonymDB)
 import LCA.Query
-import LCA.Service (getActivityInventoryWithSharedSolver)
 import qualified LCA.Service
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
@@ -153,7 +154,7 @@ lcaServer db maxTreeDepth sharedSolver methodsDir =
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
     getActivityInventory processId = do
-        result <- liftIO $ getActivityInventoryWithSharedSolver sharedSolver db processId
+        result <- liftIO $ LCA.Service.getActivityInventoryWithSharedSolver sharedSolver db processId
         case result of
             Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
@@ -174,17 +175,40 @@ lcaServer db maxTreeDepth sharedSolver methodsDir =
 
     -- Activity LCIA endpoint
     getActivityLCIA :: Text -> Text -> Handler LCIAResult
-    getActivityLCIA processId methodIdText = withValidatedActivity db processId $ \_ -> do
-        -- Placeholder - will be implemented in Service.hs
-        return $ LCIAResult
-            { lrMethodId = UUID.nil
-            , lrMethodName = "Not implemented"
-            , lrCategory = ""
-            , lrScore = 0.0
-            , lrUnit = ""
-            , lrMappedFlows = 0
-            , lrUnmappedFlows = 0
-            }
+    getActivityLCIA processIdText methodIdText = do
+        -- Load the method
+        method <- loadMethodByUUID methodIdText
+
+        -- Resolve activity and ProcessId from text
+        case LCA.Service.resolveActivityAndProcessId db processIdText of
+            Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Right (actProcessId, _activity) -> do
+                -- Compute inventory using matrix solver
+                let inventory = LCA.Matrix.computeInventoryMatrix db actProcessId
+
+                -- Get synonym DB and flow indexes
+                let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+                    flowsByUUID = dbFlows db
+                    flowsByName = dbFlowsByName db
+
+                -- Map method flows to database flows
+                let mappings = mapMethodFlows synDB flowsByUUID flowsByName method
+                    stats = computeMappingStats mappings
+
+                -- Compute LCIA score: sum of (inventory quantity * CF value) for mapped flows
+                let score = computeLCIAScore inventory mappings
+
+                return $ LCIAResult
+                    { lrMethodId = methodId method
+                    , lrMethodName = methodName method
+                    , lrCategory = methodCategory method
+                    , lrScore = score
+                    , lrUnit = methodUnit method
+                    , lrMappedFlows = msTotal stats - msUnmatched stats
+                    , lrUnmappedFlows = msUnmatched stats
+                    }
 
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail

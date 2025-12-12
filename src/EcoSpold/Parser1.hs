@@ -297,7 +297,7 @@ parseWithXeno xmlContent =
                         Nothing
                         exchangeLocation
 
-            flow = Flow flowId (exName edata) category unitId flowType M.empty
+            flow = Flow flowId (exName edata) category Nothing unitId flowType M.empty Nothing Nothing
 
             unit = Unit unitId (exUnit edata) (exUnit edata) ""
 
