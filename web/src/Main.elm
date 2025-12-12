@@ -11,6 +11,7 @@ import Json.Decode
 import Models.Activity exposing (ActivityInfo, ActivitySummary, ActivityTree, SearchResults, activityInfoDecoder, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
+import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
 import Models.Page exposing (ExchangeTab(..), Page(..), Route(..))
 import Url
 import Url.Builder
@@ -20,6 +21,7 @@ import Views.ActivitiesView as ActivitiesView
 import Views.DetailsView as DetailsView
 import Views.GraphView as GraphView
 import Views.InventoryView as InventoryView
+import Views.LCIAView as LCIAView
 import Views.LeftMenu as LeftMenu
 import Views.TreeView as TreeView
 
@@ -60,6 +62,12 @@ type alias Model =
     , hoveredNode : Maybe String
     , inventorySearchQuery : String
     , skipNextUrlChange : Bool -- Flag to prevent processing self-initiated URL changes
+    , methods : Maybe (List MethodSummary) -- Available LCIA methods
+    , selectedMethod : Maybe MethodSummary -- Currently selected method
+    , lciaResult : Maybe LCIAResult -- LCIA computation result
+    , mappingStatus : Maybe MappingStatus -- Flow mapping status
+    , loadingMethods : Bool -- Loading methods list
+    , loadingLCIA : Bool -- Loading LCIA computation
     }
 
 
@@ -90,6 +98,13 @@ type Msg
     | UpdateInventorySearchQuery String
     | LinkClicked Browser.UrlRequest
     | UrlChanged Url.Url
+      -- LCIA messages
+    | LoadMethods
+    | MethodsLoaded (Result Http.Error (List MethodSummary))
+    | LCIAViewMsg LCIAView.Msg
+    | ComputeLCIA String
+    | LCIAResultLoaded (Result Http.Error LCIAResult)
+    | MappingStatusLoaded (Result Http.Error MappingStatus)
 
 
 
@@ -112,6 +127,7 @@ routeParser =
         , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
         , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
+        , Parser.map ActivityLCIARoute (Parser.s "activity" </> string </> Parser.s "lcia")
         , Parser.map ActivityRoute (Parser.s "activity" </> string)
         ]
 
@@ -142,6 +158,9 @@ routeToPage route =
 
         ActivityGraphRoute _ ->
             GraphPage
+
+        ActivityLCIARoute _ ->
+            LCIAPage
 
         NotFoundRoute ->
             ActivitiesPage
@@ -200,6 +219,13 @@ init _ url key =
                     , searchQuery = ""
                     }
 
+                ActivityLCIARoute processId ->
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "lcia"
+                    , searchQuery = ""
+                    }
+
                 NotFoundRoute ->
                     { activityId = defaultActivityId
                     , shouldLoad = False
@@ -237,6 +263,12 @@ init _ url key =
             , hoveredNode = Nothing
             , inventorySearchQuery = ""
             , skipNextUrlChange = False
+            , methods = Nothing
+            , selectedMethod = Nothing
+            , lciaResult = Nothing
+            , mappingStatus = Nothing
+            , loadingMethods = routeConfig.loadType == "lcia"
+            , loadingLCIA = False
             }
 
         cmd =
@@ -259,6 +291,13 @@ init _ url key =
                         -- Load both graph and tree data to get activity name
                         Cmd.batch
                             [ loadGraphData routeConfig.activityId cutoff
+                            , loadActivityTree routeConfig.activityId
+                            ]
+
+                    "lcia" ->
+                        -- Load methods and activity tree for LCIA page
+                        Cmd.batch
+                            [ loadMethods
                             , loadActivityTree routeConfig.activityId
                             ]
 
@@ -564,6 +603,9 @@ update msg model =
 
                         GraphPage ->
                             ActivityGraphRoute model.currentActivityId
+
+                        LCIAPage ->
+                            ActivityLCIARoute model.currentActivityId
             in
             ( model, Nav.pushUrl model.key (routeToUrl route) )
 
@@ -687,6 +729,87 @@ update msg model =
         UpdateInventorySearchQuery query ->
             ( { model | inventorySearchQuery = query }, Cmd.none )
 
+        -- LCIA message handlers
+        LoadMethods ->
+            ( { model | loadingMethods = True, error = Nothing }
+            , loadMethods
+            )
+
+        MethodsLoaded (Ok methodsList) ->
+            ( { model
+                | methods = Just methodsList
+                , loadingMethods = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        MethodsLoaded (Err error) ->
+            ( { model
+                | loadingMethods = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        LCIAViewMsg lciaMsg ->
+            case lciaMsg of
+                LCIAView.SelectMethod methodId ->
+                    let
+                        selectedMethod =
+                            model.methods
+                                |> Maybe.andThen (List.filter (\m -> m.msmId == methodId) >> List.head)
+                    in
+                    ( { model
+                        | selectedMethod = selectedMethod
+                        , lciaResult = Nothing
+                        , mappingStatus = Nothing
+                      }
+                    , Cmd.none
+                    )
+
+                LCIAView.ComputeLCIA methodId ->
+                    ( { model | loadingLCIA = True, error = Nothing }
+                    , Cmd.batch
+                        [ computeLCIA model.currentActivityId methodId
+                        , loadMappingStatus methodId
+                        ]
+                    )
+
+        ComputeLCIA methodId ->
+            ( { model | loadingLCIA = True, error = Nothing }
+            , Cmd.batch
+                [ computeLCIA model.currentActivityId methodId
+                , loadMappingStatus methodId
+                ]
+            )
+
+        LCIAResultLoaded (Ok result) ->
+            ( { model
+                | lciaResult = Just result
+                , loadingLCIA = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        LCIAResultLoaded (Err error) ->
+            ( { model
+                | loadingLCIA = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        MappingStatusLoaded (Ok status) ->
+            ( { model | mappingStatus = Just status }
+            , Cmd.none
+            )
+
+        MappingStatusLoaded (Err _) ->
+            -- Non-critical error, just ignore
+            ( model, Cmd.none )
+
         LinkClicked urlRequest ->
             case urlRequest of
                 Browser.Internal url ->
@@ -728,6 +851,9 @@ update msg model =
                             ActivityGraphRoute processId ->
                                 { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
+                            ActivityLCIARoute processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+
                             NotFoundRoute ->
                                 { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
 
@@ -755,8 +881,11 @@ update msg model =
                     shouldLoadTreeForGraph =
                         shouldLoadGraph && not (Dict.member routeInfo.activityId model.cachedTrees)
 
+                    shouldLoadLCIA =
+                        routeInfo.needsActivity && newPage == LCIAPage && model.methods == Nothing
+
                     shouldLoad =
-                        shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph
+                        shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph || shouldLoadLCIA
 
                     shouldSearch =
                         newPage == ActivitiesPage && not (String.isEmpty routeInfo.searchQuery)
@@ -784,6 +913,7 @@ update msg model =
                             , activitiesSearchQuery = routeInfo.searchQuery
                             , searchLoading = shouldSearch
                             , treeViewModel = newTreeViewModel
+                            , loadingMethods = shouldLoadLCIA
                         }
 
                     cmd =
@@ -815,6 +945,12 @@ update msg model =
                                         Cmd.none
                             in
                             Cmd.batch [ graphCmd, treeCmd ]
+
+                        else if shouldLoadLCIA then
+                            Cmd.batch
+                                [ loadMethods
+                                , loadActivityTree routeInfo.activityId
+                                ]
 
                         else
                             Cmd.none
@@ -861,6 +997,9 @@ routeToUrl route =
 
         ActivityGraphRoute processId ->
             "/activity/" ++ processId ++ "/graph"
+
+        ActivityLCIARoute processId ->
+            "/activity/" ++ processId ++ "/lcia"
 
         NotFoundRoute ->
             "/"
@@ -938,8 +1077,32 @@ view model =
 
                 GraphPage ->
                     viewGraphPage model
+
+                LCIAPage ->
+                    viewLCIAPage model
             ]
         ]
+
+
+viewLCIAPage : Model -> Html Msg
+viewLCIAPage model =
+    let
+        activityInfo =
+            Dict.get model.currentActivityId model.cachedTrees
+                |> Maybe.andThen (\tree -> Dict.get model.currentActivityId tree.nodes)
+                |> Maybe.map (\node -> ( node.name, node.location ))
+    in
+    Html.map LCIAViewMsg
+        (LCIAView.viewLCIAPage
+            model.methods
+            model.selectedMethod
+            model.lciaResult
+            model.mappingStatus
+            model.loadingMethods
+            model.loadingLCIA
+            model.error
+            activityInfo
+        )
 
 
 viewDetailsPage : Model -> Html Msg
@@ -1363,6 +1526,30 @@ searchActivitiesWithOffset query offset limit =
                 , Url.Builder.int "offset" offset
                 ]
         , expect = Http.expectJson MoreActivitiesLoaded (searchResultsDecoder activitySummaryDecoder)
+        }
+
+
+loadMethods : Cmd Msg
+loadMethods =
+    Http.get
+        { url = "/api/v1/methods"
+        , expect = Http.expectJson MethodsLoaded methodsListDecoder
+        }
+
+
+computeLCIA : String -> String -> Cmd Msg
+computeLCIA activityId methodId =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId ++ "/lcia/" ++ methodId
+        , expect = Http.expectJson LCIAResultLoaded lciaResultDecoder
+        }
+
+
+loadMappingStatus : String -> Cmd Msg
+loadMappingStatus methodId =
+    Http.get
+        { url = "/api/v1/method/" ++ methodId ++ "/mapping"
+        , expect = Http.expectJson MappingStatusLoaded mappingStatusDecoder
         }
 
 

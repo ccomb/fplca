@@ -23,6 +23,7 @@ viewLeftMenu currentPage currentActivityId =
             , menuLabel "Lab"
             , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
             , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
+            , menuItem currentPage LCIAPage "fas fa-chart-bar" "LCIA" True
             ]
         ]
 

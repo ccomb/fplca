@@ -10,6 +10,7 @@ type Route
     | ActivityTreeRoute String -- ProcessId (tree view)
     | ActivityInventoryRoute String -- ProcessId
     | ActivityGraphRoute String -- ProcessId
+    | ActivityLCIARoute String -- ProcessId (LCIA view)
     | NotFoundRoute
 
 
@@ -23,6 +24,7 @@ type Page
     | TreePage
     | InventoryPage
     | GraphPage
+    | LCIAPage
 
 
 -- Sub-tab selection for Table view exchanges
