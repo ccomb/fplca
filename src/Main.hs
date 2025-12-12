@@ -30,6 +30,7 @@ import LCA.Matrix (initializePetscForServer, precomputeMatrixFactorization, addF
 import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import LCA.Progress
 import LCA.Query (buildDatabaseWithMatrices)
+import LCA.SynonymDB (loadEmbeddedSynonymDB)
 import LCA.Types
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified EcoSpold.Loader
@@ -60,8 +61,15 @@ main = do
   -- Resolve data directory with priority: --data > $DATADIR > current directory
   dataDirectory <- resolveDataDirectory (globalOptions cliConfig)
 
+  -- Load embedded synonym database
+  reportProgress Info "Loading embedded synonym database"
+  synonymDB <- loadEmbeddedSynonymDB
+
   -- Load database with caching
-  database <- loadDatabase dataDirectory (noCache (globalOptions cliConfig))
+  dbRaw <- loadDatabase dataDirectory (noCache (globalOptions cliConfig))
+
+  -- Initialize runtime fields (synonym DB and flow name index)
+  let database = initializeRuntimeFields dbRaw synonymDB
 
   -- Display configuration and database stats
   reportConfiguration (globalOptions cliConfig) dataDirectory

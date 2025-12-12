@@ -251,7 +251,10 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
             , dbBiosphereFlows = bioFlowUUIDs
             , dbActivityCount = activityCount
             , dbBiosphereCount = bioFlowCount
+            -- Runtime-only fields (not cached)
             , dbCachedFactorization = Nothing
+            , dbSynonymDB = Nothing  -- Will be populated at runtime from embedded DB
+            , dbFlowsByName = M.empty  -- Will be populated at runtime
             }
 
 -- | Build indexes with ProcessIds

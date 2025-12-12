@@ -220,6 +220,28 @@ data LCIAResult = LCIAResult
     }
     deriving (Generic)
 
+-- | Flow mapping status for a method
+data MappingStatus = MappingStatus
+    { mstMethodId :: UUID       -- Method UUID
+    , mstMethodName :: Text     -- Method name
+    , mstTotalFactors :: Int    -- Total CFs in method
+    , mstMappedByUUID :: Int    -- Matched by exact UUID
+    , mstMappedByName :: Int    -- Matched by normalized name
+    , mstMappedBySynonym :: Int -- Matched via synonym group
+    , mstUnmapped :: Int        -- Not matched
+    , mstCoverage :: Double     -- Percentage of mapped flows (0-100)
+    , mstUnmappedFlows :: [UnmappedFlowAPI] -- Details of unmapped flows
+    }
+    deriving (Generic)
+
+-- | Details about an unmapped flow
+data UnmappedFlowAPI = UnmappedFlowAPI
+    { ufaFlowRef :: UUID        -- Flow UUID in method
+    , ufaFlowName :: Text       -- Flow name in method
+    , ufaDirection :: Text      -- "Input" or "Output"
+    }
+    deriving (Generic)
+
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
@@ -337,6 +359,8 @@ instance ToJSON MethodSummary
 instance ToJSON MethodDetail
 instance ToJSON MethodFactorAPI
 instance ToJSON LCIAResult
+instance ToJSON MappingStatus
+instance ToJSON UnmappedFlowAPI
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a)

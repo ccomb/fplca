@@ -7,8 +7,10 @@ module LCA.API where
 
 import LCA.Matrix (Inventory)
 import LCA.Matrix.SharedSolver (SharedSolver)
+import LCA.Method.Mapping (mapMethodFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
 import LCA.Method.Parser (parseMethodFile)
 import LCA.Method.Types (Method(..), MethodCF(..), FlowDirection(..))
+import LCA.SynonymDB (SynonymDB, emptySynonymDB)
 import LCA.Query
 import LCA.Service (getActivityInventoryWithSharedSolver)
 import qualified LCA.Service
@@ -16,7 +18,7 @@ import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
 import System.Directory (listDirectory, doesFileExist)
 import System.FilePath ((</>), takeExtension)
-import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -50,6 +52,7 @@ type LCAAPI =
                 :<|> "methods" :> Get '[JSON] [MethodSummary]
                 :<|> "method" :> Capture "methodId" Text :> Get '[JSON] MethodDetail
                 :<|> "method" :> Capture "methodId" Text :> "factors" :> Get '[JSON] [MethodFactorAPI]
+                :<|> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
@@ -95,6 +98,7 @@ lcaServer db maxTreeDepth sharedSolver methodsDir =
         :<|> getMethods
         :<|> getMethodDetail
         :<|> getMethodFactors
+        :<|> getMethodMapping
         :<|> searchFlows
         :<|> searchActivitiesWithCount
         :<|> postLCIA
@@ -223,6 +227,43 @@ lcaServer db maxTreeDepth sharedSolver methodsDir =
     getMethodFactors methodIdText = do
         method <- loadMethodByUUID methodIdText
         return $ map cfToAPI (methodFactors method)
+
+    -- Get method flow mapping status
+    getMethodMapping :: Text -> Handler MappingStatus
+    getMethodMapping methodIdText = do
+        method <- loadMethodByUUID methodIdText
+        -- Get SynonymDB and flow name index from database
+        let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+            flowsByUUID = dbFlows db
+            flowsByName = dbFlowsByName db
+        -- Run the mapping
+        let mappings = mapMethodFlows synDB flowsByUUID flowsByName method
+            stats = computeMappingStats mappings
+            totalFactors = length mappings
+            coverage = if totalFactors > 0
+                       then fromIntegral (totalFactors - msUnmatched stats) / fromIntegral totalFactors * 100
+                       else 0.0
+            -- Get unmapped flows (limit to first 50 for API response)
+            unmappedFlows = take 50 [ UnmappedFlowAPI
+                { ufaFlowRef = mcfFlowRef cf
+                , ufaFlowName = mcfFlowName cf
+                , ufaDirection = case mcfDirection cf of
+                    Input -> "Input"
+                    Output -> "Output"
+                }
+                | (cf, Nothing) <- mappings
+                ]
+        return MappingStatus
+            { mstMethodId = methodId method
+            , mstMethodName = methodName method
+            , mstTotalFactors = msTotal stats
+            , mstMappedByUUID = msByUUID stats
+            , mstMappedByName = msByName stats
+            , mstMappedBySynonym = msBySynonym stats
+            , mstUnmapped = msUnmatched stats
+            , mstCoverage = coverage
+            , mstUnmappedFlows = unmappedFlows
+            }
 
     -- Helper to parse a method file and create a summary
     parseAndSummarize :: FilePath -> FilePath -> IO (Maybe MethodSummary)
