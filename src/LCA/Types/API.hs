@@ -177,6 +177,49 @@ data LCIARequest = LCIARequest
     }
     deriving (Show, Generic)
 
+-- | Method summary for listing methods
+data MethodSummary = MethodSummary
+    { msmId :: UUID           -- Method UUID
+    , msmName :: Text         -- Method name
+    , msmCategory :: Text     -- Impact category
+    , msmUnit :: Text         -- Reference unit (e.g., "kg CO2 eq")
+    , msmFactorCount :: Int   -- Number of characterization factors
+    }
+    deriving (Generic)
+
+-- | Full method details
+data MethodDetail = MethodDetail
+    { mdId :: UUID
+    , mdName :: Text
+    , mdDescription :: Maybe Text
+    , mdUnit :: Text
+    , mdCategory :: Text
+    , mdMethodology :: Maybe Text
+    , mdFactorCount :: Int
+    }
+    deriving (Generic)
+
+-- | Characterization factor for API response
+data MethodFactorAPI = MethodFactorAPI
+    { mfaFlowRef :: UUID        -- ILCD flow UUID
+    , mfaFlowName :: Text       -- Flow name
+    , mfaDirection :: Text      -- "Input" or "Output"
+    , mfaValue :: Double        -- CF value
+    }
+    deriving (Generic)
+
+-- | LCIA result for a single impact category
+data LCIAResult = LCIAResult
+    { lrMethodId :: UUID        -- Method UUID
+    , lrMethodName :: Text      -- Method name
+    , lrCategory :: Text        -- Impact category
+    , lrScore :: Double         -- Total impact score
+    , lrUnit :: Text            -- Unit (e.g., "kg CO2 eq")
+    , lrMappedFlows :: Int      -- Number of flows successfully mapped
+    , lrUnmappedFlows :: Int    -- Number of flows not mapped
+    }
+    deriving (Generic)
+
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
@@ -290,6 +333,10 @@ instance ToJSON FlowDetail
 instance ToJSON GraphExport
 instance ToJSON GraphNode
 instance ToJSON GraphEdge
+instance ToJSON MethodSummary
+instance ToJSON MethodDetail
+instance ToJSON MethodFactorAPI
+instance ToJSON LCIAResult
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a)

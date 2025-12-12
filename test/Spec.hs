@@ -9,6 +9,7 @@ import qualified MatrixConstructionSpec
 import qualified InventorySpec
 import qualified ParserSpec
 import qualified MatrixExportSpec
+import qualified MethodSpec
 
 main :: IO ()
 main = hspec $ do
@@ -17,3 +18,4 @@ main = hspec $ do
         describe "Inventory Calculation" InventorySpec.spec
         describe "Parser" ParserSpec.spec
         describe "Matrix Export" MatrixExportSpec.spec
+        describe "Method & SynonymDB" MethodSpec.spec

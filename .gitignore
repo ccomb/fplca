@@ -35,3 +35,4 @@ cabal.project.local~
 # Documentation and notes (except README)
 MEMORY.md
 *.txt
+scripts/

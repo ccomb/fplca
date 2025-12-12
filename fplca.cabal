@@ -60,6 +60,7 @@ executable fplca
                      , petsc-hs
                      , unix
                      , base64-bytestring
+                     , file-embed
 
   other-modules:     LCA.Types
                      , LCA.Types.API
@@ -80,6 +81,29 @@ executable fplca
                      , EcoSpold.Parser1
                      , EcoSpold.Loader
                      , SimaPro.Parser
+                     , LCA.SynonymDB
+                     , LCA.SynonymDB.Types
+                     , LCA.Method.Types
+                     , LCA.Method.Parser
+                     , LCA.Method.Mapping
+  default-language:    Haskell2010
+
+-- Tool to compile synonym database JSON to embedded binary
+executable synonyms-compiler
+  main-is:             Tools/SynonymsCompiler.hs
+  hs-source-dirs:      src
+  ghc-options:         -threaded -rtsopts
+  build-depends:       base >=4.14 && <5
+                     , optparse-applicative
+                     , text
+                     , containers
+                     , bytestring
+                     , binary
+                     , zstd
+                     , aeson
+                     , vector
+                     , deepseq
+  other-modules:       LCA.SynonymDB.Types
   default-language:    Haskell2010
 
 --executable test-mumps
@@ -102,6 +126,7 @@ test-suite acv-tests
                      , InventorySpec
                      , ParserSpec
                      , MatrixExportSpec
+                     , MethodSpec
                      , LCA.Types
                      , LCA.Types.API
                      , LCA.Query
@@ -116,6 +141,10 @@ test-suite acv-tests
                      , EcoSpold.Loader
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
+                     , LCA.Method.Types
+                     , LCA.Method.Parser
+                     , LCA.SynonymDB
+                     , LCA.SynonymDB.Types
   build-depends:       base >=4.14 && <5
                      , hspec
                      , text
@@ -142,4 +171,5 @@ test-suite acv-tests
                      , stm
                      , xml-types
                      , conduit
+                     , file-embed
   default-language:    Haskell2010

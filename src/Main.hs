@@ -344,7 +344,7 @@ createCombinedApp database maxTreeDepth sharedSolver req respond = do
   if C8.pack "/api/" `BS.isPrefixOf` path
     then
       -- API requests go to Servant
-      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver) req respond
+      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver Nothing) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         -- Static files: strip /static prefix and serve from web/dist/

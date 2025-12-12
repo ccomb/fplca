@@ -7,12 +7,16 @@ module LCA.API where
 
 import LCA.Matrix (Inventory)
 import LCA.Matrix.SharedSolver (SharedSolver)
+import LCA.Method.Parser (parseMethodFile)
+import LCA.Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import LCA.Query
 import LCA.Service (getActivityInventoryWithSharedSolver)
 import qualified LCA.Service
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
-import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import System.Directory (listDirectory, doesFileExist)
+import System.FilePath ((</>), takeExtension)
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -40,8 +44,12 @@ type LCAAPI =
                 :<|> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
+                :<|> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
                 :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
+                :<|> "methods" :> Get '[JSON] [MethodSummary]
+                :<|> "method" :> Capture "methodId" Text :> Get '[JSON] MethodDetail
+                :<|> "method" :> Capture "methodId" Text :> "factors" :> Get '[JSON] [MethodFactorAPI]
                 :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
@@ -71,8 +79,8 @@ withValidatedFlow db uuid action = do
                         Just flow -> action flow
 
 -- | API server implementation with multiple focused endpoints
-lcaServer :: Database -> Int -> SharedSolver -> Server LCAAPI
-lcaServer db maxTreeDepth sharedSolver =
+lcaServer :: Database -> Int -> SharedSolver -> Maybe FilePath -> Server LCAAPI
+lcaServer db maxTreeDepth sharedSolver methodsDir =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -81,8 +89,12 @@ lcaServer db maxTreeDepth sharedSolver =
         :<|> getActivityTree
         :<|> getActivityInventory
         :<|> getActivityGraph
+        :<|> getActivityLCIA
         :<|> getFlowDetail
         :<|> getFlowActivities
+        :<|> getMethods
+        :<|> getMethodDetail
+        :<|> getMethodFactors
         :<|> searchFlows
         :<|> searchActivitiesWithCount
         :<|> postLCIA
@@ -156,6 +168,20 @@ lcaServer db maxTreeDepth sharedSolver =
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right graphExport -> return graphExport
 
+    -- Activity LCIA endpoint
+    getActivityLCIA :: Text -> Text -> Handler LCIAResult
+    getActivityLCIA processId methodIdText = withValidatedActivity db processId $ \_ -> do
+        -- Placeholder - will be implemented in Service.hs
+        return $ LCIAResult
+            { lrMethodId = UUID.nil
+            , lrMethodName = "Not implemented"
+            , lrCategory = ""
+            , lrScore = 0.0
+            , lrUnit = ""
+            , lrMappedFlows = 0
+            , lrUnmappedFlows = 0
+            }
+
     -- Flow detail endpoint
     getFlowDetail :: Text -> Handler FlowDetail
     getFlowDetail flowIdText = withValidatedFlow db flowIdText $ \flow -> do
@@ -167,6 +193,77 @@ lcaServer db maxTreeDepth sharedSolver =
     getFlowActivities :: Text -> Handler [ActivitySummary]
     getFlowActivities flowIdText = withValidatedFlow db flowIdText $ \flow ->
         return $ LCA.Service.getActivitiesUsingFlow db (flowId flow)
+
+    -- List all available methods
+    getMethods :: Handler [MethodSummary]
+    getMethods = case methodsDir of
+        Nothing -> return []
+        Just dir -> do
+            files <- liftIO $ listDirectory dir
+            let xmlFiles = filter (\f -> takeExtension f == ".xml") files
+            methods <- liftIO $ mapM (parseAndSummarize dir) xmlFiles
+            return $ [m | Just m <- methods]
+
+    -- Get method details
+    getMethodDetail :: Text -> Handler MethodDetail
+    getMethodDetail methodIdText = do
+        method <- loadMethodByUUID methodIdText
+        return $ MethodDetail
+            { mdId = methodId method
+            , mdName = methodName method
+            , mdDescription = methodDescription method
+            , mdUnit = methodUnit method
+            , mdCategory = methodCategory method
+            , mdMethodology = methodMethodology method
+            , mdFactorCount = length (methodFactors method)
+            }
+
+    -- Get method characterization factors
+    getMethodFactors :: Text -> Handler [MethodFactorAPI]
+    getMethodFactors methodIdText = do
+        method <- loadMethodByUUID methodIdText
+        return $ map cfToAPI (methodFactors method)
+
+    -- Helper to parse a method file and create a summary
+    parseAndSummarize :: FilePath -> FilePath -> IO (Maybe MethodSummary)
+    parseAndSummarize dir fileName = do
+        result <- parseMethodFile (dir </> fileName)
+        case result of
+            Left _ -> return Nothing
+            Right m -> return $ Just $ MethodSummary
+                { msmId = methodId m
+                , msmName = methodName m
+                , msmCategory = methodCategory m
+                , msmUnit = methodUnit m
+                , msmFactorCount = length (methodFactors m)
+                }
+
+    -- Helper to load a method by UUID
+    loadMethodByUUID :: Text -> Handler Method
+    loadMethodByUUID uuidText = case methodsDir of
+        Nothing -> throwError err404{errBody = "No methods directory configured"}
+        Just dir -> do
+            -- Try to find the file matching the UUID
+            files <- liftIO $ listDirectory dir
+            let targetFile = T.unpack uuidText ++ ".xml"
+            if targetFile `elem` files
+                then do
+                    result <- liftIO $ parseMethodFile (dir </> targetFile)
+                    case result of
+                        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
+                        Right m -> return m
+                else throwError err404{errBody = "Method not found"}
+
+    -- Helper to convert MethodCF to API type
+    cfToAPI :: MethodCF -> MethodFactorAPI
+    cfToAPI cf = MethodFactorAPI
+        { mfaFlowRef = mcfFlowRef cf
+        , mfaFlowName = mcfFlowName cf
+        , mfaDirection = case mcfDirection cf of
+            Input -> "Input"
+            Output -> "Output"
+        , mfaValue = mcfValue cf
+        }
 
     -- Search flows by name or synonym with optional language filtering and pagination
     searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
