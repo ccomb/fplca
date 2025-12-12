@@ -17,6 +17,7 @@ data OutputFormat =
 -- | Global options that apply to all commands
 data GlobalOptions = GlobalOptions
   { dataDir :: Maybe FilePath     -- Data directory (--data), overrides env and default
+  , methodsDir :: Maybe FilePath  -- Methods directory (--methods) for LCIA methods
   , format :: Maybe OutputFormat  -- Output format (--format)
   , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)
   , treeDepth :: Int             -- Maximum tree depth (--tree-depth)

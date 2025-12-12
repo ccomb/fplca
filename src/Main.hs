@@ -109,12 +109,15 @@ main = do
 
       reportProgress Info $ "Starting API server on port " ++ show port
       reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+      case methodsDir (globalOptions cliConfig) of
+        Just dir -> reportProgress Info $ "Methods directory: " ++ dir
+        Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods to enable LCIA)"
       case password of
         Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
         Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
       reportProgress Info "Web interface available at: http://localhost/"
 
-      let baseApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver
+      let baseApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver (methodsDir (globalOptions cliConfig))
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -338,8 +341,8 @@ validateDatabase db = do
   reportProgress Info ""
 
 -- | Create a combined Wai application serving both API and static files with request logging
-createCombinedApp :: Database -> Int -> SharedSolver -> Application
-createCombinedApp database maxTreeDepth sharedSolver req respond = do
+createCombinedApp :: Database -> Int -> SharedSolver -> Maybe FilePath -> Application
+createCombinedApp database maxTreeDepth sharedSolver methodsDir req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
@@ -352,7 +355,7 @@ createCombinedApp database maxTreeDepth sharedSolver req respond = do
   if C8.pack "/api/" `BS.isPrefixOf` path
     then
       -- API requests go to Servant
-      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver Nothing) req respond
+      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver methodsDir) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         -- Static files: strip /static prefix and serve from web/dist/

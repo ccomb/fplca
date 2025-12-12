@@ -25,6 +25,14 @@ globalOptionsParser = do
                     <> help "Data directory (overrides $DATADIR and current directory)"
                 )
 
+    methodsDir <-
+        optional $
+            strOption
+                ( long "methods"
+                    <> metavar "PATH"
+                    <> help "Directory containing ILCD method XML files for LCIA"
+                )
+
     format <-
         optional $
             option
