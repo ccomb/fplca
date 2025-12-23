@@ -316,6 +316,7 @@ instance NFData SparseTriple
 data MatrixFactorization = MatrixFactorization
     { mfSystemMatrix :: !(VU.Vector SparseTriple) -- Cached (I - A) system matrix (unboxed)
     , mfActivityCount :: !Int32 -- Matrix dimension
+    , mfDatabaseId :: !Text -- Database identifier for per-database cache lookup
     } deriving (Generic, NFData, Binary)
 
 -- | Base de données complète avec index pour recherches efficaces

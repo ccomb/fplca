@@ -259,7 +259,7 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
                         techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
                         activityCountInt = fromIntegral activityCount
 
-                    factorization <- precomputeMatrixFactorization techTriplesInt activityCountInt
+                    factorization <- precomputeMatrixFactorization (dcName dbConfig) techTriplesInt activityCountInt
                     let databaseWithFact = addFactorizationToDatabase database factorization
 
                     -- Create shared solver

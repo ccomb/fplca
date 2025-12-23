@@ -83,10 +83,11 @@ type Inventory = M.Map UUID Double
 petscInitialized :: IORef Bool
 petscInitialized = unsafePerformIO $ newIORef False
 
--- | Global cache for pre-factorized KSP solver with thread synchronization
+-- | Global cache for pre-factorized KSP solvers per database with thread synchronization
+-- Maps database name to (KSP solver, PETSc matrix, activity count)
 {-# NOINLINE cachedKspSolver #-}
-cachedKspSolver :: MVar (Maybe (KSP, PetscMatrix PetscScalar_, Int))
-cachedKspSolver = unsafePerformIO $ newMVar Nothing
+cachedKspSolver :: MVar (M.Map Text (KSP, PetscMatrix PetscScalar_, Int))
+cachedKspSolver = unsafePerformIO $ newMVar M.empty
 
 -- Global mutex to serialize all PETSc operations (matrix assembly, solving, etc.)
 -- This prevents concurrent PETSc operations that can cause stack corruption
@@ -131,15 +132,19 @@ Fast solver using the globally cached pre-factorized KSP solver.
 This function uses the cached KSP solver with pre-computed MUMPS factorization,
 eliminating both matrix assembly and factorization time for concurrent requests.
 Achieves sub-second inventory calculations after server startup.
+
+The solver is looked up by database ID from the per-database cache, enabling
+instant switching between databases without re-factorization.
 -}
 solveSparseLinearSystemWithFactorization :: MatrixFactorization -> Vector -> Vector
 solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerformIO $ do
-    -- Check for globally cached pre-factorized solver with thread synchronization
-    cachedSolver <- readMVar cachedKspSolver
-    case cachedSolver of
+    -- Look up pre-factorized solver for this specific database
+    let dbId = mfDatabaseId factorization
+    cachedSolvers <- readMVar cachedKspSolver
+    case M.lookup dbId cachedSolvers of
         Nothing -> do
-            -- Fallback to standard solver if no cached factorization available
-            reportMatrixOperation "No cached factorization found, falling back to matrix assembly"
+            -- Fallback to standard solver if no cached factorization available for this database
+            reportMatrixOperation $ "No cached factorization found for database '" ++ T.unpack dbId ++ "', falling back to matrix assembly"
             let systemMatrix = mfSystemMatrix factorization
                 n = mfActivityCount factorization
                 -- Convert system matrix back to technosphere triplets (remove identity entries)
@@ -147,16 +152,16 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
             return $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
 
         Just (ksp, petscMat, n) -> do
-            reportMatrixOperation $ "Using globally cached pre-factorized solver for " ++ show n ++ " activities - ultra-fast solve"
+            reportMatrixOperation $ "Using cached solver for database '" ++ T.unpack dbId ++ "' (" ++ show n ++ " activities) - ultra-fast solve"
 
             -- Time the ultra-fast solve with thread synchronization and error handling
             result <- withProgressTiming Solver "PETSc thread-safe cached solve" $ do
                 -- Use withMVar to ensure thread-safe access to the cached KSP solver
                 result <- catch
                     (withMVar petscGlobalMutex $ \_ -> do
-                        cachedSolver <- readMVar cachedKspSolver
-                        case cachedSolver of
-                            Nothing -> error "Cached solver disappeared during solve"
+                        cachedSolvers' <- readMVar cachedKspSolver
+                        case M.lookup dbId cachedSolvers' of
+                            Nothing -> error $ "Cached solver for database '" ++ T.unpack dbId ++ "' disappeared during solve"
                             Just (kspSolver, _, _) -> do
                                 -- Create fresh vectors for each request to avoid shared state
                                 let rhsData = V.fromList $ map realToFrac $ toList demandVec
@@ -401,10 +406,13 @@ This function builds the (I - A) system matrix from technosphere triplets and
 pre-computes the factorization during server startup. The resulting
 MatrixFactorization can be stored in the Database for fast concurrent solves.
 
+The database name is used as the key in the per-database solver cache, enabling
+instant switching between databases without re-factorization.
+
 Performance: ~3s factorization time for full Ecoinvent, saves 2.9s per inventory request
 -}
-precomputeMatrixFactorization :: [(Int, Int, Double)] -> Int -> IO MatrixFactorization
-precomputeMatrixFactorization techTriples n = do
+precomputeMatrixFactorization :: Text -> [(Int, Int, Double)] -> Int -> IO MatrixFactorization
+precomputeMatrixFactorization dbName techTriples n = do
     -- Serialize ALL PETSc operations to prevent concurrent matrix assembly/factorization
     withMVar petscGlobalMutex $ \_ -> do
         -- Ensure PETSc is initialized
@@ -415,7 +423,7 @@ precomputeMatrixFactorization techTriples n = do
         let systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
         let systemMatrix = aggregateMatrixEntries (identityTriples ++ systemTechTriples)
 
-        reportMatrixOperation $ "Pre-computing factorization for " ++ show n ++ " activities with " ++ show (length systemMatrix) ++ " entries"
+        reportMatrixOperation $ "Pre-computing factorization for database '" ++ T.unpack dbName ++ "' (" ++ show n ++ " activities, " ++ show (length systemMatrix) ++ " entries)"
 
         -- Create and cache the actual PETSc factorized solver
         let matrixData = buildPetscMatrixData systemMatrix n
@@ -434,15 +442,16 @@ precomputeMatrixFactorization techTriples n = do
         kspSetInitialGuessNonzero ksp False
         kspSetUp ksp  -- This performs the actual factorization
 
-        -- Cache the factorized solver globally with thread safety
-        swapMVar cachedKspSolver (Just (ksp, mat, n))
+        -- Cache the factorized solver by database name for per-database lookup
+        modifyMVar_ cachedKspSolver $ \solvers -> return $ M.insert dbName (ksp, mat, n) solvers
 
-        reportMatrixOperation "PETSc solver factorized and cached in memory for reuse"
+        reportMatrixOperation $ "PETSc solver for database '" ++ T.unpack dbName ++ "' factorized and cached"
 
-        -- Also store the system matrix for backward compatibility
+        -- Store the system matrix for fallback when cache miss or solver failure
         let factorization = MatrixFactorization
                 { mfSystemMatrix = U.fromList [SparseTriple (fromIntegral i) (fromIntegral j) v | (i, j, v) <- systemMatrix]
                 , mfActivityCount = fromIntegral n
+                , mfDatabaseId = dbName
                 }
 
         return factorization
