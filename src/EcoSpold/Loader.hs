@@ -58,31 +58,30 @@ import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
+import Data.Bits (xor)
+import Data.Typeable (typeOf, typeRepFingerprint)
+import Data.Word (Word64)
+import GHC.Fingerprint (Fingerprint(..))
+
+-- | Magic bytes to identify fpLCA cache files
+cacheMagic :: BS.ByteString
+cacheMagic = "FPLCACHE"
 
 {-|
-Cache format version - increment when data structures change.
+Schema signature automatically derived from the Database type structure.
 
-This version number is embedded in cache filenames to automatically
-invalidate caches when the underlying Haskell data types change
-(Activity, Flow, Exchange, Unit, etc.).
+This signature changes when:
+- Fields are added/removed from Database or nested types
+- Type names change
+- Type structure changes
 
-Increment this number when:
-- Adding/removing/changing fields in core data types
-- Changing serialization format or compression
-- Modifying matrix computation algorithms
-
-Version history:
-- Version 8: Matrix pre-computation caching
-- Version 9: Improved error handling with cache validation and exception catching
-- Version 10: Fixed reference product identification to prevent negative inputs from overwriting activity unit
-- Version 11: Memory optimization - changed dbBiosphereFlows from lazy list to strict Vector (saves ~300-500MB)
-- Version 12: Major memory optimization - removed unused exchange indexes (saves ~3-4GB by eliminating Exchange duplication)
-- Version 13: Force strict evaluation during deserialization - added NFData instances and evaluate . force to prevent lazy thunk buildup during cache loading
-- Version 14: MAJOR: UUID type conversion from Text (~80 bytes) to Data.UUID.UUID (16 bytes) - saves ~2-3GB of RAM from ~100,000+ UUID instances
-- Version 15: MAJOR: Sparse triple unboxed optimization - converted from boxed Vector (Int32, Int32, Double) to unboxed VU.Vector SparseTriple with UNPACK pragmas - saves ~25MB and eliminates 800K heap objects from GC tracking
+The signature is stored inside the cache file and checked on load.
+If it doesn't match, the cache is automatically invalidated and rebuilt.
 -}
-cacheFormatVersion :: Int
-cacheFormatVersion = 16  -- v16: Added techLocation/bioLocation fields to Exchange types
+schemaSignature :: Word64
+schemaSignature =
+    let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
+    in hi `xor` lo
 
 {-|
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -469,33 +468,19 @@ loadEcoSpoldDirectory aliases dir = do
         return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
 
 {-|
-Generate filename for matrix cache (second-tier caching).
+Generate filename for matrix cache.
 
 Matrix caches store pre-computed sparse matrices (technosphere A,
 biosphere B) enabling direct LCA solving without matrix construction.
 
-Uses filename pattern: "{dbName}.cache.v{VERSION}.{HASH}.bin"
+Uses simple filename pattern: "fplca.cache.{dbName}.bin"
 
-For files (e.g., SimaPro CSV), uses the file path in the hash.
-For directories (e.g., EcoSpold), uses directory + file list in hash.
+Cache invalidation is handled by a schema signature stored inside
+the cache file, not by the filename.
 -}
 generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
-generateMatrixCacheFilename dbName path = do
-    isFile <- doesFileExist path
-    filesHash <- if isFile
-        then do
-            -- For single files (SimaPro CSV), use file path and size for hash
-            fileSize <- getFileSize path
-            return $ abs $ hash (show (path, fileSize))
-        else do
-            -- For directories (EcoSpold), use directory + file list
-            files <- listDirectory path
-            -- Include both EcoSpold1 and EcoSpold2 files in hash
-            let spold2Files = [f | f <- files, takeExtension f == ".spold"]
-            let spold1Files = [f | f <- files, map toLower (takeExtension f) == ".xml"]
-            let allSpoldFiles = spold2Files ++ spold1Files
-            return $ abs $ hash (show (path, allSpoldFiles))
-    return $ T.unpack dbName ++ ".cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
+generateMatrixCacheFilename dbName _path = do
+    return $ "fplca.cache." ++ T.unpack dbName ++ ".bin"
 
 {-|
 Validate cache file integrity before attempting to decode.
@@ -538,78 +523,66 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
     cacheFile <- generateMatrixCacheFilename dbName dataDir
     let zstdFile = cacheFile ++ ".zst"
 
-    -- Try compressed file first, then fall back to uncompressed for backwards compatibility
     zstdExists <- doesFileExist zstdFile
-    cacheExists <- doesFileExist cacheFile
-
-    if zstdExists
+    if not zstdExists
         then do
+            reportCacheOperation "No matrix cache found"
+            return Nothing
+        else do
             reportCacheInfo zstdFile
             -- Wrap cache loading in exception handler to prevent crashes
             catch
                 (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
-                    compressed <- BS.readFile zstdFile
-                    db <- case Zstd.decompress compressed of
-                        Zstd.Skip -> error "Zstd decompression failed: Skip"
-                        Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
-                        Zstd.Decompress decompressed -> do
-                            let !db = decode (BSL.fromStrict decompressed)
-                            -- Force full evaluation to prevent lazy thunk buildup
-                            evaluate (force db)
-                    reportCacheOperation $
-                        "Matrix cache loaded: "
-                        ++ show (dbActivityCount db)
-                        ++ " activities, "
-                        ++ show (VU.length $ dbTechnosphereTriples db)
-                        ++ " tech entries, "
-                        ++ show (VU.length $ dbBiosphereTriples db)
-                        ++ " bio entries (decompressed)"
-                    return (Just db))
+                    contents <- BS.readFile zstdFile
+                    -- Check header: magic (8 bytes) + signature (8 bytes)
+                    let headerSize = 16
+                    if BS.length contents < headerSize
+                        then do
+                            reportCacheOperation "Cache file too small, rebuilding"
+                            removeFile zstdFile
+                            return Nothing
+                        else do
+                            let (header, payload) = BS.splitAt headerSize contents
+                            let (magic, sigBytes) = BS.splitAt 8 header
+                            -- Check magic bytes
+                            if magic /= cacheMagic
+                                then do
+                                    reportCacheOperation "Cache file has invalid magic (old format?), rebuilding"
+                                    removeFile zstdFile
+                                    return Nothing
+                                else do
+                                    -- Check schema signature
+                                    let storedSig = decode (BSL.fromStrict sigBytes) :: Word64
+                                    if storedSig /= schemaSignature
+                                        then do
+                                            reportCacheOperation $ "Schema signature mismatch (stored: " ++ show storedSig ++ ", current: " ++ show schemaSignature ++ "), rebuilding"
+                                            removeFile zstdFile
+                                            return Nothing
+                                        else do
+                                            -- Decompress and decode
+                                            db <- case Zstd.decompress payload of
+                                                Zstd.Skip -> error "Zstd decompression failed: Skip"
+                                                Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                                                Zstd.Decompress decompressed -> do
+                                                    let !db = decode (BSL.fromStrict decompressed)
+                                                    -- Force full evaluation to prevent lazy thunk buildup
+                                                    evaluate (force db)
+                                            reportCacheOperation $
+                                                "Matrix cache loaded: "
+                                                ++ show (dbActivityCount db)
+                                                ++ " activities, "
+                                                ++ show (VU.length $ dbTechnosphereTriples db)
+                                                ++ " tech entries, "
+                                                ++ show (VU.length $ dbBiosphereTriples db)
+                                                ++ " bio entries (decompressed)"
+                                            return (Just db))
                 (\(e :: SomeException) -> do
-                    reportError $ "Compressed cache load failed: " ++ show e
-                    reportCacheOperation "The compressed cache file is corrupted or incompatible"
+                    reportError $ "Cache load failed: " ++ show e
+                    reportCacheOperation "The cache file is corrupted or incompatible"
                     reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
                     removeFile zstdFile
                     reportCacheOperation "Will rebuild database from source files"
                     return Nothing)
-    else if cacheExists
-        then do
-            reportCacheOperation "Found old uncompressed cache, migrating to compressed format"
-            -- Validate cache file before attempting to decode
-            isValid <- validateCacheFile cacheFile
-            if not isValid
-                then do
-                    reportCacheOperation "Cache file validation failed, deleting and rebuilding"
-                    removeFile cacheFile
-                    return Nothing
-                else do
-                    reportCacheInfo cacheFile
-                    -- Load old format and delete it (will be saved in new format)
-                    catch
-                        (withProgressTiming Cache "Matrix cache load (old format)" $ do
-                            !db <- BSL.readFile cacheFile >>= \bs -> evaluate (force (decode bs))
-                            reportCacheOperation $
-                                "Matrix cache loaded: "
-                                ++ show (dbActivityCount db)
-                                ++ " activities, "
-                                ++ show (VU.length $ dbTechnosphereTriples db)
-                                ++ " tech entries, "
-                                ++ show (VU.length $ dbBiosphereTriples db)
-                                ++ " bio entries"
-                            -- Delete old uncompressed cache
-                            removeFile cacheFile
-                            reportCacheOperation "Deleted old uncompressed cache (will be saved in compressed format)"
-                            return (Just db))
-                        (\(e :: SomeException) -> do
-                            reportError $ "Cache load failed: " ++ show e
-                            reportCacheOperation "The cache file is corrupted or incompatible with the current version"
-                            reportCacheOperation $ "Deleting corrupted cache file: " ++ cacheFile
-                            removeFile cacheFile
-                            reportCacheOperation "Will rebuild database from source files"
-                            return Nothing)
-        else do
-            reportCacheOperation "No matrix cache found"
-            return Nothing
 
 {-|
 Load Database directly from a specified cache file.
@@ -638,29 +611,52 @@ loadDatabaseFromCacheFile cacheFile = do
                 then loadCompressedCacheFile cacheFile
                 else loadUncompressedCacheFile cacheFile
 
--- | Load compressed (.bin.zst) cache file
+-- | Load compressed (.bin.zst) cache file with header validation
 loadCompressedCacheFile :: FilePath -> IO (Maybe Database)
 loadCompressedCacheFile zstdFile = do
     reportCacheInfo zstdFile
     catch
         (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
-            compressed <- BS.readFile zstdFile
-            db <- case Zstd.decompress compressed of
-                Zstd.Skip -> error "Zstd decompression failed: Skip"
-                Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
-                Zstd.Decompress decompressed -> do
-                    let !db = decode (BSL.fromStrict decompressed)
-                    -- Force full evaluation to prevent lazy thunk buildup
-                    evaluate (force db)
-            reportCacheOperation $
-                "Matrix cache loaded: "
-                ++ show (dbActivityCount db)
-                ++ " activities, "
-                ++ show (VU.length $ dbTechnosphereTriples db)
-                ++ " tech entries, "
-                ++ show (VU.length $ dbBiosphereTriples db)
-                ++ " bio entries (decompressed)"
-            return (Just db))
+            contents <- BS.readFile zstdFile
+            -- Check minimum size for header (16 bytes)
+            if BS.length contents < 16
+                then do
+                    reportCacheOperation "Cache file too small (missing header)"
+                    return Nothing
+                else do
+                    let (header, compressed) = BS.splitAt 16 contents
+                        (magic, sigBytes) = BS.splitAt 8 header
+                    -- Check magic bytes
+                    if magic /= cacheMagic
+                        then do
+                            reportCacheOperation "Invalid cache file (wrong magic bytes)"
+                            return Nothing
+                        else do
+                            -- Check schema signature
+                            let storedSig = decode (BSL.fromStrict sigBytes) :: Word64
+                            if storedSig /= schemaSignature
+                                then do
+                                    reportCacheOperation $ "Schema mismatch: cache=" ++ show storedSig ++ " current=" ++ show schemaSignature
+                                    reportCacheOperation "Cache will be rebuilt with new schema"
+                                    return Nothing
+                                else do
+                                    -- Decompress and decode the payload
+                                    db <- case Zstd.decompress compressed of
+                                        Zstd.Skip -> error "Zstd decompression failed: Skip"
+                                        Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                                        Zstd.Decompress decompressed -> do
+                                            let !db = decode (BSL.fromStrict decompressed)
+                                            -- Force full evaluation to prevent lazy thunk buildup
+                                            evaluate (force db)
+                                    reportCacheOperation $
+                                        "Matrix cache loaded: "
+                                        ++ show (dbActivityCount db)
+                                        ++ " activities, "
+                                        ++ show (VU.length $ dbTechnosphereTriples db)
+                                        ++ " tech entries, "
+                                        ++ show (VU.length $ dbBiosphereTriples db)
+                                        ++ " bio entries (decompressed)"
+                                    return (Just db))
         (\(e :: SomeException) -> do
             reportError $ "Compressed cache load failed: " ++ show e
             reportCacheOperation "The compressed cache file is corrupted or incompatible"
@@ -695,11 +691,13 @@ loadUncompressedCacheFile cacheFile = do
                     return Nothing)
 
 {-|
-Save Database with pre-computed matrices to cache (second-tier).
+Save Database with pre-computed matrices to cache.
 
 Serializes the complete Database including sparse matrices to enable
-ultra-fast startup (~0.5s load time). This is the most efficient
-caching tier but requires the largest disk space (~100-200MB).
+ultra-fast startup (~0.5s load time). The cache file includes:
+- 8 bytes magic ("FPLCACHE")
+- 8 bytes schema signature (auto-generated from type structure)
+- Zstd compressed Database binary
 
 Should be called after matrix construction is complete.
 -}
@@ -712,10 +710,12 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
         -- Serialize to ByteString
         let serialized = encode db
         -- Compress with zstd (level 3 = good balance of compression and speed)
-        -- Convert lazy to strict for compression, then back to lazy for writing
         let compressed = Zstd.compress 3 (BSL.toStrict serialized)
-        -- Write compressed data
-        BS.writeFile zstdFile compressed
+        -- Build header: magic (8 bytes) + schema signature (8 bytes)
+        let signatureBytes = BSL.toStrict $ encode schemaSignature
+        let header = cacheMagic <> signatureBytes
+        -- Write header + compressed data
+        BS.writeFile zstdFile (header <> compressed)
         reportCacheOperation $
             "Matrix cache saved ("
             ++ show (dbActivityCount db)
