@@ -1,19 +1,21 @@
 module Views.ActivitiesView exposing (viewActivitiesPage, Msg(..))
 
-import Html exposing (Html, a, button, div, input, table, tbody, td, text, th, thead, tr, h2, p, span)
-import Html.Attributes exposing (class, href, placeholder, style, value, type_, disabled)
+import Html exposing (Html, a, button, div, i, input, option, select, table, tbody, td, text, th, thead, tr, h2, p, span, label)
+import Html.Attributes exposing (class, href, placeholder, style, value, type_, disabled, selected, title)
 import Html.Events exposing (onInput, onClick)
 import Models.Activity exposing (ActivitySummary, SearchResults)
+import Models.Database exposing (DatabaseList, DatabaseStatus)
 
 
 type Msg
     = UpdateSearchQuery String
     | SelectActivity String
     | LoadMore
+    | ActivateDatabase String
 
 
-viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Html Msg
-viewActivitiesPage searchQuery searchResults searchLoading loadingMore error =
+viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Html Msg
+viewActivitiesPage searchQuery searchResults searchLoading loadingMore error maybeDatabaseList =
     div [ class "activities-page" ]
         [ div [ class "section" ]
             [ div [ class "container" ]
@@ -23,7 +25,7 @@ viewActivitiesPage searchQuery searchResults searchLoading loadingMore error =
             ]
         , div [ class "section" ]
             [ div [ class "container" ]
-                [ searchInput searchQuery searchLoading
+                [ viewSearchBar maybeDatabaseList searchQuery searchLoading
                 , case error of
                     Just err ->
                         div [ class "notification is-danger" ]
@@ -37,10 +39,31 @@ viewActivitiesPage searchQuery searchResults searchLoading loadingMore error =
         ]
 
 
-searchInput : String -> Bool -> Html Msg
-searchInput query isLoading =
-    div [ class "field" ]
-        [ div [ if isLoading then class "control has-icons-left is-loading" else class "control has-icons-left" ]
+viewSearchBar : Maybe DatabaseList -> String -> Bool -> Html Msg
+viewSearchBar maybeDatabaseList query isLoading =
+    div [ class "field is-grouped", style "margin-bottom" "1.5rem" ]
+        [ -- Database selector on the left
+          case maybeDatabaseList of
+            Nothing ->
+                text ""
+
+            Just dbList ->
+                let
+                    loadedDatabases =
+                        List.filter .loaded dbList.databases
+
+                    currentDbName =
+                        dbList.current |> Maybe.withDefault ""
+                in
+                div [ class "control" ]
+                    [ div [ class "select is-large" ]
+                        [ select
+                            [ onInput ActivateDatabase ]
+                            (List.map (viewDatabaseOption currentDbName) loadedDatabases)
+                        ]
+                    ]
+        , -- Search input on the right (expanded)
+          div [ class "control has-icons-left is-expanded", class (if isLoading then "is-loading" else "") ]
             [ input
                 [ class "input is-large"
                 , type_ "text"
@@ -118,3 +141,12 @@ viewActivityRow activity =
             ]
         , td [] [ text activity.location ]
         ]
+
+
+viewDatabaseOption : String -> DatabaseStatus -> Html Msg
+viewDatabaseOption currentDbName db =
+    option
+        [ value db.name
+        , selected (db.name == currentDbName)
+        ]
+        [ text db.displayName ]

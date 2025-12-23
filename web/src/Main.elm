@@ -54,6 +54,7 @@ type alias Model =
     , detailsViewModel : Maybe DetailsView.Model -- Current details view model
     , graphCutoffInput : String -- Cutoff input as string to allow partial edits like "0."
     , currentActivityId : String
+    , currentDatabaseId : Maybe String -- Database ID from URL (for URL-based navigation)
     , loading : Bool
     , error : Maybe String
     , navigationHistory : List String
@@ -131,15 +132,19 @@ activitiesQueryParser =
 routeParser : Parser (Route -> a) a
 routeParser =
     oneOf
-        [ Parser.map ActivitiesRoute (top <?> activitiesQueryParser)
-        , Parser.map ActivitiesRoute (Parser.s "activities" <?> activitiesQueryParser)
-        , Parser.map ActivityDetailsRoute (Parser.s "activity" </> string </> Parser.s "details")
-        , Parser.map ActivityTreeRoute (Parser.s "activity" </> string </> Parser.s "tree")
-        , Parser.map ActivityInventoryRoute (Parser.s "activity" </> string </> Parser.s "inventory")
-        , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
-        , Parser.map ActivityLCIARoute (Parser.s "activity" </> string </> Parser.s "lcia")
-        , Parser.map ActivityRoute (Parser.s "activity" </> string)
+        [ -- Root route - will redirect to default database
+          Parser.map RootRoute top
+          -- Global routes (no database prefix)
         , Parser.map DatabasesRoute (Parser.s "databases")
+          -- Database-scoped routes: /db/{dbName}/...
+        , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit })
+            (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
+        , Parser.map ActivityDetailsRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "details")
+        , Parser.map ActivityTreeRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "tree")
+        , Parser.map ActivityInventoryRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "inventory")
+        , Parser.map ActivityGraphRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "graph")
+        , Parser.map ActivityLCIARoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "lcia")
+        , Parser.map ActivityRoute (Parser.s "db" </> string </> Parser.s "activity" </> string)
         ]
 
 
@@ -152,25 +157,28 @@ parseUrl url =
 routeToPage : Route -> Page
 routeToPage route =
     case route of
+        RootRoute ->
+            ActivitiesPage
+
         ActivitiesRoute _ ->
             ActivitiesPage
 
-        ActivityRoute _ ->
+        ActivityRoute _ _ ->
             DetailsPage
 
-        ActivityDetailsRoute _ ->
+        ActivityDetailsRoute _ _ ->
             DetailsPage
 
-        ActivityTreeRoute _ ->
+        ActivityTreeRoute _ _ ->
             TreePage
 
-        ActivityInventoryRoute _ ->
+        ActivityInventoryRoute _ _ ->
             InventoryPage
 
-        ActivityGraphRoute _ ->
+        ActivityGraphRoute _ _ ->
             GraphPage
 
-        ActivityLCIARoute _ ->
+        ActivityLCIARoute _ _ ->
             LCIAPage
 
         DatabasesRoute ->
@@ -178,6 +186,42 @@ routeToPage route =
 
         NotFoundRoute ->
             ActivitiesPage
+
+
+{-| Extract database name from route (if applicable)
+-}
+routeToDatabase : Route -> Maybe String
+routeToDatabase route =
+    case route of
+        RootRoute ->
+            Nothing
+
+        ActivitiesRoute { db } ->
+            Just db
+
+        ActivityRoute db _ ->
+            Just db
+
+        ActivityDetailsRoute db _ ->
+            Just db
+
+        ActivityTreeRoute db _ ->
+            Just db
+
+        ActivityInventoryRoute db _ ->
+            Just db
+
+        ActivityGraphRoute db _ ->
+            Just db
+
+        ActivityLCIARoute db _ ->
+            Just db
+
+        DatabasesRoute ->
+            Nothing
+
+        NotFoundRoute ->
+            Nothing
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -189,8 +233,19 @@ init _ url key =
         defaultActivityId =
             "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
 
+        -- Extract database from route
+        urlDatabase =
+            routeToDatabase route
+
         routeConfig =
             case route of
+                RootRoute ->
+                    { activityId = defaultActivityId
+                    , shouldLoad = True
+                    , loadType = "redirect"
+                    , searchQuery = ""
+                    }
+
                 ActivitiesRoute { name } ->
                     { activityId = defaultActivityId
                     , shouldLoad = False
@@ -198,42 +253,42 @@ init _ url key =
                     , searchQuery = Maybe.withDefault "" name
                     }
 
-                ActivityRoute processId ->
+                ActivityRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "details"
                     , searchQuery = ""
                     }
 
-                ActivityDetailsRoute processId ->
+                ActivityDetailsRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "details"
                     , searchQuery = ""
                     }
 
-                ActivityTreeRoute processId ->
+                ActivityTreeRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "tree"
                     , searchQuery = ""
                     }
 
-                ActivityInventoryRoute processId ->
+                ActivityInventoryRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "inventory"
                     , searchQuery = ""
                     }
 
-                ActivityGraphRoute processId ->
+                ActivityGraphRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "graph"
                     , searchQuery = ""
                     }
 
-                ActivityLCIARoute processId ->
+                ActivityLCIARoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
                     , loadType = "lcia"
@@ -274,6 +329,7 @@ init _ url key =
             , detailsViewModel = Nothing
             , graphCutoffInput = "1.0"
             , currentActivityId = routeConfig.activityId
+            , currentDatabaseId = urlDatabase
             , loading = routeConfig.shouldLoad
             , error = Nothing
             , navigationHistory = []
@@ -291,7 +347,7 @@ init _ url key =
             , loadingMethods = routeConfig.loadType == "lcia"
             , loadingLCIA = False
             , databaseList = Nothing
-            , loadingDatabases = routeConfig.loadType == "databases"
+            , loadingDatabases = routeConfig.loadType == "databases" || routeConfig.loadType == "redirect"
             , activatingDatabase = False
             }
 
@@ -520,11 +576,15 @@ update msg model =
                             case Dict.get nodeId treeModel.idMapping of
                                 Just processId ->
                                     if processId /= model.currentActivityId then
+                                        let
+                                            db =
+                                                getCurrentDbName model
+                                        in
                                         ( { model
                                             | treeViewModel = Just updatedTreeModel
                                             , navigationHistory = model.currentActivityId :: model.navigationHistory
                                           }
-                                        , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute processId))
+                                        , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute db processId))
                                         )
 
                                     else
@@ -542,19 +602,27 @@ update msg model =
         DetailsViewMsg detailsMsg ->
             case detailsMsg of
                 DetailsView.NavigateToActivity processId ->
+                    let
+                        db =
+                            getCurrentDbName model
+                    in
                     ( { model
                         | navigationHistory = model.currentActivityId :: model.navigationHistory
                       }
-                    , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute processId))
+                    , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db processId))
                     )
 
                 DetailsView.NavigateBack ->
                     case model.navigationHistory of
                         parentId :: rest ->
+                            let
+                                db =
+                                    getCurrentDbName model
+                            in
                             ( { model
                                 | navigationHistory = rest
                               }
-                            , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute parentId))
+                            , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db parentId))
                             )
 
                         [] ->
@@ -568,17 +636,25 @@ update msg model =
             ( { model | graphCutoffInput = cutoffStr }, Cmd.none )
 
         NodeClicked nodeId ->
+            let
+                db =
+                    getCurrentDbName model
+            in
             if nodeId /= model.currentActivityId then
                 ( { model
                     | navigationHistory = model.currentActivityId :: model.navigationHistory
                   }
-                , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute nodeId))
+                , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db nodeId))
                 )
 
             else
                 ( model, Cmd.none )
 
         NavigateToParent ->
+            let
+                db =
+                    getCurrentDbName model
+            in
             case Dict.get model.currentActivityId model.cachedTrees of
                 Just tree ->
                     case Dict.get model.currentActivityId tree.nodes of
@@ -588,7 +664,7 @@ update msg model =
                                     ( { model
                                         | navigationHistory = List.drop 1 model.navigationHistory
                                       }
-                                    , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute parentId))
+                                    , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute db parentId))
                                     )
 
                                 Nothing ->
@@ -597,7 +673,7 @@ update msg model =
                                             ( { model
                                                 | navigationHistory = rest
                                               }
-                                            , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute parentId))
+                                            , Nav.pushUrl model.key (routeToUrl (ActivityTreeRoute db parentId))
                                             )
 
                                         [] ->
@@ -611,6 +687,9 @@ update msg model =
 
         NavigateToPage page ->
             let
+                db =
+                    getCurrentDbName model
+
                 route =
                     case page of
                         ActivitiesPage ->
@@ -621,22 +700,22 @@ update msg model =
                                     else
                                         Just model.activitiesSearchQuery
                             in
-                            ActivitiesRoute { name = queryName, limit = Just 20 }
+                            ActivitiesRoute { db = db, name = queryName, limit = Just 20 }
 
                         DetailsPage ->
-                            ActivityDetailsRoute model.currentActivityId
+                            ActivityDetailsRoute db model.currentActivityId
 
                         TreePage ->
-                            ActivityTreeRoute model.currentActivityId
+                            ActivityTreeRoute db model.currentActivityId
 
                         InventoryPage ->
-                            ActivityInventoryRoute model.currentActivityId
+                            ActivityInventoryRoute db model.currentActivityId
 
                         GraphPage ->
-                            ActivityGraphRoute model.currentActivityId
+                            ActivityGraphRoute db model.currentActivityId
 
                         LCIAPage ->
-                            ActivityLCIARoute model.currentActivityId
+                            ActivityLCIARoute db model.currentActivityId
 
                         DatabasesPage ->
                             DatabasesRoute
@@ -645,6 +724,9 @@ update msg model =
 
         UpdateSearchQuery query ->
             let
+                db =
+                    getCurrentDbName model
+
                 queryName =
                     if String.isEmpty query then
                         Nothing
@@ -653,7 +735,7 @@ update msg model =
                         Just query
 
                 newRoute =
-                    ActivitiesRoute { name = queryName, limit = Just 20 }
+                    ActivitiesRoute { db = db, name = queryName, limit = Just 20 }
 
                 -- Search if query is not empty, clear results if empty
                 cmds =
@@ -751,10 +833,14 @@ update msg model =
             )
 
         SelectActivity activityId ->
+            let
+                db =
+                    getCurrentDbName model
+            in
             ( { model
                 | navigationHistory = model.currentActivityId :: model.navigationHistory
               }
-            , navigateToActivity model.key activityId
+            , navigateToActivity model.key db activityId
             )
 
         NodeHovered nodeId ->
@@ -851,12 +937,35 @@ update msg model =
             )
 
         DatabasesLoaded (Ok dbList) ->
+            let
+                -- Check if we need to redirect from root to default database
+                needsRootRedirect =
+                    model.currentDatabaseId == Nothing && model.currentPage == ActivitiesPage
+
+                redirectCmd =
+                    if needsRootRedirect then
+                        case dbList.current of
+                            Just defaultDb ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivitiesRoute { db = defaultDb, name = Nothing, limit = Just 20 }))
+
+                            Nothing ->
+                                Cmd.none
+
+                    else
+                        Cmd.none
+            in
             ( { model
                 | databaseList = Just dbList
                 , loadingDatabases = False
                 , error = Nothing
+                , currentDatabaseId =
+                    if model.currentDatabaseId == Nothing then
+                        dbList.current
+
+                    else
+                        model.currentDatabaseId
               }
-            , Cmd.none
+            , redirectCmd
             )
 
         DatabasesLoaded (Err error) ->
@@ -876,12 +985,71 @@ update msg model =
 
         ActivateDatabaseResult (Ok response) ->
             if response.success then
+                let
+                    -- Get the new database name from the response
+                    newDbName =
+                        response.database
+                            |> Maybe.map .name
+                            |> Maybe.withDefault (getCurrentDbName model)
+
+                    -- Re-run search if on Activities page with a query
+                    searchCmd =
+                        if model.currentPage == ActivitiesPage && not (String.isEmpty model.activitiesSearchQuery) then
+                            searchActivities model.activitiesSearchQuery
+
+                        else
+                            Cmd.none
+
+                    -- Update URL with new database
+                    urlCmd =
+                        case model.currentPage of
+                            ActivitiesPage ->
+                                let
+                                    queryName =
+                                        if String.isEmpty model.activitiesSearchQuery then
+                                            Nothing
+
+                                        else
+                                            Just model.activitiesSearchQuery
+                                in
+                                Nav.replaceUrl model.key (routeToUrl (ActivitiesRoute { db = newDbName, name = queryName, limit = Just 20 }))
+
+                            DetailsPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityDetailsRoute newDbName model.currentActivityId))
+
+                            TreePage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityTreeRoute newDbName model.currentActivityId))
+
+                            InventoryPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityInventoryRoute newDbName model.currentActivityId))
+
+                            GraphPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityGraphRoute newDbName model.currentActivityId))
+
+                            LCIAPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityLCIARoute newDbName model.currentActivityId))
+
+                            DatabasesPage ->
+                                Cmd.none
+                    -- Set searchLoading if we're re-running search
+                    isSearching =
+                        model.currentPage == ActivitiesPage && not (String.isEmpty model.activitiesSearchQuery)
+                in
                 -- Reload database list to show updated status
                 ( { model
                     | activatingDatabase = False
                     , error = Nothing
+                    , currentDatabaseId = Just newDbName
+                    , skipNextUrlChange = True
+                    -- Clear cached data since we switched databases
+                    , cachedTrees = Dict.empty
+                    , cachedActivityInfo = Dict.empty
+                    , cachedInventories = Dict.empty
+                    , cachedGraphs = Dict.empty
+                    , searchResults = Nothing
+                    , searchLoading = isSearching
                   }
-                , loadDatabases
+                , Cmd.batch [ loadDatabases, urlCmd, searchCmd ]
                 )
 
             else
@@ -921,34 +1089,40 @@ update msg model =
                     newPage =
                         routeToPage route
 
+                    urlDatabase =
+                        routeToDatabase route
+
                     routeInfo =
                         case route of
+                            RootRoute ->
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = "", needsRedirect = True }
+
                             ActivitiesRoute { name } ->
-                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = Maybe.withDefault "" name }
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = Maybe.withDefault "" name, needsRedirect = False }
 
-                            ActivityRoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityDetailsRoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityDetailsRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityTreeRoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityTreeRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityInventoryRoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityInventoryRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityGraphRoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityGraphRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityLCIARoute processId ->
-                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
+                            ActivityLCIARoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                             DatabasesRoute ->
-                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                             NotFoundRoute ->
-                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                     -- For DetailsPage: load activity info
                     shouldLoadActivityInfo =
@@ -999,22 +1173,55 @@ update msg model =
                         else
                             model.treeViewModel
 
+                    -- If root route, we need to redirect to default database
+                    needsRedirect =
+                        routeInfo.needsRedirect
+
+                    -- Check if URL database differs from current server database
+                    needsDbActivation =
+                        case ( urlDatabase, model.databaseList ) of
+                            ( Just urlDb, Just dbList ) ->
+                                case dbList.current of
+                                    Just currentDb ->
+                                        urlDb /= currentDb
+
+                                    Nothing ->
+                                        True
+
+                            _ ->
+                                False
+
                     updatedModel =
                         { model
                             | url = url
                             , currentPage = newPage
                             , currentActivityId = routeInfo.activityId
-                            , loading = shouldLoad
+                            , currentDatabaseId = urlDatabase
+                            , loading = shouldLoad || needsRedirect
                             , navigationHistory = model.navigationHistory
                             , activitiesSearchQuery = routeInfo.searchQuery
                             , searchLoading = shouldSearch
                             , treeViewModel = newTreeViewModel
                             , loadingMethods = shouldLoadLCIA
-                            , loadingDatabases = shouldLoadDatabases
+                            , loadingDatabases = shouldLoadDatabases || needsRedirect
+                            , activatingDatabase = needsDbActivation
                         }
 
                     cmd =
-                        if shouldLoadActivityInfo then
+                        if needsRedirect then
+                            -- Load databases to get default, will redirect after
+                            loadDatabases
+
+                        else if needsDbActivation then
+                            -- Activate the database from URL
+                            case urlDatabase of
+                                Just dbName ->
+                                    activateDatabase dbName
+
+                                Nothing ->
+                                    Cmd.none
+
+                        else if shouldLoadActivityInfo then
                             loadActivityInfo routeInfo.activityId
 
                         else if shouldLoadTree then
@@ -1065,7 +1272,10 @@ update msg model =
 routeToUrl : Route -> String
 routeToUrl route =
     case route of
-        ActivitiesRoute { name, limit } ->
+        RootRoute ->
+            "/"
+
+        ActivitiesRoute { db, name, limit } ->
             let
                 queryParams =
                     [ Maybe.map (\n -> "name=" ++ n) name
@@ -1081,25 +1291,25 @@ routeToUrl route =
                     else
                         "?" ++ queryParams
             in
-            "/activities" ++ queryString
+            "/db/" ++ db ++ "/activities" ++ queryString
 
-        ActivityRoute processId ->
-            "/activity/" ++ processId
+        ActivityRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId
 
-        ActivityDetailsRoute processId ->
-            "/activity/" ++ processId ++ "/details"
+        ActivityDetailsRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/details"
 
-        ActivityTreeRoute processId ->
-            "/activity/" ++ processId ++ "/tree"
+        ActivityTreeRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/tree"
 
-        ActivityInventoryRoute processId ->
-            "/activity/" ++ processId ++ "/inventory"
+        ActivityInventoryRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/inventory"
 
-        ActivityGraphRoute processId ->
-            "/activity/" ++ processId ++ "/graph"
+        ActivityGraphRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/graph"
 
-        ActivityLCIARoute processId ->
-            "/activity/" ++ processId ++ "/lcia"
+        ActivityLCIARoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/lcia"
 
         DatabasesRoute ->
             "/databases"
@@ -1108,9 +1318,23 @@ routeToUrl route =
             "/"
 
 
-navigateToActivity : Nav.Key -> String -> Cmd Msg
-navigateToActivity key processId =
-    Nav.pushUrl key (routeToUrl (ActivityDetailsRoute processId))
+{-| Get current database name from model (URL database or server's current)
+-}
+getCurrentDbName : Model -> String
+getCurrentDbName model =
+    model.currentDatabaseId
+        |> Maybe.withDefault
+            (model.databaseList
+                |> Maybe.andThen .current
+                |> Maybe.withDefault "default"
+            )
+
+
+{-| Navigate to activity details page with current database
+-}
+navigateToActivity : Nav.Key -> String -> String -> Cmd Msg
+navigateToActivity key db processId =
+    Nav.pushUrl key (routeToUrl (ActivityDetailsRoute db processId))
 
 
 subscriptions : Model -> Sub Msg
@@ -1146,9 +1370,21 @@ view model =
                                         |> Maybe.map .displayName
                                 )
                     )
+
+        -- Get activity name from cached data
+        currentActivityName =
+            Dict.get model.currentActivityId model.cachedTrees
+                |> Maybe.andThen (\tree -> Dict.get model.currentActivityId tree.nodes)
+                |> Maybe.map .name
     in
     div [ class "app-container" ]
-        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName)
+        [ Html.map
+            (\msg ->
+                case msg of
+                    LeftMenu.NavigateTo page ->
+                        NavigateToPage page
+            )
+            (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName)
         , div [ class "main-content" ]
             [ case model.currentPage of
                 ActivitiesPage ->
@@ -1163,6 +1399,9 @@ view model =
 
                                 ActivitiesView.LoadMore ->
                                     LoadMoreActivities
+
+                                ActivitiesView.ActivateDatabase dbName ->
+                                    DatabasesViewMsg (DatabasesView.ActivateDatabase dbName)
                         )
                         (ActivitiesView.viewActivitiesPage
                             model.activitiesSearchQuery
@@ -1170,6 +1409,7 @@ view model =
                             model.searchLoading
                             model.loadingMore
                             model.error
+                            model.databaseList
                         )
 
                 DetailsPage ->

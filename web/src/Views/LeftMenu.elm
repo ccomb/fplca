@@ -1,64 +1,112 @@
-module Views.LeftMenu exposing (viewLeftMenu)
+module Views.LeftMenu exposing (Msg(..), viewLeftMenu)
 
 import Html exposing (Html, button, div, i, nav, p, span, text)
-import Html.Attributes exposing (class, classList, style)
+import Html.Attributes exposing (class, classList, style, title)
 import Html.Events exposing (onClick)
 import Models.Page exposing (Page(..))
 
 
-type alias Msg =
-    Page
+type Msg
+    = NavigateTo Page
 
 
-viewLeftMenu : Page -> String -> Maybe String -> Html Msg
-viewLeftMenu currentPage currentActivityId currentDatabaseName =
+viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName =
     nav [ class "left-menu" ]
-        [ div [ class "menu-header" ]
-            [ span [ class "title is-5 has-text-white" ] [ text "fpLCA" ]
-            ]
-        , -- Database name display (clickable to go to Databases page)
+        [ -- Database name as header (clickable to go to Databases page)
           case currentDatabaseName of
             Just dbName ->
                 button
-                    [ class "database-indicator"
-                    , onClick DatabasesPage
-                    , style "background" "rgba(255,255,255,0.1)"
+                    [ class "database-header"
+                    , onClick (NavigateTo DatabasesPage)
+                    , style "background" "transparent"
                     , style "border" "none"
-                    , style "color" "#aaa"
-                    , style "padding" "0.5rem 1rem"
-                    , style "margin" "0 0.5rem 0.5rem 0.5rem"
-                    , style "border-radius" "4px"
+                    , style "color" "#000"
+                    , style "padding" "1.25rem 1rem"
+                    , style "margin" "0"
                     , style "cursor" "pointer"
-                    , style "font-size" "0.8rem"
+                    , style "font-size" "1.4rem"
+                    , style "font-weight" "bold"
                     , style "text-align" "left"
-                    , style "width" "calc(100% - 1rem)"
+                    , style "width" "100%"
                     , style "display" "flex"
                     , style "align-items" "center"
                     , style "gap" "0.5rem"
+                    , title ("Go to Databases page - " ++ dbName)
                     ]
-                    [ i [ class "fas fa-database", style "font-size" "0.75rem" ] []
-                    , span [] [ text dbName ]
+                    [ span [ style "overflow" "hidden", style "text-overflow" "ellipsis", style "white-space" "nowrap" ] [ text dbName ]
+                    ]
+
+            Nothing ->
+                div [ class "database-header", style "padding" "1rem", style "color" "#888" ]
+                    [ text "Loading..." ]
+        , -- SEARCH section
+          div [ class "menu-items" ]
+            [ menuLabel "Search"
+            , menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
+            ]
+        , -- Activity section (only show if an activity is selected)
+          case currentActivityName of
+            Just actName ->
+                div [ class "menu-items" ]
+                    [ activityLabel actName
+                    , menuItem currentPage DetailsPage "fas fa-table" "Details" False
+                    , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
                     ]
 
             Nothing ->
                 text ""
-        , div [ class "menu-items" ]
-            [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
-            , menuItem currentPage DetailsPage "fas fa-table" "Details" False
-            , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
-            , menuItem currentPage DatabasesPage "fas fa-database" "Databases" False
-            , menuLabel "Lab"
+        , -- LAB section
+          div [ class "menu-items" ]
+            [ menuLabel "Lab"
+            , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
             , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
             , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
-            , menuItem currentPage LCIAPage "fas fa-chart-bar" "LCIA" True
             ]
+        , -- fpLCA at bottom
+          div
+            [ style "position" "absolute"
+            , style "bottom" "0"
+            , style "left" "0"
+            , style "right" "0"
+            , style "padding" "0.75rem 1rem"
+            , style "color" "#666"
+            , style "font-size" "0.85rem"
+            , style "text-align" "center"
+            , style "border-top" "1px solid #444"
+            ]
+            [ text "fpLCA" ]
         ]
 
 
 menuLabel : String -> Html Msg
 menuLabel label =
-    p [ class "menu-label has-text-grey-light", style "padding" "0.5rem 1rem", style "margin-top" "0.5rem", style "font-size" "0.75rem" ]
+    p [ class "menu-label has-text-grey-light", style "padding" "0.5rem 1rem", style "margin-top" "0.5rem", style "font-size" "0.75rem", style "text-transform" "uppercase" ]
         [ text label ]
+
+
+activityLabel : String -> Html Msg
+activityLabel actName =
+    let
+        truncatedName =
+            if String.length actName > 25 then
+                String.left 22 actName ++ "..."
+
+            else
+                actName
+    in
+    p
+        [ class "menu-label has-text-white"
+        , style "padding" "0.5rem 1rem"
+        , style "margin-top" "0.5rem"
+        , style "font-size" "0.8rem"
+        , style "font-weight" "500"
+        , style "overflow" "hidden"
+        , style "text-overflow" "ellipsis"
+        , style "white-space" "nowrap"
+        , title actName
+        ]
+        [ text truncatedName ]
 
 
 menuItem : Page -> Page -> String -> String -> Bool -> Html Msg
@@ -69,11 +117,10 @@ menuItem currentPage targetPage iconClass label isLab =
             , ( "is-active", currentPage == targetPage )
             , ( "is-lab", isLab )
             ]
-        , onClick targetPage
+        , onClick (NavigateTo targetPage)
         ]
         [ span [ class "icon" ]
             [ i [ class iconClass ] []
             ]
         , span [ class "menu-label" ] [ text label ]
         ]
-
