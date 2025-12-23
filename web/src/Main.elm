@@ -63,7 +63,6 @@ type alias Model =
     , loadingMore : Bool
     , hoveredNode : Maybe String
     , inventorySearchQuery : String
-    , skipNextUrlChange : Bool -- Flag to prevent processing self-initiated URL changes
     , methods : Maybe (List MethodSummary) -- Available LCIA methods
     , selectedMethod : Maybe MethodSummary -- Currently selected method
     , lciaResult : Maybe LCIAResult -- LCIA computation result
@@ -378,7 +377,6 @@ init _ url key =
             , loadingMore = False
             , hoveredNode = Nothing
             , inventorySearchQuery = ""
-            , skipNextUrlChange = False
             , methods = Nothing
             , selectedMethod = Nothing
             , lciaResult = Nothing
@@ -823,13 +821,11 @@ update msg model =
                         { model
                             | activitiesSearchQuery = query
                             , searchResults = Nothing
-                            , skipNextUrlChange = True
                         }
 
                     else
                         { model
                             | activitiesSearchQuery = query
-                            , skipNextUrlChange = True
                         }
             in
             ( newModel, cmds )
@@ -1115,7 +1111,6 @@ update msg model =
                     | activatingDatabase = False
                     , error = Nothing
                     , currentDatabaseId = Just newDbName
-                    , skipNextUrlChange = True
                     -- Clear cached data since we switched databases
                     , cachedTrees = Dict.empty
                     , cachedActivityInfo = Dict.empty
@@ -1152,21 +1147,36 @@ update msg model =
                     ( model, Nav.load href )
 
         UrlChanged url ->
-            -- Check if we should skip this URL change (it was triggered by us)
-            if model.skipNextUrlChange then
-                ( { model | skipNextUrlChange = False }, Cmd.none )
+            let
+                route =
+                    parseUrl url
+
+                newPage =
+                    routeToPage route
+
+                urlDatabase =
+                    routeToDatabase route
+
+                -- Check if this is just a search query update on the same page
+                -- If so, skip processing to avoid focus loss on input field
+                urlSearchQuery =
+                    case route of
+                        ActivitiesRoute { name } ->
+                            Maybe.withDefault "" name
+
+                        _ ->
+                            ""
+
+                isSamePageSameQuery =
+                    newPage == model.currentPage
+                        && newPage == ActivitiesPage
+                        && urlSearchQuery == model.activitiesSearchQuery
+            in
+            if isSamePageSameQuery then
+                ( { model | url = url }, Cmd.none )
 
             else
                 let
-                    route =
-                        parseUrl url
-
-                    newPage =
-                        routeToPage route
-
-                    urlDatabase =
-                        routeToDatabase route
-
                     routeInfo =
                         case route of
                             RootRoute ->
