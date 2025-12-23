@@ -12,71 +12,72 @@ type Msg
 
 viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> Html Msg
 viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName =
-    nav [ class "left-menu" ]
-        [ -- Database name as header (clickable to go to Databases page)
-          case currentDatabaseName of
-            Just dbName ->
-                button
-                    [ class "database-header"
-                    , onClick (NavigateTo DatabasesPage)
-                    , style "background" "transparent"
-                    , style "border" "none"
-                    , style "color" "#000"
-                    , style "padding" "1.25rem 1rem"
-                    , style "margin" "0"
-                    , style "cursor" "pointer"
-                    , style "font-size" "1.4rem"
-                    , style "font-weight" "bold"
-                    , style "text-align" "left"
-                    , style "width" "100%"
-                    , style "display" "flex"
-                    , style "align-items" "center"
-                    , style "gap" "0.5rem"
-                    , title ("Go to Databases page - " ++ dbName)
-                    ]
-                    [ span [ style "overflow" "hidden", style "text-overflow" "ellipsis", style "white-space" "nowrap" ] [ text dbName ]
-                    ]
+    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+        [ -- Top section (scrollable content)
+          div [ style "flex" "1", style "overflow-y" "auto" ]
+            [ -- Database name as header (clickable to go to Databases page)
+              case currentDatabaseName of
+                Just dbName ->
+                    button
+                        [ class "database-header"
+                        , onClick (NavigateTo DatabasesPage)
+                        , style "background" "transparent"
+                        , style "border" "none"
+                        , style "color" "#000"
+                        , style "padding" "1.25rem 1rem"
+                        , style "margin" "0"
+                        , style "cursor" "pointer"
+                        , style "font-size" "1.4rem"
+                        , style "font-weight" "bold"
+                        , style "text-align" "left"
+                        , style "width" "100%"
+                        , style "display" "flex"
+                        , style "align-items" "center"
+                        , style "gap" "0.5rem"
+                        , title ("Go to Databases page - " ++ dbName)
+                        ]
+                        [ span [ style "overflow" "hidden", style "text-overflow" "ellipsis", style "white-space" "nowrap" ] [ text dbName ]
+                        ]
 
-            Nothing ->
-                div [ class "database-header", style "padding" "1rem", style "color" "#888" ]
-                    [ text "Loading..." ]
-        , -- SEARCH section
-          div [ class "menu-items" ]
-            [ menuLabel "Search"
-            , menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
-            ]
-        , -- Activity section (only show if an activity is selected)
-          case currentActivityName of
-            Just actName ->
-                div [ class "menu-items" ]
-                    [ activityLabel actName
-                    , menuItem currentPage UpstreamPage "fas fa-arrow-up" "Upstream activities" False
-                    , menuItem currentPage EmissionsPage "fas fa-cloud" "Direct emissions" False
-                    , menuItem currentPage ResourcesPage "fas fa-leaf" "Natural resources" False
-                    , menuItem currentPage ProductsPage "fas fa-box" "Outgoing products" False
-                    , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
-                    ]
+                Nothing ->
+                    div [ class "database-header", style "padding" "1rem", style "color" "#888" ]
+                        [ text "Loading..." ]
+            , -- SEARCH section
+              div [ class "menu-items" ]
+                [ menuLabel "Search"
+                , menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
+                ]
+            , -- Activity section (only show if an activity is selected)
+              case currentActivityName of
+                Just actName ->
+                    div [ class "menu-items" ]
+                        [ activityLabel actName
+                        , menuItem currentPage UpstreamPage "fas fa-arrow-up" "Upstream activities" False
+                        , menuItem currentPage EmissionsPage "fas fa-cloud" "Direct emissions" False
+                        , menuItem currentPage ResourcesPage "fas fa-leaf" "Natural resources" False
+                        , menuItem currentPage ProductsPage "fas fa-box" "Outgoing products" False
+                        , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
+                        ]
 
-            Nothing ->
-                text ""
-        , -- LAB section
-          div [ class "menu-items" ]
-            [ menuLabel "Lab"
-            , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
-            , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
-            , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
+                Nothing ->
+                    text ""
+            , -- LAB section
+              div [ class "menu-items" ]
+                [ menuLabel "Lab"
+                , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
+                , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
+                , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
+                ]
             ]
-        , -- fpLCA at bottom
+        , -- fpLCA at bottom (fixed)
           div
-            [ style "position" "absolute"
-            , style "bottom" "0"
-            , style "left" "0"
-            , style "right" "0"
-            , style "padding" "0.75rem 1rem"
-            , style "color" "#666"
-            , style "font-size" "0.85rem"
+            [ class "menu-footer"
+            , style "flex-shrink" "0"
+            , style "padding" "0.5rem 1rem"
+            , style "color" "#888"
+            , style "font-size" "0.8rem"
             , style "text-align" "center"
-            , style "border-top" "1px solid #444"
+            , style "border-top" "1px solid #ddd"
             ]
             [ text "fpLCA" ]
         ]

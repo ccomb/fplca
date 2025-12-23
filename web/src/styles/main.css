@@ -1,17 +1,26 @@
 /* Main layout */
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
 .app-container {
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
 }
 
 .main-content {
     flex: 1;
+    overflow-y: auto;
 }
 
 /* Left Menu - structure only, no colors */
 .left-menu {
     width: 250px;
     padding: 0;
+    overflow-y: auto;
+    flex-shrink: 0;
 }
 
 .menu-header {
@@ -20,16 +29,32 @@
 }
 
 .menu-items {
-    padding: 1rem 0;
+    padding: 0.5rem 0;
 }
 
 .menu-item {
     display: flex;
     align-items: center;
-    padding: 1rem 1.5rem;
+    padding: 0.5rem 1rem;
     cursor: pointer;
     border: none;
     width: 100%;
+    background: transparent;
+    color: #4a4a4a;
+    transition: background-color 0.15s ease;
+}
+
+.menu-item:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+.menu-item.is-active {
+    background-color: #00d1b2;
+    color: #363636;
+}
+
+.menu-item.is-active:hover {
+    background-color: #00c4a7;
 }
 
 .menu-item .icon {
@@ -49,8 +74,10 @@
 
 .menu-item.is-lab:hover {
     color: #4a4a4a;
+    background-color: rgba(0, 0, 0, 0.05);
 }
 
 .menu-item.is-lab.is-active {
+    background-color: #00d1b2;
     color: #363636;
 }

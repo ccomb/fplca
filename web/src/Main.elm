@@ -1579,61 +1579,53 @@ viewLCIAPage model =
 viewUpstreamPage : Model -> Html Msg
 viewUpstreamPage model =
     viewExchangePage model
+        "Upstream Activities"
         (\activityInfo ->
             let
                 exchanges =
                     List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && ex.isInput && not ex.isReference) activityInfo.exchanges
             in
-            div [ class "box" ]
-                [ h2 [ class "title is-5" ] [ text "Upstream Activities" ]
-                , DetailsView.viewUpstreamExchanges exchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
-                ]
+            DetailsView.viewUpstreamExchanges exchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
         )
 
 
 viewEmissionsPage : Model -> Html Msg
 viewEmissionsPage model =
     viewExchangePage model
+        "Direct Emissions"
         (\activityInfo ->
             let
                 exchanges =
                     List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereEmissionType) activityInfo.exchanges
             in
-            div [ class "box" ]
-                [ h2 [ class "title is-5" ] [ text "Direct Emissions" ]
-                , DetailsView.viewEmissionsExchanges exchanges
-                ]
+            DetailsView.viewEmissionsExchanges exchanges
         )
 
 
 viewResourcesPage : Model -> Html Msg
 viewResourcesPage model =
     viewExchangePage model
+        "Natural Resources"
         (\activityInfo ->
             let
                 exchanges =
                     List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
             in
-            div [ class "box" ]
-                [ h2 [ class "title is-5" ] [ text "Natural Resources" ]
-                , DetailsView.viewNaturalResourcesExchanges exchanges
-                ]
+            DetailsView.viewNaturalResourcesExchanges exchanges
         )
 
 
 viewProductsPage : Model -> Html Msg
 viewProductsPage model =
     viewExchangePage model
+        "Outgoing Products"
         (\activityInfo ->
-            div [ class "box" ]
-                [ h2 [ class "title is-5" ] [ text "Outgoing Products" ]
-                , DetailsView.viewAllProducts activityInfo.allProducts model.currentActivityId (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
-                ]
+            DetailsView.viewAllProducts activityInfo.allProducts model.currentActivityId (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
         )
 
 
-viewExchangePage : Model -> (Models.Activity.ActivityInfo -> Html Msg) -> Html Msg
-viewExchangePage model viewContent =
+viewExchangePage : Model -> String -> (Models.Activity.ActivityInfo -> Html Msg) -> Html Msg
+viewExchangePage model pageTitle viewContent =
     div [ class "details-page-container" ]
         [ case ( model.loading, model.error ) of
             ( True, _ ) ->
@@ -1652,9 +1644,13 @@ viewExchangePage model viewContent =
             ( False, Nothing ) ->
                 case Dict.get model.currentActivityId model.cachedActivityInfo of
                     Just activityInfo ->
-                        div []
-                            [ viewActivityHeaderWithDoc activityInfo (not (List.isEmpty model.navigationHistory))
-                            , viewContent activityInfo
+                        div [ style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+                            [ div [ style "flex-shrink" "0" ]
+                                [ viewActivityHeaderWithTitle activityInfo (not (List.isEmpty model.navigationHistory)) pageTitle
+                                ]
+                            , div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0" ]
+                                [ viewContent activityInfo
+                                ]
                             ]
 
                     Nothing ->
@@ -1719,6 +1715,67 @@ viewActivityHeaderWithDoc activityInfo hasHistory =
 
           else
             text ""
+        ]
+
+
+viewActivityHeaderWithTitle : Models.Activity.ActivityInfo -> Bool -> String -> Html Msg
+viewActivityHeaderWithTitle activityInfo hasHistory pageTitle =
+    let
+        hasDescription =
+            not (List.isEmpty activityInfo.description)
+
+        backButtonText =
+            if hasHistory then
+                "Previous Activity"
+
+            else
+                "Search results"
+    in
+    div [ class "box", style "margin-bottom" "0" ]
+        [ -- Title and location on same line
+          div [ class "level", style "margin-bottom" "0" ]
+            [ div [ class "level-left" ]
+                ([ div [ class "level-item" ]
+                    [ button
+                        [ class "button is-primary"
+                        , onClick (DetailsViewMsg DetailsView.NavigateBack)
+                        ]
+                        [ span [ class "icon" ]
+                            [ i [ class "fas fa-arrow-left" ] []
+                            ]
+                        , span [] [ text backButtonText ]
+                        ]
+                    ]
+                 , div [ class "level-item" ]
+                    [ h1 [ class "title is-4", style "margin-bottom" "0" ]
+                        (case activityInfo.referenceProduct of
+                            Just product ->
+                                [ text activityInfo.name
+                                , span [ style "color" "#888", style "margin" "0 0.5rem" ] [ text "→" ]
+                                , span [ style "font-weight" "normal" ] [ text product ]
+                                ]
+
+                            Nothing ->
+                                [ text activityInfo.name ]
+                        )
+                    ]
+                 , div [ class "level-item" ]
+                    [ span [ class "tag is-light" ] [ text activityInfo.location ]
+                    ]
+                 ]
+                )
+            ]
+        , -- Description below
+          if hasDescription then
+            div [ style "font-size" "0.85rem", style "line-height" "1.4", style "margin-top" "0.5rem" ]
+                (activityInfo.description
+                    |> List.map (\para -> p [ style "margin-bottom" "0.25rem" ] [ text para ])
+                )
+
+          else
+            text ""
+        , -- Page title
+          h2 [ class "title is-5", style "margin-top" "1rem", style "margin-bottom" "0" ] [ text pageTitle ]
         ]
 
 

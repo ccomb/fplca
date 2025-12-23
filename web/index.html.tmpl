@@ -50,19 +50,29 @@
             color: #363636 !important;
         }
 
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+
         .app-container {
             display: flex;
-            min-height: 100vh;
+            height: 100vh;
+            overflow: hidden;
             background-color: white !important;
         }
 
         .main-content {
             flex: 1;
+            overflow-y: auto;
             background-color: white !important;
         }
 
         .left-menu {
             background-color: #f5f5f5 !important;
+            flex-shrink: 0;
         }
 
         /* Navbar - ensure menu is visible on desktop */
@@ -86,16 +96,36 @@
         }
 
         .menu-items {
-            padding: 1rem 0;
+            padding: 0.5rem 0;
         }
 
         .menu-item {
             display: flex;
             align-items: center;
-            padding: 1rem 1.5rem;
+            padding: 0.5rem 1rem;
             cursor: pointer;
             border: none;
             width: 100%;
+            background: transparent;
+            color: #4a4a4a;
+            transition: background-color 0.15s ease;
+        }
+
+        .menu-item:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+
+        .menu-item.is-active {
+            background-color: #00d1b2;
+            color: #363636 !important;
+        }
+
+        .menu-item.is-active:hover {
+            background-color: #00c4a7;
+        }
+
+        .menu-item.is-active .menu-label {
+            color: #363636 !important;
         }
 
         .menu-item .icon {
@@ -106,6 +136,21 @@
         .menu-label {
             font-weight: 500;
             font-size: 0.95rem;
+        }
+
+        /* Lab items styling - grey text */
+        .menu-item.is-lab {
+            color: #7a7a7a;
+        }
+
+        .menu-item.is-lab:hover {
+            color: #4a4a4a;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+
+        .menu-item.is-lab.is-active {
+            background-color: #00d1b2;
+            color: #363636 !important;
         }
     </style>
 </head>

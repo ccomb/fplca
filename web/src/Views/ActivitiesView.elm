@@ -16,26 +16,20 @@ type Msg
 
 viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Html Msg
 viewActivitiesPage searchQuery searchResults searchLoading loadingMore error maybeDatabaseList =
-    div [ class "activities-page" ]
-        [ div [ class "section" ]
-            [ div [ class "container" ]
-                [ h2 [ class "title is-3" ] [ text "Search Activities" ]
-                , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-                ]
-            ]
-        , div [ class "section" ]
-            [ div [ class "container" ]
-                [ viewSearchBar maybeDatabaseList searchQuery searchLoading
-                , case error of
-                    Just err ->
-                        div [ class "notification is-danger" ]
-                            [ text ("Error: " ++ err) ]
+    div [ class "activities-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+        [ div [ class "box", style "margin-bottom" "0", style "flex-shrink" "0" ]
+            [ h2 [ class "title is-3" ] [ text "Search Activities" ]
+            , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
+            , viewSearchBar maybeDatabaseList searchQuery searchLoading
+            , case error of
+                Just err ->
+                    div [ class "notification is-danger" ]
+                        [ text ("Error: " ++ err) ]
 
-                    Nothing ->
-                        text ""
-                , viewSearchResults searchResults searchLoading loadingMore
-                ]
+                Nothing ->
+                    text ""
             ]
+        , viewSearchResults searchResults searchLoading loadingMore
         ]
 
 
@@ -97,18 +91,18 @@ viewSearchResults maybeResults isLoading loadingMore =
                     [ div [ class "is-size-5 has-text-grey" ] [ text "No activities found" ]
                     ]
             else
-                div []
-                    [ div [ class "mb-4" ]
+                div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0" ]
+                    [ div [ style "flex-shrink" "0", style "padding" "0.5rem 0" ]
                         [ span [ class "tag is-info is-light" ]
                             [ text (String.fromInt (List.length results.results) ++ " / " ++ String.fromInt results.totalCount ++ " activities")
                             ]
                         ]
-                    , div [ class "table-container" ]
+                    , div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
                         [ table [ class "table is-striped is-hoverable is-fullwidth" ]
-                            [ thead []
+                            [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                                 [ tr []
-                                    [ th [] [ text "Activity Name" ]
-                                    , th [] [ text "Location" ]
+                                    [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                                    , th [ style "background-color" "white" ] [ text "Location" ]
                                     ]
                                 ]
                             , tbody []
@@ -116,7 +110,7 @@ viewSearchResults maybeResults isLoading loadingMore =
                             ]
                         ]
                     , if results.hasMore then
-                        div [ class "has-text-centered mt-4" ]
+                        div [ class "has-text-centered", style "flex-shrink" "0", style "padding" "1rem 0" ]
                             [ button
                                 [ class (if loadingMore then "button is-primary is-loading" else "button is-primary")
                                 , onClick LoadMore

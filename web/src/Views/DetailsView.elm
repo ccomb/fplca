@@ -294,14 +294,14 @@ viewUpstreamExchanges exchanges onNavigate =
         p [ class "has-text-grey" ] [ text "No direct upstream activities" ]
 
     else
-        div [ class "table-container" ]
+        div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
             [ table [ class "table is-striped is-hoverable is-fullwidth" ]
-                [ thead []
+                [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
-                        [ th [] [ text "Activity Name" ]
-                        , th [] [ text "Location" ]
-                        , th [ class "has-text-right" ] [ text "Quantity" ]
-                        , th [] [ text "Unit" ]
+                        [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                        , th [ style "background-color" "white" ] [ text "Location" ]
+                        , th [ class "has-text-right", style "background-color" "white" ] [ text "Quantity" ]
+                        , th [ style "background-color" "white" ] [ text "Unit" ]
                         ]
                     ]
                 , tbody []
@@ -378,14 +378,16 @@ viewEmissionsExchanges exchanges =
                 ]
                     |> List.filter (\( _, subgroups ) -> not (List.isEmpty subgroups))
         in
-        div [ class "columns is-desktop is-multiline" ]
-            (columns
-                |> List.map
-                    (\( mainName, subgroups ) ->
-                        div [ class "column" ]
-                            [ viewEmissionCompartmentWithSubgroups mainName subgroups ]
-                    )
-            )
+        div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
+            [ div [ class "columns is-desktop is-multiline" ]
+                (columns
+                    |> List.map
+                        (\( mainName, subgroups ) ->
+                            div [ class "column" ]
+                                [ viewEmissionCompartmentWithSubgroups mainName subgroups ]
+                        )
+                )
+            ]
 
 
 {-| Group exchanges by their sub-compartment (extracted from flowCategory)
@@ -440,7 +442,7 @@ groupBySubcompartment exchanges =
 viewEmissionCompartmentWithSubgroups : String -> List ( String, List ActivityExchange ) -> Html msg
 viewEmissionCompartmentWithSubgroups mainName subgroups =
     div []
-        [ h3 [ class "title is-5 has-text-grey mb-3" ] [ text mainName ]
+        [ h3 [ class "title is-5 has-text-grey mb-3", style "padding-left" "0.5rem" ] [ text mainName ]
         , div []
             (subgroups
                 |> List.map
@@ -456,14 +458,14 @@ viewEmissionCompartmentWithSubgroups mainName subgroups =
 viewSubcompartmentTable : String -> List ActivityExchange -> Html msg
 viewSubcompartmentTable subName exchanges =
     div [ class "mb-4" ]
-        [ h4 [ class "subtitle is-6 has-text-grey-dark mb-2" ] [ text subName ]
+        [ h4 [ class "subtitle is-6 has-text-grey-dark mb-2", style "padding-left" "0.5rem" ] [ text subName ]
         , div [ class "table-container" ]
             [ table [ class "table is-striped is-fullwidth is-narrow" ]
-                [ thead []
+                [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
-                        [ th [] [ text "Flow" ]
-                        , th [ class "has-text-right" ] [ text "Quantity" ]
-                        , th [] [ text "Unit" ]
+                        [ th [ style "background-color" "white" ] [ text "Flow" ]
+                        , th [ class "has-text-right", style "background-color" "white" ] [ text "Quantity" ]
+                        , th [ style "background-color" "white" ] [ text "Unit" ]
                         ]
                     ]
                 , tbody []
@@ -528,12 +530,12 @@ viewAllProducts products currentProcessId onNavigate =
         p [ class "has-text-grey" ] [ text "No products" ]
 
     else
-        div [ class "table-container" ]
+        div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
             [ table [ class "table is-striped is-fullwidth" ]
-                [ thead []
+                [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
-                        [ th [] [ text "Product" ]
-                        , th [] [ text "Location" ]
+                        [ th [ style "background-color" "white" ] [ text "Product" ]
+                        , th [ style "background-color" "white" ] [ text "Location" ]
                         ]
                     ]
                 , tbody []
@@ -596,14 +598,16 @@ viewNaturalResourcesExchanges exchanges =
                 ]
                     |> List.filter (\( _, items ) -> not (List.isEmpty items))
         in
-        div [ class "columns is-desktop is-multiline" ]
-            (compartments
-                |> List.map
-                    (\( name, items ) ->
-                        div [ class "column" ]
-                            [ viewExchangeCompartmentColumn name items ]
-                    )
-            )
+        div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
+            [ div [ class "columns is-desktop is-multiline" ]
+                (compartments
+                    |> List.map
+                        (\( name, items ) ->
+                            div [ class "column" ]
+                                [ viewExchangeCompartmentColumn name items ]
+                        )
+                )
+            ]
 
 
 type alias ResourceCompartmentGroups =
@@ -676,14 +680,14 @@ groupResourcesBySubcompartment exchanges =
 viewExchangeCompartmentColumn : String -> List ActivityExchange -> Html msg
 viewExchangeCompartmentColumn compartmentName exchanges =
     div []
-        [ h3 [ class "title is-6 has-text-grey mb-2" ] [ text compartmentName ]
+        [ h3 [ class "title is-6 has-text-grey mb-2", style "padding-left" "0.5rem" ] [ text compartmentName ]
         , div [ class "table-container" ]
             [ table [ class "table is-striped is-fullwidth is-narrow" ]
-                [ thead []
+                [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
-                        [ th [] [ text "Flow" ]
-                        , th [ class "has-text-right" ] [ text "Quantity" ]
-                        , th [] [ text "Unit" ]
+                        [ th [ style "background-color" "white" ] [ text "Flow" ]
+                        , th [ class "has-text-right", style "background-color" "white" ] [ text "Quantity" ]
+                        , th [ style "background-color" "white" ] [ text "Unit" ]
                         ]
                     ]
                 , tbody []
