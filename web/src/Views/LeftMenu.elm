@@ -50,7 +50,10 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             Just actName ->
                 div [ class "menu-items" ]
                     [ activityLabel actName
-                    , menuItem currentPage DetailsPage "fas fa-table" "Details" False
+                    , menuItem currentPage UpstreamPage "fas fa-arrow-up" "Upstream activities" False
+                    , menuItem currentPage EmissionsPage "fas fa-cloud" "Direct emissions" False
+                    , menuItem currentPage ResourcesPage "fas fa-leaf" "Natural resources" False
+                    , menuItem currentPage ProductsPage "fas fa-box" "Outgoing products" False
                     , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
                     ]
 

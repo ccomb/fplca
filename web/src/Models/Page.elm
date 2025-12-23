@@ -1,4 +1,4 @@
-module Models.Page exposing (ExchangeTab(..), Page(..), Route(..))
+module Models.Page exposing (Page(..), Route(..))
 
 -- Route definitions for URL parsing
 -- All activity-related routes include a database name as first parameter
@@ -8,7 +8,10 @@ type Route
     = RootRoute -- "/" - will redirect to default database
     | ActivitiesRoute { db : String, name : Maybe String, limit : Maybe Int }
     | ActivityRoute String String -- db, ProcessId
-    | ActivityDetailsRoute String String -- db, ProcessId (table view)
+    | ActivityUpstreamRoute String String -- db, ProcessId (upstream activities)
+    | ActivityEmissionsRoute String String -- db, ProcessId (direct emissions)
+    | ActivityResourcesRoute String String -- db, ProcessId (natural resources)
+    | ActivityProductsRoute String String -- db, ProcessId (outgoing products)
     | ActivityTreeRoute String String -- db, ProcessId (tree view)
     | ActivityInventoryRoute String String -- db, ProcessId
     | ActivityGraphRoute String String -- db, ProcessId
@@ -23,19 +26,12 @@ type Route
 
 type Page
     = ActivitiesPage
-    | DetailsPage
+    | UpstreamPage
+    | EmissionsPage
+    | ResourcesPage
+    | ProductsPage
     | TreePage
     | InventoryPage
     | GraphPage
     | LCIAPage
     | DatabasesPage
-
-
--- Sub-tab selection for Table view exchanges
-
-
-type ExchangeTab
-    = UpstreamTab
-    | EmissionsTab
-    | ConsumptionsTab
-    | ProductsTab

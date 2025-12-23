@@ -13,7 +13,7 @@ import Models.Database exposing (ActivateResponse, DatabaseList, activateRespons
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
-import Models.Page exposing (ExchangeTab(..), Page(..), Route(..))
+import Models.Page exposing (Page(..), Route(..))
 import Url
 import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
@@ -44,7 +44,6 @@ type alias Model =
     { key : Nav.Key
     , url : Url.Url
     , currentPage : Page
-    , currentExchangeTab : ExchangeTab -- Current sub-tab for exchanges (upstream/emissions/consumptions)
     , cachedTrees : Dict.Dict String ActivityTree -- Cache trees by activity ID (for tree tab)
     , cachedActivityInfo : Dict.Dict String ActivityInfo -- Cache activity info by activity ID (for table tab)
     , cachedInventories : Dict.Dict String InventoryExport -- Cache inventories by activity ID
@@ -89,7 +88,6 @@ type Msg
     | GraphViewMsg GraphView.Msg
     | TreeViewMsg TreeView.Msg
     | DetailsViewMsg DetailsView.Msg
-    | SwitchExchangeTab ExchangeTab
     | UpdateGraphCutoff String
     | NavigateToParent
     | NodeClicked String
@@ -139,7 +137,10 @@ routeParser =
           -- Database-scoped routes: /db/{dbName}/...
         , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit })
             (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
-        , Parser.map ActivityDetailsRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "details")
+        , Parser.map ActivityUpstreamRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "upstream")
+        , Parser.map ActivityEmissionsRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "emissions")
+        , Parser.map ActivityResourcesRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "resources")
+        , Parser.map ActivityProductsRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "products")
         , Parser.map ActivityTreeRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "tree")
         , Parser.map ActivityInventoryRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map ActivityGraphRoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "graph")
@@ -164,10 +165,19 @@ routeToPage route =
             ActivitiesPage
 
         ActivityRoute _ _ ->
-            DetailsPage
+            UpstreamPage
 
-        ActivityDetailsRoute _ _ ->
-            DetailsPage
+        ActivityUpstreamRoute _ _ ->
+            UpstreamPage
+
+        ActivityEmissionsRoute _ _ ->
+            EmissionsPage
+
+        ActivityResourcesRoute _ _ ->
+            ResourcesPage
+
+        ActivityProductsRoute _ _ ->
+            ProductsPage
 
         ActivityTreeRoute _ _ ->
             TreePage
@@ -202,7 +212,16 @@ routeToDatabase route =
         ActivityRoute db _ ->
             Just db
 
-        ActivityDetailsRoute db _ ->
+        ActivityUpstreamRoute db _ ->
+            Just db
+
+        ActivityEmissionsRoute db _ ->
+            Just db
+
+        ActivityResourcesRoute db _ ->
+            Just db
+
+        ActivityProductsRoute db _ ->
             Just db
 
         ActivityTreeRoute db _ ->
@@ -256,14 +275,35 @@ init _ url key =
                 ActivityRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
-                    , loadType = "details"
+                    , loadType = "upstream"
                     , searchQuery = ""
                     }
 
-                ActivityDetailsRoute _ processId ->
+                ActivityUpstreamRoute _ processId ->
                     { activityId = processId
                     , shouldLoad = True
-                    , loadType = "details"
+                    , loadType = "upstream"
+                    , searchQuery = ""
+                    }
+
+                ActivityEmissionsRoute _ processId ->
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "emissions"
+                    , searchQuery = ""
+                    }
+
+                ActivityResourcesRoute _ processId ->
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "resources"
+                    , searchQuery = ""
+                    }
+
+                ActivityProductsRoute _ processId ->
+                    { activityId = processId
+                    , shouldLoad = True
+                    , loadType = "products"
                     , searchQuery = ""
                     }
 
@@ -319,7 +359,6 @@ init _ url key =
             { key = key
             , url = url
             , currentPage = initialPage
-            , currentExchangeTab = UpstreamTab
             , cachedTrees = Dict.empty
             , cachedActivityInfo = Dict.empty
             , cachedInventories = Dict.empty
@@ -354,7 +393,16 @@ init _ url key =
         cmd =
             if routeConfig.shouldLoad then
                 case routeConfig.loadType of
-                    "details" ->
+                    "upstream" ->
+                        loadActivityInfo routeConfig.activityId
+
+                    "emissions" ->
+                        loadActivityInfo routeConfig.activityId
+
+                    "resources" ->
+                        loadActivityInfo routeConfig.activityId
+
+                    "products" ->
                         loadActivityInfo routeConfig.activityId
 
                     "tree" ->
@@ -609,7 +657,7 @@ update msg model =
                     ( { model
                         | navigationHistory = model.currentActivityId :: model.navigationHistory
                       }
-                    , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db processId))
+                    , Nav.pushUrl model.key (routeToUrl (ActivityUpstreamRoute db processId))
                     )
 
                 DetailsView.NavigateBack ->
@@ -622,14 +670,11 @@ update msg model =
                             ( { model
                                 | navigationHistory = rest
                               }
-                            , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db parentId))
+                            , Nav.pushUrl model.key (routeToUrl (ActivityUpstreamRoute db parentId))
                             )
 
                         [] ->
                             ( model, Cmd.none )
-
-        SwitchExchangeTab tab ->
-            ( { model | currentExchangeTab = tab }, Cmd.none )
 
         UpdateGraphCutoff cutoffStr ->
             -- Allow any string input, validation happens when loading
@@ -644,7 +689,7 @@ update msg model =
                 ( { model
                     | navigationHistory = model.currentActivityId :: model.navigationHistory
                   }
-                , Nav.pushUrl model.key (routeToUrl (ActivityDetailsRoute db nodeId))
+                , Nav.pushUrl model.key (routeToUrl (ActivityUpstreamRoute db nodeId))
                 )
 
             else
@@ -702,8 +747,17 @@ update msg model =
                             in
                             ActivitiesRoute { db = db, name = queryName, limit = Just 20 }
 
-                        DetailsPage ->
-                            ActivityDetailsRoute db model.currentActivityId
+                        UpstreamPage ->
+                            ActivityUpstreamRoute db model.currentActivityId
+
+                        EmissionsPage ->
+                            ActivityEmissionsRoute db model.currentActivityId
+
+                        ResourcesPage ->
+                            ActivityResourcesRoute db model.currentActivityId
+
+                        ProductsPage ->
+                            ActivityProductsRoute db model.currentActivityId
 
                         TreePage ->
                             ActivityTreeRoute db model.currentActivityId
@@ -1014,8 +1068,17 @@ update msg model =
                                 in
                                 Nav.replaceUrl model.key (routeToUrl (ActivitiesRoute { db = newDbName, name = queryName, limit = Just 20 }))
 
-                            DetailsPage ->
-                                Nav.replaceUrl model.key (routeToUrl (ActivityDetailsRoute newDbName model.currentActivityId))
+                            UpstreamPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityUpstreamRoute newDbName model.currentActivityId))
+
+                            EmissionsPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityEmissionsRoute newDbName model.currentActivityId))
+
+                            ResourcesPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityResourcesRoute newDbName model.currentActivityId))
+
+                            ProductsPage ->
+                                Nav.replaceUrl model.key (routeToUrl (ActivityProductsRoute newDbName model.currentActivityId))
 
                             TreePage ->
                                 Nav.replaceUrl model.key (routeToUrl (ActivityTreeRoute newDbName model.currentActivityId))
@@ -1103,7 +1166,16 @@ update msg model =
                             ActivityRoute _ processId ->
                                 { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                            ActivityDetailsRoute _ processId ->
+                            ActivityUpstreamRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
+
+                            ActivityEmissionsRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
+
+                            ActivityResourcesRoute _ processId ->
+                                { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
+
+                            ActivityProductsRoute _ processId ->
                                 { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                             ActivityTreeRoute _ processId ->
@@ -1124,11 +1196,10 @@ update msg model =
                             NotFoundRoute ->
                                 { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
-                    -- For DetailsPage: load activity info
+                    -- For activity exchange pages: load activity info
                     shouldLoadActivityInfo =
                         routeInfo.needsActivity
-                            && newPage
-                            == DetailsPage
+                            && (newPage == UpstreamPage || newPage == EmissionsPage || newPage == ResourcesPage || newPage == ProductsPage)
                             && not (Dict.member routeInfo.activityId model.cachedActivityInfo)
 
                     -- For TreePage: load tree data
@@ -1296,8 +1367,17 @@ routeToUrl route =
         ActivityRoute db processId ->
             "/db/" ++ db ++ "/activity/" ++ processId
 
-        ActivityDetailsRoute db processId ->
-            "/db/" ++ db ++ "/activity/" ++ processId ++ "/details"
+        ActivityUpstreamRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/upstream"
+
+        ActivityEmissionsRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/emissions"
+
+        ActivityResourcesRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/resources"
+
+        ActivityProductsRoute db processId ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/products"
 
         ActivityTreeRoute db processId ->
             "/db/" ++ db ++ "/activity/" ++ processId ++ "/tree"
@@ -1334,7 +1414,7 @@ getCurrentDbName model =
 -}
 navigateToActivity : Nav.Key -> String -> String -> Cmd Msg
 navigateToActivity key db processId =
-    Nav.pushUrl key (routeToUrl (ActivityDetailsRoute db processId))
+    Nav.pushUrl key (routeToUrl (ActivityUpstreamRoute db processId))
 
 
 subscriptions : Model -> Sub Msg
@@ -1371,11 +1451,16 @@ view model =
                                 )
                     )
 
-        -- Get activity name from cached data
+        -- Get activity name from cached data (check both cachedTrees and cachedActivityInfo)
         currentActivityName =
-            Dict.get model.currentActivityId model.cachedTrees
-                |> Maybe.andThen (\tree -> Dict.get model.currentActivityId tree.nodes)
-                |> Maybe.map .name
+            case Dict.get model.currentActivityId model.cachedTrees of
+                Just tree ->
+                    Dict.get model.currentActivityId tree.nodes
+                        |> Maybe.map .name
+
+                Nothing ->
+                    Dict.get model.currentActivityId model.cachedActivityInfo
+                        |> Maybe.map .name
     in
     div [ class "app-container" ]
         [ Html.map
@@ -1412,8 +1497,17 @@ view model =
                             model.databaseList
                         )
 
-                DetailsPage ->
-                    viewDetailsPage model
+                UpstreamPage ->
+                    viewUpstreamPage model
+
+                EmissionsPage ->
+                    viewEmissionsPage model
+
+                ResourcesPage ->
+                    viewResourcesPage model
+
+                ProductsPage ->
+                    viewProductsPage model
 
                 TreePage ->
                     viewTreePage model
@@ -1470,8 +1564,64 @@ viewLCIAPage model =
         )
 
 
-viewDetailsPage : Model -> Html Msg
-viewDetailsPage model =
+viewUpstreamPage : Model -> Html Msg
+viewUpstreamPage model =
+    viewExchangePage model
+        (\activityInfo ->
+            let
+                exchanges =
+                    List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && ex.isInput && not ex.isReference) activityInfo.exchanges
+            in
+            div [ class "box" ]
+                [ h2 [ class "title is-5" ] [ text "Upstream Activities" ]
+                , DetailsView.viewUpstreamExchanges exchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
+                ]
+        )
+
+
+viewEmissionsPage : Model -> Html Msg
+viewEmissionsPage model =
+    viewExchangePage model
+        (\activityInfo ->
+            let
+                exchanges =
+                    List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereEmissionType) activityInfo.exchanges
+            in
+            div [ class "box" ]
+                [ h2 [ class "title is-5" ] [ text "Direct Emissions" ]
+                , DetailsView.viewEmissionsExchanges exchanges
+                ]
+        )
+
+
+viewResourcesPage : Model -> Html Msg
+viewResourcesPage model =
+    viewExchangePage model
+        (\activityInfo ->
+            let
+                exchanges =
+                    List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
+            in
+            div [ class "box" ]
+                [ h2 [ class "title is-5" ] [ text "Natural Resources" ]
+                , DetailsView.viewNaturalResourcesExchanges exchanges
+                ]
+        )
+
+
+viewProductsPage : Model -> Html Msg
+viewProductsPage model =
+    viewExchangePage model
+        (\activityInfo ->
+            div [ class "box" ]
+                [ h2 [ class "title is-5" ] [ text "Outgoing Products" ]
+                , DetailsView.viewAllProducts activityInfo.allProducts model.currentActivityId (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
+                ]
+        )
+
+
+viewExchangePage : Model -> (Models.Activity.ActivityInfo -> Html Msg) -> Html Msg
+viewExchangePage model viewContent =
     div [ class "details-page-container" ]
         [ case ( model.loading, model.error ) of
             ( True, _ ) ->
@@ -1492,7 +1642,7 @@ viewDetailsPage model =
                     Just activityInfo ->
                         div []
                             [ viewActivityHeaderWithDoc activityInfo (canNavigateBack model)
-                            , viewExchangeTabs model activityInfo
+                            , viewContent activityInfo
                             ]
 
                     Nothing ->
@@ -1554,101 +1704,6 @@ viewActivityHeaderWithDoc activityInfo canGoBack =
 
           else
             text ""
-        ]
-
-
-viewExchangeTabs : Model -> Models.Activity.ActivityInfo -> Html Msg
-viewExchangeTabs model activityInfo =
-    let
-        -- Upstream: technosphere inputs that are not reference products
-        upstreamExchanges =
-            List.filter (\ex -> ex.exchangeType == Models.Activity.TechnosphereExchangeType && ex.isInput && not ex.isReference) activityInfo.exchanges
-
-        emissionExchanges =
-            List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereEmissionType) activityInfo.exchanges
-
-        consumptionExchanges =
-            List.filter (\ex -> ex.exchangeType == Models.Activity.BiosphereResourceType) activityInfo.exchanges
-
-        -- Products: all products from same activityUUID (from backend)
-        allProducts =
-            activityInfo.allProducts
-
-        upstreamCount =
-            List.length upstreamExchanges
-
-        emissionCount =
-            List.length emissionExchanges
-
-        consumptionCount =
-            List.length consumptionExchanges
-
-        productCount =
-            List.length allProducts
-    in
-    div [ class "box" ]
-        [ div [ class "tabs is-boxed" ]
-            [ ul []
-                [ viewExchangeTabItem UpstreamTab model.currentExchangeTab ("Upstream activities (" ++ String.fromInt upstreamCount ++ ")") (upstreamCount > 0)
-                , viewExchangeTabItem EmissionsTab model.currentExchangeTab ("Direct emissions (" ++ String.fromInt emissionCount ++ ")") (emissionCount > 0)
-                , viewExchangeTabItem ConsumptionsTab model.currentExchangeTab ("Natural resources (" ++ String.fromInt consumptionCount ++ ")") (consumptionCount > 0)
-                , viewExchangeTabItem ProductsTab model.currentExchangeTab ("Products (" ++ String.fromInt productCount ++ ")") (productCount > 0)
-                ]
-            ]
-        , case model.currentExchangeTab of
-            UpstreamTab ->
-                DetailsView.viewUpstreamExchanges upstreamExchanges (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
-
-            EmissionsTab ->
-                DetailsView.viewEmissionsExchanges emissionExchanges
-
-            ConsumptionsTab ->
-                DetailsView.viewNaturalResourcesExchanges consumptionExchanges
-
-            ProductsTab ->
-                DetailsView.viewAllProducts allProducts model.currentActivityId (\processId -> DetailsViewMsg (DetailsView.NavigateToActivity processId))
-        ]
-
-
-viewExchangeTabItem : ExchangeTab -> ExchangeTab -> String -> Bool -> Html Msg
-viewExchangeTabItem tab currentTab label isEnabled =
-    let
-        isActive =
-            currentTab == tab
-    in
-    li
-        [ classList
-            [ ( "is-active", isActive )
-            ]
-        ]
-        [ if isActive then
-            -- Active tab: white text on black background
-            a
-                [ href "#"
-                , style "background-color" "#363636"
-                , style "color" "white"
-                , style "border-color" "#363636"
-                , preventDefaultOn "click" (Json.Decode.succeed ( SwitchExchangeTab tab, True ))
-                ]
-                [ text label ]
-
-          else if isEnabled then
-            -- Inactive enabled tab: dark grey text
-            a
-                [ href "#"
-                , style "color" "#4a4a4a"
-                , preventDefaultOn "click" (Json.Decode.succeed ( SwitchExchangeTab tab, True ))
-                ]
-                [ text label ]
-
-          else
-            -- Disabled tab: light grey text
-            a
-                [ style "color" "#b5b5b5"
-                , style "cursor" "not-allowed"
-                , style "pointer-events" "none"
-                ]
-                [ text label ]
         ]
 
 
