@@ -250,7 +250,7 @@ init _ url key =
             parseUrl url
 
         defaultActivityId =
-            "22222222-3333-4444-5555-666666666661_chemical-b-uuid"
+            ""
 
         -- Extract database from route
         urlDatabase =
@@ -674,7 +674,21 @@ update msg model =
                             )
 
                         [] ->
-                            ( model, Cmd.none )
+                            -- No history = came from search, go back to search
+                            let
+                                db =
+                                    getCurrentDbName model
+
+                                queryName =
+                                    if String.isEmpty model.activitiesSearchQuery then
+                                        Nothing
+
+                                    else
+                                        Just model.activitiesSearchQuery
+                            in
+                            ( model
+                            , Nav.pushUrl model.key (routeToUrl (ActivitiesRoute { db = db, name = queryName, limit = Just 20 }))
+                            )
 
         UpdateGraphCutoff cutoffStr ->
             -- Allow any string input, validation happens when loading
@@ -891,9 +905,7 @@ update msg model =
                 db =
                     getCurrentDbName model
             in
-            ( { model
-                | navigationHistory = model.currentActivityId :: model.navigationHistory
-              }
+            ( model  -- Don't modify history - stays empty when coming from search
             , navigateToActivity model.key db activityId
             )
 
@@ -1641,7 +1653,7 @@ viewExchangePage model viewContent =
                 case Dict.get model.currentActivityId model.cachedActivityInfo of
                     Just activityInfo ->
                         div []
-                            [ viewActivityHeaderWithDoc activityInfo (canNavigateBack model)
+                            [ viewActivityHeaderWithDoc activityInfo (not (List.isEmpty model.navigationHistory))
                             , viewContent activityInfo
                             ]
 
@@ -1652,30 +1664,33 @@ viewExchangePage model viewContent =
 
 
 viewActivityHeaderWithDoc : Models.Activity.ActivityInfo -> Bool -> Html Msg
-viewActivityHeaderWithDoc activityInfo canGoBack =
+viewActivityHeaderWithDoc activityInfo hasHistory =
     let
         hasDescription =
             not (List.isEmpty activityInfo.description)
+
+        backButtonText =
+            if hasHistory then
+                "Previous Activity"
+
+            else
+                "Search results"
     in
     div [ class "box", style "margin-bottom" "0" ]
         [ -- Title and location on same line
           div [ class "level", style "margin-bottom" "0" ]
             [ div [ class "level-left" ]
-                ([ if canGoBack then
-                    div [ class "level-item" ]
-                        [ button
-                            [ class "button is-primary"
-                            , onClick (DetailsViewMsg DetailsView.NavigateBack)
-                            ]
-                            [ span [ class "icon" ]
-                                [ i [ class "fas fa-arrow-left" ] []
-                                ]
-                            , span [] [ text "Previous Activity" ]
-                            ]
+                ([ div [ class "level-item" ]
+                    [ button
+                        [ class "button is-primary"
+                        , onClick (DetailsViewMsg DetailsView.NavigateBack)
                         ]
-
-                   else
-                    text ""
+                        [ span [ class "icon" ]
+                            [ i [ class "fas fa-arrow-left" ] []
+                            ]
+                        , span [] [ text backButtonText ]
+                        ]
+                    ]
                  , div [ class "level-item" ]
                     [ h1 [ class "title is-4", style "margin-bottom" "0" ]
                         (case activityInfo.referenceProduct of
@@ -1705,11 +1720,6 @@ viewActivityHeaderWithDoc activityInfo canGoBack =
           else
             text ""
         ]
-
-
-canNavigateBack : Model -> Bool
-canNavigateBack model =
-    not (List.isEmpty model.navigationHistory)
 
 
 viewTreePage : Model -> Html Msg
