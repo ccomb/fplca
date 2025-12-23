@@ -12,124 +12,127 @@ type Msg
 
 viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Html Msg
 viewDatabasesPage maybeDatabases loading error =
-    div [ class "databases-page" ]
-        [ nav [ class "navbar is-light", style "height" "52px" ]
-            [ div [ class "navbar-brand" ]
-                [ div [ class "navbar-item" ]
-                    [ h1 [ class "title is-4" ] [ text "Databases" ]
-                    ]
-                ]
-            ]
-        , div [ class "container", style "padding" "1rem" ]
-            [ case error of
+    div [ class "databases-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+        [ div [ class "box", style "margin-bottom" "0", style "flex-shrink" "0" ]
+            [ h2 [ class "title is-3" ] [ text "Databases" ]
+            , p [ class "subtitle" ] [ text "Select a database to load and search activities" ]
+            , case error of
                 Just err ->
                     div [ class "notification is-danger" ]
                         [ text err ]
 
                 Nothing ->
                     text ""
-            , case ( loading, maybeDatabases ) of
-                ( True, _ ) ->
-                    div [ class "has-text-centered", style "padding" "2rem" ]
-                        [ div [ class "is-size-4" ] [ text "Loading databases..." ]
-                        , progress [ class "progress is-primary", attribute "max" "100" ] []
-                        ]
-
-                ( False, Just dbList ) ->
-                    viewDatabasesList dbList
-
-                ( False, Nothing ) ->
-                    div [ class "notification is-warning" ]
-                        [ text "No database information available" ]
             ]
+        , case ( loading, maybeDatabases ) of
+            ( True, _ ) ->
+                div [ class "has-text-centered", style "padding" "2rem" ]
+                    [ div [ class "is-size-4" ] [ text "Loading databases..." ]
+                    , progress [ class "progress is-primary", attribute "max" "100" ] []
+                    ]
+
+            ( False, Just dbList ) ->
+                viewDatabasesList dbList
+
+            ( False, Nothing ) ->
+                div [ class "notification is-warning", style "margin" "1rem" ]
+                    [ text "No database information available" ]
         ]
 
 
 viewDatabasesList : DatabaseList -> Html Msg
 viewDatabasesList dbList =
-    div []
-        [ div [ class "columns is-multiline" ]
-            (List.map (viewDatabaseCard dbList.current) dbList.databases)
+    let
+        dbCount =
+            List.length dbList.databases
+    in
+    div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0" ]
+        [ div [ style "flex-shrink" "0", style "padding" "0.5rem 0" ]
+            [ span [ class "tag is-info is-light" ]
+                [ text (String.fromInt dbCount ++ " databases") ]
+            ]
+        , div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
+            [ table [ class "table is-striped is-hoverable is-fullwidth" ]
+                [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
+                    [ tr []
+                        [ th [ style "background-color" "white", style "width" "50px" ] [ text "" ]
+                        , th [ style "background-color" "white" ] [ text "Name" ]
+                        , th [ style "background-color" "white" ] [ text "Description" ]
+                        , th [ style "background-color" "white", style "width" "120px" ] [ text "Status" ]
+                        ]
+                    ]
+                , tbody []
+                    (List.map (viewDatabaseRow dbList.current) dbList.databases)
+                ]
+            ]
         ]
 
 
-viewDatabaseCard : Maybe String -> DatabaseStatus -> Html Msg
-viewDatabaseCard currentDb db =
+viewDatabaseRow : Maybe String -> DatabaseStatus -> Html Msg
+viewDatabaseRow currentDb db =
     let
         isLoaded =
             currentDb == Just db.name
 
+        isInactive =
+            not db.active
+
         statusTag =
             if isLoaded then
-                span [ class "tag is-success is-medium" ] [ text "LOADED" ]
+                span [ class "tag is-success" ] [ text "Loaded" ]
+
+            else if isInactive then
+                span [ class "tag is-light" ] [ text "Inactive" ]
 
             else if db.cached then
-                span [ class "tag is-info is-medium" ] [ text "CACHED" ]
+                span [ class "tag is-info" ] [ text "Cached" ]
 
             else
-                span [ class "tag is-warning is-medium" ] [ text "NOT CACHED" ]
+                span [ class "tag is-warning" ] [ text "Not cached" ]
 
-        statusIcon =
+        checkboxIcon =
             if isLoaded then
-                i [ class "fas fa-check-circle has-text-success", style "font-size" "1.5rem" ] []
+                i [ class "fas fa-check-square has-text-success", style "font-size" "1.2rem" ] []
 
             else
-                i [ class "far fa-circle has-text-grey-light", style "font-size" "1.5rem" ] []
+                i [ class "far fa-square has-text-grey-light", style "font-size" "1.2rem" ] []
+
+        rowStyle =
+            if isLoaded then
+                [ style "background-color" "#effaf5" ]
+
+            else if isInactive then
+                [ style "opacity" "0.6" ]
+
+            else
+                []
+
+        rowAttrs =
+            if isInactive then
+                [ style "cursor" "not-allowed"
+                , title "Database is inactive (set active=true in config to load at startup)"
+                ]
+                    ++ rowStyle
+
+            else
+                [ class "is-clickable"
+                , style "cursor" "pointer"
+                , onClick (ActivateDatabase db.name)
+                ]
+                    ++ rowStyle
     in
-    div [ class "column is-half" ]
-        [ div
-            [ class "box"
-            , classList [ ( "has-background-success-light", isLoaded ) ]
-            , style "border-left"
-                (if isLoaded then
-                    "4px solid #48c78e"
-
-                 else
-                    "4px solid #dbdbdb"
-                )
-            ]
-            [ div [ class "level" ]
-                [ div [ class "level-left" ]
-                    [ div [ class "level-item" ]
-                        [ statusIcon ]
-                    , div [ class "level-item" ]
-                        [ div []
-                            [ h2 [ class "title is-5", style "margin-bottom" "0.25rem" ]
-                                [ text db.displayName ]
-                            , case db.description of
-                                Just desc ->
-                                    p [ class "has-text-grey", style "font-size" "0.9rem" ]
-                                        [ text desc ]
-
-                                Nothing ->
-                                    text ""
-                            ]
-                        ]
-                    ]
-                , div [ class "level-right" ]
-                    [ div [ class "level-item" ]
-                        [ statusTag ]
-                    ]
-                ]
-            , div [ class "content", style "margin-top" "1rem" ]
-                [ p [ class "is-size-7 has-text-grey" ]
-                    [ strong [] [ text "Path: " ]
-                    , text db.path
-                    ]
-                ]
-            , if not isLoaded && db.active then
-                div [ class "has-text-right" ]
-                    [ button
-                        [ class "button is-primary"
-                        , onClick (ActivateDatabase db.name)
-                        ]
-                        [ span [ class "icon" ]
-                            [ i [ class "fas fa-database" ] [] ]
-                        , span [] [ text "Load Database" ]
-                        ]
-                    ]
+    tr rowAttrs
+        [ td [ style "text-align" "center", style "vertical-align" "middle" ]
+            [ checkboxIcon ]
+        , td []
+            [ if isLoaded then
+                strong [] [ text db.displayName ]
 
               else
-                text ""
+                text db.displayName
             ]
+        , td [ class "has-text-grey" ]
+            [ text (db.description |> Maybe.withDefault "") ]
+        , td []
+            [ statusTag ]
         ]
