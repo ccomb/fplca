@@ -9,6 +9,7 @@ import Html.Events exposing (..)
 import Http
 import Json.Decode
 import Models.Activity exposing (ActivityInfo, ActivitySummary, ActivityTree, SearchResults, activityInfoDecoder, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
+import Models.Database exposing (ActivateResponse, DatabaseList, activateResponseDecoder, databaseListDecoder)
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
@@ -18,6 +19,7 @@ import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
 import Url.Parser.Query as Query
 import Views.ActivitiesView as ActivitiesView
+import Views.DatabasesView as DatabasesView
 import Views.DetailsView as DetailsView
 import Views.GraphView as GraphView
 import Views.InventoryView as InventoryView
@@ -68,6 +70,9 @@ type alias Model =
     , mappingStatus : Maybe MappingStatus -- Flow mapping status
     , loadingMethods : Bool -- Loading methods list
     , loadingLCIA : Bool -- Loading LCIA computation
+    , databaseList : Maybe DatabaseList -- Available databases
+    , loadingDatabases : Bool -- Loading database list
+    , activatingDatabase : Bool -- Activating a database
     }
 
 
@@ -105,6 +110,11 @@ type Msg
     | ComputeLCIA String
     | LCIAResultLoaded (Result Http.Error LCIAResult)
     | MappingStatusLoaded (Result Http.Error MappingStatus)
+      -- Database messages
+    | LoadDatabases
+    | DatabasesLoaded (Result Http.Error DatabaseList)
+    | DatabasesViewMsg DatabasesView.Msg
+    | ActivateDatabaseResult (Result Http.Error ActivateResponse)
 
 
 
@@ -129,6 +139,7 @@ routeParser =
         , Parser.map ActivityGraphRoute (Parser.s "activity" </> string </> Parser.s "graph")
         , Parser.map ActivityLCIARoute (Parser.s "activity" </> string </> Parser.s "lcia")
         , Parser.map ActivityRoute (Parser.s "activity" </> string)
+        , Parser.map DatabasesRoute (Parser.s "databases")
         ]
 
 
@@ -161,6 +172,9 @@ routeToPage route =
 
         ActivityLCIARoute _ ->
             LCIAPage
+
+        DatabasesRoute ->
+            DatabasesPage
 
         NotFoundRoute ->
             ActivitiesPage
@@ -226,6 +240,13 @@ init _ url key =
                     , searchQuery = ""
                     }
 
+                DatabasesRoute ->
+                    { activityId = defaultActivityId
+                    , shouldLoad = True
+                    , loadType = "databases"
+                    , searchQuery = ""
+                    }
+
                 NotFoundRoute ->
                     { activityId = defaultActivityId
                     , shouldLoad = False
@@ -269,6 +290,9 @@ init _ url key =
             , mappingStatus = Nothing
             , loadingMethods = routeConfig.loadType == "lcia"
             , loadingLCIA = False
+            , databaseList = Nothing
+            , loadingDatabases = routeConfig.loadType == "databases"
+            , activatingDatabase = False
             }
 
         cmd =
@@ -301,6 +325,9 @@ init _ url key =
                             , loadActivityTree routeConfig.activityId
                             ]
 
+                    "databases" ->
+                        loadDatabases
+
                     _ ->
                         Cmd.none
 
@@ -309,8 +336,12 @@ init _ url key =
 
             else
                 Cmd.none
+
+        -- Always load database list on startup for the header display
+        finalCmd =
+            Cmd.batch [ cmd, loadDatabases ]
     in
-    ( model, cmd )
+    ( model, finalCmd )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -606,6 +637,9 @@ update msg model =
 
                         LCIAPage ->
                             ActivityLCIARoute model.currentActivityId
+
+                        DatabasesPage ->
+                            DatabasesRoute
             in
             ( model, Nav.pushUrl model.key (routeToUrl route) )
 
@@ -810,6 +844,62 @@ update msg model =
             -- Non-critical error, just ignore
             ( model, Cmd.none )
 
+        -- Database message handlers
+        LoadDatabases ->
+            ( { model | loadingDatabases = True, error = Nothing }
+            , loadDatabases
+            )
+
+        DatabasesLoaded (Ok dbList) ->
+            ( { model
+                | databaseList = Just dbList
+                , loadingDatabases = False
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        DatabasesLoaded (Err error) ->
+            ( { model
+                | loadingDatabases = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        DatabasesViewMsg dbMsg ->
+            case dbMsg of
+                DatabasesView.ActivateDatabase dbName ->
+                    ( { model | activatingDatabase = True, error = Nothing }
+                    , activateDatabase dbName
+                    )
+
+        ActivateDatabaseResult (Ok response) ->
+            if response.success then
+                -- Reload database list to show updated status
+                ( { model
+                    | activatingDatabase = False
+                    , error = Nothing
+                  }
+                , loadDatabases
+                )
+
+            else
+                ( { model
+                    | activatingDatabase = False
+                    , error = Just response.message
+                  }
+                , Cmd.none
+                )
+
+        ActivateDatabaseResult (Err error) ->
+            ( { model
+                | activatingDatabase = False
+                , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
         LinkClicked urlRequest ->
             case urlRequest of
                 Browser.Internal url ->
@@ -854,6 +944,9 @@ update msg model =
                             ActivityLCIARoute processId ->
                                 { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery }
 
+                            DatabasesRoute ->
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
+
                             NotFoundRoute ->
                                 { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery }
 
@@ -884,8 +977,11 @@ update msg model =
                     shouldLoadLCIA =
                         routeInfo.needsActivity && newPage == LCIAPage && model.methods == Nothing
 
+                    shouldLoadDatabases =
+                        newPage == DatabasesPage && model.databaseList == Nothing
+
                     shouldLoad =
-                        shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph || shouldLoadLCIA
+                        shouldLoadActivityInfo || shouldLoadTree || shouldLoadInventory || shouldLoadGraph || shouldLoadLCIA || shouldLoadDatabases
 
                     shouldSearch =
                         newPage == ActivitiesPage && not (String.isEmpty routeInfo.searchQuery)
@@ -914,6 +1010,7 @@ update msg model =
                             , searchLoading = shouldSearch
                             , treeViewModel = newTreeViewModel
                             , loadingMethods = shouldLoadLCIA
+                            , loadingDatabases = shouldLoadDatabases
                         }
 
                     cmd =
@@ -951,6 +1048,9 @@ update msg model =
                                 [ loadMethods
                                 , loadActivityTree routeInfo.activityId
                                 ]
+
+                        else if shouldLoadDatabases then
+                            loadDatabases
 
                         else
                             Cmd.none
@@ -1001,6 +1101,9 @@ routeToUrl route =
         ActivityLCIARoute processId ->
             "/activity/" ++ processId ++ "/lcia"
 
+        DatabasesRoute ->
+            "/databases"
+
         NotFoundRoute ->
             "/"
 
@@ -1030,8 +1133,22 @@ subscriptions model =
 
 view : Model -> Html Msg
 view model =
+    let
+        currentDatabaseName =
+            model.databaseList
+                |> Maybe.andThen
+                    (\dbList ->
+                        dbList.current
+                            |> Maybe.andThen
+                                (\currentName ->
+                                    List.filter (\db -> db.name == currentName) dbList.databases
+                                        |> List.head
+                                        |> Maybe.map .displayName
+                                )
+                    )
+    in
     div [ class "app-container" ]
-        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId)
+        [ Html.map NavigateToPage (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName)
         , div [ class "main-content" ]
             [ case model.currentPage of
                 ActivitiesPage ->
@@ -1080,6 +1197,14 @@ view model =
 
                 LCIAPage ->
                     viewLCIAPage model
+
+                DatabasesPage ->
+                    Html.map DatabasesViewMsg
+                        (DatabasesView.viewDatabasesPage
+                            model.databaseList
+                            (model.loadingDatabases || model.activatingDatabase)
+                            model.error
+                        )
             ]
         ]
 
@@ -1550,6 +1675,23 @@ loadMappingStatus methodId =
     Http.get
         { url = "/api/v1/method/" ++ methodId ++ "/mapping"
         , expect = Http.expectJson MappingStatusLoaded mappingStatusDecoder
+        }
+
+
+loadDatabases : Cmd Msg
+loadDatabases =
+    Http.get
+        { url = "/api/v1/databases"
+        , expect = Http.expectJson DatabasesLoaded databaseListDecoder
+        }
+
+
+activateDatabase : String -> Cmd Msg
+activateDatabase dbName =
+    Http.post
+        { url = "/api/v1/databases/" ++ dbName ++ "/activate"
+        , body = Http.emptyBody
+        , expect = Http.expectJson ActivateDatabaseResult activateResponseDecoder
         }
 
 

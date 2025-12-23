@@ -11,6 +11,7 @@ type Route
     | ActivityInventoryRoute String -- ProcessId
     | ActivityGraphRoute String -- ProcessId
     | ActivityLCIARoute String -- ProcessId (LCIA view)
+    | DatabasesRoute -- Databases management page
     | NotFoundRoute
 
 
@@ -25,6 +26,7 @@ type Page
     | InventoryPage
     | GraphPage
     | LCIAPage
+    | DatabasesPage
 
 
 -- Sub-tab selection for Table view exchanges

@@ -61,6 +61,7 @@ executable fplca
                      , unix
                      , base64-bytestring
                      , file-embed
+                     , toml-reader
 
   other-modules:     LCA.Types
                      , LCA.Types.API
@@ -76,6 +77,8 @@ executable fplca
                      , LCA.CLI.Types
                      , LCA.CLI.Parser
                      , LCA.CLI.Command
+                     , LCA.Config
+                     , LCA.DatabaseManager
                      , EcoSpold.Common
                      , EcoSpold.Parser
                      , EcoSpold.Parser1

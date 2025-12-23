@@ -10,16 +10,43 @@ type alias Msg =
     Page
 
 
-viewLeftMenu : Page -> String -> Html Msg
-viewLeftMenu currentPage currentActivityId =
+viewLeftMenu : Page -> String -> Maybe String -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName =
     nav [ class "left-menu" ]
         [ div [ class "menu-header" ]
             [ span [ class "title is-5 has-text-white" ] [ text "fpLCA" ]
             ]
+        , -- Database name display (clickable to go to Databases page)
+          case currentDatabaseName of
+            Just dbName ->
+                button
+                    [ class "database-indicator"
+                    , onClick DatabasesPage
+                    , style "background" "rgba(255,255,255,0.1)"
+                    , style "border" "none"
+                    , style "color" "#aaa"
+                    , style "padding" "0.5rem 1rem"
+                    , style "margin" "0 0.5rem 0.5rem 0.5rem"
+                    , style "border-radius" "4px"
+                    , style "cursor" "pointer"
+                    , style "font-size" "0.8rem"
+                    , style "text-align" "left"
+                    , style "width" "calc(100% - 1rem)"
+                    , style "display" "flex"
+                    , style "align-items" "center"
+                    , style "gap" "0.5rem"
+                    ]
+                    [ i [ class "fas fa-database", style "font-size" "0.75rem" ] []
+                    , span [] [ text dbName ]
+                    ]
+
+            Nothing ->
+                text ""
         , div [ class "menu-items" ]
             [ menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
             , menuItem currentPage DetailsPage "fas fa-table" "Details" False
             , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
+            , menuItem currentPage DatabasesPage "fas fa-database" "Databases" False
             , menuLabel "Lab"
             , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
             , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True

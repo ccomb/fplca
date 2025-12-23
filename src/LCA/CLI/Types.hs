@@ -16,7 +16,8 @@ data OutputFormat =
 
 -- | Global options that apply to all commands
 data GlobalOptions = GlobalOptions
-  { dataDir :: Maybe FilePath     -- Data directory (--data), overrides env and default
+  { configFile :: Maybe FilePath  -- Config file (--config), alternative to --data
+  , dataDir :: Maybe FilePath     -- Data directory (--data), overrides env and default
   , methodsDir :: Maybe FilePath  -- Methods directory (--methods) for LCIA methods
   , format :: Maybe OutputFormat  -- Output format (--format)
   , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)

@@ -17,6 +17,15 @@ cliParser = CLIConfig <$> globalOptionsParser <*> commandParser
 -- | Global options parser (applied before commands)
 globalOptionsParser :: Parser GlobalOptions
 globalOptionsParser = do
+    configFile <-
+        optional $
+            strOption
+                ( long "config"
+                    <> short 'c'
+                    <> metavar "FILE"
+                    <> help "TOML config file for multi-database setup (alternative to --data)"
+                )
+
     dataDir <-
         optional $
             strOption

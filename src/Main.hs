@@ -26,6 +26,8 @@ import LCA.CLI.Command
 import LCA.CLI.Parser
 import LCA.CLI.Types
 import LCA.CLI.Types (Command(Server), ServerOptions(..))
+import LCA.Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), MethodConfig(..))
+import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager, getCurrentDatabase)
 import LCA.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
 import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import LCA.Progress
@@ -58,6 +60,80 @@ main = do
   -- Validate CLI configuration
   validateCLIConfig cliConfig
 
+  -- Check for Server command with --config (multi-database mode)
+  case (LCA.CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
+    (Server serverOpts, Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
+    _ -> runSingleDatabaseMode cliConfig
+
+-- | Run server with multi-database configuration file
+runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()
+runServerWithConfig cliConfig serverOpts cfgFile = do
+  reportProgress Info $ "Loading configuration from: " ++ cfgFile
+  configResult <- loadConfig cfgFile
+  case configResult of
+    Left err -> do
+      reportError $ "Failed to load config: " ++ T.unpack err
+      exitFailure
+    Right config -> do
+      -- Load embedded synonym database
+      reportProgress Info "Loading embedded synonym database"
+      synonymDB <- loadEmbeddedSynonymDB
+
+      -- Initialize DatabaseManager (pre-loads ALL active databases)
+      reportProgress Info "Initializing multi-database manager..."
+      dbManager <- initDatabaseManager config synonymDB (noCache (globalOptions cliConfig))
+
+      -- Verify at least one database loaded
+      maybeLoaded <- getCurrentDatabase dbManager
+      case maybeLoaded of
+        Nothing -> do
+          reportError "No database loaded from config"
+          exitFailure
+        Just _ -> do
+          let port = serverPort serverOpts
+
+          -- Install SIGPIPE handler
+          reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
+          _ <- installHandler sigPIPE Ignore Nothing
+
+          -- Initialize PETSc/MPI context (already done per-database in DatabaseManager)
+          reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
+          initializePetscForServer
+
+          -- Get password from CLI, config, or env var
+          password <- case serverPassword serverOpts of
+            Just pwd -> return (Just pwd)
+            Nothing -> case scPassword (cfgServer config) of
+              Just pwd -> return (Just $ T.unpack pwd)
+              Nothing -> lookupEnv "FPLCA_PASSWORD"
+
+          -- Get methods directory from config or CLI
+          let resolvedMethodsDir = case methodsDir (globalOptions cliConfig) of
+                Just dir -> Just dir
+                Nothing -> case cfgMethods config of
+                  (m:_) -> Just (mcPath m)  -- Use first active method
+                  [] -> Nothing
+
+          reportProgress Info $ "Starting API server on port " ++ show port
+          reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+          case resolvedMethodsDir of
+            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
+            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
+          case password of
+            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+            Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
+          reportProgress Info "Web interface available at: http://localhost/"
+
+          -- Create app with DatabaseManager - API handlers fetch current DB dynamically
+          let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir
+              finalApp = case password of
+                Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
+                Nothing -> baseApp
+          run port finalApp
+
+-- | Run in single-database mode (original --data behavior)
+runSingleDatabaseMode :: CLIConfig -> IO ()
+runSingleDatabaseMode cliConfig = do
   -- Resolve data directory with priority: --data > $DATADIR > current directory
   dataDirectory <- resolveDataDirectory (globalOptions cliConfig)
 
@@ -80,6 +156,10 @@ main = do
     Server serverOpts -> do
       let port = serverPort serverOpts
 
+      -- Initialize DatabaseManager with single database
+      reportProgress Info "Initializing single-database mode..."
+      dbManager <- initSingleDatabaseManager dataDirectory synonymDB (noCache (globalOptions cliConfig))
+
       -- Install SIGPIPE handler to prevent broken pipe crashes
       reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
       _ <- installHandler sigPIPE Ignore Nothing
@@ -87,20 +167,6 @@ main = do
       -- Initialize PETSc/MPI context once for the server's lifetime
       reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
       initializePetscForServer
-
-      -- Perform global matrix factorization once
-      let techTriples = dbTechnosphereTriples database
-          activityCount = dbActivityCount database
-          -- Convert Int32 to Int for PETSc functions
-          techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-          activityCountInt = fromIntegral activityCount
-      reportProgress Info "Pre-computing matrix factorization for fast concurrent inventory calculations"
-      factorization <- precomputeMatrixFactorization techTriplesInt activityCountInt
-      let databaseWithFactorization = addFactorizationToDatabase database factorization
-
-      -- Create shared solver with cached factorization for fast concurrent solves
-      reportProgress Info "Creating shared solver with cached factorization"
-      sharedSolver <- createSharedSolver (dbCachedFactorization databaseWithFactorization) techTriplesInt activityCountInt
 
       -- Get password from CLI or env var
       password <- case serverPassword serverOpts of
@@ -117,7 +183,7 @@ main = do
         Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
       reportProgress Info "Web interface available at: http://localhost/"
 
-      let baseApp = Main.createCombinedApp databaseWithFactorization (treeDepth (globalOptions cliConfig)) sharedSolver (methodsDir (globalOptions cliConfig))
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig))
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -340,9 +406,10 @@ validateDatabase db = do
 
   reportProgress Info ""
 
--- | Create a combined Wai application serving both API and static files with request logging
-createCombinedApp :: Database -> Int -> SharedSolver -> Maybe FilePath -> Application
-createCombinedApp database maxTreeDepth sharedSolver methodsDir req respond = do
+-- | Create a Wai application with DatabaseManager
+-- API handlers dynamically fetch current database from DatabaseManager on each request
+createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> Application
+createServerApp dbManager maxTreeDepth methodsDir req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
@@ -354,8 +421,8 @@ createCombinedApp database maxTreeDepth sharedSolver methodsDir req respond = do
   -- Route requests based on path prefix
   if C8.pack "/api/" `BS.isPrefixOf` path
     then
-      -- API requests go to Servant
-      serve lcaAPI (lcaServer database maxTreeDepth sharedSolver methodsDir) req respond
+      -- API requests go to Servant with DatabaseManager
+      serve lcaAPI (lcaServer dbManager maxTreeDepth methodsDir) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         -- Static files: strip /static prefix and serve from web/dist/

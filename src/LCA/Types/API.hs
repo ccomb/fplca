@@ -242,6 +242,33 @@ data UnmappedFlowAPI = UnmappedFlowAPI
     }
     deriving (Generic)
 
+-- | Database list response with current database info
+data DatabaseListResponse = DatabaseListResponse
+    { dlrDatabases :: [DatabaseStatusAPI]  -- All available databases
+    , dlrCurrent :: Maybe Text             -- Name of currently loaded database
+    }
+    deriving (Generic)
+
+-- | Database status for API responses
+data DatabaseStatusAPI = DatabaseStatusAPI
+    { dsaName        :: Text           -- Internal identifier
+    , dsaDisplayName :: Text           -- Human-readable name for UI
+    , dsaDescription :: Maybe Text
+    , dsaActive      :: Bool           -- Configured as active
+    , dsaLoaded      :: Bool           -- Currently in memory
+    , dsaCached      :: Bool           -- Cache file exists
+    , dsaPath        :: Text           -- Data path
+    }
+    deriving (Generic)
+
+-- | Response for database activation
+data ActivateResponse = ActivateResponse
+    { arSuccess  :: Bool
+    , arMessage  :: Text
+    , arDatabase :: Maybe DatabaseStatusAPI
+    }
+    deriving (Generic)
+
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
@@ -372,3 +399,9 @@ instance FromJSON ActivityLinks
 instance FromJSON ActivityStats
 instance FromJSON ExchangeWithUnit
 instance FromJSON LCIARequest
+instance ToJSON DatabaseListResponse
+instance ToJSON DatabaseStatusAPI
+instance ToJSON ActivateResponse
+instance FromJSON DatabaseListResponse
+instance FromJSON DatabaseStatusAPI
+instance FromJSON ActivateResponse
