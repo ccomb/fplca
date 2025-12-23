@@ -122,7 +122,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
           case password of
             Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
             Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
-          reportProgress Info "Web interface available at: http://localhost/"
+          reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
           -- Create app with DatabaseManager - API handlers fetch current DB dynamically
           let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir
@@ -181,7 +181,7 @@ runSingleDatabaseMode cliConfig = do
       case password of
         Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
         Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
-      reportProgress Info "Web interface available at: http://localhost/"
+      reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
       let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig))
           finalApp = case password of

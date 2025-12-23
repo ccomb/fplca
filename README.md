@@ -9,16 +9,20 @@
 - **🔍 Search & Discovery**: Find activities and flows across LCA databases
 - **📈 Multiple Output Formats**: JSON, CSV with JSONPath extraction, Pretty tables
 - **🚀 High Performance**: In-memory processing with PETSc linear algebra
-- **🌐 REST API**: HTTP server with comprehensive endpoints
-- **💾 Smart Caching**: Automatic caching for fast repeated queries
-- **📋 EcoSpold2 Support**: Native .spold file format parsing (Ecoinvent)
+- **🌐 REST API**: HTTP server with comprehensive endpoints and web UI
+- **💾 Smart Caching**: Automatic schema-based cache invalidation
+- **🗄️ Multi-Database**: Load and switch between multiple databases instantly
+- **📋 Multiple Formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV
 
 ---
 
 ## Overview & Capabilities
 
 ### Core LCA Functions
-- **Load EcoSpold2 databases** (.spold files from Ecoinvent)
+- **Load LCA databases** in multiple formats:
+  - EcoSpold2 (.spold) - Ecoinvent 3.x
+  - EcoSpold1 (.xml) - Ecoinvent 2.x, BAFU
+  - SimaPro CSV - Agribalyse
 - **Build process dependency trees** with circular dependency handling
 - **Compute life cycle inventories** (LCI) via matrix operations
 - **Apply characterization methods** for impact assessment (LCIA)
@@ -39,11 +43,14 @@
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `--data PATH` | Data directory containing .spold files | `--data ./ECOINVENT3.9.1` |
+| `--config FILE` | Configuration file with multiple databases | `--config fplca.toml` |
+| `--data PATH` | Single database path (alternative to --config) | `--data ./ECOINVENT3.9.1` |
 | `--format FORMAT` | Output format: `json\|csv\|table\|pretty` | `--format json` |
 | `--jsonpath PATH` | JSONPath for CSV extraction (required with CSV) | `--jsonpath "srResults"` |
 | `--tree-depth N` | Maximum tree depth for calculations | `--tree-depth 3` |
 | `--no-cache` | Disable caching (for development) | `--no-cache` |
+
+**Note:** Use `--config` for multi-database mode or `--data` for single-database mode (not both).
 
 ### Commands
 
@@ -236,9 +243,89 @@ coal,natural resources,-2.5,kg,false
 
 ---
 
+## Configuration File
+
+For multi-database setups, use a TOML configuration file:
+
+```toml
+# fplca.toml
+
+[server]
+port = 8080
+host = "127.0.0.1"
+
+# Ecoinvent 3.12 (EcoSpold2 format)
+[[databases]]
+name = "ecoinvent-3.12"
+displayName = "Ecoinvent 3.12"
+path = "../ecoinvent/ECOINVENT3.12/datasets"
+description = "Ecoinvent 3.12 Cutoff System Model"
+active = true
+default = true
+
+# Ecoinvent 3.9.1 (EcoSpold2 format)
+[[databases]]
+name = "ecoinvent-3.9.1"
+displayName = "Ecoinvent 3.9.1"
+path = "../ecoinvent/ECOINVENT3.9.1/datasets"
+active = true
+
+# Agribalyse (SimaPro CSV format)
+[[databases]]
+name = "agribalyse-3.2"
+displayName = "Agribalyse 3.2"
+path = "../agribalyse/AGB32_final.CSV"
+description = "French LCI database (SimaPro CSV format)"
+active = true
+
+# BAFU (EcoSpold1 format)
+[[databases]]
+name = "bafu-2025"
+displayName = "BAFU 2025"
+path = "../BAFU/LCI ecoSpold v1 Files"
+active = true
+
+# LCIA Methods
+[[methods]]
+name = "EF-3.1"
+path = "../EF-v3.1/ILCD/lciamethods"
+active = true
+```
+
+### Database Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Internal identifier (used in cache filenames) |
+| `displayName` | Yes | Human-readable name for UI |
+| `path` | Yes | Path to database files |
+| `description` | No | Optional description |
+| `active` | Yes | If true, database is pre-loaded at startup |
+| `default` | No | If true, this database is selected by default |
+
+### Activity Aliases
+
+For EcoSpold1 databases, you may need to map flow names to activity names when supplier links are ambiguous:
+
+```toml
+[[databases]]
+name = "bafu-2025"
+path = "../BAFU/LCI ecoSpold v1 Files"
+active = true
+# Map "flow name" → "activity name|location"
+activityAliases."Electricity, production mix {ENTSO-E}" = "Electricity, high voltage, at grid {ENTSO-E}|ENTSO-E"
+activityAliases."Natural gas, at consumer {RER}" = "Natural gas, high pressure, at consumer {DE}|DE"
+```
+
+---
+
 ## REST API Endpoints
 
 When running in server mode, the following endpoints are available:
+
+### Databases
+- `GET /api/v1/databases` - List all configured databases with status
+- `POST /api/v1/databases/{name}/activate` - Switch to a different database
 
 ### Activities
 - `GET /api/v1/activities` - Search activities
@@ -251,12 +338,19 @@ When running in server mode, the following endpoints are available:
 - `GET /api/v1/flow/{uuid}` - Get flow details
 
 ### Impact Assessment
+- `GET /api/v1/methods` - List available LCIA methods
 - `POST /api/v1/lcia/{uuid}` - Compute LCIA with method
 
 ### Example API Usage
 ```bash
-# Start server
-fplca --data ./ECOINVENT3.9.1 server --port 8080
+# Start server with config file
+fplca --config fplca.toml server
+
+# List databases
+curl "http://localhost:8080/api/v1/databases"
+
+# Switch database
+curl -X POST "http://localhost:8080/api/v1/databases/ecoinvent-3.9.1/activate"
 
 # Search activities
 curl "http://localhost:8080/api/v1/activities?name=electricity&limit=5"
@@ -372,10 +466,16 @@ Performance Characteristics:
 
 ### Memory Management
 - **In-memory processing**: Entire database loaded into RAM for speed
-- **Smart caching**: Automatic disk cache (~30MB compressed) for instant database reload
+- **Smart caching**: Per-database cache files (`fplca.cache.{dbName}.bin.zst`) with automatic schema-based invalidation
 - **Matrix optimization**: Unboxed sparse matrix storage with minimal overhead
 - **Memory optimizations**: UUID interning, unboxed vectors, strict evaluation
 - **Configurable limits**: GHC RTS options to control memory usage (see below)
+
+### Cache System
+Cache files are stored in the working directory with the format `fplca.cache.{dbName}.bin.zst`. The cache includes:
+- Pre-parsed activities, flows, and units
+- Pre-computed sparse matrices (technosphere A, biosphere B)
+- Automatic invalidation when the data schema changes (no manual version bumping needed)
 
 ### Computation Performance
 - **PETSc integration**: High-performance linear algebra via MUMPS solver
@@ -480,14 +580,3 @@ The CLI validates options before execution:
 GNU AFFERO GENERAL PUBLIC LICENSE 3.0 or later - See LICENSE file for details.
 
 ---
-
-## Contributing & Development
-
-This is a research/educational tool designed for LCA practitioners and developers. The codebase prioritizes:
-
-- **Correctness**: Rigorous LCA methodology implementation
-- **Performance**: Efficient large-scale computation
-- **Usability**: Clear CLI interface and comprehensive documentation
-- **Extensibility**: Modular design for easy feature addition
-
-For development setup, see `CLAUDE.md` for detailed build instructions and architecture overview.
