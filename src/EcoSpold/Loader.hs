@@ -474,13 +474,13 @@ Generate filename for matrix cache (second-tier caching).
 Matrix caches store pre-computed sparse matrices (technosphere A,
 biosphere B) enabling direct LCA solving without matrix construction.
 
-Uses separate filename pattern: "ecoinvent.matrix.v{VERSION}.{HASH}.bin"
+Uses filename pattern: "{dbName}.cache.v{VERSION}.{HASH}.bin"
 
 For files (e.g., SimaPro CSV), uses the file path in the hash.
 For directories (e.g., EcoSpold), uses directory + file list in hash.
 -}
-generateMatrixCacheFilename :: FilePath -> IO FilePath
-generateMatrixCacheFilename path = do
+generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
+generateMatrixCacheFilename dbName path = do
     isFile <- doesFileExist path
     filesHash <- if isFile
         then do
@@ -495,7 +495,7 @@ generateMatrixCacheFilename path = do
             let spold1Files = [f | f <- files, map toLower (takeExtension f) == ".xml"]
             let allSpoldFiles = spold2Files ++ spold1Files
             return $ abs $ hash (show (path, allSpoldFiles))
-    return $ "ecoinvent.matrix.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
+    return $ T.unpack dbName ++ ".cache.v" ++ show cacheFormatVersion ++ "." ++ show filesHash ++ ".bin"
 
 {-|
 Validate cache file integrity before attempting to decode.
@@ -533,9 +533,9 @@ XML parsing and matrix construction. The Database includes:
 
 Returns Nothing if no matrix cache exists.
 -}
-loadCachedDatabaseWithMatrices :: FilePath -> IO (Maybe Database)
-loadCachedDatabaseWithMatrices dataDir = do
-    cacheFile <- generateMatrixCacheFilename dataDir
+loadCachedDatabaseWithMatrices :: T.Text -> FilePath -> IO (Maybe Database)
+loadCachedDatabaseWithMatrices dbName dataDir = do
+    cacheFile <- generateMatrixCacheFilename dbName dataDir
     let zstdFile = cacheFile ++ ".zst"
 
     -- Try compressed file first, then fall back to uncompressed for backwards compatibility
@@ -703,9 +703,9 @@ caching tier but requires the largest disk space (~100-200MB).
 
 Should be called after matrix construction is complete.
 -}
-saveCachedDatabaseWithMatrices :: FilePath -> Database -> IO ()
-saveCachedDatabaseWithMatrices dataDir db = do
-    cacheFile <- generateMatrixCacheFilename dataDir
+saveCachedDatabaseWithMatrices :: T.Text -> FilePath -> Database -> IO ()
+saveCachedDatabaseWithMatrices dbName dataDir db = do
+    cacheFile <- generateMatrixCacheFilename dbName dataDir
     let zstdFile = cacheFile ++ ".zst"
     reportCacheOperation $ "Saving Database with matrices to compressed cache: " ++ zstdFile
     withProgressTiming Cache "Matrix cache save with zstd compression" $ do

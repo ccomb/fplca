@@ -244,7 +244,7 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
         else do
             -- Load raw database
             reportProgress Info $ "Loading database from: " <> path
-            dbResult <- loadDatabaseRaw aliases path noCache
+            dbResult <- loadDatabaseRaw (dcName dbConfig) aliases path noCache
 
             case dbResult of
                 Left err -> return $ Left err
@@ -274,8 +274,8 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
 
 -- | Load raw database from path (file or directory)
 -- Aliases are used for EcoSpold1 supplier linking
-loadDatabaseRaw :: M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
-loadDatabaseRaw aliases path noCache = do
+loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
+loadDatabaseRaw dbName aliases path noCache = do
     isFile <- doesFileExist path
     if isFile && isCacheFile path
         then do
@@ -295,7 +295,7 @@ loadDatabaseRaw aliases path noCache = do
                 return $ Right db
             else do
                 -- Try to load from cache, build if missing
-                mCachedDb <- Loader.loadCachedDatabaseWithMatrices path
+                mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
                 case mCachedDb of
                     Just db -> return $ Right db
                     Nothing -> do
@@ -305,5 +305,5 @@ loadDatabaseRaw aliases path noCache = do
                             (sdbActivities simpleDb)
                             (sdbFlows simpleDb)
                             (sdbUnits simpleDb)
-                        Loader.saveCachedDatabaseWithMatrices path db
+                        Loader.saveCachedDatabaseWithMatrices dbName path db
                         return $ Right db

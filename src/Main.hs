@@ -242,7 +242,8 @@ loadFromDirectory dataDirectory disableCache =
       return db
     else do
       reportCacheOperation "Checking for cached Database with matrices"
-      cachedDb <- loadCachedDatabaseWithMatrices dataDirectory
+      let cliDbName = T.pack "default"
+      cachedDb <- loadCachedDatabaseWithMatrices cliDbName dataDirectory
       case cachedDb of
         Just db -> do
           reportCacheOperation "Using cached Database with pre-computed matrices"
@@ -255,7 +256,7 @@ loadFromDirectory dataDirectory disableCache =
           !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
 
           reportCacheOperation "Saving Database with matrices to cache for next time"
-          saveCachedDatabaseWithMatrices dataDirectory db
+          saveCachedDatabaseWithMatrices cliDbName dataDirectory db
           return db
 
 
