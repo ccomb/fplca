@@ -62,7 +62,7 @@ main = do
 
   -- Check for Server command with --config (multi-database mode)
   case (LCA.CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
-    (Server serverOpts, Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
+    (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
     _ -> runSingleDatabaseMode cliConfig
 
 -- | Run server with multi-database configuration file
@@ -151,9 +151,14 @@ runSingleDatabaseMode cliConfig = do
   reportConfiguration (globalOptions cliConfig) dataDirectory
   validateAndReportDatabase database
 
-  -- Execute the command
+  -- Execute the command (or just exit if no command given)
   case LCA.CLI.Types.command cliConfig of
-    Server serverOpts -> do
+    Nothing -> do
+      -- No command: just load database (cache generated as side effect) and exit
+      reportProgress Info "No command specified - database loaded and cached"
+      reportProgress Info "Cache file ready for deployment"
+
+    Just (Server serverOpts) -> do
       let port = serverPort serverOpts
 
       -- Initialize DatabaseManager with single database
@@ -189,7 +194,7 @@ runSingleDatabaseMode cliConfig = do
             Nothing -> baseApp
       run port finalApp
 
-    _ -> executeCommand cliConfig database
+    Just cmd -> executeCommand cliConfig cmd database
 
 -- | Load database with optional caching
 -- Supports three modes:

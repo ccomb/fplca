@@ -103,9 +103,10 @@ data DebugMatricesOptions = DebugMatricesOptions
   } deriving (Eq, Show, Generic)
 
 -- | Complete CLI configuration
+-- Command is optional: if None, just load database and exit (useful for cache generation)
 data CLIConfig = CLIConfig
   { globalOptions :: GlobalOptions
-  , command :: Command
+  , command :: Maybe Command
   } deriving (Eq, Show, Generic)
 
 -- | Helper function to parse OutputFormat from string

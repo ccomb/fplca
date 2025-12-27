@@ -58,8 +58,8 @@ resolveOutputFormat globalOpts cmd = case format globalOpts of
   Nothing -> defaultFormat cmd       -- Use command-specific default
 
 -- | Execute a CLI command with global options
-executeCommand :: CLIConfig -> Database -> IO ()
-executeCommand (CLIConfig globalOpts cmd) database = do
+executeCommand :: CLIConfig -> Command -> Database -> IO ()
+executeCommand (CLIConfig globalOpts _) cmd database = do
   let outputFormat = resolveOutputFormat globalOpts cmd
       jsonPathOpt = jsonPath globalOpts
 
