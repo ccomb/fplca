@@ -63,6 +63,7 @@ main = do
   -- Check for Server command with --config (multi-database mode)
   case (LCA.CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
     (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
+    (Nothing, Just cfgFile) -> runConfigLoadOnly cliConfig cfgFile
     _ -> runSingleDatabaseMode cliConfig
 
 -- | Run server with multi-database configuration file
@@ -130,6 +131,30 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
                 Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
                 Nothing -> baseApp
           run port finalApp
+
+-- | Run config load-only mode (load all databases from config and exit)
+-- Useful for cache generation, validation, and benchmarking
+runConfigLoadOnly :: CLIConfig -> FilePath -> IO ()
+runConfigLoadOnly cliConfig cfgFile = do
+  reportProgress Info $ "Loading configuration from: " ++ cfgFile
+  configResult <- loadConfig cfgFile
+  case configResult of
+    Left err -> do
+      reportError $ "Failed to load config: " ++ T.unpack err
+      exitFailure
+    Right config -> do
+      -- Load embedded synonym database
+      reportProgress Info "Loading embedded synonym database"
+      synonymDB <- loadEmbeddedSynonymDB
+
+      -- Initialize DatabaseManager (pre-loads ALL active databases)
+      reportProgress Info "Loading all databases from config..."
+      _dbManager <- initDatabaseManager config synonymDB (noCache (globalOptions cliConfig))
+
+      -- Report success
+      let activeCount = length $ filter dcActive (cfgDatabases config)
+      reportProgress Info $ "No command specified - " ++ show activeCount ++ " database(s) loaded and cached"
+      reportProgress Info "Cache files ready for deployment"
 
 -- | Run in single-database mode (original --data behavior)
 runSingleDatabaseMode :: CLIConfig -> IO ()
