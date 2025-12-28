@@ -24,6 +24,15 @@ mkdir -p dist
 echo "Compiling Elm..."
 elm make src/Main.elm --output=dist/main.tmp.js --optimize
 
+# Minify JavaScript with SWC (Elm Guide config for optimal compression)
+echo "Minifying with SWC..."
+BEFORE_SIZE=$(wc -c < dist/main.tmp.js)
+npm install --silent --no-save @swc/core 2>/dev/null
+node minify.mjs dist/main.tmp.js dist/main.min.js
+mv dist/main.min.js dist/main.tmp.js
+AFTER_SIZE=$(wc -c < dist/main.tmp.js)
+echo "  $BEFORE_SIZE -> $AFTER_SIZE bytes ($(( (BEFORE_SIZE - AFTER_SIZE) * 100 / BEFORE_SIZE ))% reduction)"
+
 # Calculate MD5 hash of the compiled JS
 JS_HASH=$(md5sum dist/main.tmp.js | cut -d' ' -f1)
 JS_FILE="$JS_HASH.js"

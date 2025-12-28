@@ -35,3 +35,4 @@ cabal.project.local~
 MEMORY.md
 *.txt
 scripts/
+node_modules/
