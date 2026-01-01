@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-{-|
+{- |
 Module      : EcoSpold.Loader
 Description : High-performance EcoSpold XML loading with matrix caching
 
@@ -26,48 +26,48 @@ Cache performance (Ecoinvent 3.8 with 18K activities):
 
 The cache keeps day-to-day execution fast while preserving reproducibility.
 -}
-
 module EcoSpold.Loader (loadAllSpoldsWithFlows, loadAllSpoldsWithFlowsAndAliases, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
 
-import LCA.Progress
-import LCA.Types
+import qualified Codec.Compression.Zstd as Zstd
 import Control.Concurrent.Async
 import Control.DeepSeq (force)
-import Data.Char (toLower)
 import Control.Exception (SomeException, catch, evaluate)
 import Control.Monad
-import Data.Binary (encode, decode)
+import Data.Binary (decode, encode)
+import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import Data.Char (toLower)
 import Data.Hashable (hash)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Typeable (typeOf, typeRepFingerprint)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import qualified Codec.Compression.Zstd as Zstd
+import Data.Word (Word64)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1)
+import GHC.Conc (getNumCapabilities)
+import GHC.Fingerprint (Fingerprint (..))
+import LCA.Progress
+import LCA.Types
 import qualified SimaPro.Parser as SimaPro
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
 import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
-import Data.Bits (xor)
-import Data.Typeable (typeOf, typeRepFingerprint)
-import Data.Word (Word64)
-import GHC.Fingerprint (Fingerprint(..))
 
 -- | Magic bytes to identify fpLCA cache files
 cacheMagic :: BS.ByteString
 cacheMagic = "FPLCACHE"
 
-{-|
+{- |
 Schema signature automatically derived from the Database type structure.
 
 This signature changes when:
@@ -81,9 +81,9 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-    in hi `xor` lo
+     in hi `xor` lo
 
-{-|
+{- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
 Uses the same namespace as Parser.hs to ensure consistency.
 -}
@@ -101,68 +101,80 @@ ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encod
 generateActivityUUIDFromActivity :: Activity -> UUID.UUID
 generateActivityUUIDFromActivity act =
     let key = activityName act <> ":" <> activityLocation act
-    in UUID5.generateNamed ecospold1Namespace (BS.unpack $ T.encodeUtf8 key)
+     in UUID5.generateNamed ecospold1Namespace (BS.unpack $ T.encodeUtf8 key)
 
 -- | Get reference product UUID from activity exchanges
 getReferenceProductUUID :: Activity -> UUID.UUID
 getReferenceProductUUID act =
     case filter exchangeIsReference (exchanges act) of
-        (ref:_) -> exchangeFlowId ref
-        [] -> UUID.nil  -- No reference product found
+        (ref : _) -> exchangeFlowId ref
+        [] -> UUID.nil -- No reference product found
 
 -- | Type alias for supplier lookup index (with location)
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
 
--- | Type alias for name-only supplier lookup (for SimaPro)
--- Maps normalizedProductName → (activityUUID, productUUID)
+{- | Type alias for name-only supplier lookup (for SimaPro)
+Maps normalizedProductName → (activityUUID, productUUID)
+-}
 type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID)
 
 -- | Normalize text for matching: lowercase and strip whitespace
 normalizeText :: T.Text -> T.Text
 normalizeText = T.toLower . T.strip
 
--- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
--- For each activity, we index it by its reference product name + activity location
+{- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
+For each activity, we index it by its reference product name + activity location
+-}
 buildSupplierIndex :: M.Map T.Text T.Text -> ActivityMap -> FlowDB -> SupplierIndex
-buildSupplierIndex _aliases activities flowDb = M.fromList
-    [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
-    | ((actUUID, prodUUID), act) <- M.toList activities
-    , ex <- exchanges act
-    , exchangeIsReference ex
-    , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
-    ]
+buildSupplierIndex _aliases activities flowDb =
+    M.fromList
+        [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
+        | ((actUUID, prodUUID), act) <- M.toList activities
+        , ex <- exchanges act
+        , exchangeIsReference ex
+        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+        ]
 
--- | Build name-only supplier index for SimaPro linking
--- Uses only the normalized product name (no location required)
+{- | Build name-only supplier index for SimaPro linking
+Uses only the normalized product name (no location required)
+-}
 buildSupplierIndexByName :: ActivityMap -> FlowDB -> NameOnlyIndex
-buildSupplierIndexByName activities flowDb = M.fromList
-    [ (normalizeText (flowName flow), (actUUID, prodUUID))
-    | ((actUUID, prodUUID), act) <- M.toList activities
-    , ex <- exchanges act
-    , exchangeIsReference ex
-    , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
-    ]
+buildSupplierIndexByName activities flowDb =
+    M.fromList
+        [ (normalizeText (flowName flow), (actUUID, prodUUID))
+        | ((actUUID, prodUUID), act) <- M.toList activities
+        , ex <- exchanges act
+        , exchangeIsReference ex
+        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+        ]
 
--- | Fix EcoSpold1 activity links by resolving supplier references
--- Uses (flowName, flowLocation) to look up the correct supplier activity
--- Aliases map "flowName" → "activityName|location" to override lookup
+{- | Fix EcoSpold1 activity links by resolving supplier references
+Uses (flowName, flowLocation) to look up the correct supplier activity
+Aliases map "flowName" → "activityName|location" to override lookup
+-}
 fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> SimpleDatabase -> IO SimpleDatabase
 fixEcoSpold1ActivityLinks aliases db = do
     -- Build supplier index (without alias entries - aliases are applied at lookup time)
     let supplierIndex = buildSupplierIndex M.empty (sdbActivities db) (sdbFlows db)
-    reportProgress Info $ printf "Built supplier index with %d entries for activity linking (%d aliases configured)"
-        (M.size supplierIndex) (M.size aliases)
+    reportProgress Info $
+        printf
+            "Built supplier index with %d entries for activity linking (%d aliases configured)"
+            (M.size supplierIndex)
+            (M.size aliases)
 
     -- Count and report statistics
     let (fixedActivities, linkStats) = fixAllActivities aliases supplierIndex (sdbFlows db) (sdbActivities db)
     let (totalLinks, foundLinks, missingLinks) = linkStats
 
-    reportProgress Info $ printf "Activity linking: %d/%d resolved (%.1f%%), %d unresolved"
-        foundLinks totalLinks
-        (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
-        missingLinks
+    reportProgress Info $
+        printf
+            "Activity linking: %d/%d resolved (%.1f%%), %d unresolved"
+            foundLinks
+            totalLinks
+            (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
+            missingLinks
 
-    return $ db { sdbActivities = fixedActivities }
+    return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities and return statistics
 fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
@@ -173,7 +185,7 @@ fixAllActivities aliases idx flowDb activities =
         foundLinks = sum $ map (\(_, f, _) -> f) statsList
         missingLinks = sum $ map (\(_, _, m) -> m) statsList
         fixedActivities = M.map fst results
-    in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+     in (fixedActivities, (totalLinks, foundLinks, missingLinks))
 
 -- | Fix activity exchanges and return (fixed activity, (total, found, missing))
 fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
@@ -182,14 +194,16 @@ fixActivityExchanges aliases idx flowDb act =
         totalLinks = sum $ map (\(t, _, _) -> t) stats
         foundLinks = sum $ map (\(_, f, _) -> f) stats
         missingLinks = sum $ map (\(_, _, m) -> m) stats
-    in (act { exchanges = fixedExchanges }, (totalLinks, foundLinks, missingLinks))
+     in (act{exchanges = fixedExchanges}, (totalLinks, foundLinks, missingLinks))
 
--- | Fix a single exchange's activity link
--- Returns (fixed exchange, (total attempts, found, missing))
--- Aliases map "flowName" → "activityName|location" to override the lookup
+{- | Fix a single exchange's activity link
+Returns (fixed exchange, (total attempts, found, missing))
+Aliases map "flowName" → "activityName|location" to override the lookup
+-}
 fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
 fixExchangeLink aliases idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
-    | isInp && not (T.null loc) =  -- Only fix technosphere inputs with location
+    | isInp && not (T.null loc) -- Only fix technosphere inputs with location
+        =
         case M.lookup fid flowDb of
             Just flow ->
                 -- Check if flow name matches an alias (for location override)
@@ -198,29 +212,37 @@ fixExchangeLink aliases idx flowDb consumerName ex@(TechnosphereExchange fid amt
                             -- Parse "activityName|location" format
                             case T.splitOn "|" aliasTarget of
                                 [targetName, targetLoc] -> (targetName, targetLoc)
-                                _ -> (flowName flow, loc)  -- Invalid format, use original
-                        Nothing -> (flowName flow, loc)  -- No alias, use original
+                                _ -> (flowName flow, loc) -- Invalid format, use original
+                        Nothing -> (flowName flow, loc) -- No alias, use original
                     key = (normalizeText lookupName, lookupLoc)
-                in case M.lookup key idx of
-                    Just (actUUID, prodUUID) ->
-                        -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
-                        -- This is critical because the matrix lookup uses (activityLinkId, flowId) as the key
-                        (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
-                    Nothing -> do
-                        -- Supplier not found - log warning
-                        let !_ = unsafePerformIO $ hPutStrLn stderr $
-                                "[WARNING] No supplier found for technosphere input:\n" ++
-                                "  Flow: \"" ++ T.unpack (flowName flow) ++ "\"\n" ++
-                                "  Location: \"" ++ T.unpack loc ++ "\"\n" ++
-                                "  Consumer: \"" ++ T.unpack consumerName ++ "\""
-                        (ex, (1, 0, 1))
+                 in case M.lookup key idx of
+                        Just (actUUID, prodUUID) ->
+                            -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
+                            -- This is critical because the matrix lookup uses (activityLinkId, flowId) as the key
+                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
+                        Nothing -> do
+                            -- Supplier not found - log warning
+                            let !_ =
+                                    unsafePerformIO $
+                                        hPutStrLn stderr $
+                                            "[WARNING] No supplier found for technosphere input:\n"
+                                                ++ "  Flow: \""
+                                                ++ T.unpack (flowName flow)
+                                                ++ "\"\n"
+                                                ++ "  Location: \""
+                                                ++ T.unpack loc
+                                                ++ "\"\n"
+                                                ++ "  Consumer: \""
+                                                ++ T.unpack consumerName
+                                                ++ "\""
+                            (ex, (1, 0, 1))
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
                 (ex, (1, 0, 1))
-    | otherwise = (ex, (0, 0, 0))  -- Not a linkable exchange
-fixExchangeLink _ _ _ _ ex = (ex, (0, 0, 0))  -- BiosphereExchange - no linking needed
+    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange
+fixExchangeLink _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
-{-|
+{- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
 
 This function implements a high-performance loading strategy:
@@ -240,8 +262,9 @@ Used when no cache exists or caching is disabled.
 loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
 loadAllSpoldsWithFlows = loadAllSpoldsWithFlowsAndAliases M.empty
 
--- | Load all EcoSpold files with activity aliases for supplier linking
--- Aliases allow alternative names to map to the same supplier activity
+{- | Load all EcoSpold files with activity aliases for supplier linking
+Aliases allow alternative names to map to the same supplier activity
+-}
 loadAllSpoldsWithFlowsAndAliases :: M.Map T.Text T.Text -> FilePath -> IO SimpleDatabase
 loadAllSpoldsWithFlowsAndAliases aliases path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
@@ -250,9 +273,10 @@ loadAllSpoldsWithFlowsAndAliases aliases path = do
 
     if isFile && map toLower (takeExtension path) == ".csv"
         then loadSimaProCSV path
-        else if isDir
-            then loadEcoSpoldDirectory aliases path
-            else error $ "Path is neither a CSV file nor a directory: " ++ path
+        else
+            if isDir
+                then loadEcoSpoldDirectory aliases path
+                else error $ "Path is neither a CSV file nor a directory: " ++ path
 
 -- | Load SimaPro CSV file
 loadSimaProCSV :: FilePath -> IO SimpleDatabase
@@ -261,11 +285,12 @@ loadSimaProCSV csvPath = do
 
     -- Build ActivityMap with generated ProcessIds
     -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-    let activityList = zip [0..] activities
-        procMap = M.fromList
-            [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
-            | (_, act) <- activityList
-            ]
+    let activityList = zip [0 ..] activities
+        procMap =
+            M.fromList
+                [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
+                | (_, act) <- activityList
+                ]
 
     -- Build initial database
     let simpleDb = SimpleDatabase procMap flowDB unitDB
@@ -273,8 +298,9 @@ loadSimaProCSV csvPath = do
     -- Fix activity links using supplier lookup (same as EcoSpold1)
     fixSimaProActivityLinks simpleDb
 
--- | Fix SimaPro activity links by resolving supplier references
--- Uses name-only matching (no location required) for SimaPro technosphere inputs
+{- | Fix SimaPro activity links by resolving supplier references
+Uses name-only matching (no location required) for SimaPro technosphere inputs
+-}
 fixSimaProActivityLinks :: SimpleDatabase -> IO SimpleDatabase
 fixSimaProActivityLinks db = do
     let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbFlows db)
@@ -284,12 +310,15 @@ fixSimaProActivityLinks db = do
     let (fixedActivities, linkStats) = fixAllActivitiesByName nameIndex (sdbFlows db) (sdbActivities db)
     let (totalLinks, foundLinks, missingLinks) = linkStats
 
-    reportProgress Info $ printf "SimaPro activity linking: %d/%d resolved (%.1f%%), %d unresolved"
-        foundLinks totalLinks
-        (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
-        missingLinks
+    reportProgress Info $
+        printf
+            "SimaPro activity linking: %d/%d resolved (%.1f%%), %d unresolved"
+            foundLinks
+            totalLinks
+            (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
+            missingLinks
 
-    return $ db { sdbActivities = fixedActivities }
+    return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities using name-only matching
 fixAllActivitiesByName :: NameOnlyIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
@@ -300,7 +329,7 @@ fixAllActivitiesByName idx flowDb activities =
         foundLinks = sum $ map (\(_, f, _) -> f) statsList
         missingLinks = sum $ map (\(_, _, m) -> m) statsList
         fixedActivities = M.map fst results
-    in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+     in (fixedActivities, (totalLinks, foundLinks, missingLinks))
 
 -- | Fix activity exchanges using name-only matching
 fixActivityExchangesByName :: NameOnlyIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
@@ -309,33 +338,43 @@ fixActivityExchangesByName idx flowDb act =
         totalLinks = sum $ map (\(t, _, _) -> t) stats
         foundLinks = sum $ map (\(_, f, _) -> f) stats
         missingLinks = sum $ map (\(_, _, m) -> m) stats
-    in (act { exchanges = fixedExchanges }, (totalLinks, foundLinks, missingLinks))
+     in (act{exchanges = fixedExchanges}, (totalLinks, foundLinks, missingLinks))
 
--- | Fix a single exchange's activity link using name-only matching
--- Returns (fixed exchange, (total attempts, found, missing))
+{- | Fix a single exchange's activity link using name-only matching
+Returns (fixed exchange, (total attempts, found, missing))
+-}
 fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
 fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
-    | isInp =  -- All technosphere inputs (no location check!)
+    | isInp -- All technosphere inputs (no location check!)
+        =
         case M.lookup fid flowDb of
             Just flow ->
                 let key = normalizeText (flowName flow)
-                in case M.lookup key idx of
-                    Just (actUUID, prodUUID) ->
-                        -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
-                        (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
-                    Nothing -> do
-                        -- Supplier not found - log warning (only first few)
-                        let !_ = unsafePerformIO $ hPutStrLn stderr $
-                                "[WARNING] No supplier found for technosphere input:\n" ++
-                                "  Flow: \"" ++ T.unpack (flowName flow) ++ "\"\n" ++
-                                "  Location: \"" ++ T.unpack loc ++ "\"\n" ++
-                                "  Consumer: \"" ++ T.unpack consumerName ++ "\""
-                        (ex, (1, 0, 1))
+                 in case M.lookup key idx of
+                        Just (actUUID, prodUUID) ->
+                            -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
+                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
+                        Nothing -> do
+                            -- Supplier not found - log warning (only first few)
+                            let !_ =
+                                    unsafePerformIO $
+                                        hPutStrLn stderr $
+                                            "[WARNING] No supplier found for technosphere input:\n"
+                                                ++ "  Flow: \""
+                                                ++ T.unpack (flowName flow)
+                                                ++ "\"\n"
+                                                ++ "  Location: \""
+                                                ++ T.unpack loc
+                                                ++ "\"\n"
+                                                ++ "  Consumer: \""
+                                                ++ T.unpack consumerName
+                                                ++ "\""
+                            (ex, (1, 0, 1))
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
                 (ex, (1, 0, 1))
-    | otherwise = (ex, (0, 0, 0))  -- Not a linkable exchange (outputs/references)
-fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0))  -- BiosphereExchange - no linking needed
+    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange (outputs/references)
+fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO SimpleDatabase
@@ -351,29 +390,32 @@ loadEcoSpoldDirectory aliases dir = do
             ([], []) -> error $ "No EcoSpold files found in directory: " ++ dir
             ([], xs) -> (xs, "EcoSpold1 (.XML)", True)
             (xs, []) -> (xs, "EcoSpold2 (.spold)", False)
-            (xs, _)  -> (xs, "EcoSpold2 (.spold)", False)  -- Prefer EcoSpold2 if both present
-
+            (xs, _) -> (xs, "EcoSpold2 (.spold)", False) -- Prefer EcoSpold2 if both present
     reportProgress Info $ "Found " ++ show (length spoldFiles) ++ " " ++ formatName ++ " files for processing"
 
     -- Simple N-worker parallelism: divide files among CPU cores
     loadWithWorkerParallelism spoldFiles isEcoSpold1
   where
-    numWorkers = 4  -- Number of parallel workers (match CPU cores)
-
     -- Helper function for unzipping 5-tuples
     unzip5 :: [(a, b, c, d, e)] -> ([a], [b], [c], [d], [e])
-    unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a:as, b:bs, c:cs, d:ds, e:es)) ([], [], [], [], [])
+    unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a : as, b : bs, c : cs, d : ds, e : es)) ([], [], [], [], [])
 
     -- Worker-based parallelism: divide files among N workers, all process in parallel
     loadWithWorkerParallelism :: [FilePath] -> Bool -> IO SimpleDatabase
     loadWithWorkerParallelism allFiles isEcoSpold1 = do
+        -- Get actual number of CPU capabilities (respects +RTS -N)
+        numWorkers <- getNumCapabilities
         let workers = distributeFiles numWorkers allFiles
-        reportProgress Info $ printf "Processing %d files with %d parallel workers (%d files per worker)"
-            (length allFiles) numWorkers (length allFiles `div` numWorkers)
+        reportProgress Info $
+            printf
+                "Processing %d files with %d parallel workers (%d files per worker)"
+                (length allFiles)
+                numWorkers
+                (length allFiles `div` numWorkers)
 
         -- Process all workers in parallel
         startTime <- getCurrentTime
-        results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1..] workers)
+        results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1 ..] workers)
         let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
         let !finalProcMap = M.unions procMaps
         let !finalFlowMap = M.unions flowMaps
@@ -390,10 +432,18 @@ loadEcoSpoldDirectory aliases dir = do
 
         reportProgress Info $ printf "Parsing completed (%s, %.1f files/sec):" (formatDuration totalDuration) avgFilesPerSec
         reportProgress Info $ printf "  Activities: %d processes" (M.size finalProcMap)
-        reportProgress Info $ printf "  Flows: %d unique (%.1f%% deduplication from %d raw)"
-            (M.size finalFlowMap) flowDeduplication totalRawFlows
-        reportProgress Info $ printf "  Units: %d unique (%.1f%% deduplication from %d raw)"
-            (M.size finalUnitMap) unitDeduplication totalRawUnits
+        reportProgress Info $
+            printf
+                "  Flows: %d unique (%.1f%% deduplication from %d raw)"
+                (M.size finalFlowMap)
+                flowDeduplication
+                totalRawFlows
+        reportProgress Info $
+            printf
+                "  Units: %d unique (%.1f%% deduplication from %d raw)"
+                (M.size finalUnitMap)
+                unitDeduplication
+                totalRawUnits
         reportMemoryUsage "Final parsing memory usage"
 
         -- For EcoSpold1: fix activity links using supplier lookup table
@@ -410,11 +460,11 @@ loadEcoSpoldDirectory aliases dir = do
             remainder = len `mod` n
             -- First 'remainder' workers get baseSize+1 files, rest get baseSize
             sizes = replicate remainder (baseSize + 1) ++ replicate (n - remainder) baseSize
-        in distribute sizes xs
+         in distribute sizes xs
       where
         distribute [] _ = []
         distribute _ [] = []
-        distribute (s:ss) items = take s items : distribute ss (drop s items)
+        distribute (s : ss) items = take s items : distribute ss (drop s items)
 
     -- Process one worker's share of files
     processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
@@ -423,9 +473,10 @@ loadEcoSpoldDirectory aliases dir = do
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
         -- Parse all files for this worker using appropriate parser
-        let parseFile = if isEcoSpold1
-                        then streamParseActivityAndFlowsFromFile1
-                        else streamParseActivityAndFlowsFromFile
+        let parseFile =
+                if isEcoSpold1
+                    then streamParseActivityAndFlowsFromFile1
+                    else streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let (!procs, flowLists, unitLists) = unzip3 workerResults
         let !allFlows = concat flowLists
@@ -434,26 +485,31 @@ loadEcoSpoldDirectory aliases dir = do
         -- Build maps for this worker - extract UUID pairs from filenames
         -- For EcoSpold1: generate UUIDs from numeric dataset number
         -- For EcoSpold2: parse UUIDs from filename (activityUUID_productUUID.spold)
-        let !procMap = M.fromList $ zipWith (\filepath activity ->
-                if isEcoSpold1
-                then
-                    -- EcoSpold1: Generate activity UUID from name and location
-                    -- Get the reference product UUID from exchanges
-                    let actUUID = generateActivityUUIDFromActivity activity
-                        prodUUID = getReferenceProductUUID activity
-                    in ((actUUID, prodUUID), activity)
-                else
-                    -- EcoSpold2: Parse UUIDs from filename
-                    let filename = T.pack $ takeBaseName filepath
-                    in case T.splitOn "_" filename of
-                        [actUUIDText, prodUUIDText] ->
-                            -- Parse UUIDs, generating deterministic UUIDs for invalid test data
-                            -- This prevents deduplication issues where all invalid UUIDs would map to nil
-                            let actUUID = parseUUID actUUIDText
-                                prodUUID = parseUUID prodUUIDText
-                            in ((actUUID, prodUUID), activity)
-                        _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
-                ) workerFiles procs
+        let !procMap =
+                M.fromList $
+                    zipWith
+                        ( \filepath activity ->
+                            if isEcoSpold1
+                                then
+                                    -- EcoSpold1: Generate activity UUID from name and location
+                                    -- Get the reference product UUID from exchanges
+                                    let actUUID = generateActivityUUIDFromActivity activity
+                                        prodUUID = getReferenceProductUUID activity
+                                     in ((actUUID, prodUUID), activity)
+                                else
+                                    -- EcoSpold2: Parse UUIDs from filename
+                                    let filename = T.pack $ takeBaseName filepath
+                                     in case T.splitOn "_" filename of
+                                            [actUUIDText, prodUUIDText] ->
+                                                -- Parse UUIDs, generating deterministic UUIDs for invalid test data
+                                                -- This prevents deduplication issues where all invalid UUIDs would map to nil
+                                                let actUUID = parseUUID actUUIDText
+                                                    prodUUID = parseUUID prodUUIDText
+                                                 in ((actUUID, prodUUID), activity)
+                                            _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
+                        )
+                        workerFiles
+                        procs
         let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
         let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
@@ -462,12 +518,18 @@ loadEcoSpoldDirectory aliases dir = do
         let filesPerSec = fromIntegral (length workerFiles) / workerDuration
         let rawFlowCount = length allFlows
         let rawUnitCount = length allUnits
-        reportProgress Info $ printf "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
-            workerNum (M.size procMap) (M.size flowMap) (formatDuration workerDuration) filesPerSec
+        reportProgress Info $
+            printf
+                "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
+                workerNum
+                (M.size procMap)
+                (M.size flowMap)
+                (formatDuration workerDuration)
+                filesPerSec
 
         return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
 
-{-|
+{- |
 Generate filename for matrix cache.
 
 Matrix caches store pre-computed sparse matrices (technosphere A,
@@ -482,7 +544,7 @@ generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
 generateMatrixCacheFilename dbName _path = do
     return $ "fplca.cache." ++ T.unpack dbName ++ ".bin"
 
-{-|
+{- |
 Validate cache file integrity before attempting to decode.
 
 Checks:
@@ -506,7 +568,7 @@ validateCacheFile cacheFile = do
                     return False
                 else return True
 
-{-|
+{- |
 Load Database with pre-computed matrices from cache (second-tier).
 
 This is the fastest loading method (~0.5s) as it bypasses both
@@ -532,7 +594,7 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
             reportCacheInfo zstdFile
             -- Wrap cache loading in exception handler to prevent crashes
             catch
-                (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
+                ( withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
                     contents <- BS.readFile zstdFile
                     -- Check header: magic (8 bytes) + signature (8 bytes)
                     let headerSize = 16
@@ -569,22 +631,24 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
                                                     evaluate (force db)
                                             reportCacheOperation $
                                                 "Matrix cache loaded: "
-                                                ++ show (dbActivityCount db)
-                                                ++ " activities, "
-                                                ++ show (VU.length $ dbTechnosphereTriples db)
-                                                ++ " tech entries, "
-                                                ++ show (VU.length $ dbBiosphereTriples db)
-                                                ++ " bio entries (decompressed)"
-                                            return (Just db))
-                (\(e :: SomeException) -> do
+                                                    ++ show (dbActivityCount db)
+                                                    ++ " activities, "
+                                                    ++ show (VU.length $ dbTechnosphereTriples db)
+                                                    ++ " tech entries, "
+                                                    ++ show (VU.length $ dbBiosphereTriples db)
+                                                    ++ " bio entries (decompressed)"
+                                            return (Just db)
+                )
+                ( \(e :: SomeException) -> do
                     reportError $ "Cache load failed: " ++ show e
                     reportCacheOperation "The cache file is corrupted or incompatible"
                     reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
                     removeFile zstdFile
                     reportCacheOperation "Will rebuild database from source files"
-                    return Nothing)
+                    return Nothing
+                )
 
-{-|
+{- |
 Load Database directly from a specified cache file.
 
 Similar to loadCachedDatabaseWithMatrices but takes an explicit cache file path
@@ -616,7 +680,7 @@ loadCompressedCacheFile :: FilePath -> IO (Maybe Database)
 loadCompressedCacheFile zstdFile = do
     reportCacheInfo zstdFile
     catch
-        (withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
+        ( withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
             contents <- BS.readFile zstdFile
             -- Check minimum size for header (16 bytes)
             if BS.length contents < 16
@@ -650,17 +714,19 @@ loadCompressedCacheFile zstdFile = do
                                             evaluate (force db)
                                     reportCacheOperation $
                                         "Matrix cache loaded: "
-                                        ++ show (dbActivityCount db)
-                                        ++ " activities, "
-                                        ++ show (VU.length $ dbTechnosphereTriples db)
-                                        ++ " tech entries, "
-                                        ++ show (VU.length $ dbBiosphereTriples db)
-                                        ++ " bio entries (decompressed)"
-                                    return (Just db))
-        (\(e :: SomeException) -> do
+                                            ++ show (dbActivityCount db)
+                                            ++ " activities, "
+                                            ++ show (VU.length $ dbTechnosphereTriples db)
+                                            ++ " tech entries, "
+                                            ++ show (VU.length $ dbBiosphereTriples db)
+                                            ++ " bio entries (decompressed)"
+                                    return (Just db)
+        )
+        ( \(e :: SomeException) -> do
             reportError $ "Compressed cache load failed: " ++ show e
             reportCacheOperation "The compressed cache file is corrupted or incompatible"
-            return Nothing)
+            return Nothing
+        )
 
 -- | Load uncompressed (.bin) cache file
 loadUncompressedCacheFile :: FilePath -> IO (Maybe Database)
@@ -674,23 +740,25 @@ loadUncompressedCacheFile cacheFile = do
         else do
             reportCacheInfo cacheFile
             catch
-                (withProgressTiming Cache "Matrix cache load" $ do
+                ( withProgressTiming Cache "Matrix cache load" $ do
                     !db <- BSL.readFile cacheFile >>= \bs -> evaluate (force (decode bs))
                     reportCacheOperation $
                         "Matrix cache loaded: "
-                        ++ show (dbActivityCount db)
-                        ++ " activities, "
-                        ++ show (VU.length $ dbTechnosphereTriples db)
-                        ++ " tech entries, "
-                        ++ show (VU.length $ dbBiosphereTriples db)
-                        ++ " bio entries"
-                    return (Just db))
-                (\(e :: SomeException) -> do
+                            ++ show (dbActivityCount db)
+                            ++ " activities, "
+                            ++ show (VU.length $ dbTechnosphereTriples db)
+                            ++ " tech entries, "
+                            ++ show (VU.length $ dbBiosphereTriples db)
+                            ++ " bio entries"
+                    return (Just db)
+                )
+                ( \(e :: SomeException) -> do
                     reportError $ "Cache load failed: " ++ show e
                     reportCacheOperation "The cache file is corrupted or incompatible with the current version"
-                    return Nothing)
+                    return Nothing
+                )
 
-{-|
+{- |
 Save Database with pre-computed matrices to cache.
 
 Serializes the complete Database including sparse matrices to enable
@@ -718,9 +786,9 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
         BS.writeFile zstdFile (header <> compressed)
         reportCacheOperation $
             "Matrix cache saved ("
-            ++ show (dbActivityCount db)
-            ++ " activities, "
-            ++ show (VU.length $ dbTechnosphereTriples db)
-            ++ " tech entries, "
-            ++ show (VU.length $ dbBiosphereTriples db)
-            ++ " bio entries, compressed)"
+                ++ show (dbActivityCount db)
+                ++ " activities, "
+                ++ show (VU.length $ dbTechnosphereTriples db)
+                ++ " tech entries, "
+                ++ show (VU.length $ dbBiosphereTriples db)
+                ++ " bio entries, compressed)"
