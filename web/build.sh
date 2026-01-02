@@ -4,30 +4,16 @@ set -e
 
 echo "Building Elm frontend with asset hashing..."
 
-# Check if Elm is installed
-if ! command -v elm &> /dev/null; then
-    echo "Elm not found. Installing Elm..."
-    if command -v npm &> /dev/null; then
-        npm install -g elm
-    else
-        echo "Error: npm is required to install Elm. Please install Node.js and npm first."
-        echo "On Ubuntu/Debian: sudo apt install nodejs npm"
-        echo "On Arch Linux: sudo pacman -S nodejs npm"
-        exit 1
-    fi
-fi
-
 # Create dist directory
 mkdir -p dist
 
-# Build Elm to temporary file
+# Build Elm to temporary file (use local elm from node_modules)
 echo "Compiling Elm..."
-elm make src/Main.elm --output=dist/main.tmp.js --optimize
+npx elm make src/Main.elm --output=dist/main.tmp.js --optimize
 
 # Minify JavaScript with SWC (Elm Guide config for optimal compression)
 echo "Minifying with SWC..."
 BEFORE_SIZE=$(wc -c < dist/main.tmp.js)
-npm install --silent --no-save @swc/core 2>/dev/null
 node minify.mjs dist/main.tmp.js dist/main.min.js
 mv dist/main.min.js dist/main.tmp.js
 AFTER_SIZE=$(wc -c < dist/main.tmp.js)
