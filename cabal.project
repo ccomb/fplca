@@ -1,0 +1,4 @@
+packages: .
+          ./petsc-hs
+
+allow-newer: true
