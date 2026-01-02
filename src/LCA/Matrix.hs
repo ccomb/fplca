@@ -240,7 +240,7 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
 
                         -- Explicitly consume PETSC_OPTIONS environment variables
                         kspSetFromOptions ksp
-                        pc <- kspGetPC ksp
+                        pc <- kspGetPc ksp
                         pcSetFromOptions pc
 
                         -- Debug: Report that options were applied
@@ -437,7 +437,7 @@ precomputeMatrixFactorization dbName techTriples n = do
 
         kspSetOperators ksp matMutable matMutable
         kspSetFromOptions ksp
-        pc <- kspGetPC ksp
+        pc <- kspGetPc ksp
         pcSetFromOptions pc
         kspSetInitialGuessNonzero ksp False
         kspSetUp ksp  -- This performs the actual factorization
