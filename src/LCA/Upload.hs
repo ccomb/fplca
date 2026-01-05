@@ -26,6 +26,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.ByteString.Lazy as BL
+import Data.Word (Word8)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, copyFile)
 import System.FilePath ((</>), takeExtension, takeFileName)
@@ -154,35 +155,40 @@ detectArchiveFormat filename =
        else if ".csv" `T.isSuffixOf` lower then PlainCSV
        else Zip  -- Default to ZIP for backwards compatibility
 
+-- | Magic bytes for archive format detection
+sevenZipMagic :: [Word8]
+sevenZipMagic = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]  -- 7z
+
+zipMagic :: [Word8]
+zipMagic = [0x50, 0x4B]  -- PK
+
+gzipMagic :: [Word8]
+gzipMagic = [0x1F, 0x8B]
+
+xzMagic :: [Word8]
+xzMagic = [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
+
+-- | Check if content starts with given magic bytes
+matchesMagic :: [Word8] -> BL.ByteString -> Bool
+matchesMagic magic content =
+    BL.unpack (BL.take (fromIntegral $ length magic) content) == magic
+
+-- | Check if first byte is printable ASCII (for plain text detection)
+isPrintableAscii :: BL.ByteString -> Bool
+isPrintableAscii content
+    | BL.null content = False
+    | otherwise = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
+
 -- | Detect archive format from file content using magic bytes
 -- This is more reliable than filename detection
 detectArchiveFormatFromContent :: BL.ByteString -> ArchiveFormat
-detectArchiveFormatFromContent content =
-    let bytes = BL.take 6 content
-        b0 = if BL.length bytes > 0 then BL.index bytes 0 else 0
-        b1 = if BL.length bytes > 1 then BL.index bytes 1 else 0
-        b2 = if BL.length bytes > 2 then BL.index bytes 2 else 0
-        b3 = if BL.length bytes > 3 then BL.index bytes 3 else 0
-        b4 = if BL.length bytes > 4 then BL.index bytes 4 else 0
-        b5 = if BL.length bytes > 5 then BL.index bytes 5 else 0
-    in
-        -- 7z: 37 7A BC AF 27 1C
-        if b0 == 0x37 && b1 == 0x7A && b2 == 0xBC && b3 == 0xAF && b4 == 0x27 && b5 == 0x1C
-            then SevenZ
-        -- ZIP: 50 4B (PK)
-        else if b0 == 0x50 && b1 == 0x4B
-            then Zip
-        -- gzip (tar.gz): 1F 8B
-        else if b0 == 0x1F && b1 == 0x8B
-            then TarGz
-        -- xz (tar.xz): FD 37 7A 58 5A 00
-        else if b0 == 0xFD && b1 == 0x37 && b2 == 0x7A && b3 == 0x58 && b4 == 0x5A && b5 == 0x00
-            then TarXz
-        -- Assume plain CSV if it starts with text-like content
-        else if b0 == 0x7B || b0 >= 0x20 && b0 < 0x7F  -- { or printable ASCII
-            then PlainCSV
-        -- Unknown - try ZIP as fallback
-        else Zip
+detectArchiveFormatFromContent content
+    | matchesMagic sevenZipMagic content = SevenZ
+    | matchesMagic zipMagic content      = Zip
+    | matchesMagic gzipMagic content     = TarGz
+    | matchesMagic xzMagic content       = TarXz
+    | isPrintableAscii content           = PlainCSV
+    | otherwise                          = Zip  -- Fallback
 
 -- | Extract archive using system tools
 extractArchive :: ArchiveFormat -> FilePath -> FilePath -> IO (Either Text ())
