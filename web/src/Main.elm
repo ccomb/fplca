@@ -1051,11 +1051,33 @@ update msg model =
                 needsRootRedirect =
                     model.currentDatabaseId == Nothing && model.currentPage == ActivitiesPage
 
-                redirectCmd =
+                -- Check if URL database needs activation (different from server's current)
+                needsUrlDbActivation =
+                    case model.currentDatabaseId of
+                        Just urlDb ->
+                            case dbList.current of
+                                Just currentDb ->
+                                    urlDb /= currentDb
+
+                                Nothing ->
+                                    True  -- No current db on server, need to activate URL db
+
+                        Nothing ->
+                            False
+
+                cmd =
                     if needsRootRedirect then
                         case dbList.current of
                             Just defaultDb ->
                                 Nav.replaceUrl model.key (routeToUrl (ActivitiesRoute { db = defaultDb, name = Nothing, limit = Just 20 }))
+
+                            Nothing ->
+                                Cmd.none
+
+                    else if needsUrlDbActivation then
+                        case model.currentDatabaseId of
+                            Just dbName ->
+                                activateDatabase dbName
 
                             Nothing ->
                                 Cmd.none
@@ -1066,6 +1088,7 @@ update msg model =
             ( { model
                 | databaseList = Just dbList
                 , loadingDatabases = False
+                , activatingDatabase = needsUrlDbActivation
                 , error = Nothing
                 , currentDatabaseId =
                     if model.currentDatabaseId == Nothing then
@@ -1074,7 +1097,7 @@ update msg model =
                     else
                         model.currentDatabaseId
               }
-            , redirectCmd
+            , cmd
             )
 
         DatabasesLoaded (Err error) ->
@@ -1188,19 +1211,23 @@ update msg model =
                 )
 
             else
+                -- Activation failed (e.g., database not loaded) - redirect to Databases page
                 ( { model
                     | activatingDatabase = False
-                    , error = Just response.message
+                    , loading = False
+                    , currentPage = DatabasesPage
                   }
-                , Cmd.none
+                , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
                 )
 
-        ActivateDatabaseResult (Err error) ->
+        ActivateDatabaseResult (Err _) ->
+            -- Network error - redirect to Databases page
             ( { model
                 | activatingDatabase = False
-                , error = Just (httpErrorToString error)
+                , loading = False
+                , currentPage = DatabasesPage
               }
-            , Cmd.none
+            , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
             )
 
         UploadViewMsg uploadMsg ->
