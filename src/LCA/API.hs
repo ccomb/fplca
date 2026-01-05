@@ -13,24 +13,19 @@ import LCA.Method.Mapping (mapMethodFlows, MatchStrategy(..), MappingStats(..), 
 import LCA.Method.Parser (parseMethodFile)
 import LCA.Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import LCA.SynonymDB (SynonymDB, emptySynonymDB)
-import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), DatabaseStatus(..), getCurrentDatabase, getCurrentDatabaseName, listDatabases, activateDatabase, loadDatabase, unloadDatabase, removeDatabase, addDatabase)
-import qualified LCA.Config
-import LCA.Config (DatabaseConfig(..))
-import LCA.Upload (UploadData(..), UploadResult(..), DatabaseFormat(..), ProgressEvent(..), handleUpload, slugify)
-import qualified LCA.UploadedDatabase as UploadedDB
+import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), getCurrentDatabase)
+import LCA.Upload (DatabaseFormat(..))
+import qualified LCA.API.DatabaseHandlers as DBHandlers
 import LCA.Query
 import qualified LCA.Service
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
-import System.Directory (listDirectory, doesFileExist)
-import Data.List (isPrefixOf)
+import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base64 as B64
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
@@ -131,13 +126,13 @@ lcaServer dbManager maxTreeDepth methodsDir =
         :<|> searchFlows
         :<|> searchActivitiesWithCount
         :<|> postLCIA
-        :<|> getDatabases
-        :<|> activateDatabaseHandler
-        :<|> getCurrentDatabaseHandler
-        :<|> loadDatabaseHandler
-        :<|> unloadDatabaseHandler
-        :<|> deleteDatabaseHandler
-        :<|> uploadDatabaseHandler
+        :<|> DBHandlers.getDatabases dbManager
+        :<|> DBHandlers.activateDatabaseHandler dbManager
+        :<|> DBHandlers.getCurrentDatabaseHandler dbManager
+        :<|> DBHandlers.loadDatabaseHandler dbManager
+        :<|> DBHandlers.unloadDatabaseHandler dbManager
+        :<|> DBHandlers.deleteDatabaseHandler dbManager
+        :<|> DBHandlers.uploadDatabaseHandler dbManager
   where
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
@@ -411,177 +406,6 @@ lcaServer dbManager maxTreeDepth methodsDir =
             -- This would implement LCIA computation with the provided method
             -- For now, return a placeholder
             return $ object ["status" .= ("not_implemented" :: Text), "processId" .= processId, "method" .= lciaMethod lciaReq]
-
-    -- Database management handlers
-    getDatabases :: Handler DatabaseListResponse
-    getDatabases = do
-        dbStatuses <- liftIO $ listDatabases dbManager
-        currentName <- liftIO $ getCurrentDatabaseName dbManager
-        let statusList = map convertDbStatus dbStatuses
-        return $ DatabaseListResponse statusList currentName
-
-    activateDatabaseHandler :: Text -> Handler ActivateResponse
-    activateDatabaseHandler dbName = do
-        result <- liftIO $ activateDatabase dbManager dbName
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right loadedDb -> do
-                let config = ldConfig loadedDb
-                    status = DatabaseStatusAPI
-                        { dsaName = LCA.Config.dcName config
-                        , dsaDisplayName = LCA.Config.dcDisplayName config
-                        , dsaDescription = LCA.Config.dcDescription config
-                        , dsaLoadAtStartup = LCA.Config.dcLoad config
-                        , dsaLoaded = True
-                        , dsaCached = True
-                        , dsaIsUploaded = "uploads/" `isPrefixOf` LCA.Config.dcPath config
-                        , dsaPath = T.pack (LCA.Config.dcPath config)
-                        }
-                return $ ActivateResponse True ("Activated database: " <> LCA.Config.dcDisplayName config) (Just status)
-
-    getCurrentDatabaseHandler :: Handler (Maybe DatabaseStatusAPI)
-    getCurrentDatabaseHandler = do
-        maybeLoaded <- liftIO $ getCurrentDatabase dbManager
-        case maybeLoaded of
-            Nothing -> return Nothing
-            Just loaded -> return $ Just $ convertLoadedDbToStatus loaded
-
-    -- Load a database on demand
-    loadDatabaseHandler :: Text -> Handler ActivateResponse
-    loadDatabaseHandler dbName = do
-        result <- liftIO $ loadDatabase dbManager dbName
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right loadedDb -> do
-                let config = ldConfig loadedDb
-                    status = DatabaseStatusAPI
-                        { dsaName = LCA.Config.dcName config
-                        , dsaDisplayName = LCA.Config.dcDisplayName config
-                        , dsaDescription = LCA.Config.dcDescription config
-                        , dsaLoadAtStartup = LCA.Config.dcLoad config
-                        , dsaLoaded = True
-                        , dsaCached = True
-                        , dsaIsUploaded = "uploads/" `isPrefixOf` LCA.Config.dcPath config
-                        , dsaPath = T.pack (LCA.Config.dcPath config)
-                        }
-                return $ ActivateResponse True ("Loaded database: " <> LCA.Config.dcDisplayName config) (Just status)
-
-    -- Unload a database from memory
-    unloadDatabaseHandler :: Text -> Handler ActivateResponse
-    unloadDatabaseHandler dbName = do
-        result <- liftIO $ unloadDatabase dbManager dbName
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right () -> return $ ActivateResponse True ("Unloaded database: " <> dbName) Nothing
-
-    -- Delete an uploaded database (move to trash)
-    deleteDatabaseHandler :: Text -> Handler ActivateResponse
-    deleteDatabaseHandler dbName = do
-        result <- liftIO $ removeDatabase dbManager dbName
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right () -> return $ ActivateResponse True ("Deleted database: " <> dbName) Nothing
-
-    -- Upload a new database
-    uploadDatabaseHandler :: UploadRequest -> Handler UploadResponse
-    uploadDatabaseHandler req = do
-        -- Decode base64 ZIP data
-        let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
-        case zipDataResult of
-            Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
-            Right zipBytes -> do
-                let uploadData = UploadData
-                        { udName = urName req
-                        , udDescription = urDescription req
-                        , udZipData = BSL.fromStrict zipBytes
-                        }
-                -- Handle the upload (extract, detect format)
-                result <- liftIO $ handleUpload uploadData (\_ -> return ())
-
-                case result of
-                    Left err ->
-                        return $ UploadResponse False err Nothing Nothing
-                    Right uploadResult -> do
-                        -- Get upload directory path
-                        uploadsDir <- liftIO $ UploadedDB.getUploadsDir
-                        let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
-
-                        -- Create meta.toml for self-describing upload
-                        let meta = UploadedDB.UploadMeta
-                                { UploadedDB.umVersion = 1
-                                , UploadedDB.umDisplayName = urName req
-                                , UploadedDB.umDescription = urDescription req
-                                , UploadedDB.umFormat = uploadFormatToMeta (urFormat uploadResult)
-                                , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
-                                }
-                        liftIO $ UploadedDB.writeUploadMeta uploadDir meta
-
-                        -- Create database config for in-memory manager
-                        let dbConfig = DatabaseConfig
-                                { dcName = urSlug uploadResult
-                                , dcDisplayName = urName req
-                                , dcPath = urPath uploadResult
-                                , dcDescription = urDescription req
-                                , dcLoad = False  -- Don't auto-load
-                                , dcDefault = False
-                                , dcActivityAliases = M.empty
-                                }
-
-                        -- Add to manager
-                        liftIO $ addDatabase dbManager dbConfig
-
-                        return $ UploadResponse True
-                            "Database uploaded successfully"
-                            (Just $ urSlug uploadResult)
-                            (Just $ formatToText $ urFormat uploadResult)
-
-    -- Convert Upload.DatabaseFormat to UploadedDB.DatabaseFormat
-    uploadFormatToMeta :: DatabaseFormat -> UploadedDB.DatabaseFormat
-    uploadFormatToMeta SimaProCSV = UploadedDB.SimaProCSV
-    uploadFormatToMeta EcoSpold1 = UploadedDB.EcoSpold1
-    uploadFormatToMeta EcoSpold2 = UploadedDB.EcoSpold2
-    uploadFormatToMeta UnknownFormat = UploadedDB.UnknownFormat
-
-    -- Make a path relative to a base directory
-    makeRelative :: FilePath -> FilePath -> FilePath
-    makeRelative base path
-        | base `isPrefixOf` path = drop (length base + 1) path  -- +1 for separator
-        | otherwise = path
-
-    -- Helper to convert DatabaseFormat to Text
-    formatToText :: DatabaseFormat -> Text
-    formatToText SimaProCSV = "simapro-csv"
-    formatToText EcoSpold1 = "ecospold1"
-    formatToText EcoSpold2 = "ecospold2"
-    formatToText UnknownFormat = "unknown"
-
-    -- Helper to convert DatabaseManager.DatabaseStatus to API.DatabaseStatusAPI
-    convertDbStatus :: DatabaseStatus -> DatabaseStatusAPI
-    convertDbStatus ds = DatabaseStatusAPI
-        { dsaName = dsName ds
-        , dsaDisplayName = dsDisplayName ds
-        , dsaDescription = dsDescription ds
-        , dsaLoadAtStartup = dsLoadAtStartup ds
-        , dsaLoaded = dsLoaded ds
-        , dsaCached = dsCached ds
-        , dsaIsUploaded = dsIsUploaded ds
-        , dsaPath = dsPath ds
-        }
-
-    -- Helper to convert LoadedDatabase to DatabaseStatusAPI
-    convertLoadedDbToStatus :: LoadedDatabase -> DatabaseStatusAPI
-    convertLoadedDbToStatus loaded =
-        let config = ldConfig loaded
-        in DatabaseStatusAPI
-            { dsaName = LCA.Config.dcName config
-            , dsaDisplayName = LCA.Config.dcDisplayName config
-            , dsaDescription = LCA.Config.dcDescription config
-            , dsaLoadAtStartup = LCA.Config.dcLoad config
-            , dsaLoaded = True
-            , dsaCached = True
-            , dsaIsUploaded = "uploads/" `isPrefixOf` LCA.Config.dcPath config
-            , dsaPath = T.pack (LCA.Config.dcPath config)
-            }
 
 -- | Helper function to apply pagination to search results
 paginateResults :: [a] -> Maybe Int -> Maybe Int -> IO (SearchResults a)

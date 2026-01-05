@@ -75,6 +75,7 @@ executable fplca
                      , LCA.Progress
                      , LCA.Query
                      , LCA.API
+                     , LCA.API.DatabaseHandlers
                      , LCA.Auth
                      , LCA.Service
                      , LCA.UnitConversion
