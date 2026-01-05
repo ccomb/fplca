@@ -644,22 +644,26 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
                                             return Nothing
                                         else do
                                             -- Decompress and decode
-                                            db <- case Zstd.decompress payload of
-                                                Zstd.Skip -> error "Zstd decompression failed: Skip"
-                                                Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                                            case Zstd.decompress payload of
+                                                Zstd.Skip -> do
+                                                    reportError "Zstd decompression failed: Skip"
+                                                    return Nothing
+                                                Zstd.Error err -> do
+                                                    reportError $ "Zstd decompression failed: " ++ show err
+                                                    return Nothing
                                                 Zstd.Decompress decompressed -> do
                                                     let !db = decode (BSL.fromStrict decompressed)
                                                     -- Force full evaluation to prevent lazy thunk buildup
-                                                    evaluate (force db)
-                                            reportCacheOperation $
-                                                "Matrix cache loaded: "
-                                                    ++ show (dbActivityCount db)
-                                                    ++ " activities, "
-                                                    ++ show (VU.length $ dbTechnosphereTriples db)
-                                                    ++ " tech entries, "
-                                                    ++ show (VU.length $ dbBiosphereTriples db)
-                                                    ++ " bio entries (decompressed)"
-                                            return (Just db)
+                                                    db' <- evaluate (force db)
+                                                    reportCacheOperation $
+                                                        "Matrix cache loaded: "
+                                                            ++ show (dbActivityCount db')
+                                                            ++ " activities, "
+                                                            ++ show (VU.length $ dbTechnosphereTriples db')
+                                                            ++ " tech entries, "
+                                                            ++ show (VU.length $ dbBiosphereTriples db')
+                                                            ++ " bio entries (decompressed)"
+                                                    return (Just db')
                 )
                 ( \(e :: SomeException) -> do
                     reportError $ "Cache load failed: " ++ show e
@@ -727,22 +731,26 @@ loadCompressedCacheFile zstdFile = do
                                     return Nothing
                                 else do
                                     -- Decompress and decode the payload
-                                    db <- case Zstd.decompress compressed of
-                                        Zstd.Skip -> error "Zstd decompression failed: Skip"
-                                        Zstd.Error err -> error $ "Zstd decompression failed: " ++ show err
+                                    case Zstd.decompress compressed of
+                                        Zstd.Skip -> do
+                                            reportError "Zstd decompression failed: Skip"
+                                            return Nothing
+                                        Zstd.Error err -> do
+                                            reportError $ "Zstd decompression failed: " ++ show err
+                                            return Nothing
                                         Zstd.Decompress decompressed -> do
                                             let !db = decode (BSL.fromStrict decompressed)
                                             -- Force full evaluation to prevent lazy thunk buildup
-                                            evaluate (force db)
-                                    reportCacheOperation $
-                                        "Matrix cache loaded: "
-                                            ++ show (dbActivityCount db)
-                                            ++ " activities, "
-                                            ++ show (VU.length $ dbTechnosphereTriples db)
-                                            ++ " tech entries, "
-                                            ++ show (VU.length $ dbBiosphereTriples db)
-                                            ++ " bio entries (decompressed)"
-                                    return (Just db)
+                                            db' <- evaluate (force db)
+                                            reportCacheOperation $
+                                                "Matrix cache loaded: "
+                                                    ++ show (dbActivityCount db')
+                                                    ++ " activities, "
+                                                    ++ show (VU.length $ dbTechnosphereTriples db')
+                                                    ++ " tech entries, "
+                                                    ++ show (VU.length $ dbBiosphereTriples db')
+                                                    ++ " bio entries (decompressed)"
+                                            return (Just db')
         )
         ( \(e :: SomeException) -> do
             reportError $ "Compressed cache load failed: " ++ show e
