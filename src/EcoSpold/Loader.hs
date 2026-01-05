@@ -57,8 +57,9 @@ import GHC.Fingerprint (Fingerprint (..))
 import LCA.Progress
 import LCA.Types
 import qualified SimaPro.Parser as SimaPro
-import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
-import System.FilePath (takeBaseName, takeExtension, (</>))
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
+import Data.List (isPrefixOf)
+import System.FilePath (takeBaseName, takeExtension, splitDirectories, (</>))
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
@@ -535,14 +536,35 @@ Generate filename for matrix cache.
 Matrix caches store pre-computed sparse matrices (technosphere A,
 biosphere B) enabling direct LCA solving without matrix construction.
 
-Uses simple filename pattern: "fplca.cache.{dbName}.bin"
+Cache location depends on database source:
+- Uploaded databases (path starts with "uploads/"): cache in the upload directory
+- Configured databases: cache in "cache/" subdirectory
 
 Cache invalidation is handled by a schema signature stored inside
 the cache file, not by the filename.
 -}
 generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
-generateMatrixCacheFilename dbName _path = do
-    return $ "fplca.cache." ++ T.unpack dbName ++ ".bin"
+generateMatrixCacheFilename dbName dataPath = do
+    let cacheFilename = "fplca.cache." ++ T.unpack dbName ++ ".bin"
+    -- Check if this is an uploaded database
+    if "uploads/" `isPrefixOf` dataPath || "uploads" `isPrefixOf` dataPath
+        then do
+            -- For uploads, extract the upload directory (first two components: uploads/<slug>)
+            let uploadDir = getUploadDir dataPath
+            return $ uploadDir </> cacheFilename
+        else do
+            -- For configured databases, use cache/ subdirectory
+            createDirectoryIfMissing True "cache"
+            return $ "cache" </> cacheFilename
+  where
+    -- Extract upload directory from data path
+    -- e.g., "uploads/ecoinvent-3-11/datasets" -> "uploads/ecoinvent-3-11"
+    getUploadDir :: FilePath -> FilePath
+    getUploadDir p =
+        let parts = splitDirectories p
+        in case parts of
+            ("uploads" : slug : _) -> "uploads" </> slug
+            _ -> p  -- Fallback to original path
 
 {- |
 Validate cache file integrity before attempting to decode.

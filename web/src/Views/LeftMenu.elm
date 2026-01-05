@@ -15,33 +15,31 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
     nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
-            [ -- Database name as header (clickable to go to Databases page)
-              case currentDatabaseName of
-                Just dbName ->
-                    button
-                        [ class "database-header"
-                        , onClick (NavigateTo DatabasesPage)
-                        , style "background" "transparent"
-                        , style "border" "none"
-                        , style "color" "#000"
-                        , style "padding" "1.25rem 1rem"
-                        , style "margin" "0"
-                        , style "cursor" "pointer"
-                        , style "font-size" "1.4rem"
-                        , style "font-weight" "bold"
-                        , style "text-align" "left"
-                        , style "width" "100%"
-                        , style "display" "flex"
-                        , style "align-items" "center"
-                        , style "gap" "0.5rem"
-                        , title ("Go to Databases page - " ++ dbName)
-                        ]
-                        [ span [ style "overflow" "hidden", style "text-overflow" "ellipsis", style "white-space" "nowrap" ] [ text dbName ]
-                        ]
+            [ -- Database name as header (not clickable)
+              div
+                [ class "database-header"
+                , style "padding" "1.25rem 1rem"
+                , style "font-size" "1.4rem"
+                , style "font-weight" "bold"
+                , style "text-align" "center"
+                ]
+                [ case currentDatabaseName of
+                    Just dbName ->
+                        span [ style "overflow" "hidden", style "text-overflow" "ellipsis", style "white-space" "nowrap", style "display" "block" ] [ text dbName ]
 
-                Nothing ->
-                    div [ class "database-header", style "padding" "1rem", style "color" "#888" ]
-                        [ text "Loading..." ]
+                    Nothing ->
+                        span [ style "color" "#888" ]
+                            [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
+                            , text "·"
+                            , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
+                            , text "·LCA"
+                            ]
+                ]
+            , -- DATABASES section
+              div [ class "menu-items" ]
+                [ menuLabel "Databases"
+                , menuItem currentPage DatabasesPage "fas fa-database" "Databases" False
+                ]
             , -- SEARCH section
               div [ class "menu-items" ]
                 [ menuLabel "Search"
@@ -79,7 +77,11 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             , style "text-align" "center"
             , style "border-top" "1px solid #ddd"
             ]
-            [ text "fpLCA" ]
+            [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
+            , text "·"
+            , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
+            , text "·LCA"
+            ]
         ]
 
 

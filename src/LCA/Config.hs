@@ -17,7 +17,7 @@ module LCA.Config
     , defaultConfig
       -- * Utilities
     , getDefaultDatabase
-    , getActiveDatabases
+    , getLoadableDatabases
     ) where
 
 import Data.Text (Text)
@@ -47,11 +47,11 @@ data ServerConfig = ServerConfig
 
 -- | Database configuration
 data DatabaseConfig = DatabaseConfig
-    { dcName        :: !Text           -- Internal identifier (URL-safe)
+    { dcName        :: !Text           -- Internal identifier (URL-safe slug)
     , dcDisplayName :: !Text           -- Human-readable name for UI
     , dcPath        :: !FilePath
     , dcDescription :: !(Maybe Text)
-    , dcActive      :: !Bool
+    , dcLoad        :: !Bool           -- Load at startup (renamed from dcActive)
     , dcDefault     :: !Bool
     , dcActivityAliases :: !(Map Text Text)  -- Alias name → actual activity name
     } deriving (Show, Eq, Generic)
@@ -113,9 +113,9 @@ instance DecodeTOML DatabaseConfig where
             Nothing -> pure dcName  -- Fall back to name if no displayName
         dcPath <- getField "path"
         dcDescription <- getFieldOpt "description"
-        dcActive <- getFieldOpt "active" >>= \case
-            Just a  -> pure a
-            Nothing -> pure True  -- Default to active
+        dcLoad <- getFieldOpt "load" >>= \case
+            Just l  -> pure l
+            Nothing -> pure False  -- Default to NOT loading at startup
         dcDefault <- getFieldOpt "default" >>= \case
             Just d  -> pure d
             Nothing -> pure False
@@ -167,10 +167,8 @@ validateConfig cfg = do
     when (length defaultDbs > 1) $
         Left $ "Multiple databases marked as default: " <> T.intercalate ", " (map dcName defaultDbs)
 
-    -- Check for empty active databases
-    let activeDbs = filter dcActive (cfgDatabases cfg)
-    when (null activeDbs && not (null $ cfgDatabases cfg)) $
-        Left "No active databases configured"
+    -- Note: we no longer require any databases to have load=true
+    -- The user can load databases on demand via the UI
 
     Right cfg
 
@@ -183,15 +181,15 @@ findDuplicates xs = go [] [] xs
         | x `elem` seen = go seen (if x `elem` dups then dups else x:dups) rest
         | otherwise = go (x:seen) dups rest
 
--- | Get the default database (or first active if none marked default)
+-- | Get the default database (or first loadable if none marked default)
 getDefaultDatabase :: Config -> Maybe DatabaseConfig
 getDefaultDatabase cfg =
-    case filter dcDefault (getActiveDatabases cfg) of
+    case filter dcDefault (getLoadableDatabases cfg) of
         (db:_) -> Just db
-        []     -> case getActiveDatabases cfg of
+        []     -> case getLoadableDatabases cfg of
             (db:_) -> Just db
             []     -> Nothing
 
--- | Get all active databases
-getActiveDatabases :: Config -> [DatabaseConfig]
-getActiveDatabases = filter dcActive . cfgDatabases
+-- | Get all databases configured to load at startup
+getLoadableDatabases :: Config -> [DatabaseConfig]
+getLoadableDatabases = filter dcLoad . cfgDatabases

@@ -39,6 +39,7 @@ executable fplca
                      , xml-types
                      , servant-server
                      , servant
+                     , servant-multipart
                      , warp
                      , aeson
                      , aeson-pretty
@@ -62,6 +63,9 @@ executable fplca
                      , base64-bytestring
                      , file-embed
                      , toml-reader
+                     , filelock
+                     , temporary
+                     , process
 
   other-modules:     LCA.Types
                      , LCA.Types.API
@@ -78,7 +82,10 @@ executable fplca
                      , LCA.CLI.Parser
                      , LCA.CLI.Command
                      , LCA.Config
+                     , LCA.ConfigWriter
                      , LCA.DatabaseManager
+                     , LCA.Upload
+                     , LCA.UploadedDatabase
                      , EcoSpold.Common
                      , EcoSpold.Parser
                      , EcoSpold.Parser1

@@ -1,42 +1,55 @@
 dist-newstyle
-*.cache.*.bin
 weeder.toml
 .hie
 web/dist/
 web/elm-stuff/
-.aicodeprep-gui
 web/main.js
 SAMPLE*
 EF-v3.1/
 *\.bin
 uv.lock
 
-# Debug and profiling files
-debug/
-debug_ecoinvent/
-__pycache__/
-*.prof
-*.hp
-*.aux
-*.eventlog
-*.ps
-*.pyc
-*.pyo
-
-# Cache and temporary files
-*.zst
-fullcode.txt
-cabal.project.local~
-
 # External dependencies (downloaded by build script)
+petsc
 petsc/
 petsc-*/
+slepc
 slepc/
 slepc-*/
 petsc-hs/
+*.tar.gz
 
 # Documentation and notes (except README)
-MEMORY.md
 *.txt
 scripts/
 node_modules/
+
+# Generated frontend
+static/
+
+# Local configuration
+cabal.project.local
+fplca.toml
+fplca.toml.lock
+
+run*.sh
+
+# Data directories
+uploads/
+cache/
+
+# docs
+*.md
+!README.md
+!CHANGELOG.md
+
+# temporary python stuff
+pyproject.toml
+
+# hidden files
+.*
+!.gitignore
+!.python-version
+
+# debug stuff
+debug/

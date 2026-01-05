@@ -124,7 +124,19 @@ serverOptionsParser = do
                     <> metavar "PASSWORD"
                     <> help "Password for HTTP Basic Auth (or set FPLCA_PASSWORD env var)"
                 )
+    serverLoadDbs <-
+        optional $
+            option
+                dbListReader
+                ( long "load"
+                    <> metavar "DB1,DB2,..."
+                    <> help "Comma-separated list of databases to load at startup (overrides config load=true)"
+                )
     pure ServerOptions{..}
+
+-- | Reader for comma-separated list of database names
+dbListReader :: ReadM [Text]
+dbListReader = T.splitOn (T.pack ",") . T.pack <$> str
 
 -- | Activity command parser (basic info only now)
 activityParser :: Parser Command

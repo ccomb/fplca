@@ -76,61 +76,67 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
       reportError $ "Failed to load config: " ++ T.unpack err
       exitFailure
     Right config -> do
+      -- Apply --load override if specified
+      let effectiveConfig = case serverLoadDbs serverOpts of
+            Nothing -> config
+            Just dbNames -> config { cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config) }
+
       -- Load embedded synonym database
       reportProgress Info "Loading embedded synonym database"
       synonymDB <- loadEmbeddedSynonymDB
 
-      -- Initialize DatabaseManager (pre-loads ALL active databases)
+      -- Initialize DatabaseManager (pre-loads databases with load=true)
       reportProgress Info "Initializing multi-database manager..."
-      dbManager <- initDatabaseManager config synonymDB (noCache (globalOptions cliConfig))
+      dbManager <- initDatabaseManager effectiveConfig synonymDB (noCache (globalOptions cliConfig)) (Just cfgFile)
 
-      -- Verify at least one database loaded
+      -- Log database status (allow starting with no databases for BYOL mode)
       maybeLoaded <- getCurrentDatabase dbManager
       case maybeLoaded of
-        Nothing -> do
-          reportError "No database loaded from config"
-          exitFailure
-        Just _ -> do
-          let port = serverPort serverOpts
+        Nothing ->
+          reportProgress Info "No database currently active - upload or load one via the web interface"
+        Just loadedDb ->
+          reportProgress Info $ "Current database: " ++ T.unpack (dcName (ldConfig loadedDb))
 
-          -- Install SIGPIPE handler
-          reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
-          _ <- installHandler sigPIPE Ignore Nothing
+      let port = serverPort serverOpts
 
-          -- Initialize PETSc/MPI context (already done per-database in DatabaseManager)
-          reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
-          initializePetscForServer
+      -- Install SIGPIPE handler
+      reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
+      _ <- installHandler sigPIPE Ignore Nothing
 
-          -- Get password from CLI, config, or env var
-          password <- case serverPassword serverOpts of
-            Just pwd -> return (Just pwd)
-            Nothing -> case scPassword (cfgServer config) of
-              Just pwd -> return (Just $ T.unpack pwd)
-              Nothing -> lookupEnv "FPLCA_PASSWORD"
+      -- Initialize PETSc/MPI context (already done per-database in DatabaseManager)
+      reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
+      initializePetscForServer
 
-          -- Get methods directory from config or CLI
-          let resolvedMethodsDir = case methodsDir (globalOptions cliConfig) of
-                Just dir -> Just dir
-                Nothing -> case cfgMethods config of
-                  (m:_) -> Just (mcPath m)  -- Use first active method
-                  [] -> Nothing
+      -- Get password from CLI, config, or env var
+      password <- case serverPassword serverOpts of
+        Just pwd -> return (Just pwd)
+        Nothing -> case scPassword (cfgServer config) of
+          Just pwd -> return (Just $ T.unpack pwd)
+          Nothing -> lookupEnv "FPLCA_PASSWORD"
 
-          reportProgress Info $ "Starting API server on port " ++ show port
-          reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
-          case resolvedMethodsDir of
-            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
-            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
-          case password of
-            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
-            Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
-          reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
+      -- Get methods directory from config or CLI
+      let resolvedMethodsDir = case methodsDir (globalOptions cliConfig) of
+            Just dir -> Just dir
+            Nothing -> case cfgMethods config of
+              (m:_) -> Just (mcPath m)  -- Use first active method
+              [] -> Nothing
 
-          -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-          let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir
-              finalApp = case password of
-                Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
-                Nothing -> baseApp
-          run port finalApp
+      reportProgress Info $ "Starting API server on port " ++ show port
+      reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+      case resolvedMethodsDir of
+        Just dir -> reportProgress Info $ "Methods directory: " ++ dir
+        Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
+      case password of
+        Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+        Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
+      reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
+
+      -- Create app with DatabaseManager - API handlers fetch current DB dynamically
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir
+          finalApp = case password of
+            Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
+            Nothing -> baseApp
+      run port finalApp
 
 -- | Run config load-only mode (load all databases from config and exit)
 -- Useful for cache generation, validation, and benchmarking
@@ -147,14 +153,20 @@ runConfigLoadOnly cliConfig cfgFile = do
       reportProgress Info "Loading embedded synonym database"
       synonymDB <- loadEmbeddedSynonymDB
 
-      -- Initialize DatabaseManager (pre-loads ALL active databases)
+      -- Initialize DatabaseManager (pre-loads databases with load=true)
       reportProgress Info "Loading all databases from config..."
-      _dbManager <- initDatabaseManager config synonymDB (noCache (globalOptions cliConfig))
+      _dbManager <- initDatabaseManager config synonymDB (noCache (globalOptions cliConfig)) (Just cfgFile)
 
       -- Report success
-      let activeCount = length $ filter dcActive (cfgDatabases config)
-      reportProgress Info $ "No command specified - " ++ show activeCount ++ " database(s) loaded and cached"
+      let loadCount = length $ filter dcLoad (cfgDatabases config)
+      reportProgress Info $ "No command specified - " ++ show loadCount ++ " database(s) loaded and cached"
       reportProgress Info "Cache files ready for deployment"
+
+-- | Override load flag for databases based on --load CLI option
+-- If a database name is in the list, set dcLoad=True, otherwise False
+overrideLoad :: [T.Text] -> DatabaseConfig -> DatabaseConfig
+overrideLoad dbNames dbConfig =
+    dbConfig { dcLoad = dcName dbConfig `elem` dbNames }
 
 -- | Run in single-database mode (original --data behavior)
 runSingleDatabaseMode :: CLIConfig -> IO ()

@@ -8,8 +8,9 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
 import Json.Decode
+import Json.Encode
 import Models.Activity exposing (ActivityInfo, ActivitySummary, ActivityTree, SearchResults, activityInfoDecoder, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
-import Models.Database exposing (ActivateResponse, DatabaseList, activateResponseDecoder, databaseListDecoder)
+import Models.Database exposing (ActivateResponse, DatabaseList, UploadResponse, activateResponseDecoder, databaseListDecoder, uploadResponseDecoder)
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
@@ -26,6 +27,7 @@ import Views.InventoryView as InventoryView
 import Views.LCIAView as LCIAView
 import Views.LeftMenu as LeftMenu
 import Views.TreeView as TreeView
+import Views.UploadView as UploadView
 
 
 main : Program () Model Msg
@@ -72,6 +74,7 @@ type alias Model =
     , databaseList : Maybe DatabaseList -- Available databases
     , loadingDatabases : Bool -- Loading database list
     , activatingDatabase : Bool -- Activating a database
+    , uploadModel : UploadView.Model -- Upload page model
     }
 
 
@@ -113,6 +116,9 @@ type Msg
     | DatabasesLoaded (Result Http.Error DatabaseList)
     | DatabasesViewMsg DatabasesView.Msg
     | ActivateDatabaseResult (Result Http.Error ActivateResponse)
+      -- Upload messages
+    | UploadViewMsg UploadView.Msg
+    | UploadDatabaseResult (Result Http.Error UploadResponse)
 
 
 
@@ -132,6 +138,7 @@ routeParser =
         [ -- Root route - will redirect to default database
           Parser.map RootRoute top
           -- Global routes (no database prefix)
+        , Parser.map UploadRoute (Parser.s "databases" </> Parser.s "upload")
         , Parser.map DatabasesRoute (Parser.s "databases")
           -- Database-scoped routes: /db/{dbName}/...
         , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit })
@@ -193,6 +200,9 @@ routeToPage route =
         DatabasesRoute ->
             DatabasesPage
 
+        UploadRoute ->
+            UploadPage
+
         NotFoundRoute ->
             ActivitiesPage
 
@@ -236,6 +246,9 @@ routeToDatabase route =
             Just db
 
         DatabasesRoute ->
+            Nothing
+
+        UploadRoute ->
             Nothing
 
         NotFoundRoute ->
@@ -341,6 +354,13 @@ init _ url key =
                     , searchQuery = ""
                     }
 
+                UploadRoute ->
+                    { activityId = defaultActivityId
+                    , shouldLoad = False
+                    , loadType = "none"
+                    , searchQuery = ""
+                    }
+
                 NotFoundRoute ->
                     { activityId = defaultActivityId
                     , shouldLoad = False
@@ -386,6 +406,7 @@ init _ url key =
             , databaseList = Nothing
             , loadingDatabases = routeConfig.loadType == "databases" || routeConfig.loadType == "redirect"
             , activatingDatabase = False
+            , uploadModel = UploadView.init
             }
 
         cmd =
@@ -744,49 +765,75 @@ update msg model =
 
         NavigateToPage page ->
             let
-                db =
-                    getCurrentDbName model
+                maybeDb =
+                    case model.currentDatabaseId of
+                        Just db ->
+                            Just db
 
+                        Nothing ->
+                            model.databaseList |> Maybe.andThen .current
+
+                -- Pages that don't require a database
                 route =
                     case page of
-                        ActivitiesPage ->
-                            let
-                                queryName =
-                                    if String.isEmpty model.activitiesSearchQuery then
-                                        Nothing
-                                    else
-                                        Just model.activitiesSearchQuery
-                            in
-                            ActivitiesRoute { db = db, name = queryName, limit = Just 20 }
-
-                        UpstreamPage ->
-                            ActivityUpstreamRoute db model.currentActivityId
-
-                        EmissionsPage ->
-                            ActivityEmissionsRoute db model.currentActivityId
-
-                        ResourcesPage ->
-                            ActivityResourcesRoute db model.currentActivityId
-
-                        ProductsPage ->
-                            ActivityProductsRoute db model.currentActivityId
-
-                        TreePage ->
-                            ActivityTreeRoute db model.currentActivityId
-
-                        InventoryPage ->
-                            ActivityInventoryRoute db model.currentActivityId
-
-                        GraphPage ->
-                            ActivityGraphRoute db model.currentActivityId
-
-                        LCIAPage ->
-                            ActivityLCIARoute db model.currentActivityId
-
                         DatabasesPage ->
-                            DatabasesRoute
+                            Just DatabasesRoute
+
+                        UploadPage ->
+                            Just UploadRoute
+
+                        -- All other pages require a database
+                        _ ->
+                            case maybeDb of
+                                Just db ->
+                                    case page of
+                                        ActivitiesPage ->
+                                            let
+                                                queryName =
+                                                    if String.isEmpty model.activitiesSearchQuery then
+                                                        Nothing
+                                                    else
+                                                        Just model.activitiesSearchQuery
+                                            in
+                                            Just (ActivitiesRoute { db = db, name = queryName, limit = Just 20 })
+
+                                        UpstreamPage ->
+                                            Just (ActivityUpstreamRoute db model.currentActivityId)
+
+                                        EmissionsPage ->
+                                            Just (ActivityEmissionsRoute db model.currentActivityId)
+
+                                        ResourcesPage ->
+                                            Just (ActivityResourcesRoute db model.currentActivityId)
+
+                                        ProductsPage ->
+                                            Just (ActivityProductsRoute db model.currentActivityId)
+
+                                        TreePage ->
+                                            Just (ActivityTreeRoute db model.currentActivityId)
+
+                                        InventoryPage ->
+                                            Just (ActivityInventoryRoute db model.currentActivityId)
+
+                                        GraphPage ->
+                                            Just (ActivityGraphRoute db model.currentActivityId)
+
+                                        LCIAPage ->
+                                            Just (ActivityLCIARoute db model.currentActivityId)
+
+                                        _ ->
+                                            Nothing
+
+                                Nothing ->
+                                    -- No database loaded, go to databases page
+                                    Just DatabasesRoute
             in
-            ( model, Nav.pushUrl model.key (routeToUrl route) )
+            case route of
+                Just r ->
+                    ( model, Nav.pushUrl model.key (routeToUrl r) )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         UpdateSearchQuery query ->
             let
@@ -1045,6 +1092,21 @@ update msg model =
                     , activateDatabase dbName
                     )
 
+                DatabasesView.LoadDatabase dbName ->
+                    ( { model | activatingDatabase = True, error = Nothing }
+                    , loadDatabaseCmd dbName
+                    )
+
+                DatabasesView.UnloadDatabase dbName ->
+                    ( { model | activatingDatabase = True, error = Nothing }
+                    , unloadDatabaseCmd dbName
+                    )
+
+                DatabasesView.DeleteDatabase dbName ->
+                    ( { model | activatingDatabase = True, error = Nothing }
+                    , deleteDatabaseCmd dbName
+                    )
+
         ActivateDatabaseResult (Ok response) ->
             if response.success then
                 let
@@ -1102,6 +1164,9 @@ update msg model =
 
                             DatabasesPage ->
                                 Cmd.none
+
+                            UploadPage ->
+                                Cmd.none
                     -- Set searchLoading if we're re-running search
                     isSearching =
                         model.currentPage == ActivitiesPage && not (String.isEmpty model.activitiesSearchQuery)
@@ -1134,6 +1199,64 @@ update msg model =
             ( { model
                 | activatingDatabase = False
                 , error = Just (httpErrorToString error)
+              }
+            , Cmd.none
+            )
+
+        UploadViewMsg uploadMsg ->
+            let
+                ( newUploadModel, uploadCmd ) =
+                    UploadView.update uploadMsg model.uploadModel
+            in
+            -- Handle UploadDatabase by triggering API call
+            case uploadMsg of
+                UploadView.UploadDatabase ->
+                    case model.uploadModel.fileContent of
+                        Just content ->
+                            ( { model | uploadModel = newUploadModel }
+                            , uploadDatabase model.uploadModel.name model.uploadModel.description content
+                            )
+
+                        Nothing ->
+                            ( { model | uploadModel = newUploadModel }
+                            , Cmd.none
+                            )
+
+                _ ->
+                    ( { model | uploadModel = newUploadModel }
+                    , Cmd.map UploadViewMsg uploadCmd
+                    )
+
+        UploadDatabaseResult (Ok response) ->
+            let
+                currentUpload =
+                    model.uploadModel
+            in
+            if response.success then
+                -- Upload succeeded - redirect to databases page
+                ( { model
+                    | uploadModel = { currentUpload | uploading = False, success = Just response.message }
+                  }
+                , Cmd.batch
+                    [ loadDatabases
+                    , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
+                    ]
+                )
+
+            else
+                ( { model
+                    | uploadModel = { currentUpload | uploading = False, error = Just response.message }
+                  }
+                , Cmd.none
+                )
+
+        UploadDatabaseResult (Err error) ->
+            let
+                currentUpload =
+                    model.uploadModel
+            in
+            ( { model
+                | uploadModel = { currentUpload | uploading = False, error = Just (httpErrorToString error) }
               }
             , Cmd.none
             )
@@ -1213,6 +1336,9 @@ update msg model =
                                 { activityId = processId, needsActivity = True, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                             DatabasesRoute ->
+                                { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
+
+                            UploadRoute ->
                                 { activityId = model.currentActivityId, needsActivity = False, searchQuery = model.activitiesSearchQuery, needsRedirect = False }
 
                             NotFoundRoute ->
@@ -1416,6 +1542,9 @@ routeToUrl route =
         DatabasesRoute ->
             "/databases"
 
+        UploadRoute ->
+            "/databases/upload"
+
         NotFoundRoute ->
             "/"
 
@@ -1561,6 +1690,9 @@ view model =
                             (model.loadingDatabases || model.activatingDatabase)
                             model.error
                         )
+
+                UploadPage ->
+                    Html.map UploadViewMsg (UploadView.view model.uploadModel)
             ]
         ]
 
@@ -2064,6 +2196,59 @@ activateDatabase dbName =
         { url = "/api/v1/databases/" ++ dbName ++ "/activate"
         , body = Http.emptyBody
         , expect = Http.expectJson ActivateDatabaseResult activateResponseDecoder
+        }
+
+
+loadDatabaseCmd : String -> Cmd Msg
+loadDatabaseCmd dbName =
+    Http.post
+        { url = "/api/v1/databases/" ++ dbName ++ "/load"
+        , body = Http.emptyBody
+        , expect = Http.expectJson ActivateDatabaseResult activateResponseDecoder
+        }
+
+
+unloadDatabaseCmd : String -> Cmd Msg
+unloadDatabaseCmd dbName =
+    Http.post
+        { url = "/api/v1/databases/" ++ dbName ++ "/unload"
+        , body = Http.emptyBody
+        , expect = Http.expectJson ActivateDatabaseResult activateResponseDecoder
+        }
+
+
+deleteDatabaseCmd : String -> Cmd Msg
+deleteDatabaseCmd dbName =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/v1/databases/" ++ dbName
+        , body = Http.emptyBody
+        , expect = Http.expectJson ActivateDatabaseResult activateResponseDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+uploadDatabase : String -> String -> String -> Cmd Msg
+uploadDatabase name description fileContent =
+    Http.post
+        { url = "/api/v1/databases/upload"
+        , body =
+            Http.jsonBody
+                (Json.Encode.object
+                    [ ( "urName", Json.Encode.string name )
+                    , ( "urDescription"
+                      , if String.isEmpty description then
+                            Json.Encode.null
+
+                        else
+                            Json.Encode.string description
+                      )
+                    , ( "urFileData", Json.Encode.string fileContent )
+                    ]
+                )
+        , expect = Http.expectJson UploadDatabaseResult uploadResponseDecoder
         }
 
 

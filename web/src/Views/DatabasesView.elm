@@ -2,20 +2,38 @@ module Views.DatabasesView exposing (Msg(..), viewDatabasesPage)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick)
+import Html.Events exposing (onClick, stopPropagationOn)
+import Json.Decode as Decode
 import Models.Database exposing (DatabaseList, DatabaseStatus)
 
 
 type Msg
     = ActivateDatabase String
+    | LoadDatabase String
+    | UnloadDatabase String
+    | DeleteDatabase String
 
 
 viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Html Msg
 viewDatabasesPage maybeDatabases loading error =
     div [ class "databases-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ div [ class "box", style "margin-bottom" "0", style "flex-shrink" "0" ]
-            [ h2 [ class "title is-3" ] [ text "Databases" ]
-            , p [ class "subtitle" ] [ text "Select a database to load and search activities" ]
+            [ div [ class "level" ]
+                [ div [ class "level-left" ]
+                    [ div [ class "level-item" ]
+                        [ h2 [ class "title is-3", style "margin-bottom" "0" ] [ text "Databases" ]
+                        ]
+                    ]
+                , div [ class "level-right" ]
+                    [ div [ class "level-item" ]
+                        [ a [ href "/databases/upload", class "button is-primary" ]
+                            [ span [ class "icon" ] [ i [ class "fas fa-plus" ] [] ]
+                            , span [] [ text "Add database" ]
+                            ]
+                        ]
+                    ]
+                ]
+            , p [ class "subtitle" ] [ text "Manage your LCA databases" ]
             , case error of
                 Just err ->
                     div [ class "notification is-danger" ]
@@ -59,6 +77,7 @@ viewDatabasesList dbList =
                         , th [ style "background-color" "white" ] [ text "Name" ]
                         , th [ style "background-color" "white" ] [ text "Description" ]
                         , th [ style "background-color" "white", style "width" "120px" ] [ text "Status" ]
+                        , th [ style "background-color" "white", style "width" "200px" ] [ text "Actions" ]
                         ]
                     ]
                 , tbody []
@@ -72,67 +91,114 @@ viewDatabaseRow : Maybe String -> DatabaseStatus -> Html Msg
 viewDatabaseRow currentDb db =
     let
         isLoaded =
+            db.loaded
+
+        isCurrent =
             currentDb == Just db.name
 
-        isInactive =
-            not db.active
+        -- Permission checks
+        canLoad =
+            not isLoaded
 
-        statusTag =
+        canUnload =
+            isLoaded  -- Can always close if loaded (even if current)
+
+        canDelete =
+            db.isUploaded && not isLoaded
+
+        statusText =
             if isLoaded then
-                span [ class "tag is-success" ] [ text "Loaded" ]
-
-            else if isInactive then
-                span [ class "tag is-light" ] [ text "Inactive" ]
+                span [ class "has-text-success has-text-weight-semibold" ] [ text "Open" ]
 
             else if db.cached then
-                span [ class "tag is-info" ] [ text "Cached" ]
+                span [ class "has-text-info" ] [ text "Cached" ]
 
             else
-                span [ class "tag is-warning" ] [ text "Not cached" ]
+                span [ class "has-text-grey" ] [ text "Closed" ]
 
-        checkboxIcon =
-            if isLoaded then
-                i [ class "fas fa-check-square has-text-success", style "font-size" "1.2rem" ] []
+        sourceText =
+            if db.isUploaded then
+                span [ class "has-text-warning-dark", style "margin-left" "0.5rem" ] [ text "(uploaded)" ]
 
             else
-                i [ class "far fa-square has-text-grey-light", style "font-size" "1.2rem" ] []
+                text ""
+
+        activeIndicator =
+            if isCurrent then
+                span [ class "has-text-success", style "font-size" "1.2rem" ] [ text "●" ]
+
+            else
+                span [ class "has-text-grey-lighter", style "font-size" "1.2rem" ] [ text "○" ]
 
         rowStyle =
-            if isLoaded then
+            if isCurrent then
                 [ style "background-color" "#effaf5" ]
-
-            else if isInactive then
-                [ style "opacity" "0.6" ]
 
             else
                 []
 
         rowAttrs =
-            if isInactive then
-                [ style "cursor" "not-allowed"
-                , title "Database is inactive (set active=true in config to load at startup)"
-                ]
-                    ++ rowStyle
-
-            else
+            if isLoaded then
                 [ class "is-clickable"
                 , style "cursor" "pointer"
                 , onClick (ActivateDatabase db.name)
                 ]
                     ++ rowStyle
+
+            else
+                rowStyle
     in
     tr rowAttrs
         [ td [ style "text-align" "center", style "vertical-align" "middle" ]
-            [ checkboxIcon ]
+            [ activeIndicator ]
         , td []
-            [ if isLoaded then
+            [ if isCurrent then
                 strong [] [ text db.displayName ]
 
               else
                 text db.displayName
+            , sourceText
             ]
         , td [ class "has-text-grey" ]
             [ text (db.description |> Maybe.withDefault "") ]
         , td []
-            [ statusTag ]
+            [ statusText ]
+        , td []
+            [ viewActionButtons db canLoad canUnload canDelete ]
+        ]
+
+
+viewActionButtons : DatabaseStatus -> Bool -> Bool -> Bool -> Html Msg
+viewActionButtons db canLoad canUnload canDelete =
+    div [ class "buttons are-small" ]
+        [ if canLoad then
+            button
+                [ class "button is-primary is-small"
+                , stopPropagationOn "click" (Decode.succeed ( LoadDatabase db.name, True ))
+                ]
+                [ span [ class "icon is-small" ] [ i [ class "fas fa-folder-open" ] [] ]
+                , span [] [ text "Open" ]
+                ]
+
+          else if canUnload then
+            button
+                [ class "button is-warning is-small"
+                , stopPropagationOn "click" (Decode.succeed ( UnloadDatabase db.name, True ))
+                ]
+                [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
+                , span [] [ text "Close" ]
+                ]
+
+          else
+            text ""
+        , if canDelete then
+            button
+                [ class "button is-danger is-small is-outlined"
+                , stopPropagationOn "click" (Decode.succeed ( DeleteDatabase db.name, True ))
+                ]
+                [ span [ class "icon is-small" ] [ i [ class "fas fa-trash" ] [] ]
+                ]
+
+          else
+            text ""
         ]

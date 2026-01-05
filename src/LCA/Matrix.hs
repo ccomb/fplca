@@ -42,6 +42,7 @@ module LCA.Matrix (
     precomputeMatrixFactorization,
     addFactorizationToDatabase,
     solveSparseLinearSystemWithFactorization,
+    clearCachedKspSolver,
 ) where
 
 import LCA.Progress
@@ -103,6 +104,19 @@ petscGlobalInit = do
     unless initialized $ do
         petscInit0  -- Initialize PETSc/MPI without automatic finalization
         writeIORef petscInitialized True
+
+-- | Clear cached KSP solver for a database (call when unloading)
+-- Destroys the PETSc KSP solver and matrix to release memory
+clearCachedKspSolver :: Text -> IO ()
+clearCachedKspSolver dbName = do
+    modifyMVar_ cachedKspSolver $ \cache -> do
+        case M.lookup dbName cache of
+            Just (ksp, mat, _) -> do
+                -- Destroy PETSc objects to release C-level memory
+                kspDestroy ksp
+                petscMatrixDestroy mat
+                return $ M.delete dbName cache
+            Nothing -> return cache
 
 -- | Aggregate duplicate matrix entries by summing values for same (i,j) coordinates
 aggregateMatrixEntries :: [(Int, Int, Double)] -> [(Int, Int, Double)]

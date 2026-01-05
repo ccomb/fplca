@@ -2,9 +2,11 @@ module Models.Database exposing
     ( ActivateResponse
     , DatabaseList
     , DatabaseStatus
+    , UploadResponse
     , activateResponseDecoder
     , databaseListDecoder
     , databaseStatusDecoder
+    , uploadResponseDecoder
     )
 
 import Json.Decode as Decode exposing (Decoder)
@@ -17,9 +19,10 @@ type alias DatabaseStatus =
     { name : String
     , displayName : String
     , description : Maybe String
-    , active : Bool
+    , loadAtStartup : Bool
     , loaded : Bool
     , cached : Bool
+    , isUploaded : Bool
     , path : String
     }
 
@@ -49,9 +52,10 @@ databaseStatusDecoder =
         |> required "dsaName" Decode.string
         |> required "dsaDisplayName" Decode.string
         |> optional "dsaDescription" (Decode.nullable Decode.string) Nothing
-        |> required "dsaActive" Decode.bool
+        |> required "dsaLoadAtStartup" Decode.bool
         |> required "dsaLoaded" Decode.bool
         |> required "dsaCached" Decode.bool
+        |> required "dsaIsUploaded" Decode.bool
         |> required "dsaPath" Decode.string
 
 
@@ -72,3 +76,24 @@ activateResponseDecoder =
         |> required "arSuccess" Decode.bool
         |> required "arMessage" Decode.string
         |> optional "arDatabase" (Decode.nullable databaseStatusDecoder) Nothing
+
+
+{-| Response from uploading a database
+-}
+type alias UploadResponse =
+    { success : Bool
+    , message : String
+    , slug : Maybe String
+    , format : Maybe String
+    }
+
+
+{-| JSON decoder for UploadResponse
+-}
+uploadResponseDecoder : Decoder UploadResponse
+uploadResponseDecoder =
+    Decode.succeed UploadResponse
+        |> required "uprSuccess" Decode.bool
+        |> required "uprMessage" Decode.string
+        |> optional "uprSlug" (Decode.nullable Decode.string) Nothing
+        |> optional "uprFormat" (Decode.nullable Decode.string) Nothing

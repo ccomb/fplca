@@ -46,8 +46,9 @@ data Command =
 
 -- | Server-specific options
 data ServerOptions = ServerOptions
-  { serverPort :: Int           -- Server port (--port)
+  { serverPort :: Int               -- Server port (--port)
   , serverPassword :: Maybe String  -- Password for HTTP Basic Auth (--password or FPLCA_PASSWORD)
+  , serverLoadDbs :: Maybe [Text]   -- Databases to load at startup (--load db1,db2)
   } deriving (Eq, Show, Generic)
 
 -- | Activity sub-commands (kept for flow activities only now)

@@ -251,13 +251,14 @@ data DatabaseListResponse = DatabaseListResponse
 
 -- | Database status for API responses
 data DatabaseStatusAPI = DatabaseStatusAPI
-    { dsaName        :: Text           -- Internal identifier
-    , dsaDisplayName :: Text           -- Human-readable name for UI
-    , dsaDescription :: Maybe Text
-    , dsaActive      :: Bool           -- Configured as active
-    , dsaLoaded      :: Bool           -- Currently in memory
-    , dsaCached      :: Bool           -- Cache file exists
-    , dsaPath        :: Text           -- Data path
+    { dsaName          :: Text           -- Internal identifier (slug)
+    , dsaDisplayName   :: Text           -- Human-readable name for UI
+    , dsaDescription   :: Maybe Text
+    , dsaLoadAtStartup :: Bool           -- Configured to load at startup
+    , dsaLoaded        :: Bool           -- Currently in memory
+    , dsaCached        :: Bool           -- Cache file exists
+    , dsaIsUploaded    :: Bool           -- True if path starts with "uploads/"
+    , dsaPath          :: Text           -- Data path
     }
     deriving (Generic)
 
@@ -266,6 +267,23 @@ data ActivateResponse = ActivateResponse
     { arSuccess  :: Bool
     , arMessage  :: Text
     , arDatabase :: Maybe DatabaseStatusAPI
+    }
+    deriving (Generic)
+
+-- | Request for database upload (base64-encoded ZIP)
+data UploadRequest = UploadRequest
+    { urName        :: Text        -- Display name for the database
+    , urDescription :: Maybe Text  -- Optional description
+    , urFileData    :: Text        -- Base64-encoded ZIP file content
+    }
+    deriving (Generic)
+
+-- | Response for database upload
+data UploadResponse = UploadResponse
+    { uprSuccess :: Bool
+    , uprMessage :: Text
+    , uprSlug    :: Maybe Text    -- Generated slug (if successful)
+    , uprFormat  :: Maybe Text    -- Detected format (if successful)
     }
     deriving (Generic)
 
@@ -402,6 +420,10 @@ instance FromJSON LCIARequest
 instance ToJSON DatabaseListResponse
 instance ToJSON DatabaseStatusAPI
 instance ToJSON ActivateResponse
+instance ToJSON UploadRequest
+instance ToJSON UploadResponse
 instance FromJSON DatabaseListResponse
 instance FromJSON DatabaseStatusAPI
 instance FromJSON ActivateResponse
+instance FromJSON UploadRequest
+instance FromJSON UploadResponse

@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module LCA.DatabaseManager
     ( -- * Types
@@ -17,13 +18,22 @@ module LCA.DatabaseManager
     , getCurrentDatabase
     , getCurrentDatabaseName
     , listDatabases
+      -- * Load/Unload
+    , loadDatabase
+    , unloadDatabase
+    , addDatabase
+    , removeDatabase
       -- * Internal (for Main.hs to load database)
     , loadDatabaseFromConfig
     ) where
 
 import Control.Concurrent.STM
-import Control.Monad (forM, forM_)
+import Control.Exception (SomeException)
+import qualified Control.Exception
+import Control.Monad (forM, forM_, when)
+import System.Mem (performGC)
 import Data.Aeson (ToJSON(..), FromJSON(..), (.=), (.:), (.:?))
+import Data.Aeson.Types (Parser)
 import qualified Data.Aeson as A
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -31,17 +41,24 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
-import System.Directory (doesFileExist, doesDirectoryExist)
+import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
+import System.FilePath (takeExtension)
+import Data.Char (toLower)
+import Data.List (isPrefixOf)
 
 import LCA.Config
-import LCA.Matrix (precomputeMatrixFactorization, addFactorizationToDatabase)
+import LCA.Matrix (precomputeMatrixFactorization, addFactorizationToDatabase, clearCachedKspSolver)
 import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import LCA.Progress (reportProgress, reportError, ProgressLevel(..))
 import LCA.Query (buildDatabaseWithMatrices)
 import LCA.SynonymDB (SynonymDB)
-import LCA.Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields)
+import LCA.Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference)
 import qualified EcoSpold.Loader as Loader
-import System.FilePath (takeExtension, dropExtension)
+import qualified LCA.Upload as Upload
+import qualified LCA.UploadedDatabase as UploadedDB
+import qualified SimaPro.Parser as SimaPro
+import System.FilePath (takeExtension, dropExtension, (</>))
+import System.Directory (removeDirectoryRecursive)
 
 -- | A fully loaded database with solver ready for queries
 data LoadedDatabase = LoadedDatabase
@@ -52,12 +69,13 @@ data LoadedDatabase = LoadedDatabase
 
 -- | Status of a database for API responses
 data DatabaseStatus = DatabaseStatus
-    { dsName        :: !Text           -- Internal identifier
+    { dsName        :: !Text           -- Internal identifier (slug)
     , dsDisplayName :: !Text           -- Human-readable name for UI
     , dsDescription :: !(Maybe Text)
-    , dsActive      :: !Bool           -- Configured as active
+    , dsLoadAtStartup :: !Bool         -- Configured to load at startup
     , dsLoaded      :: !Bool           -- Currently in memory
-    , dsCached      :: !Bool           -- Cache file exists (kept for API compat)
+    , dsCached      :: !Bool           -- Cache file exists
+    , dsIsUploaded  :: !Bool           -- True if path starts with "uploads/"
     , dsPath        :: !Text           -- Data path
     } deriving (Show, Eq, Generic)
 
@@ -66,9 +84,10 @@ instance ToJSON DatabaseStatus where
         [ "dsName" .= dsName
         , "dsDisplayName" .= dsDisplayName
         , "dsDescription" .= dsDescription
-        , "dsActive" .= dsActive
+        , "dsLoadAtStartup" .= dsLoadAtStartup
         , "dsLoaded" .= dsLoaded
         , "dsCached" .= dsCached
+        , "dsIsUploaded" .= dsIsUploaded
         , "dsPath" .= dsPath
         ]
 
@@ -77,13 +96,14 @@ instance FromJSON DatabaseStatus where
         <$> v .: "dsName"
         <*> v .: "dsDisplayName"
         <*> v .:? "dsDescription"
-        <*> v .: "dsActive"
+        <*> v .: "dsLoadAtStartup"
         <*> v .: "dsLoaded"
         <*> v .: "dsCached"
+        <*> v .: "dsIsUploaded"
         <*> v .: "dsPath"
 
 -- | The database manager maintains state for multiple databases
--- All active databases are pre-loaded at startup for instant switching
+-- Databases with load=true are pre-loaded at startup for instant switching
 data DatabaseManager = DatabaseManager
     { dmLoadedDbs     :: !(TVar (Map Text LoadedDatabase))  -- All loaded databases
     , dmCurrentName   :: !(TVar (Maybe Text))               -- Name of current database
@@ -93,11 +113,19 @@ data DatabaseManager = DatabaseManager
     }
 
 -- | Initialize database manager from config
--- Pre-loads ALL active databases at startup for instant switching
-initDatabaseManager :: Config -> SynonymDB -> Bool -> IO DatabaseManager
-initDatabaseManager config synonymDB noCache = do
-    let activeDbs = getActiveDatabases config
-        allDbs = cfgDatabases config
+-- Pre-loads databases with load=true at startup
+-- Also discovers uploaded databases from uploads/ directory
+initDatabaseManager :: Config -> SynonymDB -> Bool -> Maybe FilePath -> IO DatabaseManager
+initDatabaseManager config synonymDB noCache _configPath = do
+    -- Get configured databases
+    let configuredDbs = cfgDatabases config
+
+    -- Discover uploaded databases from uploads/ directory (self-describing with meta.toml)
+    uploadedDbs <- discoverUploadedDatabases
+
+    -- Merge configured + uploaded
+    let allDbs = configuredDbs ++ uploadedDbs
+        loadableDbs = filter dcLoad allDbs
 
     -- Create TVars
     loadedDbsVar <- newTVarIO M.empty
@@ -112,9 +140,9 @@ initDatabaseManager config synonymDB noCache = do
             , dmNoCache = noCache
             }
 
-    -- Pre-load ALL active databases at startup
-    reportProgress Info $ "Pre-loading " ++ show (length activeDbs) ++ " active database(s)..."
-    forM_ activeDbs $ \dbConfig -> do
+    -- Pre-load databases with load=true at startup
+    reportProgress Info $ "Pre-loading " ++ show (length loadableDbs) ++ " database(s) with load=true..."
+    forM_ loadableDbs $ \dbConfig -> do
         reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
         result <- loadDatabaseFromConfig dbConfig synonymDB noCache
         case result of
@@ -124,18 +152,13 @@ initDatabaseManager config synonymDB noCache = do
             Left err ->
                 reportError $ "  ✗ Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
 
-    -- Set default as current
-    case getDefaultDatabase config of
-        Just defaultDb -> do
-            atomically $ writeTVar currentNameVar (Just (dcName defaultDb))
-            reportProgress Info $ "Default database set to: " <> T.unpack (dcDisplayName defaultDb)
-        Nothing -> do
-            -- If no default specified, use first active database
-            case activeDbs of
-                (first:_) -> do
-                    atomically $ writeTVar currentNameVar (Just (dcName first))
-                    reportProgress Info $ "Default database set to: " <> T.unpack (dcDisplayName first)
-                [] -> reportProgress Info "No active databases configured"
+    -- Set current database to first actually loaded database (not just configured as default)
+    loadedDbs <- readTVarIO loadedDbsVar
+    case M.keys loadedDbs of
+        (firstLoaded:_) -> do
+            atomically $ writeTVar currentNameVar (Just firstLoaded)
+            reportProgress Info $ "Current database set to: " <> T.unpack firstLoaded
+        [] -> reportProgress Info "No databases loaded at startup"
 
     -- Report final status
     loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
@@ -143,8 +166,29 @@ initDatabaseManager config synonymDB noCache = do
 
     return manager
 
+-- | Discover uploaded databases from uploads/ directory
+-- Reads meta.toml from each subdirectory and converts to DatabaseConfig
+discoverUploadedDatabases :: IO [DatabaseConfig]
+discoverUploadedDatabases = do
+    uploads <- UploadedDB.discoverUploadedDatabases
+    forM uploads $ \(slug, dirPath, meta) -> do
+        reportProgress Info $ "Discovered uploaded database: " <> T.unpack slug
+        return $ uploadMetaToConfig slug dirPath meta
+
+-- | Convert UploadMeta to DatabaseConfig
+uploadMetaToConfig :: Text -> FilePath -> UploadedDB.UploadMeta -> DatabaseConfig
+uploadMetaToConfig slug dirPath meta = DatabaseConfig
+    { dcName = slug
+    , dcDisplayName = UploadedDB.umDisplayName meta
+    , dcPath = dirPath </> UploadedDB.umDataPath meta  -- Full path to data
+    , dcDescription = UploadedDB.umDescription meta
+    , dcLoad = False  -- Never auto-load uploads
+    , dcDefault = False
+    , dcActivityAliases = M.empty
+    }
+
 -- | Initialize a single-database manager (for --data mode)
--- Creates a config with one active database and initializes it
+-- Creates a config with one database and initializes it
 initSingleDatabaseManager :: FilePath -> SynonymDB -> Bool -> IO DatabaseManager
 initSingleDatabaseManager dataPath synonymDB noCache = do
     let dbConfig = DatabaseConfig
@@ -152,7 +196,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , dcDisplayName = T.pack dataPath  -- Use path as display name
             , dcPath = dataPath
             , dcDescription = Just "Single database mode (--data)"
-            , dcActive = True
+            , dcLoad = True
             , dcDefault = True
             , dcActivityAliases = M.empty
             }
@@ -163,7 +207,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , cfgMethods = []
             }
 
-    initDatabaseManager config synonymDB noCache
+    initDatabaseManager config synonymDB noCache Nothing
 
 -- | Activate a database by name (instant switch - already loaded)
 activateDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -171,14 +215,14 @@ activateDatabase manager dbName = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> do
-            -- Check if it's configured but not loaded (inactive)
+            -- Check if it's configured but not loaded
             availableDbs <- readTVarIO (dmAvailableDbs manager)
             case M.lookup dbName availableDbs of
                 Nothing -> return $ Left $ "Database not found: " <> dbName
-                Just cfg | not (dcActive cfg) ->
-                    return $ Left $ "Database is inactive (set active=true in config to load at startup): " <> dbName
+                Just cfg | not (dcLoad cfg) ->
+                    return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
                 Just _ ->
-                    return $ Left $ "Database not loaded (this shouldn't happen for active databases): " <> dbName
+                    return $ Left $ "Database not loaded (load=true but not in memory): " <> dbName
         Just loaded -> do
             -- Instant switch - just update current name
             atomically $ writeTVar (dmCurrentName manager) (Just dbName)
@@ -211,14 +255,14 @@ listDatabases manager = do
 
     forM (M.toList availableDbs) $ \(name, config) -> do
         let isLoaded = M.member name loadedDbs
-            isCurrent = currentName == Just name
         return DatabaseStatus
             { dsName = name
             , dsDisplayName = dcDisplayName config
             , dsDescription = dcDescription config
-            , dsActive = dcActive config
+            , dsLoadAtStartup = dcLoad config
             , dsLoaded = isLoaded
             , dsCached = isLoaded  -- If loaded, we have it cached in memory
+            , dsIsUploaded = "uploads/" `isPrefixOf` dcPath config
             , dsPath = T.pack (dcPath config)
             }
 
@@ -272,6 +316,57 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
                         , ldConfig = dbConfig
                         }
 
+-- | Detected format of a database directory
+data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatUnknown
+    deriving (Show, Eq)
+
+-- | Detect the format of files in a directory
+detectDirectoryFormat :: FilePath -> IO DirectoryFormat
+detectDirectoryFormat path = do
+    isDir <- doesDirectoryExist path
+    isFile <- doesFileExist path
+    if isFile
+        then do
+            -- Direct file: check extension
+            let ext = map toLower (takeExtension path)
+            return $ case ext of
+                ".csv" -> FormatCSV
+                ".spold" -> FormatSpold
+                ".xml" -> FormatXML
+                _ -> FormatUnknown
+        else if isDir
+            then do
+                files <- listDirectory path
+                let extensions = map (map toLower . takeExtension) files
+                -- Check for different formats (in order of preference)
+                if any (== ".spold") extensions
+                    then return FormatSpold
+                    else if any (== ".csv") extensions
+                        then return FormatCSV
+                        else if any (== ".xml") extensions
+                            then return FormatXML
+                            else return FormatUnknown
+            else return FormatUnknown
+
+-- | Find CSV files in a directory
+findCSVFiles :: FilePath -> IO [FilePath]
+findCSVFiles path = do
+    files <- listDirectory path
+    let csvFiles = filter (\f -> map toLower (takeExtension f) == ".csv") files
+    return $ map (path </>) csvFiles
+
+-- | Build activity map from list of activities
+-- Creates (activityUUID, productUUID) -> Activity mapping
+buildActivityMap :: [Activity] -> M.Map (UUID, UUID) Activity
+buildActivityMap activities = M.fromList
+    [ ((activityUUID, productUUID), activity)
+    | activity <- activities
+    , let activityUUID = SimaPro.generateActivityUUID (activityName activity <> "@" <> activityLocation activity)
+    , let refExchanges = filter exchangeIsReference (exchanges activity)
+    , refExchange <- take 1 refExchanges  -- Take first reference product
+    , let productUUID = exchangeFlowId refExchange
+    ]
+
 -- | Load raw database from path (file or directory)
 -- Aliases are used for EcoSpold1 supplier linking
 loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
@@ -284,26 +379,171 @@ loadDatabaseRaw dbName aliases path noCache = do
             case mDb of
                 Just db -> return $ Right db
                 Nothing -> return $ Left $ "Failed to load cache file: " <> T.pack path
-        else if noCache
-            then do
-                -- No caching: load and build from scratch
-                simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
-                !db <- buildDatabaseWithMatrices
-                    (sdbActivities simpleDb)
-                    (sdbFlows simpleDb)
-                    (sdbUnits simpleDb)
-                return $ Right db
-            else do
-                -- Try to load from cache, build if missing
-                mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
-                case mCachedDb of
-                    Just db -> return $ Right db
-                    Nothing -> do
-                        -- Build and cache (with aliases applied)
-                        simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
-                        !db <- buildDatabaseWithMatrices
-                            (sdbActivities simpleDb)
-                            (sdbFlows simpleDb)
-                            (sdbUnits simpleDb)
-                        Loader.saveCachedDatabaseWithMatrices dbName path db
-                        return $ Right db
+        else do
+            -- Check what format the directory contains
+            format <- detectDirectoryFormat path
+            case format of
+                FormatCSV -> do
+                    -- Determine the CSV file path (direct file or find in directory)
+                    isFileCheck <- doesFileExist path
+                    csvFile <- if isFileCheck
+                        then return path
+                        else do
+                            csvFiles <- findCSVFiles path
+                            case csvFiles of
+                                [] -> error $ "No CSV files found in: " ++ path
+                                (f:_) -> return f
+                    -- Try to load from cache first (same as EcoSpold)
+                    if noCache
+                        then do
+                            -- No caching: parse CSV directly
+                            reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
+                            (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                            reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+                            let activityMap = buildActivityMap activities
+                            !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                            return $ Right db
+                        else do
+                            -- Try cache first
+                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
+                            case mCachedDb of
+                                Just db -> return $ Right db
+                                Nothing -> do
+                                    -- Parse SimaPro CSV
+                                    reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
+                                    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                                    reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+                                    let activityMap = buildActivityMap activities
+                                    !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                                    -- Save to cache for next time
+                                    Loader.saveCachedDatabaseWithMatrices dbName path db
+                                    return $ Right db
+                FormatUnknown ->
+                    return $ Left $ "No supported database files found in: " <> T.pack path <>
+                                   ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv)"
+                -- FormatSpold and FormatXML use the same loader (handles both formats)
+                _ ->
+                    if noCache
+                        then do
+                            -- No caching: load and build from scratch
+                            simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                            !db <- buildDatabaseWithMatrices
+                                (sdbActivities simpleDb)
+                                (sdbFlows simpleDb)
+                                (sdbUnits simpleDb)
+                            return $ Right db
+                        else do
+                            -- Try to load from cache, build if missing
+                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
+                            case mCachedDb of
+                                Just db -> return $ Right db
+                                Nothing -> do
+                                    -- Build and cache (with aliases applied)
+                                    simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                                    !db <- buildDatabaseWithMatrices
+                                        (sdbActivities simpleDb)
+                                        (sdbFlows simpleDb)
+                                        (sdbUnits simpleDb)
+                                    Loader.saveCachedDatabaseWithMatrices dbName path db
+                                    return $ Right db
+
+-- | Load a database on demand (for databases not loaded at startup)
+loadDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
+loadDatabase manager dbName = do
+    -- Check if already loaded
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    case M.lookup dbName loadedDbs of
+        Just loaded -> return $ Right loaded
+        Nothing -> do
+            -- Check if it's configured
+            availableDbs <- readTVarIO (dmAvailableDbs manager)
+            case M.lookup dbName availableDbs of
+                Nothing -> return $ Left $ "Database not found: " <> dbName
+                Just dbConfig -> do
+                    reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
+                    result <- loadDatabaseFromConfig dbConfig (dmSynonymDB manager) (dmNoCache manager)
+                    case result of
+                        Left err -> return $ Left err
+                        Right loaded -> do
+                            atomically $ modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+                            reportProgress Info $ "  ✓ Loaded: " <> T.unpack (dcDisplayName dbConfig)
+                            return $ Right loaded
+
+-- | Unload a database from memory (keeps config for reloading)
+unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
+unloadDatabase manager dbName = do
+    currentName <- readTVarIO (dmCurrentName manager)
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+
+    case M.lookup dbName loadedDbs of
+        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Just _ -> do
+            -- If unloading the current database, clear the current pointer
+            when (currentName == Just dbName) $
+                atomically $ writeTVar (dmCurrentName manager) Nothing
+
+            -- Remove from loaded databases
+            atomically $ modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
+
+            -- Clear the cached KSP solver to release PETSc memory
+            clearCachedKspSolver dbName
+
+            -- Force garbage collection to release memory
+            performGC
+
+            reportProgress Info $ "Unloaded database: " <> T.unpack dbName
+            return $ Right ()
+
+-- | Add a new database config to the manager (without loading)
+addDatabase :: DatabaseManager -> DatabaseConfig -> IO ()
+addDatabase manager dbConfig = do
+    atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert (dcName dbConfig) dbConfig)
+    reportProgress Info $ "Added database config: " <> T.unpack (dcDisplayName dbConfig)
+
+-- | Remove a database from the manager
+-- Fails if database is loaded or is the current database
+removeDatabase :: DatabaseManager -> Text -> IO (Either Text ())
+removeDatabase manager dbName = do
+    currentName <- readTVarIO (dmCurrentName manager)
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+
+    case M.lookup dbName availableDbs of
+        Nothing -> return $ Left $ "Database not found: " <> dbName
+        Just dbConfig -> do
+            -- Check if it's an uploaded database (only uploaded can be deleted)
+            if not ("uploads/" `isPrefixOf` dcPath dbConfig)
+                then return $ Left $ "Cannot delete configured database. Edit fplca.toml to remove it."
+                else if M.member dbName loadedDbs
+                    then return $ Left $ "Cannot delete loaded database. Close it first."
+                    else if currentName == Just dbName
+                        then return $ Left $ "Cannot delete current database. Activate another database first."
+                        else do
+                            -- Get the upload directory (uploads/<slug>/)
+                            uploadsDir <- UploadedDB.getUploadsDir
+                            let uploadDir = uploadsDir </> T.unpack dbName
+                            pathExists <- doesDirectoryExist uploadDir
+                            if pathExists
+                                then do
+                                    -- Delete the database directory immediately
+                                    result <- try $ removeDirectoryRecursive uploadDir
+                                    case result of
+                                        Left (e :: SomeException) ->
+                                            return $ Left $ "Failed to delete: " <> T.pack (show e)
+                                        Right () -> do
+                                            reportProgress Info $ "Deleted: " <> uploadDir
+                                            removeFromMemory manager dbName
+                                else do
+                                    -- Directory already missing, just remove from memory
+                                    reportProgress Info $ "Directory already missing: " <> uploadDir
+                                    removeFromMemory manager dbName
+  where
+    try :: IO a -> IO (Either SomeException a)
+    try = Control.Exception.try
+
+-- | Helper to remove database from in-memory maps only
+removeFromMemory :: DatabaseManager -> Text -> IO (Either Text ())
+removeFromMemory manager dbName = do
+    atomically $ modifyTVar' (dmAvailableDbs manager) (M.delete dbName)
+    reportProgress Info $ "Removed database: " <> T.unpack dbName
+    return $ Right ()
