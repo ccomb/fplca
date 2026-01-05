@@ -278,10 +278,13 @@ loadFromDirectory dataDirectory disableCache =
   if disableCache
     then do
       reportProgress Info "Loading activities with flow deduplication (caching disabled)"
-      simpleDb <- loadAllSpoldsWithFlows dataDirectory
-      reportProgress Info "Building indexes and pre-computing matrices (no caching)"
-      !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
-      return db
+      loadResult <- loadAllSpoldsWithFlows dataDirectory
+      case loadResult of
+        Left err -> error $ T.unpack err  -- CLI can still use error for fatal errors
+        Right simpleDb -> do
+          reportProgress Info "Building indexes and pre-computing matrices (no caching)"
+          !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+          return db
     else do
       reportCacheOperation "Checking for cached Database with matrices"
       let cliDbName = T.pack "default"
@@ -292,14 +295,16 @@ loadFromDirectory dataDirectory disableCache =
           return db
         Nothing -> do
           reportCacheOperation "No matrix cache found, parsing EcoSpold XML files"
-          simpleDb <- loadAllSpoldsWithFlows dataDirectory
+          loadResult <- loadAllSpoldsWithFlows dataDirectory
+          case loadResult of
+            Left err -> error $ T.unpack err  -- CLI can still use error for fatal errors
+            Right simpleDb -> do
+              reportProgress Info "Building indexes and pre-computing matrices for efficient queries"
+              !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
 
-          reportProgress Info "Building indexes and pre-computing matrices for efficient queries"
-          !db <- buildDatabaseWithMatrices (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
-
-          reportCacheOperation "Saving Database with matrices to cache for next time"
-          saveCachedDatabaseWithMatrices cliDbName dataDirectory db
-          return db
+              reportCacheOperation "Saving Database with matrices to cache for next time"
+              saveCachedDatabaseWithMatrices cliDbName dataDirectory db
+              return db
 
 
 -- | Report active configuration

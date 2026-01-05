@@ -426,12 +426,15 @@ loadDatabaseRaw dbName aliases path noCache = do
                     if noCache
                         then do
                             -- No caching: load and build from scratch
-                            simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
-                            !db <- buildDatabaseWithMatrices
-                                (sdbActivities simpleDb)
-                                (sdbFlows simpleDb)
-                                (sdbUnits simpleDb)
-                            return $ Right db
+                            loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                            case loadResult of
+                                Left err -> return $ Left err
+                                Right simpleDb -> do
+                                    !db <- buildDatabaseWithMatrices
+                                        (sdbActivities simpleDb)
+                                        (sdbFlows simpleDb)
+                                        (sdbUnits simpleDb)
+                                    return $ Right db
                         else do
                             -- Try to load from cache, build if missing
                             mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
@@ -439,13 +442,16 @@ loadDatabaseRaw dbName aliases path noCache = do
                                 Just db -> return $ Right db
                                 Nothing -> do
                                     -- Build and cache (with aliases applied)
-                                    simpleDb <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
-                                    !db <- buildDatabaseWithMatrices
-                                        (sdbActivities simpleDb)
-                                        (sdbFlows simpleDb)
-                                        (sdbUnits simpleDb)
-                                    Loader.saveCachedDatabaseWithMatrices dbName path db
-                                    return $ Right db
+                                    loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                                    case loadResult of
+                                        Left err -> return $ Left err
+                                        Right simpleDb -> do
+                                            !db <- buildDatabaseWithMatrices
+                                                (sdbActivities simpleDb)
+                                                (sdbFlows simpleDb)
+                                                (sdbUnits simpleDb)
+                                            Loader.saveCachedDatabaseWithMatrices dbName path db
+                                            return $ Right db
 
 -- | Load a database on demand (for databases not loaded at startup)
 loadDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)

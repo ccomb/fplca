@@ -260,13 +260,13 @@ Performance characteristics:
 
 Used when no cache exists or caching is disabled.
 -}
-loadAllSpoldsWithFlows :: FilePath -> IO SimpleDatabase
+loadAllSpoldsWithFlows :: FilePath -> IO (Either T.Text SimpleDatabase)
 loadAllSpoldsWithFlows = loadAllSpoldsWithFlowsAndAliases M.empty
 
 {- | Load all EcoSpold files with activity aliases for supplier linking
 Aliases allow alternative names to map to the same supplier activity
 -}
-loadAllSpoldsWithFlowsAndAliases :: M.Map T.Text T.Text -> FilePath -> IO SimpleDatabase
+loadAllSpoldsWithFlowsAndAliases :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadAllSpoldsWithFlowsAndAliases aliases path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
     isFile <- doesFileExist path
@@ -277,10 +277,10 @@ loadAllSpoldsWithFlowsAndAliases aliases path = do
         else
             if isDir
                 then loadEcoSpoldDirectory aliases path
-                else error $ "Path is neither a CSV file nor a directory: " ++ path
+                else return $ Left $ T.pack $ "Path is neither a CSV file nor a directory: " ++ path
 
 -- | Load SimaPro CSV file
-loadSimaProCSV :: FilePath -> IO SimpleDatabase
+loadSimaProCSV :: FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV csvPath = do
     (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvPath
 
@@ -297,7 +297,7 @@ loadSimaProCSV csvPath = do
     let simpleDb = SimpleDatabase procMap flowDB unitDB
 
     -- Fix activity links using supplier lookup (same as EcoSpold1)
-    fixSimaProActivityLinks simpleDb
+    Right <$> fixSimaProActivityLinks simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references
 Uses name-only matching (no location required) for SimaPro technosphere inputs
@@ -378,7 +378,7 @@ fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt u
 fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
 -- | Load EcoSpold files from directory
-loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO SimpleDatabase
+loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadEcoSpoldDirectory aliases dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
@@ -387,22 +387,24 @@ loadEcoSpoldDirectory aliases dir = do
     let spold1Files = [dir </> f | f <- files, map toLower (takeExtension f) == ".xml"]
 
     -- Determine which format to use based on what's found
-    let (spoldFiles, formatName, isEcoSpold1) = case (spold2Files, spold1Files) of
-            ([], []) -> error $ "No EcoSpold files found in directory: " ++ dir
-            ([], xs) -> (xs, "EcoSpold1 (.XML)", True)
-            (xs, []) -> (xs, "EcoSpold2 (.spold)", False)
-            (xs, _) -> (xs, "EcoSpold2 (.spold)", False) -- Prefer EcoSpold2 if both present
-    reportProgress Info $ "Found " ++ show (length spoldFiles) ++ " " ++ formatName ++ " files for processing"
-
-    -- Simple N-worker parallelism: divide files among CPU cores
-    loadWithWorkerParallelism spoldFiles isEcoSpold1
+    case (spold2Files, spold1Files) of
+        ([], []) -> return $ Left $ T.pack $ "No EcoSpold files found in directory: " ++ dir
+        ([], xs) -> do
+            reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold1 (.XML) files for processing"
+            loadWithWorkerParallelism xs True
+        (xs, []) -> do
+            reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold2 (.spold) files for processing"
+            loadWithWorkerParallelism xs False
+        (xs, _) -> do
+            reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold2 (.spold) files for processing"
+            loadWithWorkerParallelism xs False  -- Prefer EcoSpold2 if both present
   where
     -- Helper function for unzipping 5-tuples
     unzip5 :: [(a, b, c, d, e)] -> ([a], [b], [c], [d], [e])
     unzip5 = foldr (\(a, b, c, d, e) (as, bs, cs, ds, es) -> (a : as, b : bs, c : cs, d : ds, e : es)) ([], [], [], [], [])
 
     -- Worker-based parallelism: divide files among N workers, all process in parallel
-    loadWithWorkerParallelism :: [FilePath] -> Bool -> IO SimpleDatabase
+    loadWithWorkerParallelism :: [FilePath] -> Bool -> IO (Either T.Text SimpleDatabase)
     loadWithWorkerParallelism allFiles isEcoSpold1 = do
         -- Get actual number of CPU capabilities (respects +RTS -N)
         numWorkers <- getNumCapabilities
@@ -417,41 +419,48 @@ loadEcoSpoldDirectory aliases dir = do
         -- Process all workers in parallel
         startTime <- getCurrentTime
         results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1 ..] workers)
-        let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 results
-        let !finalProcMap = M.unions procMaps
-        let !finalFlowMap = M.unions flowMaps
-        let !finalUnitMap = M.unions unitMaps
 
-        endTime <- getCurrentTime
-        let totalDuration = realToFrac $ diffUTCTime endTime startTime
-        let totalFiles = length allFiles
-        let avgFilesPerSec = fromIntegral totalFiles / totalDuration
-        let totalRawFlows = sum rawFlowCounts
-        let totalRawUnits = sum rawUnitCounts
-        let flowDeduplication = if totalRawFlows > 0 then 100.0 * (1.0 - fromIntegral (M.size finalFlowMap) / fromIntegral totalRawFlows) else 0.0 :: Double
-        let unitDeduplication = if totalRawUnits > 0 then 100.0 * (1.0 - fromIntegral (M.size finalUnitMap) / fromIntegral totalRawUnits) else 0.0 :: Double
+        -- Check for errors from any worker
+        let errors = [e | Left e <- results]
+        case errors of
+            (firstErr:_) -> return $ Left firstErr
+            [] -> do
+                let successResults = [r | Right r <- results]
+                let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 successResults
+                let !finalProcMap = M.unions procMaps
+                let !finalFlowMap = M.unions flowMaps
+                let !finalUnitMap = M.unions unitMaps
 
-        reportProgress Info $ printf "Parsing completed (%s, %.1f files/sec):" (formatDuration totalDuration) avgFilesPerSec
-        reportProgress Info $ printf "  Activities: %d processes" (M.size finalProcMap)
-        reportProgress Info $
-            printf
-                "  Flows: %d unique (%.1f%% deduplication from %d raw)"
-                (M.size finalFlowMap)
-                flowDeduplication
-                totalRawFlows
-        reportProgress Info $
-            printf
-                "  Units: %d unique (%.1f%% deduplication from %d raw)"
-                (M.size finalUnitMap)
-                unitDeduplication
-                totalRawUnits
-        reportMemoryUsage "Final parsing memory usage"
+                endTime <- getCurrentTime
+                let totalDuration = realToFrac $ diffUTCTime endTime startTime
+                let totalFiles = length allFiles
+                let avgFilesPerSec = fromIntegral totalFiles / totalDuration
+                let totalRawFlows = sum rawFlowCounts
+                let totalRawUnits = sum rawUnitCounts
+                let flowDeduplication = if totalRawFlows > 0 then 100.0 * (1.0 - fromIntegral (M.size finalFlowMap) / fromIntegral totalRawFlows) else 0.0 :: Double
+                let unitDeduplication = if totalRawUnits > 0 then 100.0 * (1.0 - fromIntegral (M.size finalUnitMap) / fromIntegral totalRawUnits) else 0.0 :: Double
 
-        -- For EcoSpold1: fix activity links using supplier lookup table
-        let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
-        if isEcoSpold1
-            then fixEcoSpold1ActivityLinks aliases simpleDb
-            else return simpleDb
+                reportProgress Info $ printf "Parsing completed (%s, %.1f files/sec):" (formatDuration totalDuration) avgFilesPerSec
+                reportProgress Info $ printf "  Activities: %d processes" (M.size finalProcMap)
+                reportProgress Info $
+                    printf
+                        "  Flows: %d unique (%.1f%% deduplication from %d raw)"
+                        (M.size finalFlowMap)
+                        flowDeduplication
+                        totalRawFlows
+                reportProgress Info $
+                    printf
+                        "  Units: %d unique (%.1f%% deduplication from %d raw)"
+                        (M.size finalUnitMap)
+                        unitDeduplication
+                        totalRawUnits
+                reportMemoryUsage "Final parsing memory usage"
+
+                -- For EcoSpold1: fix activity links using supplier lookup table
+                let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
+                if isEcoSpold1
+                    then Right <$> fixEcoSpold1ActivityLinks aliases simpleDb
+                    else return $ Right simpleDb
 
     -- Distribute files evenly among N workers
     distributeFiles :: Int -> [a] -> [[a]]
@@ -468,7 +477,7 @@ loadEcoSpoldDirectory aliases dir = do
         distribute (s : ss) items = take s items : distribute ss (drop s items)
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (ActivityMap, FlowDB, UnitDB, Int, Int)
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, FlowDB, UnitDB, Int, Int))
     processWorker startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
@@ -486,49 +495,48 @@ loadEcoSpoldDirectory aliases dir = do
         -- Build maps for this worker - extract UUID pairs from filenames
         -- For EcoSpold1: generate UUIDs from numeric dataset number
         -- For EcoSpold2: parse UUIDs from filename (activityUUID_productUUID.spold)
-        let !procMap =
-                M.fromList $
-                    zipWith
-                        ( \filepath activity ->
-                            if isEcoSpold1
-                                then
-                                    -- EcoSpold1: Generate activity UUID from name and location
-                                    -- Get the reference product UUID from exchanges
-                                    let actUUID = generateActivityUUIDFromActivity activity
-                                        prodUUID = getReferenceProductUUID activity
-                                     in ((actUUID, prodUUID), activity)
-                                else
-                                    -- EcoSpold2: Parse UUIDs from filename
-                                    let filename = T.pack $ takeBaseName filepath
-                                     in case T.splitOn "_" filename of
-                                            [actUUIDText, prodUUIDText] ->
-                                                -- Parse UUIDs, generating deterministic UUIDs for invalid test data
-                                                -- This prevents deduplication issues where all invalid UUIDs would map to nil
-                                                let actUUID = parseUUID actUUIDText
-                                                    prodUUID = parseUUID prodUUIDText
-                                                 in ((actUUID, prodUUID), activity)
-                                            _ -> error $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
-                        )
-                        workerFiles
-                        procs
-        let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
-        let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
+        let procEntries = zipWith (buildProcEntry isEcoSpold1) workerFiles procs
 
-        workerEndTime <- getCurrentTime
-        let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
-        let filesPerSec = fromIntegral (length workerFiles) / workerDuration
-        let rawFlowCount = length allFlows
-        let rawUnitCount = length allUnits
-        reportProgress Info $
-            printf
-                "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
-                workerNum
-                (M.size procMap)
-                (M.size flowMap)
-                (formatDuration workerDuration)
-                filesPerSec
+        -- Check for any filename parsing errors
+        case [e | Left e <- procEntries] of
+            (firstErr:_) -> return $ Left firstErr
+            [] -> do
+                let !procMap = M.fromList [e | Right e <- procEntries]
+                let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
+                let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
 
-        return (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
+                workerEndTime <- getCurrentTime
+                let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
+                let filesPerSec = fromIntegral (length workerFiles) / workerDuration
+                let rawFlowCount = length allFlows
+                let rawUnitCount = length allUnits
+                reportProgress Info $
+                    printf
+                        "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
+                        workerNum
+                        (M.size procMap)
+                        (M.size flowMap)
+                        (formatDuration workerDuration)
+                        filesPerSec
+
+                return $ Right (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
+
+    -- Build a single process entry, returning Either for error handling
+    buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
+    buildProcEntry True _filepath activity =
+        -- EcoSpold1: Generate activity UUID from name and location
+        let actUUID = generateActivityUUIDFromActivity activity
+            prodUUID = getReferenceProductUUID activity
+        in Right ((actUUID, prodUUID), activity)
+    buildProcEntry False filepath activity =
+        -- EcoSpold2: Parse UUIDs from filename
+        let filename = T.pack $ takeBaseName filepath
+        in case T.splitOn "_" filename of
+            [actUUIDText, prodUUIDText] ->
+                let actUUID = parseUUID actUUIDText
+                    prodUUID = parseUUID prodUUIDText
+                in Right ((actUUID, prodUUID), activity)
+            _ -> Left $ T.pack $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
 
 {- |
 Generate filename for matrix cache.
