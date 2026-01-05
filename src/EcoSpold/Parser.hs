@@ -221,7 +221,7 @@ parseWithXeno xmlContent processId =
                             (parseUUID $ idUnitId idata)
                             isInput
                             isReferenceProduct
-                            (parseUUID $ idActivityLinkId idata)
+                            (if T.null (idActivityLinkId idata) then UUID.nil else parseUUID (idActivityLinkId idata))
                             Nothing
                             ""  -- EcoSpold2: no per-exchange location
                         flow = Flow
