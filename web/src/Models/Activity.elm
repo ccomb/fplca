@@ -94,6 +94,7 @@ type alias ActivitySummary =
     { id : String
     , name : String
     , location : String
+    , product : String
     }
 
 
@@ -246,6 +247,7 @@ activitySummaryDecoder =
         |> required "prsId" Decode.string
         |> required "prsName" Decode.string
         |> required "prsLocation" Decode.string
+        |> required "prsProduct" Decode.string
 
 
 searchResultsDecoder : Decoder a -> Decoder (SearchResults a)

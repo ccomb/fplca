@@ -102,6 +102,7 @@ viewSearchResults maybeResults isLoading loadingMore =
                             [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                                 [ tr []
                                     [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                                    , th [ style "background-color" "white" ] [ text "Product" ]
                                     , th [ style "background-color" "white" ] [ text "Location" ]
                                     ]
                                 ]
@@ -135,6 +136,7 @@ viewActivityRow activity =
                 ]
                 [ text activity.name ]
             ]
+        , td [] [ text activity.product ]
         , td [] [ text activity.location ]
         ]
 

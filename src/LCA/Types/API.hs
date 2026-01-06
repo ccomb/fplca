@@ -26,6 +26,7 @@ data ActivitySummary = ActivitySummary
     { prsId :: Text  -- ProcessId format: activity_uuid_product_uuid
     , prsName :: Text
     , prsLocation :: Text
+    , prsProduct :: Text  -- Reference product name
     }
     deriving (Generic)
 
