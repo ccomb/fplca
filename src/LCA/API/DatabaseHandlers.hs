@@ -146,7 +146,7 @@ uploadDatabaseHandler dbManager req = do
                             { UploadedDB.umVersion = 1
                             , UploadedDB.umDisplayName = urName req
                             , UploadedDB.umDescription = urDescription req
-                            , UploadedDB.umFormat = uploadFormatToMeta (urFormat uploadResult)
+                            , UploadedDB.umFormat = urFormat uploadResult  -- Types are now unified
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                             }
                     liftIO $ UploadedDB.writeUploadMeta uploadDir meta
@@ -160,6 +160,7 @@ uploadDatabaseHandler dbManager req = do
                             , dcLoad = False  -- Don't auto-load
                             , dcDefault = False
                             , dcActivityAliases = M.empty
+                            , dcFormat = Just (urFormat uploadResult)
                             }
 
                     -- Add to manager
@@ -181,7 +182,13 @@ convertDbStatus ds = DatabaseStatusAPI
     , dsaCached = dsCached ds
     , dsaIsUploaded = dsIsUploaded ds
     , dsaPath = dsPath ds
+    , dsaFormat = formatToDisplayText <$> dsFormat ds
     }
+  where
+    formatToDisplayText EcoSpold2 = "EcoSpold 2"
+    formatToDisplayText EcoSpold1 = "EcoSpold 1"
+    formatToDisplayText SimaProCSV = "SimaPro CSV"
+    formatToDisplayText UnknownFormat = ""
 
 -- | Convert LoadedDatabase to DatabaseStatusAPI
 convertLoadedDbToStatus :: LoadedDatabase -> DatabaseStatusAPI
@@ -200,14 +207,15 @@ makeStatusFromConfig config = DatabaseStatusAPI
     , dsaCached = True
     , dsaIsUploaded = "uploads/" `isPrefixOf` LCA.Config.dcPath config
     , dsaPath = T.pack (LCA.Config.dcPath config)
+    , dsaFormat = formatToDisplayText <$> LCA.Config.dcFormat config
     }
+  where
+    formatToDisplayText EcoSpold2 = "EcoSpold 2"
+    formatToDisplayText EcoSpold1 = "EcoSpold 1"
+    formatToDisplayText SimaProCSV = "SimaPro CSV"
+    formatToDisplayText UnknownFormat = ""
 
--- | Convert Upload.DatabaseFormat to UploadedDB.DatabaseFormat
-uploadFormatToMeta :: DatabaseFormat -> UploadedDB.DatabaseFormat
-uploadFormatToMeta SimaProCSV = UploadedDB.SimaProCSV
-uploadFormatToMeta EcoSpold1 = UploadedDB.EcoSpold1
-uploadFormatToMeta EcoSpold2 = UploadedDB.EcoSpold2
-uploadFormatToMeta UnknownFormat = UploadedDB.UnknownFormat
+-- uploadFormatToMeta removed - types are now unified (UploadedDB re-exports from Upload)
 
 -- | Make a path relative to a base directory
 makeRelative :: FilePath -> FilePath -> FilePath

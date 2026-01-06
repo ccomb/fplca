@@ -30,6 +30,7 @@ import qualified TOML
 import TOML (DecodeTOML(..), Decoder, getField, getFieldOpt, getFieldOptWith, getArrayOf, decodeFile)
 import Control.Monad (when)
 import System.Directory (doesFileExist)
+import LCA.Upload (DatabaseFormat(..))
 
 -- | Main configuration type
 data Config = Config
@@ -54,6 +55,7 @@ data DatabaseConfig = DatabaseConfig
     , dcLoad        :: !Bool           -- Load at startup (renamed from dcActive)
     , dcDefault     :: !Bool
     , dcActivityAliases :: !(Map Text Text)  -- Alias name → actual activity name
+    , dcFormat      :: !(Maybe DatabaseFormat)  -- Detected format (EcoSpold2, EcoSpold1, SimaProCSV)
     } deriving (Show, Eq, Generic)
 
 -- | Method configuration
@@ -122,6 +124,7 @@ instance DecodeTOML DatabaseConfig where
         dcActivityAliases <- getFieldOpt "activityAliases" >>= \case
             Just m  -> pure m
             Nothing -> pure M.empty
+        let dcFormat = Nothing  -- Format is detected at runtime, not stored in config
         pure DatabaseConfig{..}
 
 instance DecodeTOML MethodConfig where

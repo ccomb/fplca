@@ -25,10 +25,11 @@ import Data.List (isSuffixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word8)
 import GHC.Generics (Generic)
-import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, copyFile)
+import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, copyFile)
 import System.FilePath ((</>), takeExtension, takeFileName)
 import System.IO.Temp (withSystemTempFile)
 import System.IO (hClose)
@@ -307,31 +308,50 @@ listDirectoryRecursive dir = do
             else return [path]
     return $ concat results
 
--- | Detect database format from extracted files
+-- | Detect database format from extracted files or a single file
 detectDatabaseFormat :: FilePath -> IO DatabaseFormat
-detectDatabaseFormat dir = do
-    files <- listDirectoryRecursive dir
-    let extensions = map (map toLower . takeExtension) files
+detectDatabaseFormat path = do
+    isFile <- doesFileExist path
+    isDir <- doesDirectoryExist path
 
-    -- Check for different formats
-    let hasSpold = any (== ".spold") extensions
-        hasXml = any (== ".xml") extensions
-        hasCsv = any (== ".csv") extensions
-
-    -- EcoSpold2 uses .spold extension
-    if hasSpold
-        then return EcoSpold2
-        else if hasXml
-            then do
-                -- Check if it's EcoSpold1 by looking at file content
-                isEcoSpold1 <- checkForEcoSpold1 files
-                return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
-            else if hasCsv
-                then do
-                    -- Check if it's SimaPro CSV
-                    isSimaPro <- checkForSimaProCSV files
+    if isFile
+        then do
+            -- Single file: detect from extension and content
+            let ext = map toLower (takeExtension path)
+            case ext of
+                ".spold" -> return EcoSpold2
+                ".xml" -> do
+                    isEcoSpold1 <- checkForEcoSpold1 [path]
+                    return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                ".csv" -> do
+                    isSimaPro <- checkForSimaProCSV [path]
                     return $ if isSimaPro then SimaProCSV else UnknownFormat
-                else return UnknownFormat
+                _ -> return UnknownFormat
+        else if isDir
+            then do
+                files <- listDirectoryRecursive path
+                let extensions = map (map toLower . takeExtension) files
+
+                -- Check for different formats
+                let hasSpold = any (== ".spold") extensions
+                    hasXml = any (== ".xml") extensions
+                    hasCsv = any (== ".csv") extensions
+
+                -- EcoSpold2 uses .spold extension
+                if hasSpold
+                    then return EcoSpold2
+                    else if hasXml
+                        then do
+                            -- Check if it's EcoSpold1 by looking at file content
+                            isEcoSpold1 <- checkForEcoSpold1 files
+                            return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                        else if hasCsv
+                            then do
+                                -- Check if it's SimaPro CSV
+                                isSimaPro <- checkForSimaProCSV files
+                                return $ if isSimaPro then SimaProCSV else UnknownFormat
+                            else return UnknownFormat
+            else return UnknownFormat  -- Path doesn't exist
 
 -- | Check if XML files are EcoSpold1 format
 checkForEcoSpold1 :: [FilePath] -> IO Bool
@@ -348,18 +368,21 @@ checkForEcoSpold1 files = do
                     return $ T.isInfixOf "EcoSpold01" content || T.isInfixOf "ecoSpold" content
 
 -- | Check if CSV files are SimaPro format
+-- Uses ByteString to avoid UTF-8 encoding issues (SimaPro files often use Latin1)
 checkForSimaProCSV :: [FilePath] -> IO Bool
 checkForSimaProCSV files = do
     let csvFiles = filter (\f -> ".csv" `isSuffixOf` map toLower f) files
     case csvFiles of
         [] -> return False
         (f:_) -> do
-            result <- try $ TIO.readFile f
+            -- Read only first 100 bytes as ByteString (avoids encoding issues)
+            result <- try $ BS.readFile f
             case result of
                 Left (_ :: SomeException) -> return False
                 Right content ->
-                    -- SimaPro CSV typically starts with "{SimaPro" or has specific headers
-                    return $ T.isInfixOf "{SimaPro" content || T.isInfixOf "Process" content
+                    -- Check for SimaPro signature in first 100 bytes
+                    let header = BS.take 100 content
+                    in return $ "{SimaPro" `BS.isInfixOf` header
 
 -- | Convert name to URL-safe slug
 slugify :: Text -> Text

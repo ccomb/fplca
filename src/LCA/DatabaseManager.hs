@@ -77,6 +77,7 @@ data DatabaseStatus = DatabaseStatus
     , dsCached      :: !Bool           -- Cache file exists
     , dsIsUploaded  :: !Bool           -- True if path starts with "uploads/"
     , dsPath        :: !Text           -- Data path
+    , dsFormat      :: !(Maybe Upload.DatabaseFormat)  -- Detected format
     } deriving (Show, Eq, Generic)
 
 instance ToJSON DatabaseStatus where
@@ -89,7 +90,13 @@ instance ToJSON DatabaseStatus where
         , "dsCached" .= dsCached
         , "dsIsUploaded" .= dsIsUploaded
         , "dsPath" .= dsPath
+        , "dsFormat" .= fmap formatToDisplayText dsFormat
         ]
+      where
+        formatToDisplayText Upload.EcoSpold2 = "EcoSpold 2" :: T.Text
+        formatToDisplayText Upload.EcoSpold1 = "EcoSpold 1"
+        formatToDisplayText Upload.SimaProCSV = "SimaPro CSV"
+        formatToDisplayText Upload.UnknownFormat = ""
 
 instance FromJSON DatabaseStatus where
     parseJSON = A.withObject "DatabaseStatus" $ \v -> DatabaseStatus
@@ -101,6 +108,14 @@ instance FromJSON DatabaseStatus where
         <*> v .: "dsCached"
         <*> v .: "dsIsUploaded"
         <*> v .: "dsPath"
+        <*> (parseFormat <$> v .:? "dsFormat")
+      where
+        parseFormat :: Maybe T.Text -> Maybe Upload.DatabaseFormat
+        parseFormat Nothing = Nothing
+        parseFormat (Just "EcoSpold 2") = Just Upload.EcoSpold2
+        parseFormat (Just "EcoSpold 1") = Just Upload.EcoSpold1
+        parseFormat (Just "SimaPro CSV") = Just Upload.SimaProCSV
+        parseFormat (Just _) = Just Upload.UnknownFormat
 
 -- | The database manager maintains state for multiple databases
 -- Databases with load=true are pre-loaded at startup for instant switching
@@ -117,8 +132,10 @@ data DatabaseManager = DatabaseManager
 -- Also discovers uploaded databases from uploads/ directory
 initDatabaseManager :: Config -> SynonymDB -> Bool -> Maybe FilePath -> IO DatabaseManager
 initDatabaseManager config synonymDB noCache _configPath = do
-    -- Get configured databases
-    let configuredDbs = cfgDatabases config
+    -- Get configured databases and detect their format
+    configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
+        format <- Upload.detectDatabaseFormat (dcPath dbConfig)
+        return dbConfig { dcFormat = Just format }
 
     -- Discover uploaded databases from uploads/ directory (self-describing with meta.toml)
     uploadedDbs <- discoverUploadedDatabases
@@ -185,12 +202,16 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
     , dcLoad = False  -- Never auto-load uploads
     , dcDefault = False
     , dcActivityAliases = M.empty
+    , dcFormat = Just (UploadedDB.umFormat meta)
     }
 
 -- | Initialize a single-database manager (for --data mode)
 -- Creates a config with one database and initializes it
 initSingleDatabaseManager :: FilePath -> SynonymDB -> Bool -> IO DatabaseManager
 initSingleDatabaseManager dataPath synonymDB noCache = do
+    -- Detect format for the data path
+    format <- Upload.detectDatabaseFormat dataPath
+
     let dbConfig = DatabaseConfig
             { dcName = "default"
             , dcDisplayName = T.pack dataPath  -- Use path as display name
@@ -199,6 +220,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , dcLoad = True
             , dcDefault = True
             , dcActivityAliases = M.empty
+            , dcFormat = Just format
             }
 
     let config = Config
@@ -264,6 +286,7 @@ listDatabases manager = do
             , dsCached = isLoaded  -- If loaded, we have it cached in memory
             , dsIsUploaded = "uploads/" `isPrefixOf` dcPath config
             , dsPath = T.pack (dcPath config)
+            , dsFormat = dcFormat config
             }
 
 -- | Check if a file path is a cache file

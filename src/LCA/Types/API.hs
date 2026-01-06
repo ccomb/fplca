@@ -259,6 +259,7 @@ data DatabaseStatusAPI = DatabaseStatusAPI
     , dsaCached        :: Bool           -- Cache file exists
     , dsaIsUploaded    :: Bool           -- True if path starts with "uploads/"
     , dsaPath          :: Text           -- Data path
+    , dsaFormat        :: Maybe Text     -- Database format (EcoSpold 2, EcoSpold 1, SimaPro CSV)
     }
     deriving (Generic)
 

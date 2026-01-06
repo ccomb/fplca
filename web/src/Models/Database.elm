@@ -24,6 +24,7 @@ type alias DatabaseStatus =
     , cached : Bool
     , isUploaded : Bool
     , path : String
+    , format : Maybe String
     }
 
 
@@ -57,6 +58,7 @@ databaseStatusDecoder =
         |> required "dsaCached" Decode.bool
         |> required "dsaIsUploaded" Decode.bool
         |> required "dsaPath" Decode.string
+        |> optional "dsaFormat" (Decode.nullable Decode.string) Nothing
 
 
 {-| JSON decoder for DatabaseList

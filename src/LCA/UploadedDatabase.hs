@@ -25,13 +25,8 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, creat
 import System.FilePath ((</>), takeFileName)
 import Text.Read (readMaybe)
 
--- | Detected database format
-data DatabaseFormat
-    = SimaProCSV     -- SimaPro CSV export
-    | EcoSpold1      -- EcoSpold v1 XML format
-    | EcoSpold2      -- EcoSpold v2 XML format
-    | UnknownFormat  -- Could not detect format
-    deriving (Show, Eq, Generic, Read)
+-- Re-export DatabaseFormat from LCA.Upload (single definition)
+import LCA.Upload (DatabaseFormat(..))
 
 -- | Metadata for an uploaded database
 data UploadMeta = UploadMeta
