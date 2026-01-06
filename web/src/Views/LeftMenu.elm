@@ -1,7 +1,7 @@
 module Views.LeftMenu exposing (Msg(..), viewLeftMenu)
 
 import Html exposing (Html, button, div, i, nav, p, span, text)
-import Html.Attributes exposing (class, classList, style, title)
+import Html.Attributes exposing (class, classList, style)
 import Html.Events exposing (onClick)
 import Models.Page exposing (Page(..))
 
@@ -46,26 +46,30 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 , menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
                 ]
             , -- Activity section (only show if an activity is selected)
+              -- White background to look like vertical tabs connected to main content
               case currentActivityName of
-                Just actName ->
-                    div [ class "menu-items" ]
-                        [ activityLabel actName
+                Just _ ->
+                    div
+                        [ class "menu-items explore-section"
+                        , style "background-color" "white"
+                        , style "margin" "0.5rem 0 0.5rem 0.5rem"
+                        , style "padding" "0.5rem 0"
+                        , style "border-radius" "6px 0 0 6px"
+                        ]
+                        [ menuLabel "Explore"
                         , menuItem currentPage UpstreamPage "fas fa-arrow-up" "Upstream activities" False
                         , menuItem currentPage EmissionsPage "fas fa-cloud" "Direct emissions" False
                         , menuItem currentPage ResourcesPage "fas fa-leaf" "Natural resources" False
                         , menuItem currentPage ProductsPage "fas fa-box" "Outgoing products" False
                         , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
+                        , menuLabel "Lab"
+                        , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
+                        , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
+                        , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
                         ]
 
                 Nothing ->
                     text ""
-            , -- LAB section
-              div [ class "menu-items" ]
-                [ menuLabel "Lab"
-                , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
-                , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
-                , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
-                ]
             ]
         , -- fpLCA at bottom (fixed)
           div
@@ -89,30 +93,6 @@ menuLabel : String -> Html Msg
 menuLabel label =
     p [ class "menu-label has-text-grey-light", style "padding" "0.5rem 1rem", style "margin-top" "0.5rem", style "font-size" "0.75rem", style "text-transform" "uppercase" ]
         [ text label ]
-
-
-activityLabel : String -> Html Msg
-activityLabel actName =
-    let
-        truncatedName =
-            if String.length actName > 25 then
-                String.left 22 actName ++ "..."
-
-            else
-                actName
-    in
-    p
-        [ class "menu-label has-text-white"
-        , style "padding" "0.5rem 1rem"
-        , style "margin-top" "0.5rem"
-        , style "font-size" "0.8rem"
-        , style "font-weight" "500"
-        , style "overflow" "hidden"
-        , style "text-overflow" "ellipsis"
-        , style "white-space" "nowrap"
-        , title actName
-        ]
-        [ text truncatedName ]
 
 
 menuItem : Page -> Page -> String -> String -> Bool -> Html Msg
