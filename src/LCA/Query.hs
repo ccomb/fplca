@@ -94,13 +94,16 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                                         case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
                                             Just pid -> Just pid
                                             Nothing ->
-                                                let !_ = unsafePerformIO $ hPutStrLn stderr $
-                                                        "[WARNING] Missing activity-product pair referenced by exchange:\n"
-                                                        ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
-                                                        ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
-                                                        ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
-                                                        ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
-                                                        ++ "  This exchange will be skipped."
+                                                -- Only warn if exchange has non-zero amount (zero-amount are placeholders)
+                                                let !_ = if abs (exchangeAmount ex) > 1e-15
+                                                         then unsafePerformIO $ hPutStrLn stderr $
+                                                            "[WARNING] Missing activity-product pair referenced by exchange:\n"
+                                                            ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
+                                                            ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
+                                                            ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
+                                                            ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
+                                                            ++ "  This exchange will be skipped."
+                                                         else ()
                                                 in Nothing
                                     Nothing -> Nothing
                             -- ProcessId is already the matrix index (no identity mapping needed)
