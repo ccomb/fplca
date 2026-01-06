@@ -12,19 +12,21 @@ Used by both ActivitiesView (search results) and DetailsView (upstream activitie
 type alias ActivityRowData msg =
     { id : Maybe String -- Nothing if not clickable
     , name : String
+    , amount : Float -- Production amount (search) or consumed quantity (upstream)
+    , unit : String -- Unit for the amount
     , product : String
     , location : String
-    , quantity : Maybe ( Float, String ) -- (amount, unit) for upstream views
     , onNavigate : String -> msg
     }
 
 
-{-| Render an activity row with optional navigation link and quantity columns.
+{-| Render an activity row with unified column order.
+Columns: Activity Name | Amount | Unit | Product | Location
 -}
 viewActivityRow : ActivityRowData msg -> Html msg
 viewActivityRow data =
     tr []
-        ([ td []
+        [ td []
             [ case data.id of
                 Just activityId ->
                     a
@@ -38,16 +40,8 @@ viewActivityRow data =
                 Nothing ->
                     text data.name
             ]
-         , td [] [ text data.product ]
-         , td [] [ text data.location ]
-         ]
-            ++ (case data.quantity of
-                    Just ( amount, unit ) ->
-                        [ td [ class "has-text-right" ] [ text (Format.formatScientific amount) ]
-                        , td [] [ text unit ]
-                        ]
-
-                    Nothing ->
-                        []
-               )
-        )
+        , td [ class "has-text-right" ] [ text (Format.formatScientific data.amount) ]
+        , td [] [ text data.unit ]
+        , td [] [ text data.product ]
+        , td [] [ text data.location ]
+        ]

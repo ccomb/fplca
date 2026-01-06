@@ -117,10 +117,10 @@ viewUpstreamActivitiesFromInfo exchanges onNavigate =
                     [ thead []
                         [ tr []
                             [ th [] [ text "Activity Name" ]
+                            , th [ class "has-text-right" ] [ text "Amount" ]
+                            , th [] [ text "Unit" ]
                             , th [] [ text "Product" ]
                             , th [] [ text "Location" ]
-                            , th [ class "has-text-right" ] [ text "Quantity" ]
-                            , th [] [ text "Unit" ]
                             ]
                         ]
                     , tbody []
@@ -146,9 +146,10 @@ viewUpstreamActivityFromInfoRow onNavigate exchange =
     ActivityRow.viewActivityRow
         { id = exchange.activityLinkId
         , name = displayName
+        , amount = exchange.amount
+        , unit = exchange.unitName
         , product = exchange.flowName
         , location = displayLocation
-        , quantity = Just ( exchange.amount, exchange.unitName )
         , onNavigate = onNavigate
         }
 
@@ -284,10 +285,10 @@ viewUpstreamExchanges exchanges onNavigate =
                 [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
                         [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                        , th [ class "has-text-right", style "background-color" "white" ] [ text "Amount" ]
+                        , th [ style "background-color" "white" ] [ text "Unit" ]
                         , th [ style "background-color" "white" ] [ text "Product" ]
                         , th [ style "background-color" "white" ] [ text "Location" ]
-                        , th [ class "has-text-right", style "background-color" "white" ] [ text "Quantity" ]
-                        , th [ style "background-color" "white" ] [ text "Unit" ]
                         ]
                     ]
                 , tbody []
@@ -739,10 +740,10 @@ viewUpstreamActivitiesTable nodes edges =
                     [ thead []
                         [ tr []
                             [ th [] [ text "Activity Name" ]
+                            , th [ class "has-text-right" ] [ text "Amount" ]
+                            , th [] [ text "Unit" ]
                             , th [] [ text "Product" ]
                             , th [] [ text "Location" ]
-                            , th [ class "has-text-right" ] [ text "Quantity" ]
-                            , th [] [ text "Unit" ]
                             ]
                         ]
                     , tbody []
@@ -773,9 +774,10 @@ viewUpstreamActivityRow nodes edge =
     ActivityRow.viewActivityRow
         { id = Just edge.to
         , name = nodeName
+        , amount = edge.quantity
+        , unit = edge.unit
         , product = edge.flow.name
         , location = nodeLocation
-        , quantity = Just ( edge.quantity, edge.unit )
         , onNavigate = NavigateToActivity
         }
 

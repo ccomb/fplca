@@ -103,6 +103,8 @@ viewSearchResults maybeResults isLoading loadingMore =
                             [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                                 [ tr []
                                     [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                                    , th [ class "has-text-right", style "background-color" "white" ] [ text "Amount" ]
+                                    , th [ style "background-color" "white" ] [ text "Unit" ]
                                     , th [ style "background-color" "white" ] [ text "Product" ]
                                     , th [ style "background-color" "white" ] [ text "Location" ]
                                     ]
@@ -130,9 +132,10 @@ viewActivityRow activity =
     ActivityRow.viewActivityRow
         { id = Just activity.id
         , name = activity.name
+        , amount = activity.productAmount
+        , unit = activity.productUnit
         , product = activity.product
         , location = activity.location
-        , quantity = Nothing
         , onNavigate = SelectActivity
         }
 
