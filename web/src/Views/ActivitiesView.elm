@@ -125,13 +125,15 @@ viewSearchResults maybeResults isLoading loadingMore =
 
 viewActivityRow : ActivitySummary -> Html Msg
 viewActivityRow activity =
-    tr
-        [ class "is-clickable"
-        , style "cursor" "pointer"
-        , onClick (SelectActivity activity.id)
-        ]
+    tr []
         [ td []
-            [ a [ href "#", class "has-text-link" ] [ text activity.name ]
+            [ a
+                [ href "#"
+                , class "has-text-link"
+                , style "cursor" "pointer"
+                , onClick (SelectActivity activity.id)
+                ]
+                [ text activity.name ]
             ]
         , td [] [ text activity.location ]
         ]
