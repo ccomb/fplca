@@ -6,6 +6,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Models.Activity exposing (ActivityEdge, ActivityExchange, ActivityInfo, ActivityNode, ActivitySummary, ActivityTree, EdgeType(..), ExchangeType(..), NodeType(..))
 import Utils.Format as Format
+import Views.ActivityRow as ActivityRow
 
 
 type alias Model =
@@ -116,6 +117,7 @@ viewUpstreamActivitiesFromInfo exchanges onNavigate =
                     [ thead []
                         [ tr []
                             [ th [] [ text "Activity Name" ]
+                            , th [] [ text "Product" ]
                             , th [] [ text "Location" ]
                             , th [ class "has-text-right" ] [ text "Quantity" ]
                             , th [] [ text "Unit" ]
@@ -140,32 +142,15 @@ viewUpstreamActivityFromInfoRow onNavigate exchange =
         displayLocation =
             exchange.targetLocation
                 |> Maybe.withDefault ""
-
-        isClickable =
-            exchange.activityLinkId /= Nothing
     in
-    tr
-        (if isClickable then
-            [ class "is-clickable"
-            , style "cursor" "pointer"
-            , onClick (onNavigate (exchange.activityLinkId |> Maybe.withDefault ""))
-            ]
-
-         else
-            []
-        )
-        [ td []
-            [ if isClickable then
-                span [ class "has-text-link" ] [ text displayName ]
-
-              else
-                text displayName
-            ]
-        , td [] [ text displayLocation ]
-        , td [ class "has-text-right" ]
-            [ text (Format.formatScientific exchange.amount) ]
-        , td [] [ text exchange.unitName ]
-        ]
+    ActivityRow.viewActivityRow
+        { id = exchange.activityLinkId
+        , name = displayName
+        , product = exchange.flowName
+        , location = displayLocation
+        , quantity = Just ( exchange.amount, exchange.unitName )
+        , onNavigate = onNavigate
+        }
 
 
 viewConsumptionsFromInfo : List ActivityExchange -> Html msg
@@ -299,6 +284,7 @@ viewUpstreamExchanges exchanges onNavigate =
                 [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
                         [ th [ style "background-color" "white" ] [ text "Activity Name" ]
+                        , th [ style "background-color" "white" ] [ text "Product" ]
                         , th [ style "background-color" "white" ] [ text "Location" ]
                         , th [ class "has-text-right", style "background-color" "white" ] [ text "Quantity" ]
                         , th [ style "background-color" "white" ] [ text "Unit" ]
@@ -753,6 +739,7 @@ viewUpstreamActivitiesTable nodes edges =
                     [ thead []
                         [ tr []
                             [ th [] [ text "Activity Name" ]
+                            , th [] [ text "Product" ]
                             , th [] [ text "Location" ]
                             , th [ class "has-text-right" ] [ text "Quantity" ]
                             , th [] [ text "Unit" ]
@@ -782,27 +769,15 @@ viewUpstreamActivityRow nodes edge =
             targetNode
                 |> Maybe.map .location
                 |> Maybe.withDefault ""
-
-        nodeDescription =
-            targetNode
-                |> Maybe.map (.description >> String.join " ")
-                |> Maybe.withDefault ""
     in
-    tr
-        [ class "is-clickable"
-        , onClick (NavigateToActivity edge.to)
-        , title nodeDescription
-        , style "cursor" "pointer"
-        ]
-        [ td []
-            [ span [ class "has-text-link" ]
-                [ text nodeName ]
-            ]
-        , td [] [ text nodeLocation ]
-        , td [ class "has-text-right" ]
-            [ text (Format.formatScientific edge.quantity) ]
-        , td [] [ text edge.unit ]
-        ]
+    ActivityRow.viewActivityRow
+        { id = Just edge.to
+        , name = nodeName
+        , product = edge.flow.name
+        , location = nodeLocation
+        , quantity = Just ( edge.quantity, edge.unit )
+        , onNavigate = NavigateToActivity
+        }
 
 
 viewConsumptionsTable : Dict String ActivityNode -> List ActivityEdge -> Html Msg

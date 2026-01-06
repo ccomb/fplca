@@ -1,10 +1,11 @@
 module Views.ActivitiesView exposing (viewActivitiesPage, Msg(..))
 
-import Html exposing (Html, a, button, div, i, input, option, select, table, tbody, td, text, th, thead, tr, h2, p, span, label)
-import Html.Attributes exposing (class, href, placeholder, style, value, type_, disabled, selected, title)
+import Html exposing (Html, button, div, input, option, select, table, tbody, text, th, thead, tr, h2, p, span)
+import Html.Attributes exposing (class, placeholder, style, value, type_, disabled, selected)
 import Html.Events exposing (onInput, onClick)
 import Models.Activity exposing (ActivitySummary, SearchResults)
 import Models.Database exposing (DatabaseList, DatabaseStatus)
+import Views.ActivityRow as ActivityRow
 
 
 type Msg
@@ -126,19 +127,14 @@ viewSearchResults maybeResults isLoading loadingMore =
 
 viewActivityRow : ActivitySummary -> Html Msg
 viewActivityRow activity =
-    tr []
-        [ td []
-            [ a
-                [ href "#"
-                , class "has-text-link"
-                , style "cursor" "pointer"
-                , onClick (SelectActivity activity.id)
-                ]
-                [ text activity.name ]
-            ]
-        , td [] [ text activity.product ]
-        , td [] [ text activity.location ]
-        ]
+    ActivityRow.viewActivityRow
+        { id = Just activity.id
+        , name = activity.name
+        , product = activity.product
+        , location = activity.location
+        , quantity = Nothing
+        , onNavigate = SelectActivity
+        }
 
 
 viewDatabaseOption : String -> DatabaseStatus -> Html Msg
