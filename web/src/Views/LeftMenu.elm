@@ -84,7 +84,8 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
             , text "·"
             , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
-            , text "·LCA"
+            , text "·LCA "
+            , span [ style "font-size" "0.8em" ] [ text "(preview)" ]
             ]
         ]
 
