@@ -65,7 +65,8 @@ type alias Model =
     , searchLoading : Bool
     , loadingMore : Bool
     , hoveredNode : Maybe String
-    , inventorySearchQuery : String
+    , inventoryResourcesSearch : String
+    , inventoryEmissionsSearch : String
     , methods : Maybe (List MethodSummary) -- Available LCIA methods
     , selectedMethod : Maybe MethodSummary -- Currently selected method
     , lciaResult : Maybe LCIAResult -- LCIA computation result
@@ -102,7 +103,8 @@ type Msg
     | MoreActivitiesLoaded (Result Http.Error (SearchResults ActivitySummary))
     | SelectActivity String
     | NodeHovered (Maybe String)
-    | UpdateInventorySearchQuery String
+    | UpdateInventoryResourcesSearch String
+    | UpdateInventoryEmissionsSearch String
     | LinkClicked Browser.UrlRequest
     | UrlChanged Url.Url
       -- LCIA messages
@@ -397,7 +399,8 @@ init _ url key =
             , searchLoading = shouldSearch
             , loadingMore = False
             , hoveredNode = Nothing
-            , inventorySearchQuery = ""
+            , inventoryResourcesSearch = ""
+            , inventoryEmissionsSearch = ""
             , methods = Nothing
             , selectedMethod = Nothing
             , lciaResult = Nothing
@@ -960,8 +963,11 @@ update msg model =
         NodeHovered nodeId ->
             ( { model | hoveredNode = nodeId }, Cmd.none )
 
-        UpdateInventorySearchQuery query ->
-            ( { model | inventorySearchQuery = query }, Cmd.none )
+        UpdateInventoryResourcesSearch query ->
+            ( { model | inventoryResourcesSearch = query }, Cmd.none )
+
+        UpdateInventoryEmissionsSearch query ->
+            ( { model | inventoryEmissionsSearch = query }, Cmd.none )
 
         -- LCIA message handlers
         LoadMethods ->
@@ -1986,16 +1992,25 @@ viewInventoryPage model =
                     ( Just activityInfo, Just inventory ) ->
                         div [ style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
                             [ div [ style "flex-shrink" "0" ]
-                                [ viewInventoryHeader activityInfo inventory (not (List.isEmpty model.navigationHistory))
+                                [ viewInventoryHeader activityInfo (not (List.isEmpty model.navigationHistory))
                                 ]
                             , div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0" ]
                                 [ Html.map
                                     (\msg ->
                                         case msg of
-                                            InventoryView.UpdateSearchQuery query ->
-                                                UpdateInventorySearchQuery query
+                                            InventoryView.UpdateResourcesSearch query ->
+                                                UpdateInventoryResourcesSearch query
+
+                                            InventoryView.UpdateEmissionsSearch query ->
+                                                UpdateInventoryEmissionsSearch query
                                     )
-                                    (InventoryView.viewInventoryTable model.inventorySearchQuery inventory.ieFlows)
+                                    (InventoryView.viewInventoryTables
+                                        model.inventoryResourcesSearch
+                                        model.inventoryEmissionsSearch
+                                        inventory.ieMetadata.imResourceFlows
+                                        inventory.ieMetadata.imEmissionFlows
+                                        inventory.ieFlows
+                                    )
                                 ]
                             ]
 
@@ -2014,8 +2029,8 @@ viewInventoryPage model =
         ]
 
 
-viewInventoryHeader : Models.Activity.ActivityInfo -> Models.Inventory.InventoryExport -> Bool -> Html Msg
-viewInventoryHeader activityInfo inventory hasHistory =
+viewInventoryHeader : Models.Activity.ActivityInfo -> Bool -> Html Msg
+viewInventoryHeader activityInfo hasHistory =
     let
         backButtonText =
             if hasHistory then
@@ -2023,14 +2038,6 @@ viewInventoryHeader activityInfo inventory hasHistory =
 
             else
                 "Search results"
-
-        calcDetails =
-            "Total flows: "
-                ++ String.fromInt inventory.ieMetadata.imTotalFlows
-                ++ " | Emissions: "
-                ++ String.fromInt inventory.ieMetadata.imEmissionFlows
-                ++ " | Resources: "
-                ++ String.fromInt inventory.ieMetadata.imResourceFlows
     in
     div [ class "box", style "margin-bottom" "0" ]
         [ -- Title and location on same line
@@ -2075,9 +2082,6 @@ viewInventoryHeader activityInfo inventory hasHistory =
                  ]
                 )
             ]
-        , -- Calculation details (where description would be on other pages)
-          div [ style "font-size" "0.85rem", style "line-height" "1.4", style "margin-top" "0.5rem", style "color" "#666" ]
-            [ text calcDetails ]
         , -- Page title
           h2 [ class "title is-5", style "margin-top" "1rem", style "margin-bottom" "0" ] [ text "Inventory Metadata" ]
         ]
