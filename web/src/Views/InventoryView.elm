@@ -1,9 +1,9 @@
-module Views.InventoryView exposing (Msg(..), viewInventoryPage, viewPageNavbar)
+module Views.InventoryView exposing (Msg(..), viewInventoryTable)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
-import Models.Inventory exposing (InventoryExport, InventoryFlowDetail)
+import Models.Inventory exposing (InventoryFlowDetail)
 import Utils.Format as Format
 
 
@@ -11,95 +11,48 @@ type Msg
     = UpdateSearchQuery String
 
 
-viewInventoryPage : Maybe InventoryExport -> Bool -> Maybe String -> String -> Html Msg
-viewInventoryPage maybeInventory loading error searchQuery =
+viewInventoryTable : String -> List InventoryFlowDetail -> Html Msg
+viewInventoryTable searchQuery flows =
     let
-        activityInfo =
-            maybeInventory
-                |> Maybe.map (\inv -> ( inv.ieMetadata.imRootActivity.prsName, inv.ieMetadata.imRootActivity.prsLocation ))
+        filteredFlows =
+            filterFlows searchQuery flows
     in
-    div [ class "inventory-page" ]
-        [ viewPageNavbar "Activity Inventory" activityInfo
-        , -- Main content
-          div []
-            [ div []
-                [ case ( loading, error, maybeInventory ) of
-                    ( True, _, _ ) ->
-                        div [ class "has-text-centered" ]
-                            [ div [ class "is-size-3" ] [ text "Loading inventory..." ]
-                            , progress [ class "progress is-primary", attribute "max" "100" ] []
-                            ]
-
-                    ( _, Just errorMsg, _ ) ->
-                        div [ class "notification is-danger" ]
-                            [ strong [] [ text "Error: " ]
-                            , text errorMsg
-                            ]
-
-                    ( _, _, Just inventory ) ->
-                        div []
-                            [ viewInventoryHeader inventory
-                            , viewSearchBox searchQuery
-                            , viewInventoryTable (filterFlows searchQuery inventory.ieFlows)
-                            ]
-
-                    ( _, _, Nothing ) ->
-                        div [ class "has-text-centered" ]
-                            [ text "No inventory data to display" ]
-                ]
-            ]
-        ]
-
-
-viewInventoryHeader : InventoryExport -> Html msg
-viewInventoryHeader inventory =
-    div [ class "box" ]
-        [ h2 [ class "title is-5" ] [ text "Inventory Metadata" ]
-        , div [ class "columns" ]
-            [ div [ class "column" ]
-                [ div [ class "field" ]
-                    [ label [ class "label" ] [ text "Root Activity" ]
-                    , div [ class "content" ]
-                        [ strong [] [ text inventory.ieMetadata.imRootActivity.prsName ]
-                        , br [] []
-                        , text inventory.ieMetadata.imRootActivity.prsLocation
-                        , br [] []
-                        , small [ class "has-text-grey" ] [ text inventory.ieMetadata.imRootActivity.prsId ]
+    div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
+        [ table [ class "table is-striped is-hoverable is-fullwidth" ]
+            [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
+                [ tr []
+                    [ th [ class "has-text-right", style "background-color" "white" ] [ text "Amount" ]
+                    , th [ style "background-color" "white" ] [ text "Unit" ]
+                    , th [ style "background-color" "white" ]
+                        [ text "Flow"
                         ]
+                    , th [ style "background-color" "white" ] [ text "Compartment" ]
+                    , th [ style "background-color" "white" ] [ text "Type" ]
+                    ]
+                , tr []
+                    [ th [ style "background-color" "white" ] []
+                    , th [ style "background-color" "white" ] []
+                    , th [ style "background-color" "white", style "padding" "0.25rem 0.5rem" ]
+                        [ div [ class "control has-icons-left" ]
+                            [ input
+                                [ class "input is-small"
+                                , type_ "text"
+                                , placeholder "Search flows..."
+                                , value searchQuery
+                                , onInput UpdateSearchQuery
+                                ]
+                                []
+                            , span [ class "icon is-small is-left" ]
+                                [ i [ class "fas fa-search" ] []
+                                ]
+                            ]
+                        ]
+                    , th [ style "background-color" "white" ] []
+                    , th [ style "background-color" "white" ] []
                     ]
                 ]
-            , div [ class "column" ]
-                [ div [ class "field" ]
-                    [ label [ class "label" ] [ text "Calculation Details" ]
-                    , div [ class "content" ]
-                        [ div [] [ text ("Total flows: " ++ String.fromInt inventory.ieMetadata.imTotalFlows) ]
-                        , div [] [ text ("Emission flows: " ++ String.fromInt inventory.ieMetadata.imEmissionFlows) ]
-                        , div [] [ text ("Resource flows: " ++ String.fromInt inventory.ieMetadata.imResourceFlows) ]
-                        ]
-                    ]
-                ]
-            ]
-        ]
-
-
-viewInventoryTable : List InventoryFlowDetail -> Html msg
-viewInventoryTable flows =
-    div [ class "box" ]
-        [ h2 [ class "title is-5" ] [ text "Inventory Flows" ]
-        , div [ class "table-container" ]
-            [ table [ class "table is-striped is-hoverable is-fullwidth" ]
-                [ thead []
-                    [ tr []
-                        [ th [] [ text "Compartment" ]
-                        , th [] [ text "Flow" ]
-                        , th [] [ text "Amount" ]
-                        , th [] [ text "Unit" ]
-                        , th [] [ text "Type" ]
-                        ]
-                    ]
-                , tbody []
-                    (List.map viewInventoryRow flows)
-                ]
+            , tbody []
+                (List.map viewInventoryRow filteredFlows)
             ]
         ]
 
@@ -107,15 +60,15 @@ viewInventoryTable flows =
 viewInventoryRow : InventoryFlowDetail -> Html msg
 viewInventoryRow flowDetail =
     tr []
-        [ td [] [ text flowDetail.ifdFlow.flowCategory ]
+        [ td [ class "has-text-right" ] [ text (Format.formatScientific flowDetail.ifdQuantity) ]
+        , td [] [ text flowDetail.ifdUnitName ]
         , td []
             [ div []
                 [ div [] [ text flowDetail.ifdFlow.flowName ]
                 , small [ class "has-text-grey" ] [ text flowDetail.ifdFlow.flowId ]
                 ]
             ]
-        , td [ class "has-text-right" ] [ text (Format.formatScientific flowDetail.ifdQuantity) ]
-        , td [] [ text flowDetail.ifdUnitName ]
+        , td [] [ text flowDetail.ifdFlow.flowCategory ]
         , td []
             [ span
                 [ class
@@ -134,62 +87,6 @@ viewInventoryRow flowDetail =
                         "Resource"
                     )
                 ]
-            ]
-        ]
-
-
-viewSearchBox : String -> Html Msg
-viewSearchBox searchQuery =
-    div [ class "box" ]
-        [ div [ class "field" ]
-            [ label [ class "label" ] [ text "Search Flows" ]
-            , div [ class "control has-icons-left" ]
-                [ input
-                    [ class "input"
-                    , type_ "text"
-                    , placeholder "Search by flow name (e.g., \"dioxide carbon\" for flows containing both words)"
-                    , value searchQuery
-                    , onInput UpdateSearchQuery
-                    ]
-                    []
-                , span [ class "icon is-small is-left" ]
-                    [ i [ class "fas fa-search" ] []
-                    ]
-                ]
-            , p [ class "help" ]
-                [ text "Enter multiple words to find flows containing all words (case-insensitive)" ]
-            ]
-        ]
-
-
-{-| Shared navbar component for all pages
--}
-viewPageNavbar : String -> Maybe ( String, String ) -> Html msg
-viewPageNavbar title maybeActivity =
-    nav [ class "navbar is-light" ]
-        [ div [ class "navbar-brand" ]
-            [ div [ class "navbar-item" ]
-                [ h1 [ class "title is-4" ] [ text title ]
-                ]
-            ]
-        , div [ class "navbar-menu is-active" ]
-            [ div [ class "navbar-end" ]
-                (case maybeActivity of
-                    Just ( name, location ) ->
-                        [ div [ class "navbar-item" ]
-                            [ span [ class "title is-4" ] [ text name ]
-                            ]
-                        , div [ class "navbar-item" ]
-                            [ span [ class "subtitle is-6" ] [ text location ]
-                            ]
-                        ]
-
-                    Nothing ->
-                        [ div [ class "navbar-item" ]
-                            [ span [ class "subtitle is-6" ] [ text "Loading..." ]
-                            ]
-                        ]
-                )
             ]
         ]
 
@@ -224,4 +121,3 @@ filterFlows searchQuery flows =
                 List.all (\word -> String.contains word searchableText) searchWords
         in
         List.filter matchesAllWords flows
-

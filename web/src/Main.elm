@@ -429,7 +429,11 @@ init _ url key =
                         loadActivityTree routeConfig.activityId
 
                     "inventory" ->
-                        loadInventoryData routeConfig.activityId
+                        -- Load both activity info and inventory data
+                        Cmd.batch
+                            [ loadActivityInfo routeConfig.activityId
+                            , loadInventoryData routeConfig.activityId
+                            ]
 
                     "graph" ->
                         let
@@ -1375,7 +1379,7 @@ update msg model =
                     -- For activity exchange pages: load activity info
                     shouldLoadActivityInfo =
                         routeInfo.needsActivity
-                            && (newPage == UpstreamPage || newPage == EmissionsPage || newPage == ResourcesPage || newPage == ProductsPage)
+                            && (newPage == UpstreamPage || newPage == EmissionsPage || newPage == ResourcesPage || newPage == ProductsPage || newPage == InventoryPage)
                             && not (Dict.member routeInfo.activityId model.cachedActivityInfo)
 
                     -- For TreePage: load tree data
@@ -1467,6 +1471,10 @@ update msg model =
 
                                 Nothing ->
                                     Cmd.none
+
+                        else if shouldLoadActivityInfo && shouldLoadInventory then
+                            -- For inventory page: load both activity info and inventory
+                            Cmd.batch [ loadActivityInfo routeInfo.activityId, loadInventoryData routeInfo.activityId ]
 
                         else if shouldLoadActivityInfo then
                             loadActivityInfo routeInfo.activityId
@@ -1692,18 +1700,7 @@ view model =
                     viewTreePage model
 
                 InventoryPage ->
-                    Html.map
-                        (\msg ->
-                            case msg of
-                                InventoryView.UpdateSearchQuery query ->
-                                    UpdateInventorySearchQuery query
-                        )
-                        (InventoryView.viewInventoryPage
-                            (Dict.get model.currentActivityId model.cachedInventories)
-                            model.loading
-                            model.error
-                            model.inventorySearchQuery
-                        )
+                    viewInventoryPage model
 
                 GraphPage ->
                     viewGraphPage model
@@ -1964,6 +1961,125 @@ viewActivityHeaderWithTitle activityInfo hasHistory pageTitle =
             text ""
         , -- Page title
           h2 [ class "title is-5", style "margin-top" "1rem", style "margin-bottom" "0" ] [ text pageTitle ]
+        ]
+
+
+viewInventoryPage : Model -> Html Msg
+viewInventoryPage model =
+    div [ class "details-page-container" ]
+        [ case ( model.loading, model.error ) of
+            ( True, _ ) ->
+                div [ class "has-text-centered" ]
+                    [ div [ class "is-size-3" ] [ text "Loading..." ]
+                    , progress [ class "progress is-primary", attribute "max" "100" ] []
+                    ]
+
+            ( _, Just err ) ->
+                div [ class "notification is-danger" ]
+                    [ button [ class "delete", onClick (LoadActivityInfo model.currentActivityId) ] []
+                    , strong [] [ text "Error: " ]
+                    , text err
+                    ]
+
+            ( False, Nothing ) ->
+                case ( Dict.get model.currentActivityId model.cachedActivityInfo, Dict.get model.currentActivityId model.cachedInventories ) of
+                    ( Just activityInfo, Just inventory ) ->
+                        div [ style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+                            [ div [ style "flex-shrink" "0" ]
+                                [ viewInventoryHeader activityInfo inventory (not (List.isEmpty model.navigationHistory))
+                                ]
+                            , div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0" ]
+                                [ Html.map
+                                    (\msg ->
+                                        case msg of
+                                            InventoryView.UpdateSearchQuery query ->
+                                                UpdateInventorySearchQuery query
+                                    )
+                                    (InventoryView.viewInventoryTable model.inventorySearchQuery inventory.ieFlows)
+                                ]
+                            ]
+
+                    ( Just activityInfo, Nothing ) ->
+                        div [ style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+                            [ div [ style "flex-shrink" "0" ]
+                                [ viewActivityHeaderWithTitle activityInfo (not (List.isEmpty model.navigationHistory)) "Inventory Metadata"
+                                ]
+                            , div [ class "has-text-centered", style "padding" "2rem" ]
+                                [ text "Loading inventory data..." ]
+                            ]
+
+                    _ ->
+                        div [ class "has-text-centered" ]
+                            [ text "Loading activity data..." ]
+        ]
+
+
+viewInventoryHeader : Models.Activity.ActivityInfo -> Models.Inventory.InventoryExport -> Bool -> Html Msg
+viewInventoryHeader activityInfo inventory hasHistory =
+    let
+        backButtonText =
+            if hasHistory then
+                "Previous Activity"
+
+            else
+                "Search results"
+
+        calcDetails =
+            "Total flows: "
+                ++ String.fromInt inventory.ieMetadata.imTotalFlows
+                ++ " | Emissions: "
+                ++ String.fromInt inventory.ieMetadata.imEmissionFlows
+                ++ " | Resources: "
+                ++ String.fromInt inventory.ieMetadata.imResourceFlows
+    in
+    div [ class "box", style "margin-bottom" "0" ]
+        [ -- Title and location on same line
+          div [ class "level", style "margin-bottom" "0" ]
+            [ div [ class "level-left" ]
+                ([ div [ class "level-item" ]
+                    [ button
+                        [ class "button is-primary"
+                        , onClick (DetailsViewMsg DetailsView.NavigateBack)
+                        ]
+                        [ span [ class "icon" ]
+                            [ i [ class "fas fa-arrow-left" ] []
+                            ]
+                        , span [] [ text backButtonText ]
+                        ]
+                    ]
+                 , div [ class "level-item" ]
+                    [ h1 [ class "title is-4", style "margin-bottom" "0" ]
+                        (case activityInfo.referenceProduct of
+                            Just product ->
+                                let
+                                    productText =
+                                        case ( activityInfo.referenceProductAmount, activityInfo.referenceProductUnit ) of
+                                            ( Just amount, Just unit ) ->
+                                                Format.formatScientific amount ++ " " ++ unit ++ " " ++ product
+
+                                            _ ->
+                                                product
+                                in
+                                [ text activityInfo.name
+                                , span [ style "color" "#888", style "margin" "0 0.5rem" ] [ text "→" ]
+                                , span [ style "font-weight" "normal" ] [ text productText ]
+                                ]
+
+                            Nothing ->
+                                [ text activityInfo.name ]
+                        )
+                    ]
+                 , div [ class "level-item" ]
+                    [ span [ class "tag is-light" ] [ text activityInfo.location ]
+                    ]
+                 ]
+                )
+            ]
+        , -- Calculation details (where description would be on other pages)
+          div [ style "font-size" "0.85rem", style "line-height" "1.4", style "margin-top" "0.5rem", style "color" "#666" ]
+            [ text calcDetails ]
+        , -- Page title
+          h2 [ class "title is-5", style "margin-top" "1rem", style "margin-bottom" "0" ] [ text "Inventory Metadata" ]
         ]
 
 
