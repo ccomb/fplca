@@ -697,7 +697,7 @@ update msg model =
                             ( { model
                                 | navigationHistory = rest
                               }
-                            , Nav.pushUrl model.key (routeToUrl (ActivityUpstreamRoute db parentId))
+                            , Nav.pushUrl model.key (routeToUrl (pageTypeToRoute db parentId model.currentPage))
                             )
 
                         [] ->
@@ -1589,6 +1589,45 @@ routeToUrl route =
 
         NotFoundRoute ->
             "/"
+
+
+{-| Convert a Page type to the corresponding Route for a given activity
+-}
+pageTypeToRoute : String -> String -> Page -> Route
+pageTypeToRoute db activityId page =
+    case page of
+        UpstreamPage ->
+            ActivityUpstreamRoute db activityId
+
+        EmissionsPage ->
+            ActivityEmissionsRoute db activityId
+
+        ResourcesPage ->
+            ActivityResourcesRoute db activityId
+
+        ProductsPage ->
+            ActivityProductsRoute db activityId
+
+        TreePage ->
+            ActivityTreeRoute db activityId
+
+        InventoryPage ->
+            ActivityInventoryRoute db activityId
+
+        GraphPage ->
+            ActivityGraphRoute db activityId
+
+        LCIAPage ->
+            ActivityLCIARoute db activityId
+
+        ActivitiesPage ->
+            ActivitiesRoute { db = db, name = Nothing, limit = Just 20 }
+
+        DatabasesPage ->
+            DatabasesRoute
+
+        UploadPage ->
+            UploadRoute
 
 
 {-| Get current database name from model (URL database or server's current)
