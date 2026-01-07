@@ -145,6 +145,8 @@ convertToInventoryExport db processId rootActivity inventory =
                 M.toList $
                     M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
 
+        !(prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) rootActivity
+
         !metadata =
             InventoryMetadata
                 { imRootActivity =
@@ -152,7 +154,9 @@ convertToInventoryExport db processId rootActivity inventory =
                         (processIdToText db processId)
                         (activityName rootActivity)
                         (activityLocation rootActivity)
-                        (fromMaybe "" (getReferenceProductName (dbFlows db) rootActivity))
+                        prodName
+                        prodAmount
+                        prodUnit
                 , imTotalFlows = length flowDetails
                 , imEmissionFlows = emissionFlows
                 , imResourceFlows = resourceFlows
@@ -645,21 +649,25 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam = do
         activityResults =
             map
                 ( \activity ->
-                    let productName = fromMaybe "" (getReferenceProductName (dbFlows db) activity)
+                    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) activity
                     in case findProcessIdForActivity db activity of
                         Just processId ->
                             ActivitySummary
                                 (processIdToText db processId)
                                 (activityName activity)
                                 (activityLocation activity)
-                                productName
+                                prodName
+                                prodAmount
+                                prodUnit
                         Nothing ->
                             -- Fallback if ProcessId not found
                             ActivitySummary
                                 "unknown"
                                 (activityName activity)
                                 (activityLocation activity)
-                                productName
+                                prodName
+                                prodAmount
+                                prodUnit
                 )
                 pagedResults
     endTime <- getCurrentTime
@@ -711,6 +719,7 @@ convertActivityForAPI db processId activity =
     let allProducts = case processIdToUUIDs db processId of
             Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
             Nothing -> []
+        (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) activity
     in ActivityForAPI
         { pfaProcessId = processIdToText db processId
         , pfaName = activityName activity
@@ -719,7 +728,9 @@ convertActivityForAPI db processId activity =
         , pfaClassifications = activityClassification activity
         , pfaLocation = activityLocation activity
         , pfaUnit = activityUnit activity
-        , pfaReferenceProduct = getReferenceProductName (dbFlows db) activity
+        , pfaReferenceProduct = if T.null refProdName then Nothing else Just refProdName
+        , pfaReferenceProductAmount = if T.null refProdName then Nothing else Just refProdAmount
+        , pfaReferenceProductUnit = if T.null refProdName then Nothing else Just refProdUnit
         , pfaAllProducts = allProducts
         , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
         }
@@ -756,16 +767,30 @@ getReferenceProductName flows activity =
         (ex : _) -> fmap flowName (M.lookup (exchangeFlowId ex) flows)
         [] -> Nothing
 
+-- | Get reference product info (name, amount, unit) from activity exchanges
+getReferenceProductInfo :: M.Map UUID Flow -> UnitDB -> Activity -> (Text, Double, Text)
+getReferenceProductInfo flows units activity =
+    case [ex | ex <- exchanges activity, exchangeIsReference ex] of
+        (ex : _) ->
+            let name = maybe "" flowName (M.lookup (exchangeFlowId ex) flows)
+                amount = exchangeAmount ex
+                unitName = getUnitNameForExchange units ex
+            in (name, amount, unitName)
+        [] -> ("", 1.0, "")
+
 -- | Get all products (ProcessIds) for an activity UUID using the products index
 getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
 getAllProductsForActivity db activityUUID =
     case M.lookup activityUUID (dbActivityProductsIndex db) of
         Just processIds ->
-            [ ActivitySummary
+            [ let (prodName, prodAmount, prodUnit) = getProductInfo db pid
+              in ActivitySummary
                 { prsId = processIdToText db pid
                 , prsName = getActivityNameForPid db pid
                 , prsLocation = maybe "" activityLocation (findActivityByProcessId db pid)
-                , prsProduct = getProductName db pid
+                , prsProduct = prodName
+                , prsProductAmount = prodAmount
+                , prsProductUnit = prodUnit
                 }
             | pid <- processIds
             ]
@@ -777,15 +802,12 @@ getAllProductsForActivity db activityUUID =
         case findActivityByProcessId db' pid of
             Just activity -> activityName activity
             Nothing -> "Unknown"
-    -- Get product name from reference exchange flow
-    getProductName :: Database -> ProcessId -> Text
-    getProductName db' pid =
+    -- Get product info (name, amount, unit) from reference exchange
+    getProductInfo :: Database -> ProcessId -> (Text, Double, Text)
+    getProductInfo db' pid =
         case findActivityByProcessId db' pid of
-            Just activity ->
-                case getReferenceProductName (dbFlows db') activity of
-                    Just name -> name
-                    Nothing -> activityName activity
-            Nothing -> "Unknown"
+            Just activity -> getReferenceProductInfo (dbFlows db') (dbUnits db') activity
+            Nothing -> ("Unknown", 1.0, "")
 
 -- | Get target activity for technosphere navigation
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
@@ -793,13 +815,15 @@ getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
     targetActivity <- findActivityByActivityUUID db targetId
     processId <- findProcessIdForActivity db targetActivity
-    let productName = fromMaybe "" (getReferenceProductName (dbFlows db) targetActivity)
+    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) targetActivity
     return $
         ActivitySummary
             { prsId = processIdToText db processId
             , prsName = activityName targetActivity
             , prsLocation = activityLocation targetActivity
-            , prsProduct = productName
+            , prsProduct = prodName
+            , prsProductAmount = prodAmount
+            , prsProductUnit = prodUnit
             }
 
 -- | Get reference product as FlowDetail (if exists)
@@ -820,11 +844,14 @@ getActivitiesUsingFlow db flowUUID =
         Nothing -> []
         Just activityUUIDs ->
             let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
-             in [ ActivitySummary
+             in [ let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) proc
+                  in ActivitySummary
                     (processIdToText db processId)
                     (activityName proc)
                     (activityLocation proc)
-                    (fromMaybe "" (getReferenceProductName (dbFlows db) proc))
+                    prodName
+                    prodAmount
+                    prodUnit
                 | procUUID <- uniqueUUIDs
                 , Just proc <- [findActivityByActivityUUID db procUUID]
                 , Just processId <- [findProcessIdForActivity db proc]

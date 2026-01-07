@@ -95,6 +95,8 @@ type alias ActivitySummary =
     , name : String
     , location : String
     , product : String
+    , productAmount : Float
+    , productUnit : String
     }
 
 
@@ -116,6 +118,8 @@ type alias ActivityInfo =
     , description : List String
     , classifications : Dict String String
     , referenceProduct : Maybe String
+    , referenceProductAmount : Maybe Float
+    , referenceProductUnit : Maybe String
     , allProducts : List ActivitySummary
     , exchanges : List ActivityExchange
     }
@@ -248,6 +252,8 @@ activitySummaryDecoder =
         |> required "prsName" Decode.string
         |> required "prsLocation" Decode.string
         |> required "prsProduct" Decode.string
+        |> required "prsProductAmount" Decode.float
+        |> required "prsProductUnit" Decode.string
 
 
 searchResultsDecoder : Decoder a -> Decoder (SearchResults a)
@@ -269,6 +275,8 @@ activityInfoDecoder =
             |> required "pfaDescription" (Decode.list Decode.string)
             |> required "pfaClassifications" (Decode.dict Decode.string)
             |> required "pfaReferenceProduct" (Decode.nullable Decode.string)
+            |> required "pfaReferenceProductAmount" (Decode.nullable Decode.float)
+            |> required "pfaReferenceProductUnit" (Decode.nullable Decode.string)
             |> required "pfaAllProducts" (Decode.list activitySummaryDecoder)
             |> required "pfaExchanges" (Decode.list activityExchangeDecoder)
         )

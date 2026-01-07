@@ -27,6 +27,8 @@ data ActivitySummary = ActivitySummary
     , prsName :: Text
     , prsLocation :: Text
     , prsProduct :: Text  -- Reference product name
+    , prsProductAmount :: Double  -- Reference product amount
+    , prsProductUnit :: Text  -- Reference product unit name
     }
     deriving (Generic)
 
@@ -311,6 +313,8 @@ data ActivityForAPI = ActivityForAPI
     , pfaLocation :: Text
     , pfaUnit :: Text -- Unité de référence
     , pfaReferenceProduct :: Maybe Text -- Name of the reference product (output)
+    , pfaReferenceProductAmount :: Maybe Double -- Amount of reference product
+    , pfaReferenceProductUnit :: Maybe Text -- Unit of reference product
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     }

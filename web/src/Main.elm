@@ -15,6 +15,7 @@ import Models.Graph exposing (GraphData, graphDataDecoder)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
 import Models.Page exposing (Page(..), Route(..))
+import Utils.Format as Format
 import Url
 import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, parse, string, top)
@@ -1860,9 +1861,18 @@ viewActivityHeaderWithDoc activityInfo hasHistory =
                     [ h1 [ class "title is-4", style "margin-bottom" "0" ]
                         (case activityInfo.referenceProduct of
                             Just product ->
+                                let
+                                    productText =
+                                        case ( activityInfo.referenceProductAmount, activityInfo.referenceProductUnit ) of
+                                            ( Just amount, Just unit ) ->
+                                                Format.formatScientific amount ++ " " ++ unit ++ " " ++ product
+
+                                            _ ->
+                                                product
+                                in
                                 [ text activityInfo.name
                                 , span [ style "color" "#888", style "margin" "0 0.5rem" ] [ text "→" ]
-                                , span [ style "font-weight" "normal" ] [ text product ]
+                                , span [ style "font-weight" "normal" ] [ text productText ]
                                 ]
 
                             Nothing ->
@@ -1919,9 +1929,18 @@ viewActivityHeaderWithTitle activityInfo hasHistory pageTitle =
                     [ h1 [ class "title is-4", style "margin-bottom" "0" ]
                         (case activityInfo.referenceProduct of
                             Just product ->
+                                let
+                                    productText =
+                                        case ( activityInfo.referenceProductAmount, activityInfo.referenceProductUnit ) of
+                                            ( Just amount, Just unit ) ->
+                                                Format.formatScientific amount ++ " " ++ unit ++ " " ++ product
+
+                                            _ ->
+                                                product
+                                in
                                 [ text activityInfo.name
                                 , span [ style "color" "#888", style "margin" "0 0.5rem" ] [ text "→" ]
-                                , span [ style "font-weight" "normal" ] [ text product ]
+                                , span [ style "font-weight" "normal" ] [ text productText ]
                                 ]
 
                             Nothing ->
