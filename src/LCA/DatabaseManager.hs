@@ -53,6 +53,7 @@ import LCA.Progress (reportProgress, reportError, ProgressLevel(..))
 import LCA.Query (buildDatabaseWithMatrices)
 import LCA.SynonymDB (SynonymDB)
 import LCA.Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference)
+import qualified LCA.UnitConversion as UnitConversion
 import qualified EcoSpold.Loader as Loader
 import qualified LCA.Upload as Upload
 import qualified LCA.UploadedDatabase as UploadedDB
@@ -125,6 +126,7 @@ data DatabaseManager = DatabaseManager
     , dmAvailableDbs  :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
     , dmSynonymDB     :: !SynonymDB                         -- Shared synonym database
     , dmNoCache       :: !Bool                              -- Caching disabled flag
+    , dmUnitConfig    :: !UnitConversion.UnitConfig         -- Unit configuration
     }
 
 -- | Initialize database manager from config
@@ -144,6 +146,21 @@ initDatabaseManager config synonymDB noCache _configPath = do
     let allDbs = configuredDbs ++ uploadedDbs
         loadableDbs = filter dcLoad allDbs
 
+    -- Build UnitConfig from config (or use defaults)
+    unitConfig <- case cfgUnits config of
+        Nothing -> do
+            reportProgress Info "Using default unit configuration"
+            return UnitConversion.defaultUnitConfig
+        Just unitsToml -> do
+            let aliases = M.map (\uac -> (uacDim uac, uacFactor uac)) (ucAliases unitsToml)
+            case UnitConversion.buildUnitConfigFromToml (ucDimensions unitsToml) aliases of
+                Right cfg -> do
+                    reportProgress Info $ "Loaded " ++ show (M.size aliases) ++ " custom unit aliases from config"
+                    return cfg
+                Left err -> do
+                    reportError $ "Invalid [units] config: " <> T.unpack err <> " - using defaults"
+                    return UnitConversion.defaultUnitConfig
+
     -- Create TVars
     loadedDbsVar <- newTVarIO M.empty
     currentNameVar <- newTVarIO Nothing
@@ -155,6 +172,7 @@ initDatabaseManager config synonymDB noCache _configPath = do
             , dmAvailableDbs = availableDbsVar
             , dmSynonymDB = synonymDB
             , dmNoCache = noCache
+            , dmUnitConfig = unitConfig
             }
 
     -- Pre-load databases with load=true at startup
@@ -227,6 +245,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             { cfgServer = defaultServerConfig
             , cfgDatabases = [dbConfig]
             , cfgMethods = []
+            , cfgUnits = Nothing
             }
 
     initDatabaseManager config synonymDB noCache Nothing

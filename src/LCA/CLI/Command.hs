@@ -6,6 +6,7 @@ import LCA.CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLICon
 import LCA.Progress
 import qualified LCA.Service
 import LCA.Types (Database)
+import LCA.UnitConversion (defaultUnitConfig)
 import Control.Monad (when)
 import Data.Aeson (Value, toJSON, encode)
 import Data.Aeson.Encode.Pretty (encodePretty)
@@ -112,7 +113,7 @@ executeCommand (CLIConfig globalOpts _) cmd database = do
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityCommand fmt jsonPathOpt database uuid = do
-  case LCA.Service.getActivityInfo database uuid of
+  case LCA.Service.getActivityInfo defaultUnitConfig database uuid of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 

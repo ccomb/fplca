@@ -239,11 +239,17 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
     reportMatrixOperation "Database with matrices built successfully"
     reportMatrixOperation ("Final matrix stats: " ++ show (VU.length techTriples) ++ " tech entries, " ++ show (VU.length bioTriples) ++ " bio entries")
 
+    -- Build product index for SimaPro link resolution and future product search
+    reportMatrixOperation "Building product index"
+    let !productIndex = buildProductIndex dbActivities dbProcessIdTable flowDB
+    reportMatrixOperation ("Product index: " ++ show (M.size (piByUUID productIndex)) ++ " products indexed")
+
     return Database
             { dbProcessIdTable = dbProcessIdTable
             , dbProcessIdLookup = dbProcessIdLookup
             , dbActivityUUIDIndex = dbActivityUUIDIndex
             , dbActivityProductsIndex = dbActivityProductsIndex
+            , dbProductIndex = productIndex
             , dbActivities = dbActivities
             , dbFlows = flowDB
             , dbUnits = unitDB
@@ -315,6 +321,26 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
             , idxFlowByCategory = flowCatIdx
             , idxFlowByType = flowTypeIdx
             }
+
+-- | Build ProductIndex for product-based lookups
+-- Used for: (1) SimaPro upstream link resolution, (2) future product search
+-- Maps product flow UUIDs and names to the activities that produce them
+buildProductIndex :: V.Vector Activity -> V.Vector (UUID, UUID) -> FlowDB -> ProductIndex
+buildProductIndex activities processIdTable flowDb =
+    let -- Build list of (ProcessId, productUUID, productName, location) for each activity
+        entries =
+            [ (pid, prodUUID, prodName, actLoc)
+            | (pid, (_, prodUUID)) <- zip [0..] (V.toList processIdTable)
+            , let act = activities V.! fromIntegral pid
+            , let actLoc = activityLocation act
+            , Just flow <- [M.lookup prodUUID flowDb]
+            , let prodName = T.toLower (flowName flow)
+            ]
+    in ProductIndex
+        { piByUUID = M.fromList [(prodUUID, pid) | (pid, prodUUID, _, _) <- entries]
+        , piByName = M.fromListWith (++) [(name, [pid]) | (pid, _, name, _) <- entries]
+        , piByLocation = M.fromListWith (++) [(loc, [pid]) | (pid, _, _, loc) <- entries, not (T.null loc)]
+        }
 
 -- | Search activities by multiple fields (name, geography, product)
 -- Multi-word search: each word must match either name OR location (AND logic)

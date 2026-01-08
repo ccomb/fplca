@@ -9,6 +9,8 @@ module LCA.Config
     , ServerConfig(..)
     , DatabaseConfig(..)
     , MethodConfig(..)
+    , UnitsConfig(..)
+    , UnitAliasConfig(..)
       -- * Loading
     , loadConfig
     , loadConfigFile
@@ -37,6 +39,7 @@ data Config = Config
     { cfgServer    :: !ServerConfig
     , cfgDatabases :: ![DatabaseConfig]
     , cfgMethods   :: ![MethodConfig]
+    , cfgUnits     :: !(Maybe UnitsConfig)  -- Optional custom unit definitions
     } deriving (Show, Eq, Generic)
 
 -- | Server configuration
@@ -65,6 +68,19 @@ data MethodConfig = MethodConfig
     , mcActive :: !Bool
     } deriving (Show, Eq, Generic)
 
+-- | Unit configuration for dimensional analysis
+-- Allows defining custom unit aliases with dimension expressions
+data UnitsConfig = UnitsConfig
+    { ucDimensions :: ![Text]                      -- Base dimension names in order
+    , ucAliases    :: !(Map Text UnitAliasConfig)  -- Unit name → {dim, factor}
+    } deriving (Show, Eq, Generic)
+
+-- | Single unit alias definition
+data UnitAliasConfig = UnitAliasConfig
+    { uacDim    :: !Text    -- Dimension expression like "mass*length" or "length/time"
+    , uacFactor :: !Double  -- Conversion factor to SI base units
+    } deriving (Show, Eq, Generic)
+
 -- | Default server configuration
 defaultServerConfig :: ServerConfig
 defaultServerConfig = ServerConfig
@@ -79,6 +95,7 @@ defaultConfig = Config
     { cfgServer = defaultServerConfig
     , cfgDatabases = []
     , cfgMethods = []
+    , cfgUnits = Nothing
     }
 
 -- TOML Decoders
@@ -94,6 +111,7 @@ instance DecodeTOML Config where
         cfgMethods <- getFieldOptWith (getArrayOf tomlDecoder) "methods" >>= \case
             Just ms -> pure ms
             Nothing -> pure []
+        cfgUnits <- getFieldOptWith tomlDecoder "units"
         pure Config{..}
 
 instance DecodeTOML ServerConfig where
@@ -135,6 +153,22 @@ instance DecodeTOML MethodConfig where
             Just a  -> pure a
             Nothing -> pure True  -- Default to active
         pure MethodConfig{..}
+
+instance DecodeTOML UnitsConfig where
+    tomlDecoder = do
+        ucDimensions <- getFieldOpt "dimensions" >>= \case
+            Just dims -> pure dims
+            Nothing -> pure ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        ucAliases <- getFieldOpt "aliases" >>= \case
+            Just m  -> pure m
+            Nothing -> pure M.empty
+        pure UnitsConfig{..}
+
+instance DecodeTOML UnitAliasConfig where
+    tomlDecoder = do
+        uacDim <- getField "dim"
+        uacFactor <- getField "factor"
+        pure UnitAliasConfig{..}
 
 -- | Load configuration from a TOML file
 loadConfigFile :: FilePath -> IO (Either Text Config)

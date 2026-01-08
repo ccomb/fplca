@@ -11,6 +11,7 @@ import LCA.Query (findActivitiesByFields, findFlowsBySynonym)
 import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
 import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import LCA.UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int32)
 import qualified Data.List as L
@@ -97,10 +98,10 @@ validateProcessIdInMatrixIndex db processId =
 
 
 -- | Rich activity info (returns same format as API)
-getActivityInfo :: Database -> Text -> Either ServiceError Value
-getActivityInfo db queryText = do
+getActivityInfo :: UnitConfig -> Database -> Text -> Either ServiceError Value
+getActivityInfo unitCfg db queryText = do
     (processId, activity) <- resolveActivityAndProcessId db queryText
-    let activityForAPI = convertActivityForAPI db processId activity
+    let activityForAPI = convertActivityForAPI unitCfg db processId activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
         -- Use ProcessId (which encodes both activityUUID and productUUID) for links
@@ -262,6 +263,42 @@ findProcessIdForActivity db activity =
 
         matchingIndex = V.findIndex matchesActivity (dbActivities db)
     in fmap fromIntegral matchingIndex
+
+-- | Find supplier ProcessId by product flow UUID with fallback to name+unit matching.
+-- Primary: UUID lookup in ProductIndex
+-- Fallback: When UUID fails (e.g., SimaPro tkm vs kgkm), find by name with unit compatibility check
+findProcessIdByProductFlowWithFallback :: UnitConfig -> Database -> UUID -> Maybe ProcessId
+findProcessIdByProductFlowWithFallback unitCfg db flowUUID =
+    case findProcessIdByProductFlow db flowUUID of
+        Just pid -> Just pid
+        Nothing ->
+            -- Fallback: look up the flow to get its name and unit
+            case M.lookup flowUUID (dbFlows db) of
+                Just inputFlow ->
+                    let inputName = T.toLower (flowName inputFlow)
+                        inputUnit = getUnitNameForFlow (dbUnits db) inputFlow
+                        -- Get candidates by normalized name
+                        candidates = searchProductsByName db inputName
+                        -- Filter to only dimensionally compatible units
+                        compatible = filter (isUnitCompatible inputUnit) candidates
+                    in case compatible of
+                        [singleMatch] -> Just singleMatch  -- Exactly one match
+                        _ -> Nothing  -- Zero or multiple matches
+                Nothing -> Nothing
+  where
+    isUnitCompatible :: Text -> ProcessId -> Bool
+    isUnitCompatible inputUnit pid =
+        case getActivity db pid of
+            Just act ->
+                let prodUnit = getRefProductUnit db act
+                in unitsCompatible unitCfg inputUnit prodUnit
+            Nothing -> False
+
+    getRefProductUnit :: Database -> Activity -> Text
+    getRefProductUnit db' act =
+        case [ex | ex <- exchanges act, exchangeIsReference ex] of
+            (ex:_) -> getUnitNameForExchange (dbUnits db') ex
+            [] -> ""
 
 -- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
 -- For all node types, we attempt to return ProcessId format for consistency
@@ -714,8 +751,8 @@ calculateActivityStats activity =
 
 -- | Convert Activity to ActivityForAPI with unit names
 -- Note: This function requires the ProcessId to get the activity UUID
-convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
-convertActivityForAPI db processId activity =
+convertActivityForAPI :: UnitConfig -> Database -> ProcessId -> Activity -> ActivityForAPI
+convertActivityForAPI unitCfg db processId activity =
     let allProducts = case processIdToUUIDs db processId of
             Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
             Nothing -> []
@@ -738,13 +775,23 @@ convertActivityForAPI db processId activity =
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
-                TechnosphereExchange _ _ _ _ _ linkId _ _ ->
-                    case findActivityByActivityUUID db linkId of
-                        Just targetActivity ->
-                            let maybeProcessId = findProcessIdByActivityUUID db linkId
-                                processIdText = fmap (processIdToText db) maybeProcessId
-                            in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
-                        Nothing -> (Nothing, Nothing, Nothing)
+                TechnosphereExchange flowId _ _ isInput _ linkId _ _
+                    | isInput && linkId /= UUID.nil ->
+                        -- EcoSpold path: use explicit activity link
+                        case findActivityByActivityUUID db linkId of
+                            Just targetActivity ->
+                                let maybeProcessId = findProcessIdByActivityUUID db linkId
+                                    processIdText = fmap (processIdToText db) maybeProcessId
+                                in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
+                            Nothing -> (Nothing, Nothing, Nothing)
+                    | isInput ->
+                        -- SimaPro path: linkId is nil, resolve by product flow UUID
+                        -- Uses fallback to name+unit matching when UUID lookup fails (e.g., tkm vs kgkm)
+                        case findProcessIdByProductFlowWithFallback unitCfg db flowId of
+                            Just pid | Just act <- getActivity db pid ->
+                                (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
+                            _ -> (Nothing, Nothing, Nothing)
+                    | otherwise -> (Nothing, Nothing, Nothing)
                 BiosphereExchange _ _ _ _ _ -> (Nothing, Nothing, Nothing)
          in ExchangeWithUnit
                 { ewuExchange = exchange

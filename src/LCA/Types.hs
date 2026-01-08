@@ -319,6 +319,25 @@ data MatrixFactorization = MatrixFactorization
     , mfDatabaseId :: !Text -- Database identifier for per-database cache lookup
     } deriving (Generic, NFData, Binary)
 
+-- | Index for looking up activities by their reference product attributes
+-- Used for: (1) upstream link resolution for SimaPro data, (2) future product search
+data ProductIndex = ProductIndex
+    { piByUUID     :: !(M.Map UUID ProcessId)      -- Product flow UUID → ProcessId (for upstream links)
+    , piByName     :: !(M.Map Text [ProcessId])    -- Normalized product name → [ProcessId] (for search)
+    , piByLocation :: !(M.Map Text [ProcessId])    -- Location → [ProcessId] (for search)
+    } deriving (Generic, NFData)
+
+instance Binary ProductIndex where
+    put pi = do
+        Binary.put (piByUUID pi)
+        Binary.put (piByName pi)
+        Binary.put (piByLocation pi)
+    get = ProductIndex <$> Binary.get <*> Binary.get <*> Binary.get
+
+-- | Empty product index (used as default when loading old cache files)
+emptyProductIndex :: ProductIndex
+emptyProductIndex = ProductIndex M.empty M.empty M.empty
+
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
@@ -326,6 +345,7 @@ data Database = Database
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
     , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
     , dbActivityProductsIndex :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
+    , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbFlows :: !FlowDB
     , dbUnits :: !UnitDB
@@ -353,6 +373,7 @@ instance Binary Database where
         Binary.put (dbProcessIdLookup db)
         Binary.put (dbActivityUUIDIndex db)
         Binary.put (dbActivityProductsIndex db)
+        Binary.put (dbProductIndex db)
         Binary.put (dbActivities db)
         Binary.put (dbFlows db)
         Binary.put (dbUnits db)
@@ -370,6 +391,7 @@ instance Binary Database where
         processIdLookup <- Binary.get
         activityUUIDIndex <- Binary.get
         activityProductsIndex <- Binary.get
+        productIndex <- Binary.get
         activities <- Binary.get
         flows <- Binary.get
         units <- Binary.get
@@ -385,6 +407,7 @@ instance Binary Database where
             , dbProcessIdLookup = processIdLookup
             , dbActivityUUIDIndex = activityUUIDIndex
             , dbActivityProductsIndex = activityProductsIndex
+            , dbProductIndex = productIndex
             , dbActivities = activities
             , dbFlows = flows
             , dbUnits = units
@@ -431,6 +454,25 @@ findActivityByActivityUUID :: Database -> UUID -> Maybe Activity
 findActivityByActivityUUID db searchUUID = do
     pid <- M.lookup searchUUID (dbActivityUUIDIndex db)
     getActivity db pid
+
+-- | Find supplier ProcessId by product flow UUID
+-- ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlowId is valid.
+-- Uses the ProductIndex to resolve the supplier activity from the product flow.
+findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
+findProcessIdByProductFlow db flowUUID =
+    M.lookup flowUUID (piByUUID $ dbProductIndex db)
+
+-- | Search products by name (for future product search feature)
+-- Returns all ProcessIds that produce products matching the given name
+searchProductsByName :: Database -> Text -> [ProcessId]
+searchProductsByName db query =
+    M.findWithDefault [] (T.toLower query) (piByName $ dbProductIndex db)
+
+-- | Search products by location (for future product search feature)
+-- Returns all ProcessIds that produce products at the given location
+searchProductsByLocation :: Database -> Text -> [ProcessId]
+searchProductsByLocation db loc =
+    M.findWithDefault [] loc (piByLocation $ dbProductIndex db)
 
 -- | Convert ProcessId to UUID pair
 processIdToUUIDs :: Database -> ProcessId -> Maybe (UUID, UUID)

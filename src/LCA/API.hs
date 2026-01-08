@@ -138,7 +138,8 @@ lcaServer dbManager maxTreeDepth methodsDir =
     getActivityInfo :: Text -> Handler ActivityInfo
     getActivityInfo processId = do
         (db, _) <- requireCurrentDatabase dbManager
-        case LCA.Service.getActivityInfo db processId of
+        let unitCfg = dmUnitConfig dbManager
+        case LCA.Service.getActivityInfo unitCfg db processId of
             Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (LCA.Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Right result -> case fromJSON result of
