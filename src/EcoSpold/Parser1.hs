@@ -276,11 +276,15 @@ parseWithXeno xmlContent =
 
             flowType = if isBiosphere then Biosphere else Technosphere
 
-            -- Exchange location: use exchange's own location, or fall back to activity location
+            -- Exchange location: use exchange's own location
+            -- For technosphere: leave empty if not specified, so Loader can use name-only lookup
+            -- For biosphere: fall back to activity location (biosphere flows don't need supplier linking)
             exchangeLocation = if T.null (exLocation edata)
-                               then case activityLoc of
-                                        Just loc -> loc
-                                        Nothing -> ""
+                               then if isBiosphere
+                                    then case activityLoc of
+                                             Just loc -> loc
+                                             Nothing -> ""
+                                    else ""  -- Technosphere: leave empty for name-only lookup in Loader
                                else exLocation edata
 
             -- Set activityLinkId to nil - will be resolved later in Loader using

@@ -119,6 +119,12 @@ Maps normalizedProductName → (activityUUID, productUUID)
 -}
 type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID)
 
+{- | Type alias for name-only supplier lookup with location (for EcoSpold1)
+Maps normalizedProductName → (activityUUID, productUUID, location)
+Used when exchange has no location attribute to find the activity's actual location
+-}
+type SupplierByNameWithLocation = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
+
 -- | Normalize text for matching: lowercase and strip whitespace
 normalizeText :: T.Text -> T.Text
 normalizeText = T.toLower . T.strip
@@ -149,22 +155,40 @@ buildSupplierIndexByName activities flowDb =
         , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
         ]
 
+{- | Build name-only supplier index with location for EcoSpold1 linking
+Used when exchange has no location attribute to find the activity's actual location
+Maps normalizedProductName → (activityUUID, productUUID, activityLocation)
+-}
+buildSupplierIndexByNameWithLocation :: ActivityMap -> FlowDB -> SupplierByNameWithLocation
+buildSupplierIndexByNameWithLocation activities flowDb =
+    M.fromList
+        [ (normalizeText (flowName flow), (actUUID, prodUUID, activityLocation act))
+        | ((actUUID, prodUUID), act) <- M.toList activities
+        , ex <- exchanges act
+        , exchangeIsReference ex
+        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+        ]
+
 {- | Fix EcoSpold1 activity links by resolving supplier references
 Uses (flowName, flowLocation) to look up the correct supplier activity
 Aliases map "flowName" → "activityName|location" to override lookup
+When exchange has no location, uses name-only lookup to find the activity's location
 -}
 fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> SimpleDatabase -> IO SimpleDatabase
 fixEcoSpold1ActivityLinks aliases db = do
     -- Build supplier index (without alias entries - aliases are applied at lookup time)
     let supplierIndex = buildSupplierIndex M.empty (sdbActivities db) (sdbFlows db)
+    -- Build name-only index with location for exchanges missing location attribute
+    let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbFlows db)
     reportProgress Info $
         printf
-            "Built supplier index with %d entries for activity linking (%d aliases configured)"
+            "Built supplier index with %d entries for activity linking (%d aliases configured, %d name-only entries)"
             (M.size supplierIndex)
             (M.size aliases)
+            (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, linkStats) = fixAllActivities aliases supplierIndex (sdbFlows db) (sdbActivities db)
+    let (fixedActivities, linkStats) = fixAllActivities aliases supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
     let (totalLinks, foundLinks, missingLinks) = linkStats
 
     reportProgress Info $
@@ -178,9 +202,9 @@ fixEcoSpold1ActivityLinks aliases db = do
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities and return statistics
-fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
-fixAllActivities aliases idx flowDb activities =
-    let results = M.map (\act -> fixActivityExchanges aliases idx flowDb act) activities
+fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+fixAllActivities aliases idx nameIdx flowDb activities =
+    let results = M.map (\act -> fixActivityExchanges aliases idx nameIdx flowDb act) activities
         statsList = map snd $ M.elems results
         totalLinks = sum $ map (\(t, _, _) -> t) statsList
         foundLinks = sum $ map (\(_, f, _) -> f) statsList
@@ -189,9 +213,9 @@ fixAllActivities aliases idx flowDb activities =
      in (fixedActivities, (totalLinks, foundLinks, missingLinks))
 
 -- | Fix activity exchanges and return (fixed activity, (total, found, missing))
-fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
-fixActivityExchanges aliases idx flowDb act =
-    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink aliases idx flowDb (activityName act)) (exchanges act)
+fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+fixActivityExchanges aliases idx nameIdx flowDb act =
+    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink aliases idx nameIdx flowDb (activityName act)) (exchanges act)
         totalLinks = sum $ map (\(t, _, _) -> t) stats
         foundLinks = sum $ map (\(_, f, _) -> f) stats
         missingLinks = sum $ map (\(_, _, m) -> m) stats
@@ -200,21 +224,31 @@ fixActivityExchanges aliases idx flowDb act =
 {- | Fix a single exchange's activity link
 Returns (fixed exchange, (total attempts, found, missing))
 Aliases map "flowName" → "activityName|location" to override the lookup
+When exchange has no location, uses name-only lookup to find the activity's location
 -}
-fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
-fixExchangeLink aliases idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
-    | isInp && not (T.null loc) -- Only fix technosphere inputs with location
+fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLink aliases idx nameIdx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+    | isInp -- Fix all technosphere inputs (with or without location)
         =
         case M.lookup fid flowDb of
             Just flow ->
-                -- Check if flow name matches an alias (for location override)
+                -- Determine lookup name and location:
+                -- 1. If alias exists, use it (highest priority)
+                -- 2. If no location on exchange, look up activity by name to get its location
+                -- 3. Otherwise use the exchange's location
                 let (lookupName, lookupLoc) = case M.lookup (flowName flow) aliases of
                         Just aliasTarget ->
                             -- Parse "activityName|location" format
                             case T.splitOn "|" aliasTarget of
                                 [targetName, targetLoc] -> (targetName, targetLoc)
                                 _ -> (flowName flow, loc) -- Invalid format, use original
-                        Nothing -> (flowName flow, loc) -- No alias, use original
+                        Nothing
+                            | T.null loc ->
+                                -- No location on exchange: try name-only lookup to get activity's location
+                                case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                    Just (_, _, actLoc) -> (flowName flow, actLoc) -- Use activity's location
+                                    Nothing -> (flowName flow, loc) -- Fall back (loc is empty)
+                            | otherwise -> (flowName flow, loc) -- Has location, use it
                     key = (normalizeText lookupName, lookupLoc)
                  in case M.lookup key idx of
                         Just (actUUID, prodUUID) ->
@@ -231,8 +265,10 @@ fixExchangeLink aliases idx flowDb consumerName ex@(TechnosphereExchange fid amt
                                                 ++ T.unpack (flowName flow)
                                                 ++ "\"\n"
                                                 ++ "  Location: \""
+                                                ++ T.unpack lookupLoc
+                                                ++ "\" (original: \""
                                                 ++ T.unpack loc
-                                                ++ "\"\n"
+                                                ++ "\")\n"
                                                 ++ "  Consumer: \""
                                                 ++ T.unpack consumerName
                                                 ++ "\""
@@ -240,8 +276,8 @@ fixExchangeLink aliases idx flowDb consumerName ex@(TechnosphereExchange fid amt
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
                 (ex, (1, 0, 1))
-    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange
-fixExchangeLink _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
+    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange (outputs/references)
+fixExchangeLink _ _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
