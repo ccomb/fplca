@@ -58,6 +58,7 @@ data DatabaseConfig = DatabaseConfig
     , dcLoad        :: !Bool           -- Load at startup (renamed from dcActive)
     , dcDefault     :: !Bool
     , dcActivityAliases :: !(Map Text Text)  -- Alias name → actual activity name
+    , dcExchangeLocationFixes :: !(Map Text Text)  -- "flowName|wrongLoc" → correctLoc
     , dcFormat      :: !(Maybe DatabaseFormat)  -- Detected format (EcoSpold2, EcoSpold1, SimaProCSV)
     } deriving (Show, Eq, Generic)
 
@@ -140,6 +141,9 @@ instance DecodeTOML DatabaseConfig where
             Just d  -> pure d
             Nothing -> pure False
         dcActivityAliases <- getFieldOpt "activityAliases" >>= \case
+            Just m  -> pure m
+            Nothing -> pure M.empty
+        dcExchangeLocationFixes <- getFieldOpt "exchangeLocationFixes" >>= \case
             Just m  -> pure m
             Nothing -> pure M.empty
         let dcFormat = Nothing  -- Format is detected at runtime, not stored in config

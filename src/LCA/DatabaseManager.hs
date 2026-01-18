@@ -220,6 +220,7 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
     , dcLoad = False  -- Never auto-load uploads
     , dcDefault = False
     , dcActivityAliases = M.empty
+    , dcExchangeLocationFixes = M.empty
     , dcFormat = Just (UploadedDB.umFormat meta)
     }
 
@@ -238,6 +239,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , dcLoad = True
             , dcDefault = True
             , dcActivityAliases = M.empty
+            , dcExchangeLocationFixes = M.empty
             , dcFormat = Just format
             }
 
@@ -320,6 +322,7 @@ loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text
 loadDatabaseFromConfig dbConfig synonymDB noCache = do
     let path = dcPath dbConfig
         aliases = dcActivityAliases dbConfig
+        locationFixes = dcExchangeLocationFixes dbConfig
 
     -- Check if path exists
     isFile <- doesFileExist path
@@ -330,7 +333,7 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
         else do
             -- Load raw database
             reportProgress Info $ "Loading database from: " <> path
-            dbResult <- loadDatabaseRaw (dcName dbConfig) aliases path noCache
+            dbResult <- loadDatabaseRaw (dcName dbConfig) aliases locationFixes path noCache
 
             case dbResult of
                 Left err -> return $ Left err
@@ -411,8 +414,8 @@ buildActivityMap activities = M.fromList
 
 -- | Load raw database from path (file or directory)
 -- Aliases are used for EcoSpold1 supplier linking
-loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
-loadDatabaseRaw dbName aliases path noCache = do
+loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
+loadDatabaseRaw dbName aliases locationFixes path noCache = do
     isFile <- doesFileExist path
     if isFile && isCacheFile path
         then do
@@ -468,7 +471,7 @@ loadDatabaseRaw dbName aliases path noCache = do
                     if noCache
                         then do
                             -- No caching: load and build from scratch
-                            loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                            loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases locationFixes path
                             case loadResult of
                                 Left err -> return $ Left err
                                 Right simpleDb -> do
@@ -483,8 +486,8 @@ loadDatabaseRaw dbName aliases path noCache = do
                             case mCachedDb of
                                 Just db -> return $ Right db
                                 Nothing -> do
-                                    -- Build and cache (with aliases applied)
-                                    loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases path
+                                    -- Build and cache (with aliases and location fixes applied)
+                                    loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases locationFixes path
                                     case loadResult of
                                         Left err -> return $ Left err
                                         Right simpleDb -> do
