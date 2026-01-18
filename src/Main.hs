@@ -6,6 +6,7 @@ import Control.Monad (forM_, unless)
 import Control.Exception (catch, SomeException)
 import Data.List (intercalate)
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -121,18 +122,29 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
               (m:_) -> Just (mcPath m)  -- Use first active method
               [] -> Nothing
 
-      reportProgress Info $ "Starting API server on port " ++ show port
-      reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
-      case resolvedMethodsDir of
-        Just dir -> reportProgress Info $ "Methods directory: " ++ dir
-        Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
-      case password of
-        Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
-        Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
-      reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
+      -- Determine static directory (--static-dir or default "web/dist")
+      let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
+          desktopMode = serverDesktopMode serverOpts
+
+      -- In desktop mode, print machine-readable port for launcher, then minimal logging
+      if desktopMode
+        then do
+          -- Machine-readable output for Tauri launcher to detect port
+          putStrLn $ "FPLCA_PORT=" ++ show port
+          hFlush stdout
+        else do
+          reportProgress Info $ "Starting API server on port " ++ show port
+          reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+          case resolvedMethodsDir of
+            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
+            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
+          case password of
+            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+            Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
+          reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
       -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir staticDir desktopMode
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -215,17 +227,28 @@ runSingleDatabaseMode cliConfig = do
         Just pwd -> return (Just pwd)
         Nothing -> lookupEnv "FPLCA_PASSWORD"
 
-      reportProgress Info $ "Starting API server on port " ++ show port
-      reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
-      case methodsDir (globalOptions cliConfig) of
-        Just dir -> reportProgress Info $ "Methods directory: " ++ dir
-        Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods to enable LCIA)"
-      case password of
-        Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
-        Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
-      reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
+      -- Determine static directory (--static-dir or default "web/dist")
+      let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
+          desktopMode = serverDesktopMode serverOpts
 
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig))
+      -- In desktop mode, print machine-readable port for launcher, then minimal logging
+      if desktopMode
+        then do
+          -- Machine-readable output for Tauri launcher to detect port
+          putStrLn $ "FPLCA_PORT=" ++ show port
+          hFlush stdout
+        else do
+          reportProgress Info $ "Starting API server on port " ++ show port
+          reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+          case methodsDir (globalOptions cliConfig) of
+            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
+            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods to enable LCIA)"
+          case password of
+            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+            Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
+          reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
+
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig)) staticDir desktopMode
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -456,15 +479,19 @@ validateDatabase db = do
 
 -- | Create a Wai application with DatabaseManager
 -- API handlers dynamically fetch current database from DatabaseManager on each request
-createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> Application
-createServerApp dbManager maxTreeDepth methodsDir req respond = do
+-- staticDir: directory to serve static files from (default: "web/dist")
+-- desktopMode: if True, suppress request logging for cleaner output
+createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> FilePath -> Bool -> Application
+createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
 
   -- Simple request logging (like nginx/apache access log) with explicit flush
-  putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack fullUrl
-  hFlush stdout
+  -- In desktop mode, suppress logging to avoid cluttering the launcher output
+  unless desktopMode $ do
+    putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack fullUrl
+    hFlush stdout
 
   -- Route requests based on path prefix
   if C8.pack "/api/" `BS.isPrefixOf` path
@@ -473,7 +500,7 @@ createServerApp dbManager maxTreeDepth methodsDir req respond = do
       serve lcaAPI (lcaServer dbManager maxTreeDepth methodsDir) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
-        -- Static files: strip /static prefix and serve from web/dist/
+        -- Static files: strip /static prefix and serve from staticDir
         let strippedPath = BS.drop 7 path  -- Remove "/static" (7 chars), keep the "/"
             -- Also update pathInfo by removing "static" segment
             originalPathInfo = pathInfo req
@@ -481,12 +508,12 @@ createServerApp dbManager maxTreeDepth methodsDir req respond = do
               (segment:rest) | segment == T.pack "static" -> rest
               other -> other
             staticReq = req { rawPathInfo = strippedPath, pathInfo = newPathInfo }
-            staticSettings = (defaultWebAppSettings "web/dist")
+            staticSettings = (defaultWebAppSettings staticDir)
               { ssIndices = [unsafeToPiece (T.pack "index.html")] }
          in staticApp staticSettings staticReq respond
       else
         -- Everything else: serve index.html for SPA routing
-        let staticSettings = (defaultWebAppSettings "web/dist")
+        let staticSettings = (defaultWebAppSettings staticDir)
               { ssIndices = [unsafeToPiece (T.pack "index.html")] }
             indexReq = req { rawPathInfo = C8.pack "/", pathInfo = [] }
          in staticApp staticSettings indexReq respond

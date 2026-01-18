@@ -14,6 +14,7 @@
 #   --clean             Clean build artifacts before building
 #   --all               Force re-download and rebuild of PETSc/SLEPc
 #   --test              Run tests after building
+#   --desktop           Build desktop application (Tauri bundle)
 #
 # Environment variables:
 #   PETSC_DIR           Path to PETSc installation
@@ -51,6 +52,7 @@ esac
 FORCE_REBUILD=false
 RUN_TESTS=false
 CLEAN_BUILD=false
+BUILD_DESKTOP=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -120,6 +122,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --test)
             RUN_TESTS=true
+            shift
+            ;;
+        --desktop)
+            BUILD_DESKTOP=true
             shift
             ;;
         *)
@@ -424,6 +430,18 @@ if [[ "$RUN_TESTS" == "true" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Build desktop application (if requested)
+# -----------------------------------------------------------------------------
+
+if [[ "$BUILD_DESKTOP" == "true" ]]; then
+    log_info "Building desktop application..."
+    cd "$SCRIPT_DIR/desktop"
+    ./build-desktop.sh
+    log_success "Desktop application built"
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 
@@ -445,5 +463,16 @@ echo ""
 FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
 if [[ -n "$FPLCA_BIN" ]]; then
     echo "Executable: $FPLCA_BIN"
+    echo ""
+fi
+
+# Show desktop build instructions if not already built
+if [[ "$BUILD_DESKTOP" != "true" ]]; then
+    echo "To build the desktop application:"
+    echo ""
+    echo "  ./build.sh --desktop"
+    echo ""
+    echo "Or manually:"
+    echo "  cd desktop && ./build-desktop.sh"
     echo ""
 fi

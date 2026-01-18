@@ -132,6 +132,18 @@ serverOptionsParser = do
                     <> metavar "DB1,DB2,..."
                     <> help "Comma-separated list of databases to load at startup (overrides config load=true)"
                 )
+    serverDesktopMode <-
+        switch
+            ( long "desktop"
+                <> help "Desktop mode: print FPLCA_PORT=N on startup for launcher integration"
+            )
+    serverStaticDir <-
+        optional $
+            strOption
+                ( long "static-dir"
+                    <> metavar "PATH"
+                    <> help "Override default static file directory (default: web/dist)"
+                )
     pure ServerOptions{..}
 
 -- | Reader for comma-separated list of database names
