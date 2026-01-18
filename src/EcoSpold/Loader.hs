@@ -26,7 +26,7 @@ Cache performance (Ecoinvent 3.8 with 18K activities):
 
 The cache keeps day-to-day execution fast while preserving reproducibility.
 -}
-module EcoSpold.Loader (loadAllSpoldsWithFlows, loadAllSpoldsWithFlowsAndAliases, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
+module EcoSpold.Loader (loadAllSpoldsWithFlows, loadAllSpoldsWithLocationAliases, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
 
 import qualified Codec.Compression.Zstd as Zstd
 import Control.Concurrent.Async
@@ -132,8 +132,8 @@ normalizeText = T.toLower . T.strip
 {- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
 For each activity, we index it by its reference product name + activity location
 -}
-buildSupplierIndex :: M.Map T.Text T.Text -> ActivityMap -> FlowDB -> SupplierIndex
-buildSupplierIndex _aliases activities flowDb =
+buildSupplierIndex :: ActivityMap -> FlowDB -> SupplierIndex
+buildSupplierIndex activities flowDb =
     M.fromList
         [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
         | ((actUUID, prodUUID), act) <- M.toList activities
@@ -171,26 +171,24 @@ buildSupplierIndexByNameWithLocation activities flowDb =
 
 {- | Fix EcoSpold1 activity links by resolving supplier references
 Uses (flowName, flowLocation) to look up the correct supplier activity
-Aliases map "flowName" → "activityName|location" to override lookup
-Exchange location fixes map "flowName|wrongLoc" → correctLoc
+Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 When exchange has no location, uses name-only lookup to find the activity's location
 -}
-fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> SimpleDatabase -> IO SimpleDatabase
-fixEcoSpold1ActivityLinks aliases exchangeLocationFixes db = do
-    -- Build supplier index (without alias entries - aliases are applied at lookup time)
-    let supplierIndex = buildSupplierIndex M.empty (sdbActivities db) (sdbFlows db)
+fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> SimpleDatabase -> IO SimpleDatabase
+fixEcoSpold1ActivityLinks locationAliases db = do
+    -- Build supplier index
+    let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)
     -- Build name-only index with location for exchanges missing location attribute
     let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbFlows db)
     reportProgress Info $
         printf
-            "Built supplier index with %d entries for activity linking (%d aliases, %d location fixes, %d name-only entries)"
+            "Built supplier index with %d entries for activity linking (%d location aliases, %d name-only entries)"
             (M.size supplierIndex)
-            (M.size aliases)
-            (M.size exchangeLocationFixes)
+            (M.size locationAliases)
             (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, linkStats) = fixAllActivities aliases exchangeLocationFixes supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
+    let (fixedActivities, linkStats) = fixAllActivities locationAliases supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
     let (totalLinks, foundLinks, missingLinks) = linkStats
 
     reportProgress Info $
@@ -204,9 +202,9 @@ fixEcoSpold1ActivityLinks aliases exchangeLocationFixes db = do
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities and return statistics
-fixAllActivities :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
-fixAllActivities aliases exchangeLocationFixes idx nameIdx flowDb activities =
-    let results = M.map (\act -> fixActivityExchanges aliases exchangeLocationFixes idx nameIdx flowDb act) activities
+fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+fixAllActivities locationAliases idx nameIdx flowDb activities =
+    let results = M.map (\act -> fixActivityExchanges locationAliases idx nameIdx flowDb act) activities
         statsList = map snd $ M.elems results
         totalLinks = sum $ map (\(t, _, _) -> t) statsList
         foundLinks = sum $ map (\(_, f, _) -> f) statsList
@@ -215,9 +213,9 @@ fixAllActivities aliases exchangeLocationFixes idx nameIdx flowDb activities =
      in (fixedActivities, (totalLinks, foundLinks, missingLinks))
 
 -- | Fix activity exchanges and return (fixed activity, (total, found, missing))
-fixActivityExchanges :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
-fixActivityExchanges aliases exchangeLocationFixes idx nameIdx flowDb act =
-    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink aliases exchangeLocationFixes idx nameIdx flowDb (activityName act)) (exchanges act)
+fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+fixActivityExchanges locationAliases idx nameIdx flowDb act =
+    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink locationAliases idx nameIdx flowDb (activityName act)) (exchanges act)
         totalLinks = sum $ map (\(t, _, _) -> t) stats
         foundLinks = sum $ map (\(_, f, _) -> f) stats
         missingLinks = sum $ map (\(_, _, m) -> m) stats
@@ -225,40 +223,26 @@ fixActivityExchanges aliases exchangeLocationFixes idx nameIdx flowDb act =
 
 {- | Fix a single exchange's activity link
 Returns (fixed exchange, (total attempts, found, missing))
-Aliases map "flowName" → "activityName|location" to override the lookup
-Exchange location fixes map "flowName|wrongLoc" → correctLoc
+Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 When exchange has no location, uses name-only lookup to find the activity's location
 -}
-fixExchangeLink :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
-fixExchangeLink aliases exchangeLocationFixes idx nameIdx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLink locationAliases idx nameIdx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
     | isInp -- Fix all technosphere inputs (with or without location)
         =
         case M.lookup fid flowDb of
             Just flow ->
-                -- Determine lookup name and location:
-                -- 1. If alias exists, use it (highest priority - overrides both name and location)
-                -- 2. If exchange location fix exists, use it (overrides just location)
-                -- 3. If no location on exchange, look up activity by name to get its location
-                -- 4. Otherwise use the exchange's location
-                let (lookupName, lookupLoc) = case M.lookup (flowName flow) aliases of
-                        Just aliasTarget ->
-                            -- Parse "activityName|location" format
-                            case T.splitOn "|" aliasTarget of
-                                [targetName, targetLoc] -> (targetName, targetLoc)
-                                _ -> (flowName flow, loc) -- Invalid format, use original
-                        Nothing ->
-                            -- Check for exchange location fix: "flowName|wrongLoc" → correctLoc
-                            let fixKey = flowName flow <> "|" <> loc
-                            in case M.lookup fixKey exchangeLocationFixes of
-                                Just fixedLoc -> (flowName flow, fixedLoc)
-                                Nothing
-                                    | T.null loc ->
-                                        -- No location on exchange: try name-only lookup to get activity's location
-                                        case M.lookup (normalizeText (flowName flow)) nameIdx of
-                                            Just (_, _, actLoc) -> (flowName flow, actLoc) -- Use activity's location
-                                            Nothing -> (flowName flow, loc) -- Fall back (loc is empty)
-                                    | otherwise -> (flowName flow, loc) -- Has location, use it
-                    key = (normalizeText lookupName, lookupLoc)
+                -- Normalize location using aliases (e.g., "ENTSO" → "ENTSO-E")
+                let normalizedLoc = fromMaybe loc (M.lookup loc locationAliases)
+                    -- Determine final lookup location:
+                    -- If no location on exchange, try name-only lookup to get activity's location
+                    lookupLoc
+                        | T.null normalizedLoc =
+                            case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                Just (_, _, actLoc) -> actLoc  -- Use activity's location
+                                Nothing -> normalizedLoc       -- Fall back (empty)
+                        | otherwise = normalizedLoc            -- Has location, use it
+                    key = (normalizeText (flowName flow), lookupLoc)
                  in case M.lookup key idx of
                         Just (actUUID, prodUUID) ->
                             -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
@@ -286,7 +270,7 @@ fixExchangeLink aliases exchangeLocationFixes idx nameIdx flowDb consumerName ex
                 -- Flow not in database - shouldn't happen but be safe
                 (ex, (1, 0, 1))
     | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange (outputs/references)
-fixExchangeLink _ _ _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
+fixExchangeLink _ _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -306,14 +290,13 @@ Performance characteristics:
 Used when no cache exists or caching is disabled.
 -}
 loadAllSpoldsWithFlows :: FilePath -> IO (Either T.Text SimpleDatabase)
-loadAllSpoldsWithFlows = loadAllSpoldsWithFlowsAndAliases M.empty M.empty
+loadAllSpoldsWithFlows = loadAllSpoldsWithLocationAliases M.empty
 
-{- | Load all EcoSpold files with activity aliases and exchange location fixes
-Aliases allow alternative names to map to the same supplier activity
-Exchange location fixes map "flowName|wrongLoc" → correctLoc
+{- | Load all EcoSpold files with location aliases
+Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 -}
-loadAllSpoldsWithFlowsAndAliases :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadAllSpoldsWithFlowsAndAliases aliases exchangeLocationFixes path = do
+loadAllSpoldsWithLocationAliases :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadAllSpoldsWithLocationAliases locationAliases path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
     isFile <- doesFileExist path
     isDir <- doesDirectoryExist path
@@ -322,7 +305,7 @@ loadAllSpoldsWithFlowsAndAliases aliases exchangeLocationFixes path = do
         then loadSimaProCSV path
         else
             if isDir
-                then loadEcoSpoldDirectory aliases exchangeLocationFixes path
+                then loadEcoSpoldDirectory locationAliases path
                 else return $ Left $ T.pack $ "Path is neither a CSV file nor a directory: " ++ path
 
 -- | Load SimaPro CSV file
@@ -424,8 +407,8 @@ fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt u
 fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
 
 -- | Load EcoSpold files from directory
-loadEcoSpoldDirectory :: M.Map T.Text T.Text -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadEcoSpoldDirectory aliases exchangeLocationFixes dir = do
+loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadEcoSpoldDirectory locationAliases dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
     -- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files
@@ -505,7 +488,7 @@ loadEcoSpoldDirectory aliases exchangeLocationFixes dir = do
                 -- For EcoSpold1: fix activity links using supplier lookup table
                 let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
                 if isEcoSpold1
-                    then Right <$> fixEcoSpold1ActivityLinks aliases exchangeLocationFixes simpleDb
+                    then Right <$> fixEcoSpold1ActivityLinks locationAliases simpleDb
                     else return $ Right simpleDb
 
     -- Distribute files evenly among N workers

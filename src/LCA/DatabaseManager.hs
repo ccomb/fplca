@@ -219,8 +219,7 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
     , dcDescription = UploadedDB.umDescription meta
     , dcLoad = False  -- Never auto-load uploads
     , dcDefault = False
-    , dcActivityAliases = M.empty
-    , dcExchangeLocationFixes = M.empty
+    , dcLocationAliases = M.empty
     , dcFormat = Just (UploadedDB.umFormat meta)
     }
 
@@ -238,8 +237,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , dcDescription = Just "Single database mode (--data)"
             , dcLoad = True
             , dcDefault = True
-            , dcActivityAliases = M.empty
-            , dcExchangeLocationFixes = M.empty
+            , dcLocationAliases = M.empty
             , dcFormat = Just format
             }
 
@@ -321,8 +319,7 @@ isCacheFile path =
 loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text LoadedDatabase)
 loadDatabaseFromConfig dbConfig synonymDB noCache = do
     let path = dcPath dbConfig
-        aliases = dcActivityAliases dbConfig
-        locationFixes = dcExchangeLocationFixes dbConfig
+        locationAliases = dcLocationAliases dbConfig
 
     -- Check if path exists
     isFile <- doesFileExist path
@@ -333,7 +330,7 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
         else do
             -- Load raw database
             reportProgress Info $ "Loading database from: " <> path
-            dbResult <- loadDatabaseRaw (dcName dbConfig) aliases locationFixes path noCache
+            dbResult <- loadDatabaseRaw (dcName dbConfig) locationAliases path noCache
 
             case dbResult of
                 Left err -> return $ Left err
@@ -413,9 +410,9 @@ buildActivityMap activities = M.fromList
     ]
 
 -- | Load raw database from path (file or directory)
--- Aliases are used for EcoSpold1 supplier linking
-loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
-loadDatabaseRaw dbName aliases locationFixes path noCache = do
+-- Location aliases are used for EcoSpold1 supplier linking (wrongLocation → correctLocation)
+loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
+loadDatabaseRaw dbName locationAliases path noCache = do
     isFile <- doesFileExist path
     if isFile && isCacheFile path
         then do
@@ -471,7 +468,7 @@ loadDatabaseRaw dbName aliases locationFixes path noCache = do
                     if noCache
                         then do
                             -- No caching: load and build from scratch
-                            loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases locationFixes path
+                            loadResult <- Loader.loadAllSpoldsWithLocationAliases locationAliases path
                             case loadResult of
                                 Left err -> return $ Left err
                                 Right simpleDb -> do
@@ -486,8 +483,8 @@ loadDatabaseRaw dbName aliases locationFixes path noCache = do
                             case mCachedDb of
                                 Just db -> return $ Right db
                                 Nothing -> do
-                                    -- Build and cache (with aliases and location fixes applied)
-                                    loadResult <- Loader.loadAllSpoldsWithFlowsAndAliases aliases locationFixes path
+                                    -- Build and cache (with location aliases applied)
+                                    loadResult <- Loader.loadAllSpoldsWithLocationAliases locationAliases path
                                     case loadResult of
                                         Left err -> return $ Left err
                                         Right simpleDb -> do

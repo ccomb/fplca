@@ -159,8 +159,7 @@ uploadDatabaseHandler dbManager req = do
                             , dcDescription = urDescription req
                             , dcLoad = False  -- Don't auto-load
                             , dcDefault = False
-                            , dcActivityAliases = M.empty
-                            , dcExchangeLocationFixes = M.empty
+                            , dcLocationAliases = M.empty
                             , dcFormat = Just (urFormat uploadResult)
                             }
 
