@@ -1,5 +1,6 @@
 module Views.LeftMenu exposing (Msg(..), viewLeftMenu)
 
+import Char
 import Html exposing (Html, button, div, i, nav, p, span, text)
 import Html.Attributes exposing (class, classList, style)
 import Html.Events exposing (onClick)
@@ -10,8 +11,8 @@ type Msg
     = NavigateTo Page
 
 
-viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> Html Msg
-viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName =
+viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> String -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version =
     nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
@@ -81,13 +82,36 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             , style "text-align" "center"
             , style "border-top" "1px solid #ddd"
             ]
-            [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
-            , text "·"
-            , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
-            , text "·LCA "
-            , span [ style "font-size" "0.8em" ] [ text "(preview)" ]
+            [ div []
+                [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
+                , text "·"
+                , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
+                , text "·LCA"
+                ]
+            , div [ style "font-size" "0.8em", style "margin-top" "0.25rem" ]
+                [ text (formatVersion version) ]
             ]
         ]
+
+
+formatVersion : String -> String
+formatVersion version =
+    -- Check if version looks like a semantic version (starts with digit or 'v' followed by digit)
+    case String.uncons version of
+        Just ( first, _ ) ->
+            if Char.isDigit first then
+                "version " ++ version
+
+            else if first == 'v' then
+                -- Remove 'v' prefix for display
+                "version " ++ String.dropLeft 1 version
+
+            else
+                -- Commit hash - just show as-is
+                version
+
+        Nothing ->
+            version
 
 
 menuLabel : String -> Html Msg

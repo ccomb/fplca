@@ -4,8 +4,20 @@ set -e
 
 echo "Building Elm frontend with asset hashing..."
 
-# Create dist directory
+# Determine version from git
+# If HEAD is tagged, use the tag name; otherwise use cabal version + "-dev"
+if VERSION=$(git describe --tags --exact-match HEAD 2>/dev/null); then
+    VERSION="${VERSION#v}"  # Remove leading 'v' if present
+    echo "Building version: $VERSION (from tag)"
+else
+    CABAL_VERSION=$(grep "^version:" ../fplca.cabal | awk '{print $2}')
+    VERSION="${CABAL_VERSION}-dev"
+    echo "Building version: $VERSION (development)"
+fi
+
+# Create dist directory and clean old JS files
 mkdir -p dist
+rm -f dist/*.js
 
 # Build Elm to temporary file (use local elm from node_modules)
 echo "Compiling Elm..."
@@ -28,7 +40,7 @@ mv dist/main.tmp.js "dist/$JS_FILE"
 
 # Generate index.html from template
 echo "Generating index.html..."
-sed "s/{{JS_FILE}}/$JS_FILE/g" index.html.tmpl > dist/index.html
+sed -e "s/{{JS_FILE}}/$JS_FILE/g" -e "s/{{VERSION}}/$VERSION/g" index.html.tmpl > dist/index.html
 
 echo "Frontend build complete!"
 echo "Generated: dist/$JS_FILE"

@@ -31,6 +31,7 @@ static/
 cabal.project.local
 fplca.toml
 fplca.toml.lock
+!desktop/resources/fplca.toml
 
 run*.sh
 

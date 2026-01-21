@@ -85,6 +85,24 @@ log_success "Prerequisites OK"
 echo ""
 
 # -----------------------------------------------------------------------------
+# Detect version from git
+# -----------------------------------------------------------------------------
+
+log_info "Detecting version..."
+
+# If HEAD is tagged, use the tag name; otherwise use cabal version + "-dev"
+if GIT_VERSION=$(git describe --tags --exact-match HEAD 2>/dev/null); then
+    VERSION="${GIT_VERSION#v}"  # Remove leading 'v' if present
+    log_info "Building version: $VERSION (from tag)"
+else
+    CABAL_VERSION=$(grep "^version:" "$PROJECT_DIR/fplca.cabal" | awk '{print $2}')
+    VERSION="${CABAL_VERSION}-dev"
+    log_info "Building version: $VERSION (development)"
+fi
+
+echo ""
+
+# -----------------------------------------------------------------------------
 # Detect PETSc/SLEPc paths
 # -----------------------------------------------------------------------------
 
@@ -151,6 +169,22 @@ if [[ -z "$FPLCA_BIN" ]]; then
 fi
 cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca"
 log_success "Copied fplca binary"
+
+# Create default config file for BYOL mode
+cat > "$RESOURCES_DIR/fplca.toml" << 'TOMLEOF'
+# fpLCA Desktop Configuration
+# Databases can be uploaded via the web interface
+
+[server]
+# No password required for local desktop use
+
+# No databases configured - users upload via web interface
+# [[databases]]
+# name = "example"
+# path = "/path/to/data"
+# load = true
+TOMLEOF
+log_success "Created default config"
 
 # Copy web assets
 if [[ -d "$PROJECT_DIR/web/dist" ]]; then
@@ -238,6 +272,23 @@ cp "$RESOURCES_DIR/fplca.toml" "$TARGET_DIR/" 2>/dev/null || true
 cp -r "$RESOURCES_DIR/lib/"* "$TARGET_DIR/lib/" 2>/dev/null || true
 cp -r "$RESOURCES_DIR/web/"* "$TARGET_DIR/web/" 2>/dev/null || true
 log_success "Resources staged to target/release"
+
+# -----------------------------------------------------------------------------
+# Update tauri.conf.json version
+# -----------------------------------------------------------------------------
+
+log_info "Updating tauri.conf.json version to $VERSION..."
+
+# Use a temporary file to ensure atomic update
+TAURI_CONF="$SCRIPT_DIR/tauri.conf.json"
+TAURI_CONF_TMP="$SCRIPT_DIR/tauri.conf.json.tmp"
+
+# Update version field using sed (cross-platform compatible)
+sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$TAURI_CONF" > "$TAURI_CONF_TMP"
+mv "$TAURI_CONF_TMP" "$TAURI_CONF"
+
+log_success "Updated version in tauri.conf.json"
+echo ""
 
 # -----------------------------------------------------------------------------
 # Build Tauri app

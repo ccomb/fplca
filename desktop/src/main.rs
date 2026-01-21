@@ -25,23 +25,28 @@ fn find_available_port(start: u16, end: u16) -> Option<u16> {
 
 /// Get the resource directory for bundled files (used before Tauri app is initialized)
 fn get_resource_dir_fallback() -> PathBuf {
+    // Check for installed location first (Debian package installs to /usr/lib/fplca)
+    let installed_path = PathBuf::from("/usr/lib/fplca");
+    if installed_path.join("fplca").exists() {
+        return installed_path;
+    }
+
     let exe_dir = env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
     // In development, try multiple locations
-    if cfg!(debug_assertions) {
-        let candidates = [
-            exe_dir.join("resources"),
-            PathBuf::from("resources"),
-            PathBuf::from("desktop/resources"),
-        ];
+    let candidates = [
+        exe_dir.join("resources"),
+        PathBuf::from("resources"),
+        PathBuf::from("desktop/resources"),
+        exe_dir.clone(),
+    ];
 
-        for candidate in &candidates {
-            if candidate.exists() {
-                return candidate.clone();
-            }
+    for candidate in &candidates {
+        if candidate.join("fplca").exists() {
+            return candidate.clone();
         }
     }
 
@@ -171,7 +176,7 @@ fn main() {
 
             let backend_state = Arc::clone(&backend_state_clone);
             let backend_ready = Arc::clone(&backend_ready_clone);
-            let window = app.get_webview_window("main").unwrap();
+            let main_window = app.get_webview_window("main").unwrap();
 
             // Spawn backend and wait for it to be ready
             std::thread::spawn(move || {
@@ -212,22 +217,15 @@ fn main() {
                             println!("Backend is ready");
                             backend_ready.store(true, Ordering::SeqCst);
 
-                            // Navigate to the backend URL
+                            // Navigate main window to the backend URL
                             let url = format!("http://127.0.0.1:{}/", port);
-                            let _ = window.eval(&format!("window.location.href = '{}'", url));
+                            let _ = main_window.eval(&format!("window.location.href = '{}'", url));
                         } else {
                             eprintln!("Backend failed to start within timeout");
-                            let _ = window.eval(
-                                "document.body.innerHTML = '<h1>Error: Backend failed to start</h1><p>Please check the logs for more information.</p>'"
-                            );
                         }
                     }
                     Err(e) => {
                         eprintln!("Failed to start backend: {}", e);
-                        let _ = window.eval(&format!(
-                            "document.body.innerHTML = '<h1>Error</h1><p>{}</p>'",
-                            e.replace("'", "\\'")
-                        ));
                     }
                 }
             });

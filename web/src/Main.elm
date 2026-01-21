@@ -31,7 +31,11 @@ import Views.TreeView as TreeView
 import Views.UploadView as UploadView
 
 
-main : Program () Model Msg
+type alias Flags =
+    { version : String }
+
+
+main : Program Flags Model Msg
 main =
     Browser.application
         { init = init
@@ -77,6 +81,7 @@ type alias Model =
     , loadingDatabases : Bool -- Loading database list
     , activatingDatabase : Bool -- Activating a database
     , uploadModel : UploadView.Model -- Upload page model
+    , version : String -- Application version
     }
 
 
@@ -258,8 +263,8 @@ routeToDatabase route =
             Nothing
 
 
-init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init _ url key =
+init : Flags -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init flags url key =
     let
         route =
             parseUrl url
@@ -411,6 +416,7 @@ init _ url key =
             , loadingDatabases = routeConfig.loadType == "databases" || routeConfig.loadType == "redirect"
             , activatingDatabase = False
             , uploadModel = UploadView.init
+            , version = flags.version
             }
 
         cmd =
@@ -1701,7 +1707,7 @@ view model =
                     LeftMenu.NavigateTo page ->
                         NavigateToPage page
             )
-            (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName)
+            (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName model.version)
         , div [ class "main-content" ]
             [ case model.currentPage of
                 ActivitiesPage ->

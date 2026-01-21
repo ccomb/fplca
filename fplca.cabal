@@ -1,6 +1,6 @@
 cabal-version:       >=1.10
 name:                fplca
-version:             0.1.0.0
+version:             0.5.0
 build-type:          Simple
 
 license:             AGPL-3.0-or-later
