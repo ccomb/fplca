@@ -19,7 +19,7 @@
 #   SLEPC_DIR          Path to SLEPc installation
 #
 # Prerequisites:
-#   - Visual Studio 2022 (or Build Tools) with C++ workload
+#   - Visual Studio (or Build Tools) with C++ workload
 #   - Python 3.x
 #   - GHC and Cabal (via ghcup)
 #   - Node.js and npm
@@ -120,13 +120,21 @@ Write-Info "Checking dependencies..."
 
 $MissingDeps = $false
 
-# Check for Visual Studio / MSVC
-$vcvarsall = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -Recurse -Filter "vcvarsall.bat" -ErrorAction SilentlyContinue | Select-Object -First 1
+# Check for Visual Studio / MSVC (search both Program Files locations, prefer latest version)
+$vcvarsall = $null
+$vsPaths = @("${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio")
+$allVcvars = foreach ($vsPath in $vsPaths) {
+    if (Test-Path $vsPath) {
+        Get-ChildItem -Path $vsPath -Recurse -Filter "vcvarsall.bat" -ErrorAction SilentlyContinue
+    }
+}
+# Sort by path descending to prefer newer versions (2026 > 2022 > 2019)
+$vcvarsall = $allVcvars | Sort-Object -Property FullName -Descending | Select-Object -First 1
 if ($vcvarsall) {
     Write-Success "Visual Studio found: $($vcvarsall.DirectoryName)"
 } else {
     Write-Error "Visual Studio Build Tools not found"
-    Write-Warn "Install Visual Studio 2022 with C++ workload"
+    Write-Warn "Install Visual Studio with C++ workload (Desktop development with C++)"
     $MissingDeps = $true
 }
 
@@ -155,7 +163,7 @@ if ($MissingDeps) {
     Write-Error "Missing required dependencies. Please install them and try again."
     Write-Host ""
     Write-Host "Prerequisites for Windows:"
-    Write-Host "  1. Visual Studio 2022 (or Build Tools) with C++ workload"
+    Write-Host "  1. Visual Studio (or Build Tools) with C++ workload"
     Write-Host "  2. Python 3.x (https://www.python.org/)"
     Write-Host "  3. Git for Windows (https://git-scm.com/)"
     Write-Host "  4. Node.js (https://nodejs.org/)"
@@ -200,7 +208,7 @@ if (-not (Test-Path $PetscLibDir)) {
     Write-Host "PETSc/SLEPc must be built separately on Windows."
     Write-Host ""
     Write-Host "Build instructions:"
-    Write-Host "  1. Open 'x64 Native Tools Command Prompt for VS 2022'"
+    Write-Host "  1. Open 'x64 Native Tools Command Prompt for VS'"
     Write-Host "  2. Clone PETSc:"
     Write-Host "     git clone https://gitlab.com/petsc/petsc.git"
     Write-Host "     cd petsc"
