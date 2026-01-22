@@ -191,7 +191,7 @@ python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblasla
 
     # Build PETSc using MSYS2 make with MinGW
     Write-Info "Building PETSc..."
-    $buildScript = "export PETSC_DIR='$petscMsysPath' && export PATH='/ucrt64/bin:`$PATH' && cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    $buildScript = "export PETSC_DIR='$petscMsysPath' && export PATH='/ucrt64/bin:/usr/bin:`$PATH' && cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
     & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
         throw "PETSc build failed"
@@ -271,7 +271,7 @@ python ./configure
 
     # Build SLEPc using MSYS2 make with MinGW
     Write-Info "Building SLEPc..."
-    $buildScript = "export PATH='/ucrt64/bin:`$PATH' && cd '$slepcMsysPath' && make SLEPC_DIR='$slepcMsysPath' PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    $buildScript = "export PATH='/ucrt64/bin:/usr/bin:`$PATH' && cd '$slepcMsysPath' && make SLEPC_DIR='$slepcMsysPath' PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
     & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
         throw "SLEPc build failed"
