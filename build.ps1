@@ -120,16 +120,25 @@ Write-Info "Checking dependencies..."
 
 $MissingDeps = $false
 
-# Check for Visual Studio / MSVC (search both Program Files locations, prefer latest version)
+# Check for Visual Studio / MSVC (search known paths, prefer latest version)
 $vcvarsall = $null
-$vsPaths = @("${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio")
-$allVcvars = foreach ($vsPath in $vsPaths) {
-    if (Test-Path $vsPath) {
-        Get-ChildItem -Path $vsPath -Recurse -Filter "vcvarsall.bat" -ErrorAction SilentlyContinue
+$vsRoots = @("${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio")
+$vsVersions = @("2026", "2025", "2024", "2023", "2022", "2019")
+$vsEditions = @("Enterprise", "Professional", "Community", "BuildTools")
+
+foreach ($vsRoot in $vsRoots) {
+    if ($vcvarsall) { break }
+    foreach ($vsVer in $vsVersions) {
+        if ($vcvarsall) { break }
+        foreach ($vsEd in $vsEditions) {
+            $candidate = "$vsRoot\$vsVer\$vsEd\VC\Auxiliary\Build\vcvarsall.bat"
+            if (Test-Path $candidate) {
+                $vcvarsall = Get-Item $candidate
+                break
+            }
+        }
     }
 }
-# Sort by path descending to prefer newer versions (2026 > 2022 > 2019)
-$vcvarsall = $allVcvars | Sort-Object -Property FullName -Descending | Select-Object -First 1
 if ($vcvarsall) {
     Write-Success "Visual Studio found: $($vcvarsall.DirectoryName)"
 } else {
@@ -199,8 +208,8 @@ if ($env:PETSC_ARCH) {
 }
 
 # Check if PETSc/SLEPc are already built
-$PetscLibDir = Join-Path $PetscDir $PetscArch "lib"
-$SlepcLibDir = Join-Path $SlepcDir $PetscArch "lib"
+$PetscLibDir = "$PetscDir\$PetscArch\lib"
+$SlepcLibDir = "$SlepcDir\$PetscArch\lib"
 
 if (-not (Test-Path $PetscLibDir)) {
     Write-Warn "PETSc not found at: $PetscLibDir"
@@ -250,10 +259,10 @@ if (-not (Test-Path $PetscHsDir)) {
 # Set up environment
 # -----------------------------------------------------------------------------
 
-$PetscIncludeDir = Join-Path $PetscDir "include"
-$PetscArchIncludeDir = Join-Path $PetscDir $PetscArch "include"
-$SlepcIncludeDir = Join-Path $SlepcDir "include"
-$SlepcArchIncludeDir = Join-Path $SlepcDir $PetscArch "include"
+$PetscIncludeDir = "$PetscDir\include"
+$PetscArchIncludeDir = "$PetscDir\$PetscArch\include"
+$SlepcIncludeDir = "$SlepcDir\include"
+$SlepcArchIncludeDir = "$SlepcDir\$PetscArch\include"
 
 # Add library paths to PATH for DLL discovery
 $env:PATH = "$PetscLibDir;$SlepcLibDir;$env:PATH"
