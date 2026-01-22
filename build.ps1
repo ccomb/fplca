@@ -178,7 +178,7 @@ function Build-PETSc {
 
     $configScript = @"
 cd '$petscMsysPath'
-python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-openblas --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
