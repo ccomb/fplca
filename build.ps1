@@ -176,10 +176,12 @@ function Build-PETSc {
     Write-Info "Configuring PETSc (optimized, no MPI, no Fortran)..."
     Write-Info "Using MSYS2 bash for configure..."
 
+    # Use MSYS2 UCRT64 environment with MinGW-w64 compiler
     $configScript = @"
 export PETSC_DIR='$petscMsysPath'
+export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -187,9 +189,9 @@ python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-f2cblaslapa
         throw "PETSc configure failed"
     }
 
-    # Build PETSc using MSYS2 make
+    # Build PETSc using MSYS2 make with MinGW
     Write-Info "Building PETSc..."
-    $buildScript = "export PETSC_DIR='$petscMsysPath' && cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    $buildScript = "export PETSC_DIR='$petscMsysPath' && export PATH='/ucrt64/bin:`$PATH' && cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
     & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
         throw "PETSc build failed"
@@ -252,10 +254,12 @@ function Build-SLEPc {
     Write-Info "Configuring SLEPc..."
     Write-Info "Using MSYS2 bash for configure..."
 
+    # Use MSYS2 UCRT64 environment with MinGW-w64 compiler
     $configScript = @"
 export PETSC_DIR='$petscMsysPath'
 export SLEPC_DIR='$slepcMsysPath'
 export PETSC_ARCH=$PetscArch
+export PATH="/ucrt64/bin:`$PATH"
 cd '$slepcMsysPath'
 python ./configure
 "@
@@ -265,9 +269,9 @@ python ./configure
         throw "SLEPc configure failed"
     }
 
-    # Build SLEPc using MSYS2 make
+    # Build SLEPc using MSYS2 make with MinGW
     Write-Info "Building SLEPc..."
-    $buildScript = "cd '$slepcMsysPath' && make SLEPC_DIR='$slepcMsysPath' PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    $buildScript = "export PATH='/ucrt64/bin:`$PATH' && cd '$slepcMsysPath' && make SLEPC_DIR='$slepcMsysPath' PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
     & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
         throw "SLEPc build failed"
@@ -409,8 +413,8 @@ if (-not $env:SLEPC_DIR) {
 $PetscDir = $env:PETSC_DIR
 $SlepcDir = $env:SLEPC_DIR
 
-# On Windows, use a simplified arch name
-$PetscArch = "arch-mswin-c-opt"
+# On Windows with MinGW, use a simplified arch name
+$PetscArch = "arch-msys2-c-opt"
 if ($env:PETSC_ARCH) {
     $PetscArch = $env:PETSC_ARCH
 }
