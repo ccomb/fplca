@@ -30,7 +30,15 @@
         "bundleMediaFramework": false
       },
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "liblapack3",
+          "libblas3",
+          "libgfortran5",
+          "libgomp1",
+          "libquadmath0"
+        ]
       }
     },
     "windows": {
