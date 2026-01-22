@@ -99,6 +99,170 @@ function Test-Command {
     }
 }
 
+# Set up MSVC environment by invoking vcvarsall.bat
+function Initialize-VCEnvironment {
+    param([string]$VcvarsallPath)
+
+    Write-Info "Setting up MSVC environment..."
+
+    # Run vcvarsall.bat and capture environment variables
+    $envBefore = @{}
+    Get-ChildItem env: | ForEach-Object { $envBefore[$_.Name] = $_.Value }
+
+    # Use cmd to run vcvarsall and output environment
+    $vcOutput = cmd /c "`"$VcvarsallPath`" x64 && set" 2>&1
+
+    # Parse the output and set environment variables
+    foreach ($line in $vcOutput) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            $name = $matches[1]
+            $value = $matches[2]
+            if ($envBefore[$name] -ne $value) {
+                [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+            }
+        }
+    }
+
+    Write-Success "MSVC environment configured"
+}
+
+# Download and build PETSc
+function Build-PETSc {
+    param(
+        [string]$PetscDir,
+        [string]$PetscArch,
+        [string]$PetscVersion
+    )
+
+    Write-Info "Downloading and building PETSc $PetscVersion..."
+    Write-Info "This may take 15-30 minutes..."
+    Write-Host ""
+
+    $petscUrl = "https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-$PetscVersion.tar.gz"
+    $tarball = Join-Path $ScriptDir "petsc-$PetscVersion.tar.gz"
+    $extractDir = Join-Path $ScriptDir "petsc-$PetscVersion"
+
+    # Download if not cached
+    if (-not (Test-Path $tarball)) {
+        Write-Info "Downloading PETSc from $petscUrl..."
+        Invoke-WebRequest -Uri $petscUrl -OutFile $tarball
+    } else {
+        Write-Info "Using cached PETSc tarball"
+    }
+
+    # Extract if not already extracted
+    if (-not (Test-Path $extractDir)) {
+        Write-Info "Extracting PETSc..."
+        tar -xzf $tarball -C $ScriptDir
+    }
+
+    # Create symlink or copy
+    $petscLink = Join-Path $ScriptDir "petsc"
+    if (Test-Path $petscLink) {
+        Remove-Item -Recurse -Force $petscLink
+    }
+    # Use junction on Windows (symlinks need admin)
+    cmd /c mklink /J "$petscLink" "$extractDir"
+
+    # Configure PETSc
+    Write-Info "Configuring PETSc (optimized, no MPI, no Fortran)..."
+    Push-Location $petscLink
+
+    $configArgs = @(
+        "./configure",
+        "--with-cc=cl",
+        "--with-cxx=cl",
+        "--with-fc=0",
+        "--download-openblas",
+        "--with-mpi=0",
+        "--with-debugging=0",
+        "PETSC_ARCH=$PetscArch"
+    )
+
+    & python $configArgs
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "PETSc configure failed"
+    }
+
+    # Build PETSc
+    Write-Info "Building PETSc..."
+    & nmake /f gmakefile PETSC_DIR="$petscLink" PETSC_ARCH="$PetscArch"
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "PETSc build failed"
+    }
+
+    Pop-Location
+    Write-Success "PETSc built successfully"
+    Write-Host ""
+}
+
+# Download and build SLEPc
+function Build-SLEPc {
+    param(
+        [string]$SlepcDir,
+        [string]$PetscDir,
+        [string]$PetscArch,
+        [string]$SlepcVersion
+    )
+
+    Write-Info "Downloading and building SLEPc $SlepcVersion..."
+    Write-Host ""
+
+    $slepcUrl = "https://slepc.upv.es/download/distrib/slepc-$SlepcVersion.tar.gz"
+    $tarball = Join-Path $ScriptDir "slepc-$SlepcVersion.tar.gz"
+    $extractDir = Join-Path $ScriptDir "slepc-$SlepcVersion"
+
+    # Download if not cached
+    if (-not (Test-Path $tarball)) {
+        Write-Info "Downloading SLEPc from $slepcUrl..."
+        Invoke-WebRequest -Uri $slepcUrl -OutFile $tarball
+    } else {
+        Write-Info "Using cached SLEPc tarball"
+    }
+
+    # Extract if not already extracted
+    if (-not (Test-Path $extractDir)) {
+        Write-Info "Extracting SLEPc..."
+        tar -xzf $tarball -C $ScriptDir
+    }
+
+    # Create symlink
+    $slepcLink = Join-Path $ScriptDir "slepc"
+    if (Test-Path $slepcLink) {
+        Remove-Item -Recurse -Force $slepcLink
+    }
+    cmd /c mklink /J "$slepcLink" "$extractDir"
+
+    # Set environment for SLEPc configure
+    $env:PETSC_DIR = $PetscDir
+    $env:SLEPC_DIR = $slepcLink
+    $env:PETSC_ARCH = $PetscArch
+
+    # Configure SLEPc
+    Write-Info "Configuring SLEPc..."
+    Push-Location $slepcLink
+
+    & python ./configure
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "SLEPc configure failed"
+    }
+
+    # Build SLEPc
+    Write-Info "Building SLEPc..."
+    & nmake /f gmakefile SLEPC_DIR="$slepcLink" PETSC_DIR="$PetscDir" PETSC_ARCH="$PetscArch"
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "SLEPc build failed"
+    }
+
+    Pop-Location
+    Write-Success "SLEPc built successfully"
+    Write-Host ""
+}
+
 # -----------------------------------------------------------------------------
 # Parse arguments
 # -----------------------------------------------------------------------------
@@ -211,31 +375,32 @@ if ($env:PETSC_ARCH) {
 $PetscLibDir = "$PetscDir\$PetscArch\lib"
 $SlepcLibDir = "$SlepcDir\$PetscArch\lib"
 
-if (-not (Test-Path $PetscLibDir)) {
-    Write-Warn "PETSc not found at: $PetscLibDir"
-    Write-Host ""
-    Write-Host "PETSc/SLEPc must be built separately on Windows."
-    Write-Host ""
-    Write-Host "Build instructions:"
-    Write-Host "  1. Open 'x64 Native Tools Command Prompt for VS'"
-    Write-Host "  2. Clone PETSc:"
-    Write-Host "     git clone https://gitlab.com/petsc/petsc.git"
-    Write-Host "     cd petsc"
-    Write-Host "  3. Configure PETSc:"
-    Write-Host "     python configure --with-cc=cl --with-cxx=cl --with-fc=0 \"
-    Write-Host "         --download-openblas --with-mpi=0 --with-debugging=0"
-    Write-Host "  4. Build PETSc (follow the instructions from configure output)"
-    Write-Host "  5. Clone and build SLEPc similarly"
-    Write-Host ""
-    Write-Host "Set environment variables:"
-    Write-Host "  `$env:PETSC_DIR = 'C:\path\to\petsc'"
-    Write-Host "  `$env:SLEPC_DIR = 'C:\path\to\slepc'"
-    Write-Host "  `$env:PETSC_ARCH = 'arch-mswin-c-opt'"
-    Write-Host ""
+$needPetsc = (-not (Test-Path $PetscLibDir)) -or $All
+$needSlepc = (-not (Test-Path $SlepcLibDir)) -or $All
 
-    if (-not $All) {
-        exit 1
+if ($needPetsc -or $needSlepc) {
+    # Set up MSVC environment before building
+    Initialize-VCEnvironment -VcvarsallPath $vcvarsall.FullName
+}
+
+# Download/build PETSc if needed
+if ($needPetsc) {
+    if ($All -and (Test-Path $PetscDir)) {
+        Write-Info "Removing existing PETSc for rebuild..."
+        Remove-Item -Recurse -Force $PetscDir -ErrorAction SilentlyContinue
+        Remove-Item -Force (Join-Path $ScriptDir "petsc-*.tar.gz") -ErrorAction SilentlyContinue
     }
+    Build-PETSc -PetscDir $PetscDir -PetscArch $PetscArch -PetscVersion $PetscVersion
+}
+
+# Download/build SLEPc if needed
+if ($needSlepc) {
+    if ($All -and (Test-Path $SlepcDir)) {
+        Write-Info "Removing existing SLEPc for rebuild..."
+        Remove-Item -Recurse -Force $SlepcDir -ErrorAction SilentlyContinue
+        Remove-Item -Force (Join-Path $ScriptDir "slepc-*.tar.gz") -ErrorAction SilentlyContinue
+    }
+    Build-SLEPc -SlepcDir $SlepcDir -PetscDir $PetscDir -PetscArch $PetscArch -SlepcVersion $SlepcVersion
 }
 
 Write-Success "Using PETSc: $PetscDir\$PetscArch"
