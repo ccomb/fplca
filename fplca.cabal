@@ -59,13 +59,16 @@ executable fplca
                      , containers
                      , random
                      , petsc-hs
-                     , unix
                      , base64-bytestring
                      , file-embed
                      , toml-reader
                      , filelock
                      , temporary
                      , process
+
+  -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
+  if !os(windows)
+    build-depends: unix
 
   other-modules:     LCA.Types
                      , LCA.Types.API

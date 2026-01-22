@@ -23,12 +23,52 @@ fn find_available_port(start: u16, end: u16) -> Option<u16> {
     None
 }
 
+/// Get the binary name for the current platform
+/// On Windows, we look for both fplca.exe and fplca (for bundled resources)
+fn get_binary_name() -> &'static str {
+    "fplca"
+}
+
+/// Get the binary path, checking for both fplca and fplca.exe on Windows
+fn get_binary_path(resource_dir: &PathBuf) -> PathBuf {
+    let base = resource_dir.join("fplca");
+
+    #[cfg(windows)]
+    {
+        // On Windows, try fplca.exe first, then fplca
+        let exe_path = resource_dir.join("fplca.exe");
+        if exe_path.exists() {
+            return exe_path;
+        }
+    }
+
+    base
+}
+
 /// Get the resource directory for bundled files (used before Tauri app is initialized)
 fn get_resource_dir_fallback() -> PathBuf {
-    // Check for installed location first (Debian package installs to /usr/lib/fplca)
-    let installed_path = PathBuf::from("/usr/lib/fplca");
-    if installed_path.join("fplca").exists() {
-        return installed_path;
+    let binary_name = get_binary_name();
+
+    // Check for installed location first
+    #[cfg(target_os = "linux")]
+    {
+        // Debian package installs to /usr/lib/fplca
+        let installed_path = PathBuf::from("/usr/lib/fplca");
+        if installed_path.join(binary_name).exists() {
+            return installed_path;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows installer typically installs to Program Files
+        if let Ok(program_files) = env::var("ProgramFiles") {
+            let installed_path = PathBuf::from(program_files).join("fplca");
+            // Check for both fplca.exe and fplca
+            if installed_path.join("fplca.exe").exists() || installed_path.join(binary_name).exists() {
+                return installed_path;
+            }
+        }
     }
 
     let exe_dir = env::current_exe()
@@ -45,7 +85,11 @@ fn get_resource_dir_fallback() -> PathBuf {
     ];
 
     for candidate in &candidates {
-        if candidate.join("fplca").exists() {
+        if candidate.join(binary_name).exists() {
+            return candidate.clone();
+        }
+        #[cfg(windows)]
+        if candidate.join("fplca.exe").exists() {
             return candidate.clone();
         }
     }
@@ -53,14 +97,34 @@ fn get_resource_dir_fallback() -> PathBuf {
     exe_dir
 }
 
-/// Build LD_LIBRARY_PATH including bundled libraries
+/// Get the environment variable name for library path on current platform
+fn get_library_path_env_var() -> &'static str {
+    if cfg!(windows) {
+        "PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    }
+}
+
+/// Get the path separator for the current platform
+fn get_path_separator() -> &'static str {
+    if cfg!(windows) {
+        ";"
+    } else {
+        ":"
+    }
+}
+
+/// Build library path including bundled libraries (LD_LIBRARY_PATH on Unix, PATH on Windows)
 fn build_library_path(resource_dir: &PathBuf) -> String {
     let lib_dir = resource_dir.join("lib");
     let lib_path = lib_dir.to_string_lossy().to_string();
+    let env_var = get_library_path_env_var();
+    let separator = get_path_separator();
 
-    // Prepend to existing LD_LIBRARY_PATH if any
-    match env::var("LD_LIBRARY_PATH") {
-        Ok(existing) if !existing.is_empty() => format!("{}:{}", lib_path, existing),
+    // Prepend to existing path if any
+    match env::var(env_var) {
+        Ok(existing) if !existing.is_empty() => format!("{}{}{}", lib_path, separator, existing),
         _ => lib_path,
     }
 }
@@ -92,9 +156,10 @@ async fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
 
 /// Spawn the fplca backend process
 fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
-    let fplca_binary = resource_dir.join("fplca");
+    let fplca_binary = get_binary_path(resource_dir);
     let web_dir = resource_dir.join("web");
     let lib_path = build_library_path(resource_dir);
+    let lib_env_var = get_library_path_env_var();
 
     // Verify binary exists
     if !fplca_binary.exists() {
@@ -108,7 +173,7 @@ fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
     // Use --config for BYOL mode (no database required at startup)
     let config_file = resource_dir.join("fplca.toml");
     let mut cmd = Command::new(&fplca_binary);
-    cmd.env("LD_LIBRARY_PATH", &lib_path);
+    cmd.env(lib_env_var, &lib_path);
 
     // Use config file if it exists (enables BYOL mode)
     if config_file.exists() {

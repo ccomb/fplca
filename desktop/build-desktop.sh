@@ -170,21 +170,9 @@ fi
 cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca"
 log_success "Copied fplca binary"
 
-# Create default config file for BYOL mode
-cat > "$RESOURCES_DIR/fplca.toml" << 'TOMLEOF'
-# fpLCA Desktop Configuration
-# Databases can be uploaded via the web interface
-
-[server]
-# No password required for local desktop use
-
-# No databases configured - users upload via web interface
-# [[databases]]
-# name = "example"
-# path = "/path/to/data"
-# load = true
-TOMLEOF
-log_success "Created default config"
+# Copy default config file for BYOL mode
+cp "$SCRIPT_DIR/fplca.toml" "$RESOURCES_DIR/fplca.toml"
+log_success "Copied default config"
 
 # Copy web assets
 if [[ -d "$PROJECT_DIR/web/dist" ]]; then
@@ -221,43 +209,12 @@ echo ""
 # Create placeholder icons if they don't exist
 # -----------------------------------------------------------------------------
 
+# Verify icons exist
 ICONS_DIR="$SCRIPT_DIR/icons"
-if [[ ! -f "$ICONS_DIR/32x32.png" ]]; then
-    log_info "Creating placeholder icons..."
-    mkdir -p "$ICONS_DIR"
-
-    # Create valid RGBA PNG icons using Python
-    ICONS_DIR="$ICONS_DIR" python3 << 'PYEOF'
-import struct
-import zlib
-import os
-
-def create_rgba_png(filename, width, height, r, g, b, a=255):
-    signature = b'\x89PNG\r\n\x1a\n'
-    ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
-    ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff
-    ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_data + struct.pack('>I', ihdr_crc)
-    raw_data = b''
-    for y in range(height):
-        raw_data += b'\x00'
-        for x in range(width):
-            raw_data += bytes([r, g, b, a])
-    compressed = zlib.compress(raw_data, 9)
-    idat_crc = zlib.crc32(b'IDAT' + compressed) & 0xffffffff
-    idat = struct.pack('>I', len(compressed)) + b'IDAT' + compressed + struct.pack('>I', idat_crc)
-    iend_crc = zlib.crc32(b'IEND') & 0xffffffff
-    iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_crc)
-    with open(filename, 'wb') as f:
-        f.write(signature + ihdr + idat + iend)
-
-icons_dir = os.environ.get('ICONS_DIR', 'icons')
-green = (76, 175, 80)
-create_rgba_png(f'{icons_dir}/32x32.png', 32, 32, *green)
-create_rgba_png(f'{icons_dir}/128x128.png', 128, 128, *green)
-create_rgba_png(f'{icons_dir}/128x128@2x.png', 256, 256, *green)
-PYEOF
-
-    log_success "Created placeholder icons"
+if [[ ! -f "$ICONS_DIR/32x32.png" ]] || [[ ! -f "$ICONS_DIR/icon.ico" ]]; then
+    log_error "Missing required icons in $ICONS_DIR"
+    log_error "Required: 32x32.png, 128x128.png, 128x128@2x.png, icon.ico"
+    exit 1
 fi
 
 # -----------------------------------------------------------------------------

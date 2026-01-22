@@ -1,0 +1,11 @@
+# fpLCA Desktop Configuration
+# Databases can be uploaded via the web interface
+
+[server]
+# No password required for local desktop use
+
+# No databases configured - users upload via web interface
+# [[databases]]
+# name = "example"
+# path = "/path/to/data"
+# load = true

@@ -11,11 +11,12 @@
   "bundle": {
     "active": true,
     "category": "Education",
-    "targets": ["appimage", "deb"],
+    "targets": ["appimage", "deb", "msi", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
-      "icons/128x128@2x.png"
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
     ],
     "resources": {
       "resources/lib/*": "lib/",
@@ -30,6 +31,14 @@
       },
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
       }
     },
     "shortDescription": "Life Cycle Assessment computation engine",

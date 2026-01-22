@@ -29,9 +29,7 @@ static/
 
 # Local configuration
 cabal.project.local
-fplca.toml
-fplca.toml.lock
-!desktop/resources/fplca.toml
+/fplca.toml
 
 run*.sh
 
@@ -54,3 +52,8 @@ pyproject.toml
 
 # debug stuff
 debug/
+
+# Desktop app build artifacts
+desktop/resources/
+desktop/target/
+desktop/gen/

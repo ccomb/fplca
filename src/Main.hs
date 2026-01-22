@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 
 module Main where
 
@@ -18,7 +19,9 @@ import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import qualified System.FilePath
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
+#ifndef mingw32_HOST_OS
 import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
+#endif
 import Text.Printf (printf)
 
 -- fpLCA imports
@@ -100,9 +103,11 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
 
       let port = serverPort serverOpts
 
-      -- Install SIGPIPE handler
+      -- Install SIGPIPE handler (Unix only - not needed on Windows)
+#ifndef mingw32_HOST_OS
       reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
       _ <- installHandler sigPIPE Ignore Nothing
+#endif
 
       -- Initialize PETSc/MPI context (already done per-database in DatabaseManager)
       reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
@@ -214,9 +219,11 @@ runSingleDatabaseMode cliConfig = do
       reportProgress Info "Initializing single-database mode..."
       dbManager <- initSingleDatabaseManager dataDirectory synonymDB (noCache (globalOptions cliConfig))
 
-      -- Install SIGPIPE handler to prevent broken pipe crashes
+      -- Install SIGPIPE handler to prevent broken pipe crashes (Unix only)
+#ifndef mingw32_HOST_OS
       reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
       _ <- installHandler sigPIPE Ignore Nothing
+#endif
 
       -- Initialize PETSc/MPI context once for the server's lifetime
       reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
