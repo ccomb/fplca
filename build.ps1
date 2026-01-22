@@ -131,8 +131,13 @@ function Build-PETSc {
     param(
         [string]$PetscDir,
         [string]$PetscArch,
-        [string]$PetscVersion
+        [string]$PetscVersion,
+        [string]$Msys2Bash
     )
+
+    if (-not $Msys2Bash) {
+        throw "MSYS2 is required to build PETSc. Install from https://www.msys2.org/"
+    }
 
     Write-Info "Downloading and building PETSc $PetscVersion..."
     Write-Info "This may take 15-30 minutes..."
@@ -164,36 +169,31 @@ function Build-PETSc {
     # Use junction on Windows (symlinks need admin)
     cmd /c mklink /J "$petscLink" "$extractDir"
 
-    # Configure PETSc
+    # Convert Windows path to MSYS2 path
+    $petscMsysPath = $petscLink -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+
+    # Configure PETSc using MSYS2 bash
     Write-Info "Configuring PETSc (optimized, no MPI, no Fortran)..."
-    Push-Location $petscLink
+    Write-Info "Using MSYS2 bash for configure..."
 
-    $configArgs = @(
-        "./configure",
-        "--with-cc=cl",
-        "--with-cxx=cl",
-        "--with-fc=0",
-        "--download-openblas",
-        "--with-mpi=0",
-        "--with-debugging=0",
-        "PETSC_ARCH=$PetscArch"
-    )
+    $configScript = @"
+cd '$petscMsysPath'
+python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-openblas --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
+"@
 
-    & python $configArgs
+    & $Msys2Bash -l -c $configScript
     if ($LASTEXITCODE -ne 0) {
-        Pop-Location
         throw "PETSc configure failed"
     }
 
-    # Build PETSc
+    # Build PETSc using MSYS2 make
     Write-Info "Building PETSc..."
-    & nmake /f gmakefile PETSC_DIR="$petscLink" PETSC_ARCH="$PetscArch"
+    $buildScript = "cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
-        Pop-Location
         throw "PETSc build failed"
     }
 
-    Pop-Location
     Write-Success "PETSc built successfully"
     Write-Host ""
 }
@@ -204,8 +204,13 @@ function Build-SLEPc {
         [string]$SlepcDir,
         [string]$PetscDir,
         [string]$PetscArch,
-        [string]$SlepcVersion
+        [string]$SlepcVersion,
+        [string]$Msys2Bash
     )
+
+    if (-not $Msys2Bash) {
+        throw "MSYS2 is required to build SLEPc. Install from https://www.msys2.org/"
+    }
 
     Write-Info "Downloading and building SLEPc $SlepcVersion..."
     Write-Host ""
@@ -235,30 +240,35 @@ function Build-SLEPc {
     }
     cmd /c mklink /J "$slepcLink" "$extractDir"
 
-    # Set environment for SLEPc configure
-    $env:PETSC_DIR = $PetscDir
-    $env:SLEPC_DIR = $slepcLink
-    $env:PETSC_ARCH = $PetscArch
+    # Convert Windows paths to MSYS2 paths
+    $slepcMsysPath = $slepcLink -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+    $petscMsysPath = $PetscDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
 
-    # Configure SLEPc
+    # Configure SLEPc using MSYS2 bash
     Write-Info "Configuring SLEPc..."
-    Push-Location $slepcLink
+    Write-Info "Using MSYS2 bash for configure..."
 
-    & python ./configure
+    $configScript = @"
+export PETSC_DIR='$petscMsysPath'
+export SLEPC_DIR='$slepcMsysPath'
+export PETSC_ARCH=$PetscArch
+cd '$slepcMsysPath'
+python ./configure
+"@
+
+    & $Msys2Bash -l -c $configScript
     if ($LASTEXITCODE -ne 0) {
-        Pop-Location
         throw "SLEPc configure failed"
     }
 
-    # Build SLEPc
+    # Build SLEPc using MSYS2 make
     Write-Info "Building SLEPc..."
-    & nmake /f gmakefile SLEPC_DIR="$slepcLink" PETSC_DIR="$PetscDir" PETSC_ARCH="$PetscArch"
+    $buildScript = "cd '$slepcMsysPath' && make SLEPC_DIR='$slepcMsysPath' PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
-        Pop-Location
         throw "SLEPc build failed"
     }
 
-    Pop-Location
     Write-Success "SLEPc built successfully"
     Write-Host ""
 }
@@ -312,10 +322,40 @@ if ($vcvarsall) {
 }
 
 # Required build tools
-foreach ($cmd in @("python", "curl", "tar", "git")) {
+foreach ($cmd in @("curl", "tar", "git")) {
     if (-not (Test-Command $cmd)) {
         $MissingDeps = $true
     }
+}
+
+# Check for Python (try python, python3, py)
+$pythonCmd = $null
+foreach ($cmd in @("python", "python3", "py")) {
+    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+        $pythonCmd = $cmd
+        Write-Success "$cmd found: $((Get-Command $cmd).Source)"
+        break
+    }
+}
+if (-not $pythonCmd) {
+    Write-Error "python not found (tried: python, python3, py)"
+    $MissingDeps = $true
+}
+
+# Check for MSYS2 (required for PETSc configure)
+$msys2Bash = $null
+$msys2Paths = @("C:\msys64\usr\bin\bash.exe", "C:\msys32\usr\bin\bash.exe", "$env:USERPROFILE\msys64\usr\bin\bash.exe")
+foreach ($path in $msys2Paths) {
+    if (Test-Path $path) {
+        $msys2Bash = $path
+        Write-Success "MSYS2 found: $path"
+        break
+    }
+}
+if (-not $msys2Bash) {
+    Write-Warn "MSYS2 not found (required for building PETSc/SLEPc)"
+    Write-Warn "Install from: https://www.msys2.org/"
+    Write-Warn "Then run: pacman -S python make"
 }
 
 # Haskell toolchain
@@ -385,22 +425,32 @@ if ($needPetsc -or $needSlepc) {
 
 # Download/build PETSc if needed
 if ($needPetsc) {
+    if (-not $msys2Bash) {
+        Write-Error "MSYS2 is required to build PETSc but was not found"
+        Write-Host "Install MSYS2 from: https://www.msys2.org/"
+        Write-Host "Then run in MSYS2 terminal: pacman -S python make"
+        exit 1
+    }
     if ($All -and (Test-Path $PetscDir)) {
         Write-Info "Removing existing PETSc for rebuild..."
         Remove-Item -Recurse -Force $PetscDir -ErrorAction SilentlyContinue
         Remove-Item -Force (Join-Path $ScriptDir "petsc-*.tar.gz") -ErrorAction SilentlyContinue
     }
-    Build-PETSc -PetscDir $PetscDir -PetscArch $PetscArch -PetscVersion $PetscVersion
+    Build-PETSc -PetscDir $PetscDir -PetscArch $PetscArch -PetscVersion $PetscVersion -Msys2Bash $msys2Bash
 }
 
 # Download/build SLEPc if needed
 if ($needSlepc) {
+    if (-not $msys2Bash) {
+        Write-Error "MSYS2 is required to build SLEPc but was not found"
+        exit 1
+    }
     if ($All -and (Test-Path $SlepcDir)) {
         Write-Info "Removing existing SLEPc for rebuild..."
         Remove-Item -Recurse -Force $SlepcDir -ErrorAction SilentlyContinue
         Remove-Item -Force (Join-Path $ScriptDir "slepc-*.tar.gz") -ErrorAction SilentlyContinue
     }
-    Build-SLEPc -SlepcDir $SlepcDir -PetscDir $PetscDir -PetscArch $PetscArch -SlepcVersion $SlepcVersion
+    Build-SLEPc -SlepcDir $SlepcDir -PetscDir $PetscDir -PetscArch $PetscArch -SlepcVersion $SlepcVersion -Msys2Bash $msys2Bash
 }
 
 Write-Success "Using PETSc: $PetscDir\$PetscArch"
