@@ -169,14 +169,15 @@ function Build-PETSc {
     # Use junction on Windows (symlinks need admin)
     cmd /c mklink /J "$petscLink" "$extractDir"
 
-    # Convert Windows path to MSYS2 path
-    $petscMsysPath = $petscLink -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+    # Convert Windows path to MSYS2 path (use actual extract dir, not junction)
+    $petscMsysPath = $extractDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
 
     # Configure PETSc using MSYS2 bash
     Write-Info "Configuring PETSc (optimized, no MPI, no Fortran)..."
     Write-Info "Using MSYS2 bash for configure..."
 
     $configScript = @"
+export PETSC_DIR='$petscMsysPath'
 cd '$petscMsysPath'
 python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
 "@
@@ -188,7 +189,7 @@ python ./configure --with-cc=cl --with-cxx=cl --with-fc=0 --download-f2cblaslapa
 
     # Build PETSc using MSYS2 make
     Write-Info "Building PETSc..."
-    $buildScript = "cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
+    $buildScript = "export PETSC_DIR='$petscMsysPath' && cd '$petscMsysPath' && make PETSC_DIR='$petscMsysPath' PETSC_ARCH=$PetscArch all"
     & $Msys2Bash -l -c $buildScript
     if ($LASTEXITCODE -ne 0) {
         throw "PETSc build failed"
@@ -205,6 +206,7 @@ function Build-SLEPc {
         [string]$PetscDir,
         [string]$PetscArch,
         [string]$SlepcVersion,
+        [string]$PetscVersion,
         [string]$Msys2Bash
     )
 
@@ -240,9 +242,11 @@ function Build-SLEPc {
     }
     cmd /c mklink /J "$slepcLink" "$extractDir"
 
-    # Convert Windows paths to MSYS2 paths
-    $slepcMsysPath = $slepcLink -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
-    $petscMsysPath = $PetscDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+    # Convert Windows paths to MSYS2 paths (use actual extract dirs, not junctions)
+    $slepcMsysPath = $extractDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+    # For PETSc, we need to find the actual versioned directory
+    $petscExtractDir = Join-Path $ScriptDir "petsc-$PetscVersion"
+    $petscMsysPath = $petscExtractDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
 
     # Configure SLEPc using MSYS2 bash
     Write-Info "Configuring SLEPc..."
@@ -450,7 +454,7 @@ if ($needSlepc) {
         Remove-Item -Recurse -Force $SlepcDir -ErrorAction SilentlyContinue
         Remove-Item -Force (Join-Path $ScriptDir "slepc-*.tar.gz") -ErrorAction SilentlyContinue
     }
-    Build-SLEPc -SlepcDir $SlepcDir -PetscDir $PetscDir -PetscArch $PetscArch -SlepcVersion $SlepcVersion -Msys2Bash $msys2Bash
+    Build-SLEPc -SlepcDir $SlepcDir -PetscDir $PetscDir -PetscArch $PetscArch -SlepcVersion $SlepcVersion -PetscVersion $PetscVersion -Msys2Bash $msys2Bash
 }
 
 Write-Success "Using PETSc: $PetscDir\$PetscArch"
