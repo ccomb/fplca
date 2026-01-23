@@ -572,11 +572,10 @@ if (Test-Path $PetscHsCabal) {
         # Libraries needed:
         # - f2clapack, f2cblas: BLAS/LAPACK from PETSc
         # - stdc++: C++ standard library (PETSc uses C++ for device support)
-        # - gcc: GCC runtime
         # - quadmath: 128-bit float operations (__addtf3)
         # - mingwex: MinGW extensions (__mingw_fe_dfl_env)
         # - pthread: POSIX threads (nanosleep64)
-        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, stdc++, gcc, quadmath, mingwex, pthread"
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, stdc++, quadmath, mingwex, pthread"
         $modified = $true
     }
 
