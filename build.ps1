@@ -566,10 +566,17 @@ if (Test-Path $PetscHsCabal) {
         $modified = $true
     }
 
-    # Add BLAS/LAPACK and MinGW runtime libraries for Windows static build
+    # Add BLAS/LAPACK, C++ runtime, and MinGW runtime libraries for Windows static build
     if ($content -notmatch "f2clapack") {
-        Write-Info "Adding BLAS/LAPACK and MinGW libraries to petsc-hs.cabal..."
-        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, quadmath, mingwex"
+        Write-Info "Adding BLAS/LAPACK, C++ and MinGW libraries to petsc-hs.cabal..."
+        # Libraries needed:
+        # - f2clapack, f2cblas: BLAS/LAPACK from PETSc
+        # - stdc++: C++ standard library (PETSc uses C++ for device support)
+        # - gcc: GCC runtime
+        # - quadmath: 128-bit float operations (__addtf3)
+        # - mingwex: MinGW extensions (__mingw_fe_dfl_env)
+        # - pthread: POSIX threads (nanosleep64)
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, stdc++, gcc, quadmath, mingwex, pthread"
         $modified = $true
     }
 
