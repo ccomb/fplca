@@ -231,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=1 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -566,19 +566,8 @@ if (Test-Path $PetscHsCabal) {
         $modified = $true
     }
 
-    # Add BLAS/LAPACK and MinGW runtime libraries for Windows static build
-    # Note: PETSc is built without C++ (--with-cxx=0) to avoid C++ runtime linking issues
-    if ($content -notmatch "f2clapack") {
-        Write-Info "Adding BLAS/LAPACK and MinGW libraries to petsc-hs.cabal..."
-        # Libraries needed:
-        # - f2clapack, f2cblas: BLAS/LAPACK from PETSc
-        # - mingwex: MinGW extensions (__mingw_fe_dfl_env, stat64i32)
-        # - mingw32: MinGW base runtime
-        # - pthread: POSIX threads (nanosleep64)
-        # - quadmath: 128-bit float (__addtf3)
-        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, mingwex, mingw32, pthread, quadmath"
-        $modified = $true
-    }
+    # Note: PETSc is built with shared libraries, so extra static libs not needed
+    # The MinGW runtime is linked into the DLLs
 
     if ($modified) {
         Set-Content -Path $PetscHsCabal -Value $content
@@ -693,12 +682,6 @@ extra-include-dirs: $PetscIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
--- Use MinGW gcc instead of LLVM for linking (lld doesn't work with MinGW libraries)
-package petsc-hs
-  ghc-options: "-pgml C:/msys64/ucrt64/bin/gcc.exe" -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
-
-package fplca
-  ghc-options: "-pgml C:/msys64/ucrt64/bin/gcc.exe" -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
