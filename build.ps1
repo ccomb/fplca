@@ -208,7 +208,8 @@ function Build-PETSc {
     # Extract if not already extracted
     if (-not (Test-Path $extractDir)) {
         Write-Info "Extracting PETSc..."
-        tar -xzf $tarball -C $ScriptDir
+        # Use Windows tar explicitly to avoid Git's tar which has path issues
+        & "$env:SystemRoot\system32\tar.exe" -xzf $tarball -C $ScriptDir
     }
 
     # Create symlink or copy
@@ -284,7 +285,8 @@ function Build-SLEPc {
     # Extract if not already extracted
     if (-not (Test-Path $extractDir)) {
         Write-Info "Extracting SLEPc..."
-        tar -xzf $tarball -C $ScriptDir
+        # Use Windows tar explicitly to avoid Git's tar which has path issues
+        & "$env:SystemRoot\system32\tar.exe" -xzf $tarball -C $ScriptDir
     }
 
     # Create symlink
@@ -602,6 +604,73 @@ PetscErrorCode PetscViewerHDF5Open(MPI_Comm comm, const char name[], PetscFileMo
     Set-Content -Path $Hdf5StubFile -Value $stubContent -Encoding UTF8
 }
 
+# Create MinGW runtime stub file (provides symbols PETSc needs that ld.lld can't find)
+$MingwStubFile = Join-Path $PetscHsDir "cbits\mingw_stub.c"
+if (-not (Test-Path $MingwStubFile)) {
+    Write-Info "Creating MinGW runtime stub for petsc-hs..."
+    $mingwStubContent = @"
+/* Stubs for MinGW runtime symbols not found by ld.lld on Windows */
+#ifdef _WIN32
+
+#include <windows.h>
+#include <stdint.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <setjmp.h>
+
+/* Provide __imp__setjmp as a pointer to the real _setjmp function.
+   This is needed because PETSc's checkptr.o references the imported symbol. */
+typedef int (*setjmp_func_t)(jmp_buf);
+
+/* On x86_64 Windows, _setjmp takes two args (buffer and frame pointer) */
+extern int __cdecl _setjmp(jmp_buf _Buf, void *_Ctx);
+void* __imp__setjmp = (void*)_setjmp;
+
+/* Floating point environment default */
+typedef struct {
+    unsigned int __cw;
+    unsigned int __sw;
+    unsigned int __tag;
+    unsigned int __ipoff;
+    unsigned int __cssel;
+    unsigned int __dataoff;
+    unsigned int __datasel;
+    unsigned int __mxcsr;
+} stub_fenv_t;
+
+const stub_fenv_t __mingw_fe_dfl_env = { 0x37f, 0, 0, 0, 0, 0, 0, 0x1f80 };
+
+/* stat64i32 - wrapper using _stat64 */
+int stat64i32(const char *path, struct _stat64 *buf) {
+    return _stat64(path, buf);
+}
+
+/* nanosleep64 implementation using Windows Sleep */
+struct timespec64 {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
+int nanosleep64(const struct timespec64 *req, struct timespec64 *rem) {
+    if (req == NULL) return -1;
+
+    /* Convert to milliseconds and use Sleep */
+    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000);
+    if (ms > 0) {
+        Sleep(ms);
+    }
+    if (rem) {
+        rem->tv_sec = 0;
+        rem->tv_nsec = 0;
+    }
+    return 0;
+}
+
+#endif /* _WIN32 */
+"@
+    Set-Content -Path $MingwStubFile -Value $mingwStubContent -Encoding UTF8
+}
+
 # Add c-sources to petsc-hs.cabal if not already present
 $PetscHsCabal = Join-Path $PetscHsDir "petsc-hs.cabal"
 if (Test-Path $PetscHsCabal) {
@@ -609,6 +678,13 @@ if (Test-Path $PetscHsCabal) {
     if ($content -notmatch "hdf5_stub\.c") {
         Write-Info "Adding HDF5 stub to petsc-hs.cabal..."
         $content = $content -replace "(extra-libraries:\s+petsc)", "c-sources: cbits/hdf5_stub.c`n  `$1"
+        Set-Content -Path $PetscHsCabal -Value $content
+    }
+    # Add mingw_stub.c if not already present
+    $content = Get-Content $PetscHsCabal -Raw
+    if ($content -notmatch "mingw_stub\.c") {
+        Write-Info "Adding MinGW stub to petsc-hs.cabal..."
+        $content = $content -replace "(c-sources: cbits/hdf5_stub\.c)", "`$1`n             cbits/mingw_stub.c"
         Set-Content -Path $PetscHsCabal -Value $content
     }
 }
@@ -666,30 +742,34 @@ if ($Clean) {
 Write-Info "Building fplca..."
 Set-Location $ScriptDir
 
-# Find MSYS2 library directory for MinGW runtime libraries
+# Find MSYS2 library directories
 $Msys2LibDir = "C:\msys64\ucrt64\lib"
 if (-not (Test-Path $Msys2LibDir)) {
     $Msys2LibDir = "C:\msys64\mingw64\lib"
 }
 
+# Find GCC library directory for libgcc and libquadmath
+$GccLibDir = "C:\msys64\ucrt64\lib\gcc\x86_64-w64-mingw32"
+$GccVersion = Get-ChildItem $GccLibDir -Directory | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+$GccLibPath = Join-Path $GccLibDir $GccVersion
+
 # Find f2cblaslapack library directory (PETSc external packages)
 $F2cBlasLapackDir = "$PetscDir\$PetscArch\lib"
 
 # Write cabal.project.local with library paths
-# Use ghc-options to pass MinGW libraries directly to linker since GHC uses its own toolchain
+# Link MinGW runtime libraries needed by PETSc (built with UCRT64 gcc)
+# The mingw_stub.c provides __imp__setjmp, __mingw_fe_dfl_env, stat64i32, nanosleep64
 $cabalProjectLocal = @"
 extra-lib-dirs: $PetscLibDir
               , $SlepcLibDir
-              , $F2cBlasLapackDir
-              , $Msys2LibDir
 extra-include-dirs: $PetscIncludeDir
                   , $PetscArchIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
--- Use MinGW gcc for linking and add MinGW runtime libraries
+-- Link MinGW runtime libs needed by PETSc (built with UCRT64)
 package fplca
-  ghc-options: "-pgml C:/msys64/ucrt64/bin/gcc.exe" -optl-static-libgcc -optl-L$Msys2LibDir
+  ghc-options: -optl-L$GccLibPath -optl-lgcc -optl-L$Msys2LibDir -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
