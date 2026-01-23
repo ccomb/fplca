@@ -682,6 +682,7 @@ if (-not (Test-Path $Msys2LibDir)) {
 $F2cBlasLapackDir = "$PetscDir\$PetscArch\lib"
 
 # Write cabal.project.local with library paths
+# Use ghc-options to pass MinGW libraries directly to linker since GHC uses its own toolchain
 $cabalProjectLocal = @"
 extra-lib-dirs: $PetscLibDir
               , $SlepcLibDir
@@ -691,6 +692,9 @@ extra-include-dirs: $PetscIncludeDir
                   , $PetscArchIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
+
+package petsc-hs
+  ghc-options: -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
