@@ -476,6 +476,17 @@ if (-not (Test-Path $PetscHsDir)) {
     Remove-Item -Recurse -Force (Join-Path $PetscHsDir "dist-newstyle") -ErrorAction SilentlyContinue
 }
 
+# Patch petsc-hs.cabal to remove mpich dependency (we build PETSc without MPI)
+$PetscHsCabal = Join-Path $PetscHsDir "petsc-hs.cabal"
+if (Test-Path $PetscHsCabal) {
+    $content = Get-Content $PetscHsCabal -Raw
+    if ($content -match "mpich") {
+        Write-Info "Patching petsc-hs.cabal to remove mpich dependency..."
+        $content = $content -replace "petsc, mpich, slepc", "petsc, slepc"
+        Set-Content -Path $PetscHsCabal -Value $content
+    }
+}
+
 # -----------------------------------------------------------------------------
 # Set up environment
 # -----------------------------------------------------------------------------
