@@ -42,9 +42,42 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Versions
-$PetscVersion = "3.24.2"
-$SlepcVersion = "3.24.1"
+# -----------------------------------------------------------------------------
+# Load versions from central file
+# -----------------------------------------------------------------------------
+
+$versionsFile = Join-Path $ScriptDir "versions.env"
+if (-not (Test-Path $versionsFile)) {
+    Write-Host "[ERROR] " -ForegroundColor Red -NoNewline
+    Write-Host "versions.env not found in $ScriptDir"
+    exit 1
+}
+
+# Parse versions.env (KEY=VALUE format, # comments)
+$versions = @{}
+Get-Content $versionsFile | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -and -not $line.StartsWith("#")) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            $versions[$matches[1].Trim()] = $matches[2].Trim()
+        }
+    }
+}
+
+# Extract version variables
+$PetscVersion = $versions["PETSC_VERSION"]
+$SlepcVersion = $versions["SLEPC_VERSION"]
+$GhcVersion = $versions["GHC_VERSION"]
+$RustVersion = $versions["RUST_VERSION"]
+$NodeVersion = $versions["NODE_VERSION"]
+$ElmVersion = $versions["ELM_VERSION"]
+
+# Validate required versions are loaded
+if (-not $PetscVersion -or -not $SlepcVersion) {
+    Write-Host "[ERROR] " -ForegroundColor Red -NoNewline
+    Write-Host "Failed to load required versions from versions.env"
+    exit 1
+}
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -95,6 +128,23 @@ function Test-Command {
         } else {
             Write-Warn "$Command not found (optional)"
         }
+        return $false
+    }
+}
+
+# Check tool version against expected version (exact match)
+function Test-ToolVersion {
+    param(
+        [string]$Tool,
+        [string]$Actual,
+        [string]$Expected
+    )
+
+    if ($Actual -eq $Expected) {
+        Write-Success "$Tool version $Actual"
+        return $true
+    } else {
+        Write-Warn "$Tool version $Actual (expected $Expected)"
         return $false
     }
 }
@@ -181,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --download-hdf5 --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -393,9 +443,36 @@ if ($MissingDeps) {
     exit 1
 }
 
+# -----------------------------------------------------------------------------
+# Check tool versions
+# -----------------------------------------------------------------------------
+
+Write-Info "Checking tool versions..."
+
 # Check GHC version
-$ghcVersion = & ghc --numeric-version
-Write-Info "GHC version: $ghcVersion"
+$ghcActual = & ghc --numeric-version
+Test-ToolVersion "GHC" $ghcActual $GhcVersion | Out-Null
+
+# Check Node version
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    $nodeActual = (& node --version) -replace '^v', ''
+    Test-ToolVersion "Node.js" $nodeActual $NodeVersion | Out-Null
+}
+
+# Check Rust version (optional, for desktop build)
+if (Get-Command rustc -ErrorAction SilentlyContinue) {
+    $rustActual = (& rustc --version) -replace '^rustc ', '' -replace ' .*$', ''
+    Test-ToolVersion "Rust" $rustActual $RustVersion | Out-Null
+}
+
+# Check Elm version (optional, installed via npm if missing)
+if (Get-Command elm -ErrorAction SilentlyContinue) {
+    $elmActual = & elm --version 2>$null
+    if ($elmActual) {
+        Test-ToolVersion "Elm" $elmActual $ElmVersion | Out-Null
+    }
+}
+
 Write-Host ""
 
 # -----------------------------------------------------------------------------
@@ -540,14 +617,30 @@ if ($Clean) {
 Write-Info "Building fplca..."
 Set-Location $ScriptDir
 
-# Write cabal.project.local with library paths
+# Find MSYS2 library directory for MinGW runtime libraries
+$Msys2LibDir = "C:\msys64\ucrt64\lib"
+if (-not (Test-Path $Msys2LibDir)) {
+    $Msys2LibDir = "C:\msys64\mingw64\lib"
+}
+
+# Find f2cblaslapack library directory (PETSc external packages)
+$F2cBlasLapackDir = "$PetscDir\$PetscArch\lib"
+
+# Write cabal.project.local with library paths and extra libraries
 $cabalProjectLocal = @"
 extra-lib-dirs: $PetscLibDir
               , $SlepcLibDir
+              , $F2cBlasLapackDir
+              , $Msys2LibDir
 extra-include-dirs: $PetscIncludeDir
                   , $PetscArchIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
+
+-- Link against BLAS/LAPACK from PETSc's f2cblaslapack,
+-- HDF5, and MinGW runtime libraries for 128-bit float and FP environment
+package petsc-hs
+  extra-libraries: f2clapack f2cblas hdf5 quadmath mingwex
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal

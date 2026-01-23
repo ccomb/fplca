@@ -36,9 +36,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Versions
-PETSC_VERSION="3.24.2"
-SLEPC_VERSION="3.24.1"
+# Source version definitions from central file
+if [[ -f "$SCRIPT_DIR/versions.env" ]]; then
+    # shellcheck source=versions.env
+    source "$SCRIPT_DIR/versions.env"
+else
+    echo "ERROR: versions.env not found in $SCRIPT_DIR"
+    exit 1
+fi
 
 # Detect OS
 OS_TYPE="$(uname -s)"
@@ -99,6 +104,21 @@ check_command() {
         else
             log_warn "$cmd not found (optional)"
         fi
+        return 1
+    fi
+}
+
+# Check tool version against expected version (exact match)
+check_version() {
+    local tool="$1"
+    local actual="$2"
+    local expected="$3"
+
+    if [[ "$actual" == "$expected" ]]; then
+        log_success "$tool version $actual"
+        return 0
+    else
+        log_warn "$tool version $actual (expected $expected)"
         return 1
     fi
 }
@@ -194,6 +214,20 @@ if ! check_command "npm"; then
     log_warn "Install Node.js: https://nodejs.org/"
 fi
 
+# Rust (needed for desktop build)
+if command -v rustc &> /dev/null; then
+    log_success "rustc found: $(command -v rustc)"
+else
+    log_warn "rustc not found (optional, needed for desktop build)"
+fi
+
+# Elm (needed for frontend build)
+if command -v elm &> /dev/null; then
+    log_success "elm found: $(command -v elm)"
+else
+    log_warn "elm not found (optional, installed via npm)"
+fi
+
 if [[ "$MISSING_DEPS" == "true" ]]; then
     log_error "Missing required dependencies. Please install them and try again."
     echo ""
@@ -217,9 +251,36 @@ if [[ "$MISSING_DEPS" == "true" ]]; then
     exit 1
 fi
 
+# -----------------------------------------------------------------------------
+# Check tool versions
+# -----------------------------------------------------------------------------
+
+log_info "Checking tool versions..."
+
 # Check GHC version
-GHC_VERSION=$(ghc --numeric-version)
-log_info "GHC version: $GHC_VERSION"
+GHC_ACTUAL=$(ghc --numeric-version)
+check_version "GHC" "$GHC_ACTUAL" "$GHC_VERSION"
+
+# Check Node version
+if command -v node &> /dev/null; then
+    NODE_ACTUAL=$(node --version | sed 's/^v//')
+    check_version "Node.js" "$NODE_ACTUAL" "$NODE_VERSION"
+fi
+
+# Check Rust version (optional, for desktop build)
+if command -v rustc &> /dev/null; then
+    RUST_ACTUAL=$(rustc --version | awk '{print $2}')
+    check_version "Rust" "$RUST_ACTUAL" "$RUST_VERSION"
+fi
+
+# Check Elm version (optional, installed via npm if missing)
+if command -v elm &> /dev/null; then
+    ELM_ACTUAL=$(elm --version 2>/dev/null || echo "unknown")
+    if [[ "$ELM_ACTUAL" != "unknown" ]]; then
+        check_version "Elm" "$ELM_ACTUAL" "$ELM_VERSION"
+    fi
+fi
+
 echo ""
 
 # -----------------------------------------------------------------------------
