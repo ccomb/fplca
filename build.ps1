@@ -231,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --download-hdf5 --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --download-cmake --download-hdf5 --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
