@@ -257,18 +257,16 @@ download_and_build_petsc() {
 
     cd "$PETSC_DIR"
 
-    # Configure PETSc (optimized with 64-bit indices for large matrices)
-    log_info "Configuring PETSc (64-bit indices, optimized)..."
+    # Configure PETSc (optimized, no MPI for simpler build)
+    # Uses system BLAS/LAPACK for performance (OpenBLAS on most Linux distros)
+    log_info "Configuring PETSc (optimized, no MPI)..."
 
     python3 ./configure \
-        --download-mpich \
-        --download-mumps \
-        --download-scalapack \
-        --download-hdf5=yes \
+        --with-mpi=0 \
+        --with-blaslapack-lib="-llapack -lblas" \
         --with-debugging=no \
         COPTFLAGS=-O3 \
         CXXOPTFLAGS=-O3 \
-        FOPTFLAGS=-O3 \
         PETSC_ARCH="$PETSC_ARCH"
 
     log_info "Building PETSc..."
