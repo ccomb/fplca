@@ -181,7 +181,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -426,10 +426,8 @@ $SlepcLibDir = "$SlepcDir\$PetscArch\lib"
 $needPetsc = (-not (Test-Path $PetscLibDir)) -or $All
 $needSlepc = (-not (Test-Path $SlepcLibDir)) -or $All
 
-if ($needPetsc -or $needSlepc) {
-    # Set up MSVC environment before building
-    Initialize-VCEnvironment -VcvarsallPath $vcvarsall.FullName
-}
+# Note: PETSc/SLEPc use MinGW-w64 via MSYS2, not MSVC
+# Rust/Tauri handles its own MSVC setup automatically
 
 # Download/build PETSc if needed
 if ($needPetsc) {
