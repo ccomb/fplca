@@ -231,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -566,16 +566,11 @@ if (Test-Path $PetscHsCabal) {
         $modified = $true
     }
 
-    # Add BLAS/LAPACK, C++ runtime, and MinGW runtime libraries for Windows static build
+    # Add BLAS/LAPACK libraries for Windows static build
+    # Note: PETSc is built without C++ (--with-cxx=0) to avoid C++ runtime linking issues
     if ($content -notmatch "f2clapack") {
-        Write-Info "Adding BLAS/LAPACK, C++ and MinGW libraries to petsc-hs.cabal..."
-        # Libraries needed:
-        # - f2clapack, f2cblas: BLAS/LAPACK from PETSc
-        # - stdc++: C++ standard library (PETSc uses C++ for device support)
-        # - quadmath: 128-bit float operations (__addtf3)
-        # - mingwex: MinGW extensions (__mingw_fe_dfl_env)
-        # - pthread: POSIX threads (nanosleep64)
-        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, stdc++, quadmath, mingwex, pthread"
+        Write-Info "Adding BLAS/LAPACK libraries to petsc-hs.cabal..."
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas"
         $modified = $true
     }
 
