@@ -231,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=1 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 --with-single-library=1 LDFLAGS="-static-libgcc" PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -567,8 +567,12 @@ if (Test-Path $PetscHsCabal) {
         $modified = $true
     }
 
-    # Note: PETSc is built with shared libraries, so extra static libs not needed
-    # The MinGW runtime is linked into the DLLs
+    # Add BLAS/LAPACK and MinGW runtime libraries for Windows static build
+    if ($content -notmatch "f2clapack") {
+        Write-Info "Adding BLAS/LAPACK and MinGW libraries to petsc-hs.cabal..."
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas"
+        $modified = $true
+    }
 
     if ($modified) {
         Set-Content -Path $PetscHsCabal -Value $content
@@ -683,6 +687,9 @@ extra-include-dirs: $PetscIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
+-- Use MinGW gcc for linking and add MinGW runtime libraries
+package fplca
+  ghc-options: "-pgml C:/msys64/ucrt64/bin/gcc.exe" -optl-static-libgcc -optl-L$Msys2LibDir
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
