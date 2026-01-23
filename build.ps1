@@ -553,33 +553,62 @@ if (-not (Test-Path $PetscHsDir)) {
     Remove-Item -Recurse -Force (Join-Path $PetscHsDir "dist-newstyle") -ErrorAction SilentlyContinue
 }
 
-# Patch petsc-hs.cabal to remove mpich dependency (we build PETSc without MPI)
+# Patch petsc-hs.cabal to remove mpich and add required libraries
 $PetscHsCabal = Join-Path $PetscHsDir "petsc-hs.cabal"
 if (Test-Path $PetscHsCabal) {
     $content = Get-Content $PetscHsCabal -Raw
+    $modified = $false
+
+    # Remove mpich dependency (we build PETSc without MPI)
     if ($content -match "mpich") {
         Write-Info "Patching petsc-hs.cabal to remove mpich dependency..."
         $content = $content -replace "petsc, mpich, slepc", "petsc, slepc"
+        $modified = $true
+    }
+
+    # Add BLAS/LAPACK and MinGW runtime libraries for Windows static build
+    if ($content -notmatch "f2clapack") {
+        Write-Info "Adding BLAS/LAPACK and MinGW libraries to petsc-hs.cabal..."
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas, quadmath, mingwex"
+        $modified = $true
+    }
+
+    if ($modified) {
         Set-Content -Path $PetscHsCabal -Value $content
     }
 }
 
-# Patch petsc-hs InlineC.hs to remove HDF5 function (we build PETSc without HDF5)
-$InlineCFile = Join-Path $PetscHsDir "src\Numerical\PETSc\Internal\InlineC.hs"
-if (Test-Path $InlineCFile) {
-    $lines = Get-Content $InlineCFile
-    $hasHdf5 = $lines | Where-Object { $_ -match "PetscViewerHDF5Open" }
-    $alreadyPatched = $lines | Where-Object { $_ -match "-- HDF5 DISABLED" }
-    if ($hasHdf5 -and -not $alreadyPatched) {
-        Write-Info "Patching petsc-hs InlineC.hs to remove HDF5 dependency..."
-        $newLines = $lines | ForEach-Object {
-            if ($_ -match "PetscViewerHDF5Open") {
-                "-- HDF5 DISABLED: $_"
-            } else {
-                $_
-            }
-        }
-        Set-Content -Path $InlineCFile -Value $newLines -Encoding UTF8
+# Create HDF5 stub file (we build PETSc without HDF5, but petsc-hs references it)
+$Hdf5StubFile = Join-Path $PetscHsDir "cbits\hdf5_stub.c"
+$CbitsDir = Join-Path $PetscHsDir "cbits"
+if (-not (Test-Path $CbitsDir)) {
+    New-Item -ItemType Directory -Path $CbitsDir | Out-Null
+}
+if (-not (Test-Path $Hdf5StubFile)) {
+    Write-Info "Creating HDF5 stub for petsc-hs..."
+    $stubContent = @"
+/* Stub for PetscViewerHDF5Open - PETSc built without HDF5 support */
+typedef int PetscErrorCode;
+typedef void* PetscViewer;
+typedef void* MPI_Comm;
+typedef int PetscFileMode;
+
+PetscErrorCode PetscViewerHDF5Open(MPI_Comm comm, const char name[], PetscFileMode type, PetscViewer *viewer) {
+    (void)comm; (void)name; (void)type; (void)viewer;
+    return -1; /* PETSC_ERR_SUP - not supported */
+}
+"@
+    Set-Content -Path $Hdf5StubFile -Value $stubContent -Encoding UTF8
+}
+
+# Add c-sources to petsc-hs.cabal if not already present
+$PetscHsCabal = Join-Path $PetscHsDir "petsc-hs.cabal"
+if (Test-Path $PetscHsCabal) {
+    $content = Get-Content $PetscHsCabal -Raw
+    if ($content -notmatch "hdf5_stub\.c") {
+        Write-Info "Adding HDF5 stub to petsc-hs.cabal..."
+        $content = $content -replace "(extra-libraries:\s+petsc)", "c-sources: cbits/hdf5_stub.c`n  `$1"
+        Set-Content -Path $PetscHsCabal -Value $content
     }
 }
 
@@ -645,7 +674,7 @@ if (-not (Test-Path $Msys2LibDir)) {
 # Find f2cblaslapack library directory (PETSc external packages)
 $F2cBlasLapackDir = "$PetscDir\$PetscArch\lib"
 
-# Write cabal.project.local with library paths and extra libraries
+# Write cabal.project.local with library paths
 $cabalProjectLocal = @"
 extra-lib-dirs: $PetscLibDir
               , $SlepcLibDir
@@ -655,11 +684,6 @@ extra-include-dirs: $PetscIncludeDir
                   , $PetscArchIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
-
--- Link against BLAS/LAPACK from PETSc's f2cblaslapack
--- and MinGW runtime libraries for 128-bit float and FP environment
-package petsc-hs
-  extra-libraries: f2clapack f2cblas quadmath mingwex
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
