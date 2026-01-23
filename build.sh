@@ -324,10 +324,10 @@ download_and_build_petsc() {
 
     python3 ./configure \
         --with-mpi=0 \
+        --with-cxx=0 \
         --with-blaslapack-lib="-llapack -lblas" \
         --with-debugging=no \
         COPTFLAGS=-O3 \
-        CXXOPTFLAGS=-O3 \
         PETSC_ARCH="$PETSC_ARCH"
 
     log_info "Building PETSc..."
