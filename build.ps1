@@ -231,7 +231,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --download-cmake --download-hdf5 --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=g++ --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -564,6 +564,25 @@ if (Test-Path $PetscHsCabal) {
     }
 }
 
+# Patch petsc-hs InlineC.hs to remove HDF5 function (we build PETSc without HDF5)
+$InlineCFile = Join-Path $PetscHsDir "src\Numerical\PETSc\Internal\InlineC.hs"
+if (Test-Path $InlineCFile) {
+    $lines = Get-Content $InlineCFile
+    $hasHdf5 = $lines | Where-Object { $_ -match "PetscViewerHDF5Open" }
+    $alreadyPatched = $lines | Where-Object { $_ -match "-- HDF5 DISABLED" }
+    if ($hasHdf5 -and -not $alreadyPatched) {
+        Write-Info "Patching petsc-hs InlineC.hs to remove HDF5 dependency..."
+        $newLines = $lines | ForEach-Object {
+            if ($_ -match "PetscViewerHDF5Open") {
+                "-- HDF5 DISABLED: $_"
+            } else {
+                $_
+            }
+        }
+        Set-Content -Path $InlineCFile -Value $newLines -Encoding UTF8
+    }
+}
+
 # Generate TypesC2HsGen.hs if it doesn't exist
 $TypesC2HsGen = Join-Path $PetscHsDir "src\Numerical\PETSc\Internal\C2HsGen\TypesC2HsGen.hs"
 if (-not (Test-Path $TypesC2HsGen)) {
@@ -637,10 +656,10 @@ extra-include-dirs: $PetscIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
--- Link against BLAS/LAPACK from PETSc's f2cblaslapack,
--- HDF5, and MinGW runtime libraries for 128-bit float and FP environment
+-- Link against BLAS/LAPACK from PETSc's f2cblaslapack
+-- and MinGW runtime libraries for 128-bit float and FP environment
 package petsc-hs
-  extra-libraries: f2clapack f2cblas hdf5 quadmath mingwex
+  extra-libraries: f2clapack f2cblas quadmath mingwex
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
