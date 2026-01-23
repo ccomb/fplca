@@ -693,8 +693,12 @@ extra-include-dirs: $PetscIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
+-- Use MinGW ld instead of LLVM lld for linking (lld doesn't work with MinGW libraries)
 package petsc-hs
-  ghc-options: -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
+  ghc-options: "-pgml C:/msys64/ucrt64/bin/ld.exe" -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
+
+package fplca
+  ghc-options: "-pgml C:/msys64/ucrt64/bin/ld.exe" -optl-L$Msys2LibDir -optl-lmingwex -optl-lmingw32 -optl-lwinpthread -optl-lquadmath
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
