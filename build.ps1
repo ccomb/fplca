@@ -305,11 +305,12 @@ function Build-SLEPc {
     Write-Info "Using MSYS2 bash for configure..."
 
     # Use MSYS2 UCRT64 environment with MinGW-w64 compiler
+    # Add PETSc lib to PATH so DLL can be found during configure tests
     $configScript = @"
 export PETSC_DIR='$petscMsysPath'
 export SLEPC_DIR='$slepcMsysPath'
 export PETSC_ARCH=$PetscArch
-export PATH="/ucrt64/bin:`$PATH"
+export PATH="$petscMsysPath/$PetscArch/lib:/ucrt64/bin:`$PATH"
 cd '$slepcMsysPath'
 python ./configure
 "@
