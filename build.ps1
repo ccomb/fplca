@@ -487,6 +487,14 @@ if (Test-Path $PetscHsCabal) {
     }
 }
 
+# Generate TypesC2HsGen.hs if it doesn't exist
+$TypesC2HsGen = Join-Path $PetscHsDir "src\Numerical\PETSc\Internal\C2HsGen\TypesC2HsGen.hs"
+if (-not (Test-Path $TypesC2HsGen)) {
+    Write-Info "Generating TypesC2HsGen.hs..."
+    $GeneratorScript = Join-Path $PetscHsDir "src\Numerical\PETSc\Internal\C2HsGen\GenerateC2Hs.hs"
+    & runhaskell $GeneratorScript | Out-File -FilePath $TypesC2HsGen -Encoding utf8
+}
+
 # -----------------------------------------------------------------------------
 # Set up environment
 # -----------------------------------------------------------------------------

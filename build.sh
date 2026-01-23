@@ -329,6 +329,13 @@ elif [[ "$FORCE_REBUILD" == "true" ]]; then
     rm -rf "$PETSC_HS_DIR/dist-newstyle"
 fi
 
+# Generate TypesC2HsGen.hs if it doesn't exist
+TYPES_C2HS_GEN="$PETSC_HS_DIR/src/Numerical/PETSc/Internal/C2HsGen/TypesC2HsGen.hs"
+if [[ ! -f "$TYPES_C2HS_GEN" ]]; then
+    log_info "Generating TypesC2HsGen.hs..."
+    runhaskell "$PETSC_HS_DIR/src/Numerical/PETSc/Internal/C2HsGen/GenerateC2Hs.hs" > "$TYPES_C2HS_GEN"
+fi
+
 # Download/build PETSc if needed or forced
 if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
     if [[ "$FORCE_REBUILD" == "true" && -d "$PETSC_DIR" ]]; then
