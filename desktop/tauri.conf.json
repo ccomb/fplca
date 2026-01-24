@@ -21,7 +21,6 @@
     "resources": {
       "resources/fplca": "./",
       "resources/fplca.toml": "./",
-      "resources/lib/*": "lib/",
       "resources/web/*": "web/",
       "resources/web/webfonts/*": "web/webfonts/",
       "icons/*": "icons/"
