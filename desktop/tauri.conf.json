@@ -48,6 +48,10 @@
       "timestampUrl": "",
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "wix": {
+        "dialogImagePath": "./icons/dialog.bmp",
+        "bannerPath": "./icons/banner.bmp"
       }
     },
     "shortDescription": "Life Cycle Assessment computation engine",
