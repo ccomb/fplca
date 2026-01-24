@@ -287,7 +287,58 @@ echo ""
 # Locate or download PETSc/SLEPc
 # -----------------------------------------------------------------------------
 
-# Default paths
+# Check for system PETSc/SLEPc (Debian/Ubuntu packages)
+detect_system_petsc() {
+    # Debian/Ubuntu install to /usr/lib/petscdir/petsc<version>/<arch>
+    local petsc_base="/usr/lib/petscdir"
+    if [[ -d "$petsc_base" ]]; then
+        # Find the latest version
+        local latest=$(ls -d "$petsc_base"/petsc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
+        if [[ -n "$latest" && -d "$latest" ]]; then
+            echo "$latest"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+detect_system_slepc() {
+    # Debian/Ubuntu install to /usr/lib/slepcdir/slepc<version>/<arch>
+    local slepc_base="/usr/lib/slepcdir"
+    if [[ -d "$slepc_base" ]]; then
+        # Find the latest version
+        local latest=$(ls -d "$slepc_base"/slepc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
+        if [[ -n "$latest" && -d "$latest" ]]; then
+            echo "$latest"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Check for system packages first
+USE_SYSTEM_PETSC=false
+SYSTEM_PETSC_DIR=""
+SYSTEM_SLEPC_DIR=""
+
+if SYSTEM_PETSC_DIR=$(detect_system_petsc) && SYSTEM_SLEPC_DIR=$(detect_system_slepc); then
+    # Both system packages found
+    if [[ "$FORCE_REBUILD" != "true" ]]; then
+        USE_SYSTEM_PETSC=true
+        log_success "Found system PETSc: $SYSTEM_PETSC_DIR"
+        log_success "Found system SLEPc: $SYSTEM_SLEPC_DIR"
+
+        # Extract version from path (e.g., petsc3.22 -> 3.22)
+        SYSTEM_PETSC_VERSION=$(echo "$SYSTEM_PETSC_DIR" | grep -oP 'petsc\K[0-9.]+')
+        SYSTEM_SLEPC_VERSION=$(echo "$SYSTEM_SLEPC_DIR" | grep -oP 'slepc\K[0-9.]+')
+        log_info "System PETSc version: $SYSTEM_PETSC_VERSION"
+        log_info "System SLEPc version: $SYSTEM_SLEPC_VERSION"
+    else
+        log_info "System PETSc/SLEPc found but --all forces rebuild from source"
+    fi
+fi
+
+# Default paths (used when building from source)
 PETSC_DIR=${PETSC_DIR:-"$SCRIPT_DIR/petsc"}
 SLEPC_DIR=${SLEPC_DIR:-"$SCRIPT_DIR/slepc"}
 
@@ -397,35 +448,100 @@ if [[ ! -f "$TYPES_C2HS_GEN" ]]; then
     runhaskell "$PETSC_HS_DIR/src/Numerical/PETSc/Internal/C2HsGen/GenerateC2Hs.hs" > "$TYPES_C2HS_GEN"
 fi
 
-# Download/build PETSc if needed or forced
-if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
-    if [[ "$FORCE_REBUILD" == "true" && -d "$PETSC_DIR" ]]; then
-        log_info "Removing existing PETSc for rebuild..."
-        rm -rf "$PETSC_DIR" petsc-*.tar.gz petsc-[0-9]*
+# Check if PETSc was built with MPI and patch petsc-hs.cabal accordingly
+PETSC_HS_CABAL="$PETSC_HS_DIR/petsc-hs.cabal"
+PETSC_LIB_CHECK="${PETSC_DIR:-$SCRIPT_DIR/petsc}/${PETSC_ARCH:-arch-linux-c-opt}/lib"
+if [[ -f "$PETSC_LIB_CHECK/libmpi.so" ]] || [[ -f "$PETSC_LIB_CHECK/libmpich.so" ]]; then
+    # PETSc was built with MPI, keep mpi dependency
+    log_info "Patching petsc-hs.cabal to remove MPI dependency..."
+    if grep -q "petsc, mpich, slepc" "$PETSC_HS_CABAL" 2>/dev/null; then
+        # Replace mpich with mpi (the actual library name in the PETSc build)
+        sed -i 's/petsc, mpich, slepc/petsc, mpi, slepc/g' "$PETSC_HS_CABAL"
     fi
-    download_and_build_petsc
+elif grep -q "mpich" "$PETSC_HS_CABAL" 2>/dev/null; then
+    # PETSc was built without MPI, remove mpi dependency
+    log_info "Patching petsc-hs.cabal to remove MPI dependency..."
+    sed -i 's/petsc, mpich, slepc/petsc, slepc/g' "$PETSC_HS_CABAL"
 fi
 
-# Download/build SLEPc if needed or forced
-if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$SLEPC_DIR/$PETSC_ARCH" ]]; then
-    if [[ "$FORCE_REBUILD" == "true" && -d "$SLEPC_DIR" ]]; then
-        log_info "Removing existing SLEPc for rebuild..."
-        rm -rf "$SLEPC_DIR" slepc-*.tar.gz slepc-[0-9]*
-    fi
-    download_and_build_slepc
-fi
+# Use system packages or build from source
+if [[ "$USE_SYSTEM_PETSC" == "true" ]]; then
+    # Use system packages
+    PETSC_DIR="$SYSTEM_PETSC_DIR"
+    SLEPC_DIR="$SYSTEM_SLEPC_DIR"
+    PETSC_ARCH=""  # System packages don't use PETSC_ARCH
+    USE_SYSTEM_LIBS=true
 
-log_success "Using PETSc: $PETSC_DIR/$PETSC_ARCH"
-log_success "Using SLEPc: $SLEPC_DIR/$PETSC_ARCH"
+    # Debian uses libpetsc_real.so and libslepc_real.so
+    PETSC_LIB_NAME="petsc_real"
+    SLEPC_LIB_NAME="slepc_real"
+
+    # Patch petsc-hs.cabal to use system library names
+    if ! grep -q "petsc_real" "$PETSC_HS_CABAL" 2>/dev/null; then
+        log_info "Patching petsc-hs.cabal for system library names..."
+        sed -i 's/petsc, slepc/petsc_real, slepc_real/g' "$PETSC_HS_CABAL"
+    fi
+
+    log_success "Using system PETSc: $PETSC_DIR"
+    log_success "Using system SLEPc: $SLEPC_DIR"
+else
+    USE_SYSTEM_LIBS=false
+    PETSC_LIB_NAME="petsc"
+    SLEPC_LIB_NAME="slepc"
+
+    # Download/build PETSc if needed or forced
+    if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
+        if [[ "$FORCE_REBUILD" == "true" && -d "$PETSC_DIR" ]]; then
+            log_info "Removing existing PETSc for rebuild..."
+            rm -rf "$PETSC_DIR" petsc-*.tar.gz petsc-[0-9]*
+        fi
+        download_and_build_petsc
+    fi
+
+    # Download/build SLEPc if needed or forced
+    if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$SLEPC_DIR/$PETSC_ARCH" ]]; then
+        if [[ "$FORCE_REBUILD" == "true" && -d "$SLEPC_DIR" ]]; then
+            log_info "Removing existing SLEPc for rebuild..."
+            rm -rf "$SLEPC_DIR" slepc-*.tar.gz slepc-[0-9]*
+        fi
+        download_and_build_slepc
+    fi
+
+    log_success "Using PETSc: $PETSC_DIR/$PETSC_ARCH"
+    log_success "Using SLEPc: $SLEPC_DIR/$PETSC_ARCH"
+fi
 echo ""
 
 # -----------------------------------------------------------------------------
 # Set up environment
 # -----------------------------------------------------------------------------
 
-export LD_LIBRARY_PATH="$PETSC_DIR/$PETSC_ARCH/lib:$SLEPC_DIR/$PETSC_ARCH/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export C_INCLUDE_PATH="$PETSC_DIR/$PETSC_ARCH/include:$SLEPC_DIR/$PETSC_ARCH/include${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
-export CPLUS_INCLUDE_PATH="$PETSC_DIR/$PETSC_ARCH/include:$SLEPC_DIR/$PETSC_ARCH/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
+    # System packages: libs in /usr/lib, includes in the petscdir/slepcdir paths
+    PETSC_LIB_DIR="/usr/lib/x86_64-linux-gnu"
+    SLEPC_LIB_DIR="/usr/lib/x86_64-linux-gnu"
+    PETSC_INCLUDE_DIR="$PETSC_DIR/include"
+    SLEPC_INCLUDE_DIR="$SLEPC_DIR/include"
+else
+    # Custom build: libs in PETSC_ARCH subdirectory, includes in both main and arch dirs
+    PETSC_LIB_DIR="$PETSC_DIR/$PETSC_ARCH/lib"
+    SLEPC_LIB_DIR="$SLEPC_DIR/$PETSC_ARCH/lib"
+    # Main headers (petscdm.h, etc.) are in $PETSC_DIR/include
+    # Arch-specific headers (petscconf.h, etc.) are in $PETSC_DIR/$PETSC_ARCH/include
+    PETSC_INCLUDE_DIR="$PETSC_DIR/include"
+    PETSC_ARCH_INCLUDE_DIR="$PETSC_DIR/$PETSC_ARCH/include"
+    SLEPC_INCLUDE_DIR="$SLEPC_DIR/include"
+    SLEPC_ARCH_INCLUDE_DIR="$SLEPC_DIR/$PETSC_ARCH/include"
+fi
+
+export LD_LIBRARY_PATH="$PETSC_LIB_DIR:$SLEPC_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
+    export C_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$SLEPC_INCLUDE_DIR${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+    export CPLUS_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$SLEPC_INCLUDE_DIR${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+else
+    export C_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$PETSC_ARCH_INCLUDE_DIR:$SLEPC_INCLUDE_DIR:$SLEPC_ARCH_INCLUDE_DIR${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+    export CPLUS_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$PETSC_ARCH_INCLUDE_DIR:$SLEPC_INCLUDE_DIR:$SLEPC_ARCH_INCLUDE_DIR${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+fi
 export PETSC_DIR
 export SLEPC_DIR
 export PETSC_ARCH
@@ -454,14 +570,28 @@ log_info "Building fplca..."
 cd "$SCRIPT_DIR"
 
 # Write cabal.project.local with library paths
-cat > cabal.project.local << EOF
-extra-lib-dirs: $PETSC_DIR/$PETSC_ARCH/lib
-              , $SLEPC_DIR/$PETSC_ARCH/lib
-extra-include-dirs: $PETSC_DIR/include
-                  , $PETSC_DIR/$PETSC_ARCH/include
-                  , $SLEPC_DIR/include
-                  , $SLEPC_DIR/$PETSC_ARCH/include
+if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
+    cat > cabal.project.local << EOF
+extra-lib-dirs: $PETSC_LIB_DIR
+              , $SLEPC_LIB_DIR
+extra-include-dirs: $PETSC_INCLUDE_DIR
+                  , $SLEPC_INCLUDE_DIR
 EOF
+else
+    # Custom build needs both main and arch-specific include directories
+    cat > cabal.project.local << EOF
+extra-lib-dirs: $PETSC_LIB_DIR
+              , $SLEPC_LIB_DIR
+extra-include-dirs: $PETSC_INCLUDE_DIR
+                  , $PETSC_ARCH_INCLUDE_DIR
+                  , $SLEPC_INCLUDE_DIR
+                  , $SLEPC_ARCH_INCLUDE_DIR
+EOF
+fi
+
+if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
+    log_info "Using system libraries: $PETSC_LIB_NAME, $SLEPC_LIB_NAME"
+fi
 
 cabal build -O2
 
