@@ -82,14 +82,20 @@ Write-Host ""
 
 Write-Info "Detecting version..."
 
-$gitVersion = git describe --tags --exact-match HEAD 2>$null
+$gitVersion = $null
+try {
+    $gitVersion = git describe --tags --exact-match HEAD 2>$null
+} catch {
+    # No exact tag match - expected for development builds
+}
 if ($gitVersion) {
     $Version = $gitVersion -replace '^v', ''
     Write-Info "Building version: $Version (from tag)"
 } else {
     $cabalContent = Get-Content (Join-Path $ProjectDir "fplca.cabal") | Select-String "^version:"
     $cabalVersion = ($cabalContent -split '\s+')[1]
-    $Version = "$cabalVersion-dev"
+    # MSI requires numeric-only versions, so use base version for dev builds
+    $Version = $cabalVersion
     Write-Info "Building version: $Version (development)"
 }
 
@@ -112,10 +118,13 @@ $SlepcDir = $env:SLEPC_DIR
 # Auto-detect PETSC_ARCH
 if (-not $env:PETSC_ARCH) {
     $archOpt = Join-Path $PetscDir "arch-mswin-c-opt"
+    $archMsys2 = Join-Path $PetscDir "arch-msys2-c-opt"
     $archDebug = Join-Path $PetscDir "arch-mswin-c-debug"
 
     if (Test-Path $archOpt) {
         $PetscArch = "arch-mswin-c-opt"
+    } elseif (Test-Path $archMsys2) {
+        $PetscArch = "arch-msys2-c-opt"
     } elseif (Test-Path $archDebug) {
         $PetscArch = "arch-mswin-c-debug"
     } else {
