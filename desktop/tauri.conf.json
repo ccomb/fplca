@@ -51,6 +51,10 @@
       "wix": {
         "dialogImagePath": "./icons/dialog.bmp",
         "bannerPath": "./icons/banner.bmp"
+      },
+      "nsis": {
+        "sidebarImage": "./icons/nsis-sidebar.bmp",
+        "headerImage": "./icons/nsis-header.bmp"
       }
     },
     "shortDescription": "Life Cycle Assessment computation engine",
