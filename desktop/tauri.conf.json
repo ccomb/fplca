@@ -22,6 +22,7 @@
       "resources/fplca": "./",
       "resources/fplca.toml": "./",
       "resources/web/*": "web/",
+      "resources/web/webfonts/*": "web/webfonts/",
       "icons/*": "icons/"
     },
     "linux": {
@@ -66,7 +67,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com"
     }
   },
   "plugins": {
