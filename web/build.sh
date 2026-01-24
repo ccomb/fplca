@@ -19,6 +19,23 @@ fi
 mkdir -p dist
 rm -f dist/*.js
 
+# Download CSS dependencies if not present
+if [ ! -f dist/bulma.min.css ]; then
+    echo "Downloading Bulma CSS..."
+    curl -sL "https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" -o dist/bulma.min.css
+fi
+
+if [ ! -f dist/fontawesome.min.css ]; then
+    echo "Downloading Font Awesome..."
+    curl -sL "https://use.fontawesome.com/releases/v6.0.0/fontawesome-free-6.0.0-web.zip" -o dist/fa.zip
+    unzip -q dist/fa.zip -d dist/
+    cp dist/fontawesome-free-6.0.0-web/css/all.min.css dist/fontawesome.min.css
+    cp -r dist/fontawesome-free-6.0.0-web/webfonts dist/
+    # Fix webfont paths in CSS (remove ../ prefix)
+    sed -i 's|\.\./webfonts/|webfonts/|g' dist/fontawesome.min.css
+    rm -rf dist/fontawesome-free-6.0.0-web dist/fa.zip
+fi
+
 # Build Elm to temporary file (use local elm from node_modules)
 echo "Compiling Elm..."
 npx elm make src/Main.elm --output=dist/main.tmp.js --optimize
