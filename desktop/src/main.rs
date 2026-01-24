@@ -13,6 +13,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Manager;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Find an available port in the given range
 fn find_available_port(start: u16, end: u16) -> Option<u16> {
     for port in start..=end {
@@ -195,6 +201,10 @@ fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
         "PETSC_OPTIONS",
         "-mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1",
     );
+
+    // Hide console window on Windows
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
 
     cmd.spawn()
         .map_err(|e| format!("Failed to spawn fplca backend: {}", e))
