@@ -232,7 +232,7 @@ function Build-PETSc {
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --download-f2cblaslapack --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 --with-single-library=1 LDFLAGS="-static-libgcc" PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --with-blaslapack-lib="-lopenblas" --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 --with-single-library=1 LDFLAGS="-static-libgcc" PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -416,7 +416,17 @@ foreach ($path in $msys2Paths) {
 if (-not $msys2Bash) {
     Write-Warn "MSYS2 not found (required for building PETSc/SLEPc)"
     Write-Warn "Install from: https://www.msys2.org/"
-    Write-Warn "Then run: pacman -S python make"
+    Write-Warn "Then run: pacman -S python make mingw-w64-ucrt-x86_64-openblas"
+} else {
+    # Ensure OpenBLAS is installed in MSYS2 (required for PETSc performance)
+    Write-Info "Checking for OpenBLAS in MSYS2..."
+    $openblasCheck = & $msys2Bash -l -c "pacman -Q mingw-w64-ucrt-x86_64-openblas 2>/dev/null"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "Installing OpenBLAS in MSYS2 (this improves PETSc performance by 5-10x)..."
+        & $msys2Bash -l -c "pacman -S --noconfirm mingw-w64-ucrt-x86_64-openblas"
+    } else {
+        Write-Success "OpenBLAS found in MSYS2"
+    }
 }
 
 # Haskell toolchain
@@ -569,10 +579,10 @@ if (Test-Path $PetscHsCabal) {
         $modified = $true
     }
 
-    # Add BLAS/LAPACK and MinGW runtime libraries for Windows static build
-    if ($content -notmatch "f2clapack") {
-        Write-Info "Adding BLAS/LAPACK and MinGW libraries to petsc-hs.cabal..."
-        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, f2clapack, f2cblas"
+    # Add OpenBLAS and MinGW runtime libraries for Windows static build
+    if ($content -notmatch "openblas") {
+        Write-Info "Adding OpenBLAS library to petsc-hs.cabal..."
+        $content = $content -replace "(extra-libraries:\s+petsc, slepc)", "`$1, openblas"
         $modified = $true
     }
 
@@ -753,23 +763,22 @@ $GccLibDir = "C:\msys64\ucrt64\lib\gcc\x86_64-w64-mingw32"
 $GccVersion = Get-ChildItem $GccLibDir -Directory | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
 $GccLibPath = Join-Path $GccLibDir $GccVersion
 
-# Find f2cblaslapack library directory (PETSc external packages)
-$F2cBlasLapackDir = "$PetscDir\$PetscArch\lib"
-
 # Write cabal.project.local with library paths
 # Link MinGW runtime libraries needed by PETSc (built with UCRT64 gcc)
+# OpenBLAS is linked via MSYS2's ucrt64/lib directory
 # The mingw_stub.c provides __imp__setjmp, __mingw_fe_dfl_env, stat64i32, nanosleep64
 $cabalProjectLocal = @"
 extra-lib-dirs: $PetscLibDir
               , $SlepcLibDir
+              , $Msys2LibDir
 extra-include-dirs: $PetscIncludeDir
                   , $PetscArchIncludeDir
                   , $SlepcIncludeDir
                   , $SlepcArchIncludeDir
 
--- Link MinGW runtime libs needed by PETSc (built with UCRT64)
+-- Link MinGW runtime libs and OpenBLAS needed by PETSc (built with UCRT64)
 package fplca
-  ghc-options: -optl-L$GccLibPath -optl-lgcc -optl-L$Msys2LibDir -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
+  ghc-options: -optl-L$GccLibPath -optl-lgcc -optl-L$Msys2LibDir -optl-lopenblas -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
 "@
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
