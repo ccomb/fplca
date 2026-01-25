@@ -5,12 +5,14 @@
 )]
 
 use std::env;
+use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use serde::Deserialize;
 use tauri::Manager;
 
 #[cfg(windows)]
@@ -18,6 +20,51 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Default PETSC_OPTIONS for MUMPS solver
+const DEFAULT_PETSC_OPTIONS: &str = "-mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1";
+
+/// Solver configuration from fplca.toml
+#[derive(Debug, Deserialize, Default)]
+struct SolverConfig {
+    petsc_options: Option<String>,
+}
+
+/// Config file structure
+#[derive(Debug, Deserialize, Default)]
+struct Config {
+    #[serde(default)]
+    solver: SolverConfig,
+}
+
+/// Read PETSC_OPTIONS from config file, environment variable, or use default
+fn get_petsc_options(config_file: &PathBuf) -> String {
+    // Priority 1: Environment variable
+    if let Ok(env_options) = env::var("PETSC_OPTIONS") {
+        if !env_options.is_empty() {
+            println!("Using PETSC_OPTIONS from environment: {}", env_options);
+            return env_options;
+        }
+    }
+
+    // Priority 2: Config file
+    if config_file.exists() {
+        if let Ok(content) = fs::read_to_string(config_file) {
+            if let Ok(config) = toml::from_str::<Config>(&content) {
+                if let Some(options) = config.solver.petsc_options {
+                    if !options.is_empty() {
+                        println!("Using PETSC_OPTIONS from config: {}", options);
+                        return options;
+                    }
+                }
+            }
+        }
+    }
+
+    // Priority 3: Default value
+    println!("Using default PETSC_OPTIONS: {}", DEFAULT_PETSC_OPTIONS);
+    DEFAULT_PETSC_OPTIONS.to_string()
+}
 
 /// Find an available port in the given range
 fn find_available_port(start: u16, end: u16) -> Option<u16> {
@@ -196,11 +243,9 @@ fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // Set PETSC_OPTIONS for optimal solver behavior
-    cmd.env(
-        "PETSC_OPTIONS",
-        "-mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1",
-    );
+    // Set PETSC_OPTIONS from config file, environment, or default
+    let petsc_options = get_petsc_options(&config_file);
+    cmd.env("PETSC_OPTIONS", &petsc_options);
 
     // Hide console window on Windows
     #[cfg(windows)]
