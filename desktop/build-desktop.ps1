@@ -217,13 +217,28 @@ foreach ($libDir in @($PetscLibDir, $SlepcLibDir)) {
     }
 }
 
-# Copy OpenBLAS DLL from MSYS2 (required for PETSc performance)
-$OpenBlasDll = "C:\msys64\ucrt64\bin\libopenblas.dll"
-if (Test-Path $OpenBlasDll) {
-    Copy-Item $OpenBlasDll $destLibDir -Force
-    Write-Success "Copied OpenBLAS library"
+# Copy OpenBLAS and its dependencies from MSYS2 (required for PETSc performance)
+$Msys2BinDir = "C:\msys64\ucrt64\bin"
+$openBlasDlls = @(
+    "libopenblas.dll",
+    "libgcc_s_seh-1.dll",
+    "libgfortran-5.dll",
+    "libgomp-1.dll",
+    "libwinpthread-1.dll",
+    "libquadmath-0.dll"
+)
+$copiedCount = 0
+foreach ($dll in $openBlasDlls) {
+    $src = Join-Path $Msys2BinDir $dll
+    if (Test-Path $src) {
+        Copy-Item $src $destLibDir -Force
+        $copiedCount++
+    }
+}
+if ($copiedCount -gt 0) {
+    Write-Success "Copied $copiedCount OpenBLAS libraries"
 } else {
-    Write-Warn "OpenBLAS DLL not found at $OpenBlasDll - performance may be degraded"
+    Write-Warn "OpenBLAS DLLs not found in $Msys2BinDir - performance may be degraded"
 }
 
 $libCount = (Get-ChildItem -Path $destLibDir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
