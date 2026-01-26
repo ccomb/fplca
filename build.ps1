@@ -785,6 +785,24 @@ package fplca
 
 Set-Content -Path "cabal.project.local" -Value $cabalProjectLocal
 
+# Copy OpenBLAS and its dependencies to current directory for GHC to find
+# GHC's runtime linker on Windows doesn't respect PATH for DLL loading
+Write-Info "Copying OpenBLAS DLLs for GHC..."
+$openBlasDlls = @(
+    "libopenblas.dll",
+    "libgcc_s_seh-1.dll",
+    "libgfortran-5.dll",
+    "libgomp-1.dll",
+    "libwinpthread-1.dll",
+    "libquadmath-0.dll"
+)
+foreach ($dll in $openBlasDlls) {
+    $src = Join-Path $Msys2BinDir $dll
+    if (Test-Path $src) {
+        Copy-Item $src . -Force
+    }
+}
+
 cabal build -O2
 
 if ($LASTEXITCODE -ne 0) {
