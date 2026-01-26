@@ -716,8 +716,10 @@ $PetscArchIncludeDir = "$PetscDir\$PetscArch\include"
 $SlepcIncludeDir = "$SlepcDir\include"
 $SlepcArchIncludeDir = "$SlepcDir\$PetscArch\include"
 
-# Add library paths to PATH for DLL discovery
-$env:PATH = "$PetscLibDir;$SlepcLibDir;$env:PATH"
+# Add library and DLL paths to PATH for DLL discovery
+# OpenBLAS DLL is in ucrt64/bin, not ucrt64/lib
+$Msys2BinDir = "C:\msys64\ucrt64\bin"
+$env:PATH = "$PetscLibDir;$SlepcLibDir;$Msys2BinDir;$env:PATH"
 
 # Set include paths for C compiler
 $env:INCLUDE = "$PetscIncludeDir;$PetscArchIncludeDir;$SlepcIncludeDir;$SlepcArchIncludeDir;$env:INCLUDE"

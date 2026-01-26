@@ -217,6 +217,15 @@ foreach ($libDir in @($PetscLibDir, $SlepcLibDir)) {
     }
 }
 
+# Copy OpenBLAS DLL from MSYS2 (required for PETSc performance)
+$OpenBlasDll = "C:\msys64\ucrt64\bin\libopenblas.dll"
+if (Test-Path $OpenBlasDll) {
+    Copy-Item $OpenBlasDll $destLibDir -Force
+    Write-Success "Copied OpenBLAS library"
+} else {
+    Write-Warn "OpenBLAS DLL not found at $OpenBlasDll - performance may be degraded"
+}
+
 $libCount = (Get-ChildItem -Path $destLibDir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
 $libSize = "{0:N2} MB" -f ((Get-ChildItem -Path $destLibDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB)
 Write-Success "Copied $libCount libraries ($libSize)"
