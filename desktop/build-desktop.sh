@@ -8,6 +8,8 @@
 # - Elm frontend
 # - PETSc/SLEPc libraries
 #
+# Works on Linux, macOS, and Windows (via MSYS2).
+#
 # Prerequisites:
 #   cargo install tauri-cli --locked
 #
@@ -24,28 +26,23 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Source shared library functions
+if [[ -f "$PROJECT_DIR/lib.sh" ]]; then
+    # shellcheck source=../lib.sh
+    source "$PROJECT_DIR/lib.sh"
+else
+    echo "ERROR: lib.sh not found"
+    exit 1
+fi
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+# Source PETSc configuration
+if [[ -f "$PROJECT_DIR/petsc.env" ]]; then
+    # shellcheck source=../petsc.env
+    source "$PROJECT_DIR/petsc.env"
+fi
 
-log_success() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+# Detect OS
+OS=$(detect_os)
 
 # Parse arguments
 DEV_MODE=false
@@ -77,7 +74,6 @@ fi
 # Check for tauri-cli
 if ! cargo tauri --version &> /dev/null; then
     log_warn "tauri-cli not found. Installing..."
-    # Use --locked to ensure compatibility with current Rust version
     cargo install tauri-cli --locked
 fi
 
@@ -90,29 +86,25 @@ echo ""
 
 log_info "Detecting version..."
 
-# If HEAD is tagged, use the tag name; otherwise use cabal version + "-dev"
-if GIT_VERSION=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${GIT_VERSION#v}"  # Remove leading 'v' if present
-    log_info "Building version: $VERSION (from tag)"
-else
-    CABAL_VERSION=$(grep "^version:" "$PROJECT_DIR/fplca.cabal" | awk '{print $2}')
-    VERSION="${CABAL_VERSION}-dev"
-    log_info "Building version: $VERSION (development)"
+VERSION=$(get_version "$PROJECT_DIR/fplca.cabal")
+if [[ -z "$VERSION" ]]; then
+    VERSION="0.1.0"
 fi
 
+# Add -dev suffix for non-tagged versions
+if ! git describe --tags --exact-match HEAD 2>/dev/null; then
+    # For Windows MSI, version must be numeric only
+    if [[ "$OS" != "windows" ]]; then
+        VERSION="${VERSION}-dev"
+    fi
+fi
+
+log_info "Building version: $VERSION"
 echo ""
 
 # -----------------------------------------------------------------------------
 # Detect PETSc/SLEPc paths
 # -----------------------------------------------------------------------------
-
-# Auto-detect OS
-OS_TYPE="$(uname -s)"
-case "$OS_TYPE" in
-    Linux*)  OS="linux" ;;
-    Darwin*) OS="darwin" ;;
-    *)       OS="unknown" ;;
-esac
 
 # Find PETSc/SLEPc directories
 PETSC_DIR="${PETSC_DIR:-$PROJECT_DIR/petsc}"
@@ -120,15 +112,13 @@ SLEPC_DIR="${SLEPC_DIR:-$PROJECT_DIR/slepc}"
 
 # Auto-detect PETSC_ARCH
 if [[ -z "$PETSC_ARCH" ]]; then
-    if [[ -d "$PETSC_DIR/arch-${OS}-c-opt" ]]; then
-        PETSC_ARCH="arch-${OS}-c-opt"
-    elif [[ -d "$PETSC_DIR/arch-${OS}-c-debug" ]]; then
-        PETSC_ARCH="arch-${OS}-c-debug"
-    else
-        log_error "Could not find PETSc architecture directory"
-        log_error "Please set PETSC_ARCH or build PETSc first with ../build.sh"
-        exit 1
-    fi
+    PETSC_ARCH=$(detect_existing_petsc_arch "$PETSC_DIR" "$SLEPC_DIR")
+fi
+
+if [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
+    log_error "Could not find PETSc architecture directory: $PETSC_DIR/$PETSC_ARCH"
+    log_error "Please build PETSc first with ../build.sh"
+    exit 1
 fi
 
 log_info "Using PETSc: $PETSC_DIR/$PETSC_ARCH"
@@ -142,7 +132,7 @@ echo ""
 log_info "Building fplca backend and frontend..."
 cd "$PROJECT_DIR"
 
-# Touch source files to ensure cabal detects changes (cabal can miss changes sometimes)
+# Touch source files to ensure cabal detects changes
 touch src/Main.hs src/LCA/CLI/Types.hs src/LCA/CLI/Parser.hs 2>/dev/null || true
 
 ./build.sh
@@ -158,16 +148,32 @@ log_info "Staging resources..."
 
 RESOURCES_DIR="$SCRIPT_DIR/resources"
 rm -rf "$RESOURCES_DIR"
-mkdir -p "$RESOURCES_DIR/lib"
 mkdir -p "$RESOURCES_DIR/web"
 
+# Create lib directory for Linux/macOS
+if [[ "$OS" != "windows" ]]; then
+    mkdir -p "$RESOURCES_DIR/lib"
+fi
+
 # Copy fplca binary
-FPLCA_BIN=$(find "$PROJECT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
+if [[ "$OS" == "windows" ]]; then
+    FPLCA_BIN=$(find "$PROJECT_DIR/dist-newstyle" -name "fplca.exe" -type f 2>/dev/null | head -1)
+else
+    FPLCA_BIN=$(find "$PROJECT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
+fi
+
 if [[ -z "$FPLCA_BIN" ]]; then
     log_error "Could not find fplca binary"
     exit 1
 fi
-cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca"
+
+if [[ "$OS" == "windows" ]]; then
+    # On Windows, copy as both fplca.exe and fplca (for Tauri resource bundling)
+    cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca.exe"
+    cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca"
+else
+    cp "$FPLCA_BIN" "$RESOURCES_DIR/fplca"
+fi
 log_success "Copied fplca binary"
 
 # Copy default config file for BYOL mode
@@ -183,33 +189,52 @@ else
 fi
 
 # Copy PETSc/SLEPc libraries
-log_info "Copying PETSc/SLEPc libraries (this may take a moment)..."
+log_info "Copying PETSc/SLEPc libraries..."
 
 PETSC_LIB_DIR="$PETSC_DIR/$PETSC_ARCH/lib"
 SLEPC_LIB_DIR="$SLEPC_DIR/$PETSC_ARCH/lib"
 
-# Copy all shared libraries, following symlinks
-for lib_dir in "$PETSC_LIB_DIR" "$SLEPC_LIB_DIR"; do
-    if [[ -d "$lib_dir" ]]; then
-        # Copy .so files (following symlinks to get actual files)
-        find "$lib_dir" -maxdepth 1 -name "*.so*" -type f -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
-        # Also handle symlinks that point to versioned libraries
-        find "$lib_dir" -maxdepth 1 -name "*.so*" -type l -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
-    fi
-done
+if [[ "$OS" == "windows" ]]; then
+    # On Windows, DLLs must be next to the executable
+    for lib_dir in "$PETSC_LIB_DIR" "$SLEPC_LIB_DIR"; do
+        if [[ -d "$lib_dir" ]]; then
+            find "$lib_dir" -maxdepth 1 -name "*.dll" -exec cp {} "$RESOURCES_DIR/" \; 2>/dev/null || true
+        fi
+    done
 
-# Count libraries
-LIB_COUNT=$(find "$RESOURCES_DIR/lib" -name "*.so*" | wc -l)
-LIB_SIZE=$(du -sh "$RESOURCES_DIR/lib" 2>/dev/null | cut -f1)
-log_success "Copied $LIB_COUNT libraries ($LIB_SIZE)"
+    # Copy OpenBLAS and MinGW runtime DLLs
+    MSYS2_BIN="/ucrt64/bin"
+    if [[ -d "$MSYS2_BIN" ]]; then
+        for dll in $WINDOWS_OPENBLAS_DLLS; do
+            src="$MSYS2_BIN/$dll"
+            if [[ -f "$src" ]]; then
+                cp "$src" "$RESOURCES_DIR/"
+            fi
+        done
+    fi
+
+    DLL_COUNT=$(find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" | wc -l)
+    log_success "Copied $DLL_COUNT DLLs"
+else
+    # On Linux/macOS, copy .so files
+    for lib_dir in "$PETSC_LIB_DIR" "$SLEPC_LIB_DIR"; do
+        if [[ -d "$lib_dir" ]]; then
+            find "$lib_dir" -maxdepth 1 -name "*.so*" -type f -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
+            find "$lib_dir" -maxdepth 1 -name "*.so*" -type l -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
+        fi
+    done
+
+    LIB_COUNT=$(find "$RESOURCES_DIR/lib" -name "*.so*" 2>/dev/null | wc -l)
+    LIB_SIZE=$(du -sh "$RESOURCES_DIR/lib" 2>/dev/null | cut -f1)
+    log_success "Copied $LIB_COUNT libraries ($LIB_SIZE)"
+fi
 
 echo ""
 
 # -----------------------------------------------------------------------------
-# Create placeholder icons if they don't exist
+# Verify icons exist
 # -----------------------------------------------------------------------------
 
-# Verify icons exist
 ICONS_DIR="$SCRIPT_DIR/icons"
 if [[ ! -f "$ICONS_DIR/32x32.png" ]] || [[ ! -f "$ICONS_DIR/icon.ico" ]]; then
     log_error "Missing required icons in $ICONS_DIR"
@@ -223,10 +248,20 @@ fi
 
 log_info "Staging resources to target/release..."
 TARGET_DIR="$SCRIPT_DIR/target/release"
-mkdir -p "$TARGET_DIR/lib" "$TARGET_DIR/web"
-cp "$RESOURCES_DIR/fplca" "$TARGET_DIR/"
+mkdir -p "$TARGET_DIR/web"
+
+if [[ "$OS" == "windows" ]]; then
+    cp "$RESOURCES_DIR/fplca.exe" "$TARGET_DIR/"
+    cp "$RESOURCES_DIR/fplca" "$TARGET_DIR/"
+    # Copy DLLs to same directory
+    find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" -exec cp {} "$TARGET_DIR/" \; 2>/dev/null || true
+else
+    mkdir -p "$TARGET_DIR/lib"
+    cp "$RESOURCES_DIR/fplca" "$TARGET_DIR/"
+    cp -r "$RESOURCES_DIR/lib/"* "$TARGET_DIR/lib/" 2>/dev/null || true
+fi
+
 cp "$RESOURCES_DIR/fplca.toml" "$TARGET_DIR/" 2>/dev/null || true
-cp -r "$RESOURCES_DIR/lib/"* "$TARGET_DIR/lib/" 2>/dev/null || true
 cp -r "$RESOURCES_DIR/web/"* "$TARGET_DIR/web/" 2>/dev/null || true
 log_success "Resources staged to target/release"
 
@@ -236,11 +271,9 @@ log_success "Resources staged to target/release"
 
 log_info "Updating tauri.conf.json version to $VERSION..."
 
-# Use a temporary file to ensure atomic update
 TAURI_CONF="$SCRIPT_DIR/tauri.conf.json"
 TAURI_CONF_TMP="$SCRIPT_DIR/tauri.conf.json.tmp"
 
-# Update version field using sed (cross-platform compatible)
 sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$TAURI_CONF" > "$TAURI_CONF_TMP"
 mv "$TAURI_CONF_TMP" "$TAURI_CONF"
 
@@ -258,7 +291,22 @@ if [[ "$DEV_MODE" == "true" ]]; then
     cargo tauri build --debug
 else
     log_info "Building Tauri app (release mode)..."
-    cargo tauri build --bundles deb
+
+    # Platform-specific bundle types
+    case "$OS" in
+        linux)
+            cargo tauri build --bundles deb
+            ;;
+        macos)
+            cargo tauri build --bundles dmg
+            ;;
+        windows)
+            cargo tauri build --bundles msi,nsis
+            ;;
+        *)
+            cargo tauri build
+            ;;
+    esac
 fi
 
 log_success "Tauri build complete"
@@ -282,7 +330,17 @@ fi
 
 if [[ -d "$BUNDLE_DIR" ]]; then
     echo "Generated bundles:"
-    find "$BUNDLE_DIR" -type f \( -name "*.AppImage" -o -name "*.deb" \) -exec echo "  {}" \;
+    case "$OS" in
+        linux)
+            find "$BUNDLE_DIR" -type f \( -name "*.AppImage" -o -name "*.deb" \) -exec echo "  {}" \;
+            ;;
+        macos)
+            find "$BUNDLE_DIR" -type f -name "*.dmg" -exec echo "  {}" \;
+            ;;
+        windows)
+            find "$BUNDLE_DIR" -type f \( -name "*.msi" -o -name "*.exe" \) -exec echo "  {}" \;
+            ;;
+    esac
     echo ""
 fi
 
