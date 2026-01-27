@@ -21,8 +21,12 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Default PETSC_OPTIONS for MUMPS solver
-const DEFAULT_PETSC_OPTIONS: &str = "-mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1";
+/// Default PETSC_OPTIONS for MUMPS direct solver
+/// -pc_type lu: Use direct LU factorization
+/// -pc_factor_mat_solver_type mumps: Use MUMPS as the solver
+/// -mat_mumps_icntl_14 80: Increase workspace for large matrices
+/// -mat_mumps_icntl_24 1: Enable null pivot detection
+const DEFAULT_PETSC_OPTIONS: &str = "-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1";
 
 /// Solver configuration from fplca.toml
 #[derive(Debug, Deserialize, Default)]

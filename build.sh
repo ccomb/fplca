@@ -369,16 +369,21 @@ download_and_build_petsc() {
 
     cd "$PETSC_DIR"
 
-    # Configure PETSc (optimized, no MPI for simpler build)
+    # Configure PETSc with MUMPS direct solver for fast LCA matrix solving
     # Uses system BLAS/LAPACK for performance (OpenBLAS on most Linux distros)
-    log_info "Configuring PETSc (optimized, no MPI)..."
+    # Downloads MPICH, MUMPS, and ScaLAPACK for direct solver support
+    log_info "Configuring PETSc (optimized, with MUMPS direct solver)..."
+    log_info "This will download and build MPICH, MUMPS, and ScaLAPACK..."
 
     python3 ./configure \
-        --with-mpi=0 \
         --with-cxx=0 \
         --with-blaslapack-lib="-llapack -lblas" \
+        --download-mpich \
+        --download-mumps \
+        --download-scalapack \
         --with-debugging=no \
         COPTFLAGS=-O3 \
+        FOPTFLAGS=-O3 \
         PETSC_ARCH="$PETSC_ARCH"
 
     log_info "Building PETSc..."
