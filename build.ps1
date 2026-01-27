@@ -224,15 +224,17 @@ function Build-PETSc {
     $petscMsysPath = $extractDir -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
 
     # Configure PETSc using MSYS2 bash
-    Write-Info "Configuring PETSc (optimized, no MPI, no Fortran)..."
+    Write-Info "Configuring PETSc (optimized, with MUMPS direct solver)..."
     Write-Info "Using MSYS2 bash for configure..."
+    Write-Info "This will download and build MPICH, MUMPS, and ScaLAPACK..."
 
     # Use MSYS2 UCRT64 environment with MinGW-w64 compiler
+    # MUMPS requires Fortran and MPI (we download MPICH)
     $configScript = @"
 export PETSC_DIR='$petscMsysPath'
 export PATH="/ucrt64/bin:`$PATH"
 cd '$petscMsysPath'
-python ./configure --with-cc=gcc --with-cxx=0 --with-fc=0 --with-blaslapack-lib="-lopenblas" --with-mpi=0 --with-debugging=0 --with-shared-libraries=0 --with-single-library=1 LDFLAGS="-static-libgcc" PETSC_ARCH=$PetscArch
+python ./configure --with-cc=gcc --with-cxx=0 --with-fc=gfortran --with-blaslapack-lib="-lopenblas" --download-mpich --download-mumps --download-scalapack --with-debugging=0 --with-shared-libraries=0 --with-single-library=1 COPTFLAGS=-O3 FOPTFLAGS=-O3 LDFLAGS="-static-libgcc" PETSC_ARCH=$PetscArch
 "@
 
     & $Msys2Bash -l -c $configScript
@@ -416,16 +418,22 @@ foreach ($path in $msys2Paths) {
 if (-not $msys2Bash) {
     Write-Warn "MSYS2 not found (required for building PETSc/SLEPc)"
     Write-Warn "Install from: https://www.msys2.org/"
-    Write-Warn "Then run: pacman -S python make mingw-w64-ucrt-x86_64-openblas"
+    Write-Warn "Then run: pacman -S python make mingw-w64-ucrt-x86_64-openblas mingw-w64-ucrt-x86_64-gcc-fortran"
 } else {
-    # Ensure OpenBLAS is installed in MSYS2 (required for PETSc performance)
-    Write-Info "Checking for OpenBLAS in MSYS2..."
-    $openblasCheck = & $msys2Bash -l -c "pacman -Q mingw-w64-ucrt-x86_64-openblas 2>/dev/null"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "Installing OpenBLAS in MSYS2 (this improves PETSc performance by 5-10x)..."
-        & $msys2Bash -l -c "pacman -S --noconfirm mingw-w64-ucrt-x86_64-openblas"
-    } else {
-        Write-Success "OpenBLAS found in MSYS2"
+    # Ensure OpenBLAS and Fortran compiler are installed in MSYS2
+    Write-Info "Checking for required MSYS2 packages..."
+    $requiredPackages = @(
+        "mingw-w64-ucrt-x86_64-openblas",
+        "mingw-w64-ucrt-x86_64-gcc-fortran"
+    )
+    foreach ($pkg in $requiredPackages) {
+        $pkgCheck = & $msys2Bash -l -c "pacman -Q $pkg 2>/dev/null"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info "Installing $pkg in MSYS2..."
+            & $msys2Bash -l -c "pacman -S --noconfirm $pkg"
+        } else {
+            Write-Success "$pkg found in MSYS2"
+        }
     }
 }
 
