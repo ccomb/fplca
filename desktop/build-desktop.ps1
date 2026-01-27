@@ -170,7 +170,6 @@ Write-Info "Staging resources..."
 $ResourcesDir = Join-Path $ScriptDir "resources"
 Remove-Item -Recurse -Force $ResourcesDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $ResourcesDir "lib") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $ResourcesDir "web") | Out-Null
 
 # Copy fplca binary
@@ -198,26 +197,23 @@ if (Test-Path $webDistDir) {
 }
 
 # Copy PETSc/SLEPc libraries (DLLs on Windows)
+# DLLs must be in same directory as fplca.exe for Windows to find them at load time
 Write-Info "Copying PETSc/SLEPc libraries..."
 
 $PetscLibDir = Join-Path $PetscDir "$PetscArch\lib"
 $SlepcLibDir = Join-Path $SlepcDir "$PetscArch\lib"
-$destLibDir = Join-Path $ResourcesDir "lib"
 
 foreach ($libDir in @($PetscLibDir, $SlepcLibDir)) {
     if (Test-Path $libDir) {
-        # Copy DLLs
+        # Copy DLLs to same dir as fplca.exe
         Get-ChildItem -Path $libDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName $destLibDir -Force
-        }
-        # Also copy any static libs that might be needed
-        Get-ChildItem -Path $libDir -Filter "*.lib" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName $destLibDir -Force
+            Copy-Item $_.FullName $ResourcesDir -Force
         }
     }
 }
 
 # Copy OpenBLAS and its dependencies from MSYS2 (required for PETSc performance)
+# Must be in same directory as fplca.exe for Windows DLL loading
 $Msys2BinDir = "C:\msys64\ucrt64\bin"
 $openBlasDlls = @(
     "libopenblas.dll",
@@ -231,7 +227,7 @@ $copiedCount = 0
 foreach ($dll in $openBlasDlls) {
     $src = Join-Path $Msys2BinDir $dll
     if (Test-Path $src) {
-        Copy-Item $src $destLibDir -Force
+        Copy-Item $src $ResourcesDir -Force
         $copiedCount++
     }
 }
@@ -241,8 +237,8 @@ if ($copiedCount -gt 0) {
     Write-Warn "OpenBLAS DLLs not found in $Msys2BinDir - performance may be degraded"
 }
 
-$libCount = (Get-ChildItem -Path $destLibDir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
-$libSize = "{0:N2} MB" -f ((Get-ChildItem -Path $destLibDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB)
+$libCount = (Get-ChildItem -Path $ResourcesDir -Filter "*.dll" -ErrorAction SilentlyContinue).Count
+$libSize = "{0:N2} MB" -f ((Get-ChildItem -Path $ResourcesDir -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum / 1MB)
 Write-Success "Copied $libCount libraries ($libSize)"
 
 Write-Host ""
@@ -304,13 +300,15 @@ create_rgba_png(f'{icons_dir}/128x128@2x.png', 256, 256, *green)
 Write-Info "Staging resources to target\release..."
 $TargetDir = Join-Path $ScriptDir "target\release"
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $TargetDir "lib") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $TargetDir "web") | Out-Null
 
 Copy-Item (Join-Path $ResourcesDir "fplca.exe") $TargetDir -Force
 Copy-Item (Join-Path $ResourcesDir "fplca") $TargetDir -Force
 Copy-Item (Join-Path $ResourcesDir "fplca.toml") $TargetDir -Force -ErrorAction SilentlyContinue
-Copy-Item -Recurse -Force (Join-Path $ResourcesDir "lib\*") (Join-Path $TargetDir "lib") -ErrorAction SilentlyContinue
+# Copy DLLs to same directory as fplca.exe
+Get-ChildItem -Path $ResourcesDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+    Copy-Item $_.FullName $TargetDir -Force
+}
 Copy-Item -Recurse -Force (Join-Path $ResourcesDir "web\*") (Join-Path $TargetDir "web") -ErrorAction SilentlyContinue
 Write-Success "Resources staged to target\release"
 
