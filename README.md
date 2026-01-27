@@ -575,6 +575,53 @@ The CLI validates options before execution:
 
 ---
 
+## Building
+
+### Linux/macOS
+
+```bash
+./build.sh              # Download PETSc/SLEPc and build
+./build.sh --test       # Build and run tests
+./build.sh --desktop    # Build desktop application
+```
+
+### Windows
+
+Windows builds require MSYS2 with UCRT64 environment. All builds use the same bash script.
+
+1. Install MSYS2 from https://www.msys2.org/
+2. Open "MSYS2 UCRT64" terminal (from Start menu)
+3. Install dependencies:
+   ```bash
+   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gcc-fortran \
+             mingw-w64-ucrt-x86_64-openblas make python git
+   ```
+4. Install Haskell toolchain:
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+   ```
+5. Run build:
+   ```bash
+   ./build.sh              # Same script as Linux/macOS
+   ./build.sh --test
+   ./build.sh --desktop
+   ```
+
+### Docker
+
+```bash
+docker build -t fplca .
+docker run -p 8080:8080 -v /path/to/data:/data fplca
+```
+
+### Configuration Files
+
+- `versions.env` - Central version definitions for all tools (PETSc, GHC, Node, etc.)
+- `petsc.env` - PETSc/SLEPc build configuration
+- `lib.sh` - Shared bash functions for build scripts
+
+---
+
 ## License
 
 GNU AFFERO GENERAL PUBLIC LICENSE 3.0 or later - See LICENSE file for details.

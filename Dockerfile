@@ -1,5 +1,5 @@
 # Stage 1: Build PETSc and SLEPc from source
-# Versions should match build.sh
+# Configuration is centralized in config/petsc.env and versions.env
 FROM debian:bookworm-slim AS petsc-builder
 
 RUN apt-get update && apt-get install -y \
@@ -12,21 +12,27 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /opt
 
-# Download and build PETSc (version synced with build.sh)
-ENV PETSC_VERSION=3.24.2
-RUN wget -q https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-${PETSC_VERSION}.tar.gz \
-    && tar xzf petsc-${PETSC_VERSION}.tar.gz \
-    && rm petsc-${PETSC_VERSION}.tar.gz \
-    && mv petsc-${PETSC_VERSION} petsc
+# Copy configuration files
+COPY versions.env /tmp/
+COPY petsc.env /tmp/
+
+# Extract versions from env files using shell
+# Download and build PETSc (version from versions.env)
+RUN . /tmp/versions.env && \
+    wget -q https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-${PETSC_VERSION}.tar.gz && \
+    tar xzf petsc-${PETSC_VERSION}.tar.gz && \
+    rm petsc-${PETSC_VERSION}.tar.gz && \
+    mv petsc-${PETSC_VERSION} petsc
 
 WORKDIR /opt/petsc
 ENV PETSC_DIR=/opt/petsc
 ENV PETSC_ARCH=arch-linux-c-opt
 
-# Configuration matches build.sh (no 64-bit indices for petsc-hs compatibility)
-# --download-cmake needed because Debian's cmake is too old for some dependencies
-# --download-fblaslapack needed because bookworm-slim has no BLAS
-RUN python3 ./configure \
+# Configure PETSc using options from petsc.env
+# Docker-specific: --download-cmake, --download-fblaslapack, --download-hdf5
+RUN . /tmp/versions.env && . /tmp/petsc.env && \
+    python3 ./configure \
+    --with-cxx=0 \
     --download-cmake \
     --download-fblaslapack \
     --download-mpich \
@@ -39,13 +45,13 @@ RUN python3 ./configure \
     FOPTFLAGS=-O3 \
     && make -j all
 
-# Download and build SLEPc (version synced with build.sh)
-ENV SLEPC_VERSION=3.24.1
+# Download and build SLEPc (version from versions.env)
 WORKDIR /opt
-RUN wget -q https://slepc.upv.es/download/distrib/slepc-${SLEPC_VERSION}.tar.gz \
-    && tar xzf slepc-${SLEPC_VERSION}.tar.gz \
-    && rm slepc-${SLEPC_VERSION}.tar.gz \
-    && mv slepc-${SLEPC_VERSION} slepc
+RUN . /tmp/versions.env && \
+    wget -q https://slepc.upv.es/download/distrib/slepc-${SLEPC_VERSION}.tar.gz && \
+    tar xzf slepc-${SLEPC_VERSION}.tar.gz && \
+    rm slepc-${SLEPC_VERSION}.tar.gz && \
+    mv slepc-${SLEPC_VERSION} slepc
 
 WORKDIR /opt/slepc
 ENV SLEPC_DIR=/opt/slepc
@@ -71,12 +77,16 @@ RUN apt-get update && apt-get install -y \
     libnuma-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ghcup and GHC 9.4.8 (same version as local build for cache compatibility)
+# Copy versions.env for GHC version
+COPY versions.env /tmp/
+
+# Install ghcup and GHC (version from versions.env)
 ENV GHCUP_INSTALL_BASE_PREFIX=/opt
 ENV PATH="/opt/.ghcup/bin:$PATH"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | \
+RUN . /tmp/versions.env && \
+    curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | \
     BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
-    BOOTSTRAP_HASKELL_GHC_VERSION=9.4.8 \
+    BOOTSTRAP_HASKELL_GHC_VERSION=${GHC_VERSION} \
     BOOTSTRAP_HASKELL_CABAL_VERSION=latest \
     BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
     sh
@@ -169,6 +179,9 @@ COPY --from=haskell-builder /build/output/fplca /usr/local/bin/fplca
 COPY --from=haskell-builder /build/fplca/web/dist /app/web/dist
 
 ENV LD_LIBRARY_PATH=/opt/petsc/lib:/opt/slepc/lib
+
+# PETSC_OPTIONS from config/petsc.env (MUMPS direct solver settings)
+# Note: -malloc_hbw false is Docker-specific (no high-bandwidth memory)
 ENV PETSC_OPTIONS="-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1 -malloc_hbw false"
 
 WORKDIR /app

@@ -5,6 +5,7 @@
 # =============================================================================
 # This script builds fplca with PETSc/SLEPc integration.
 # It can automatically download and build PETSc/SLEPc if not found.
+# Works on Linux, macOS, and Windows (via MSYS2).
 #
 # Usage:
 #   ./build.sh [options]
@@ -19,12 +20,16 @@
 # Environment variables:
 #   PETSC_DIR           Path to PETSc installation
 #   SLEPC_DIR           Path to SLEPc installation
-#   PETSC_ARCH          PETSc architecture (default: arch-linux-c-opt)
+#   PETSC_ARCH          PETSc architecture (default: auto-detected)
 #
 # Examples:
 #   ./build.sh                      # Download deps if needed and build
 #   ./build.sh --all                # Force re-download everything
 #   ./build.sh --test               # Build and run tests
+#
+# Windows:
+#   Run from MSYS2 UCRT64 terminal:
+#   $ ./build.sh
 #
 # =============================================================================
 
@@ -36,92 +41,41 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source version definitions from central file
+# Source shared library functions
+if [[ -f "$SCRIPT_DIR/lib.sh" ]]; then
+    # shellcheck source=lib.sh
+    source "$SCRIPT_DIR/lib.sh"
+else
+    echo "ERROR: lib.sh not found in $SCRIPT_DIR"
+    exit 1
+fi
+
+# Source version definitions
 if [[ -f "$SCRIPT_DIR/versions.env" ]]; then
     # shellcheck source=versions.env
     source "$SCRIPT_DIR/versions.env"
 else
-    echo "ERROR: versions.env not found in $SCRIPT_DIR"
+    log_error "versions.env not found in $SCRIPT_DIR"
+    exit 1
+fi
+
+# Source PETSc configuration
+if [[ -f "$SCRIPT_DIR/petsc.env" ]]; then
+    # shellcheck source=petsc.env
+    source "$SCRIPT_DIR/petsc.env"
+else
+    log_error "petsc.env not found in $SCRIPT_DIR"
     exit 1
 fi
 
 # Detect OS
-OS_TYPE="$(uname -s)"
-case "$OS_TYPE" in
-    Linux*)  OS="linux" ;;
-    Darwin*) OS="darwin" ;;
-    *)       OS="unknown" ;;
-esac
+OS=$(detect_os)
 
 # Defaults
 FORCE_REBUILD=false
 RUN_TESTS=false
 CLEAN_BUILD=false
 BUILD_DESKTOP=false
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-show_help() {
-    sed -n '3,27p' "$0" | sed 's/^# //' | sed 's/^#//'
-    exit 0
-}
-
-check_command() {
-    local cmd="$1"
-    local required="${2:-true}"
-
-    if command -v "$cmd" &> /dev/null; then
-        log_success "$cmd found: $(command -v "$cmd")"
-        return 0
-    else
-        if [[ "$required" == "true" ]]; then
-            log_error "$cmd not found"
-        else
-            log_warn "$cmd not found (optional)"
-        fi
-        return 1
-    fi
-}
-
-# Check tool version against expected version (exact match)
-check_version() {
-    local tool="$1"
-    local actual="$2"
-    local expected="$3"
-
-    if [[ "$actual" == "$expected" ]]; then
-        log_success "$tool version $actual"
-        return 0
-    else
-        log_warn "$tool version $actual (expected $expected)"
-        return 1
-    fi
-}
 
 # -----------------------------------------------------------------------------
 # Parse arguments
@@ -130,7 +84,7 @@ check_version() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         --help|-h)
-            show_help
+            show_help "$0"
             ;;
         --clean)
             CLEAN_BUILD=true
@@ -156,21 +110,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Set default PETSC_ARCH based on OS (optimized build with 64-bit indices)
-# Auto-detect existing PETSC_ARCH if not set - must exist in both PETSc and SLEPc
+# Set default PETSC_ARCH based on OS
+# Auto-detect existing PETSC_ARCH if not set
 if [[ -z "$PETSC_ARCH" ]]; then
     PETSC_DIR_CHECK=${PETSC_DIR:-"$SCRIPT_DIR/petsc"}
     SLEPC_DIR_CHECK=${SLEPC_DIR:-"$SCRIPT_DIR/slepc"}
-
-    # Prefer opt, but only if both PETSc and SLEPc have it
-    if [[ -d "$PETSC_DIR_CHECK/arch-${OS}-c-opt" && -d "$SLEPC_DIR_CHECK/arch-${OS}-c-opt" ]]; then
-        PETSC_ARCH="arch-${OS}-c-opt"
-    elif [[ -d "$PETSC_DIR_CHECK/arch-${OS}-c-debug" && -d "$SLEPC_DIR_CHECK/arch-${OS}-c-debug" ]]; then
-        PETSC_ARCH="arch-${OS}-c-debug"
-    else
-        # Default for fresh builds
-        PETSC_ARCH="arch-${OS}-c-opt"
-    fi
+    PETSC_ARCH=$(detect_existing_petsc_arch "$PETSC_DIR_CHECK" "$SLEPC_DIR_CHECK")
 fi
 
 echo ""
@@ -178,6 +123,13 @@ log_info "Build configuration:"
 log_info "  OS: $OS"
 log_info "  PETSC_ARCH: $PETSC_ARCH"
 echo ""
+
+# Check MSYS2 environment on Windows
+if [[ "$OS" == "windows" ]]; then
+    if ! require_msys2_ucrt64; then
+        exit 1
+    fi
+fi
 
 # -----------------------------------------------------------------------------
 # Check dependencies
@@ -187,17 +139,31 @@ log_info "Checking dependencies..."
 
 MISSING_DEPS=false
 
-# Required build tools
-for cmd in gcc g++ make python3 curl tar; do
-    if ! check_command "$cmd"; then
-        MISSING_DEPS=true
-    fi
-done
+# Required build tools (platform-specific)
+if [[ "$OS" == "windows" ]]; then
+    # On Windows/MSYS2, check for MinGW tools
+    for cmd in gcc make python3 curl tar git; do
+        if ! check_command "$cmd"; then
+            MISSING_DEPS=true
+        fi
+    done
+else
+    # Linux/macOS
+    for cmd in gcc g++ make python3 curl tar; do
+        if ! check_command "$cmd"; then
+            MISSING_DEPS=true
+        fi
+    done
+fi
 
 # Fortran compiler (needed for PETSc)
 if ! check_command "gfortran"; then
     log_warn "gfortran not found - PETSc build may fail"
-    log_warn "Install with: sudo apt install gfortran"
+    if [[ "$OS" == "windows" ]]; then
+        log_warn "Install with: pacman -S mingw-w64-ucrt-x86_64-gcc-fortran"
+    else
+        log_warn "Install with: sudo apt install gfortran"
+    fi
 fi
 
 # Haskell toolchain
@@ -215,23 +181,20 @@ if ! check_command "npm"; then
 fi
 
 # Rust (needed for desktop build)
-if command -v rustc &> /dev/null; then
-    log_success "rustc found: $(command -v rustc)"
-else
-    log_warn "rustc not found (optional, needed for desktop build)"
-fi
+check_command "rustc" "false"
 
 # Elm (needed for frontend build)
-if command -v elm &> /dev/null; then
-    log_success "elm found: $(command -v elm)"
-else
-    log_warn "elm not found (optional, installed via npm)"
-fi
+check_command "elm" "false"
 
 if [[ "$MISSING_DEPS" == "true" ]]; then
     log_error "Missing required dependencies. Please install them and try again."
     echo ""
-    if [[ "$OS" == "darwin" ]]; then
+    if [[ "$OS" == "windows" ]]; then
+        echo "On Windows (MSYS2 UCRT64):"
+        echo "  pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gcc-fortran \\"
+        echo "            mingw-w64-ucrt-x86_64-openblas make python git"
+        echo ""
+    elif [[ "$OS" == "macos" ]]; then
         echo "On macOS:"
         echo "  brew install gcc python3 curl node"
         echo ""
@@ -287,13 +250,12 @@ echo ""
 # Locate or download PETSc/SLEPc
 # -----------------------------------------------------------------------------
 
-# Check for system PETSc/SLEPc (Debian/Ubuntu packages)
+# Check for system PETSc/SLEPc (Debian/Ubuntu packages) - Linux only
 detect_system_petsc() {
-    # Debian/Ubuntu install to /usr/lib/petscdir/petsc<version>/<arch>
     local petsc_base="/usr/lib/petscdir"
     if [[ -d "$petsc_base" ]]; then
-        # Find the latest version
-        local latest=$(ls -d "$petsc_base"/petsc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
+        local latest
+        latest=$(ls -d "$petsc_base"/petsc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
         if [[ -n "$latest" && -d "$latest" ]]; then
             echo "$latest"
             return 0
@@ -303,11 +265,10 @@ detect_system_petsc() {
 }
 
 detect_system_slepc() {
-    # Debian/Ubuntu install to /usr/lib/slepcdir/slepc<version>/<arch>
     local slepc_base="/usr/lib/slepcdir"
     if [[ -d "$slepc_base" ]]; then
-        # Find the latest version
-        local latest=$(ls -d "$slepc_base"/slepc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
+        local latest
+        latest=$(ls -d "$slepc_base"/slepc*/x86_64-linux-gnu-real 2>/dev/null | sort -V | tail -1)
         if [[ -n "$latest" && -d "$latest" ]]; then
             echo "$latest"
             return 0
@@ -316,25 +277,25 @@ detect_system_slepc() {
     return 1
 }
 
-# Check for system packages first
+# Check for system packages first (Linux only)
 USE_SYSTEM_PETSC=false
 SYSTEM_PETSC_DIR=""
 SYSTEM_SLEPC_DIR=""
 
-if SYSTEM_PETSC_DIR=$(detect_system_petsc) && SYSTEM_SLEPC_DIR=$(detect_system_slepc); then
-    # Both system packages found
-    if [[ "$FORCE_REBUILD" != "true" ]]; then
-        USE_SYSTEM_PETSC=true
-        log_success "Found system PETSc: $SYSTEM_PETSC_DIR"
-        log_success "Found system SLEPc: $SYSTEM_SLEPC_DIR"
+if [[ "$OS" == "linux" ]]; then
+    if SYSTEM_PETSC_DIR=$(detect_system_petsc) && SYSTEM_SLEPC_DIR=$(detect_system_slepc); then
+        if [[ "$FORCE_REBUILD" != "true" ]]; then
+            USE_SYSTEM_PETSC=true
+            log_success "Found system PETSc: $SYSTEM_PETSC_DIR"
+            log_success "Found system SLEPc: $SYSTEM_SLEPC_DIR"
 
-        # Extract version from path (e.g., petsc3.22 -> 3.22)
-        SYSTEM_PETSC_VERSION=$(echo "$SYSTEM_PETSC_DIR" | grep -oP 'petsc\K[0-9.]+')
-        SYSTEM_SLEPC_VERSION=$(echo "$SYSTEM_SLEPC_DIR" | grep -oP 'slepc\K[0-9.]+')
-        log_info "System PETSc version: $SYSTEM_PETSC_VERSION"
-        log_info "System SLEPc version: $SYSTEM_SLEPC_VERSION"
-    else
-        log_info "System PETSc/SLEPc found but --all forces rebuild from source"
+            SYSTEM_PETSC_VERSION=$(echo "$SYSTEM_PETSC_DIR" | grep -oP 'petsc\K[0-9.]+')
+            SYSTEM_SLEPC_VERSION=$(echo "$SYSTEM_SLEPC_DIR" | grep -oP 'slepc\K[0-9.]+')
+            log_info "System PETSc version: $SYSTEM_PETSC_VERSION"
+            log_info "System SLEPc version: $SYSTEM_SLEPC_VERSION"
+        else
+            log_info "System PETSc/SLEPc found but --all forces rebuild from source"
+        fi
     fi
 fi
 
@@ -342,12 +303,21 @@ fi
 PETSC_DIR=${PETSC_DIR:-"$SCRIPT_DIR/petsc"}
 SLEPC_DIR=${SLEPC_DIR:-"$SCRIPT_DIR/slepc"}
 
+# Get platform-specific configure options
+get_petsc_configure_platform() {
+    case "$OS" in
+        linux)  echo "$PETSC_CONFIGURE_LINUX" ;;
+        macos)  echo "$PETSC_CONFIGURE_MACOS" ;;
+        windows) echo "$PETSC_CONFIGURE_WINDOWS" ;;
+        *)      echo "$PETSC_CONFIGURE_LINUX" ;;
+    esac
+}
+
 download_and_build_petsc() {
     log_info "Downloading and building PETSc $PETSC_VERSION..."
-    log_info "This will take 10-30 minutes depending on your system..."
     echo ""
 
-    local PETSC_URL="https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-$PETSC_VERSION.tar.gz"
+    local PETSC_URL="${PETSC_URL_BASE}/petsc-$PETSC_VERSION.tar.gz"
 
     cd "$SCRIPT_DIR"
 
@@ -363,27 +333,30 @@ download_and_build_petsc() {
         tar xzf "petsc-$PETSC_VERSION.tar.gz"
     fi
 
-    # Create symlink
-    ln -sfn "petsc-$PETSC_VERSION" petsc
+    # Create symlink (on Windows, use directory copy if symlinks fail)
+    if [[ "$OS" == "windows" ]]; then
+        rm -rf petsc
+        cp -r "petsc-$PETSC_VERSION" petsc
+    else
+        ln -sfn "petsc-$PETSC_VERSION" petsc
+    fi
     PETSC_DIR="$SCRIPT_DIR/petsc"
 
     cd "$PETSC_DIR"
 
-    # Configure PETSc with MUMPS direct solver for fast LCA matrix solving
-    # Uses system BLAS/LAPACK for performance (OpenBLAS on most Linux distros)
-    # Downloads MPICH, MUMPS, and ScaLAPACK for direct solver support
+    # Get platform-specific options
+    local PLATFORM_OPTS
+    PLATFORM_OPTS=$(get_petsc_configure_platform)
+
     log_info "Configuring PETSc (optimized, with MUMPS direct solver)..."
     log_info "This will download and build MPICH, MUMPS, and ScaLAPACK..."
 
+    # Configure PETSc with unified options
     python3 ./configure \
-        --with-cxx=0 \
-        --with-blaslapack-lib="-llapack -lblas" \
-        --download-mpich \
-        --download-mumps \
-        --download-scalapack \
-        --with-debugging=no \
-        COPTFLAGS=-O3 \
-        FOPTFLAGS=-O3 \
+        $PETSC_CONFIGURE_COMMON \
+        $PLATFORM_OPTS \
+        COPTFLAGS="$PETSC_COPTFLAGS" \
+        FOPTFLAGS="$PETSC_FOPTFLAGS" \
         PETSC_ARCH="$PETSC_ARCH"
 
     log_info "Building PETSc..."
@@ -397,7 +370,7 @@ download_and_build_slepc() {
     log_info "Downloading and building SLEPc $SLEPC_VERSION..."
     echo ""
 
-    local SLEPC_URL="https://slepc.upv.es/download/distrib/slepc-$SLEPC_VERSION.tar.gz"
+    local SLEPC_URL="${SLEPC_URL_BASE}/slepc-$SLEPC_VERSION.tar.gz"
 
     cd "$SCRIPT_DIR"
 
@@ -414,7 +387,12 @@ download_and_build_slepc() {
     fi
 
     # Create symlink
-    ln -sfn "slepc-$SLEPC_VERSION" slepc
+    if [[ "$OS" == "windows" ]]; then
+        rm -rf slepc
+        cp -r "slepc-$SLEPC_VERSION" slepc
+    else
+        ln -sfn "slepc-$SLEPC_VERSION" slepc
+    fi
     SLEPC_DIR="$SCRIPT_DIR/slepc"
 
     cd "$SLEPC_DIR"
@@ -440,8 +418,6 @@ if [[ ! -d "$PETSC_HS_DIR" ]]; then
     log_info "Cloning petsc-hs..."
     git clone https://github.com/ccomb/petsc-hs.git "$PETSC_HS_DIR"
 elif [[ "$FORCE_REBUILD" == "true" ]]; then
-    # Don't git pull - we have local PETSc 3.24 compatibility fixes
-    # Just clean the cabal build artifacts to force recompilation
     log_info "Cleaning petsc-hs build artifacts..."
     rm -rf "$PETSC_HS_DIR/dist-newstyle"
 fi
@@ -457,16 +433,102 @@ fi
 PETSC_HS_CABAL="$PETSC_HS_DIR/petsc-hs.cabal"
 PETSC_LIB_CHECK="${PETSC_DIR:-$SCRIPT_DIR/petsc}/${PETSC_ARCH:-arch-linux-c-opt}/lib"
 if [[ -f "$PETSC_LIB_CHECK/libmpi.so" ]] || [[ -f "$PETSC_LIB_CHECK/libmpich.so" ]]; then
-    # PETSc was built with MPI, keep mpi dependency
-    log_info "Patching petsc-hs.cabal to remove MPI dependency..."
+    log_info "Patching petsc-hs.cabal for MPI..."
     if grep -q "petsc, mpich, slepc" "$PETSC_HS_CABAL" 2>/dev/null; then
-        # Replace mpich with mpi (the actual library name in the PETSc build)
         sed -i 's/petsc, mpich, slepc/petsc, mpi, slepc/g' "$PETSC_HS_CABAL"
     fi
 elif grep -q "mpich" "$PETSC_HS_CABAL" 2>/dev/null; then
-    # PETSc was built without MPI, remove mpi dependency
     log_info "Patching petsc-hs.cabal to remove MPI dependency..."
     sed -i 's/petsc, mpich, slepc/petsc, slepc/g' "$PETSC_HS_CABAL"
+fi
+
+# Windows-specific patches for petsc-hs
+if [[ "$OS" == "windows" ]]; then
+    # Add OpenBLAS library for Windows
+    if ! grep -q "openblas" "$PETSC_HS_CABAL" 2>/dev/null; then
+        log_info "Adding OpenBLAS library to petsc-hs.cabal..."
+        sed -i 's/\(extra-libraries:\s*petsc, slepc\)/\1, openblas/g' "$PETSC_HS_CABAL"
+    fi
+
+    # Create stub files for Windows compatibility
+    CBITS_DIR="$PETSC_HS_DIR/cbits"
+    mkdir -p "$CBITS_DIR"
+
+    # HDF5 stub (we build PETSc without HDF5 on Windows)
+    HDF5_STUB="$CBITS_DIR/hdf5_stub.c"
+    if [[ ! -f "$HDF5_STUB" ]]; then
+        log_info "Creating HDF5 stub for petsc-hs..."
+        cat > "$HDF5_STUB" << 'STUB_EOF'
+/* Stub for PetscViewerHDF5Open - PETSc built without HDF5 support */
+typedef int PetscErrorCode;
+typedef void* PetscViewer;
+typedef void* MPI_Comm;
+typedef int PetscFileMode;
+
+PetscErrorCode PetscViewerHDF5Open(MPI_Comm comm, const char name[], PetscFileMode type, PetscViewer *viewer) {
+    (void)comm; (void)name; (void)type; (void)viewer;
+    return -1; /* PETSC_ERR_SUP - not supported */
+}
+STUB_EOF
+    fi
+
+    # MinGW runtime stub
+    MINGW_STUB="$CBITS_DIR/mingw_stub.c"
+    if [[ ! -f "$MINGW_STUB" ]]; then
+        log_info "Creating MinGW runtime stub for petsc-hs..."
+        cat > "$MINGW_STUB" << 'STUB_EOF'
+/* Stubs for MinGW runtime symbols not found by ld.lld on Windows */
+#ifdef _WIN32
+
+#include <windows.h>
+#include <stdint.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <setjmp.h>
+
+typedef int (*setjmp_func_t)(jmp_buf);
+extern int __cdecl _setjmp(jmp_buf _Buf, void *_Ctx);
+void* __imp__setjmp = (void*)_setjmp;
+
+typedef struct {
+    unsigned int __cw;
+    unsigned int __sw;
+    unsigned int __tag;
+    unsigned int __ipoff;
+    unsigned int __cssel;
+    unsigned int __dataoff;
+    unsigned int __datasel;
+    unsigned int __mxcsr;
+} stub_fenv_t;
+
+const stub_fenv_t __mingw_fe_dfl_env = { 0x37f, 0, 0, 0, 0, 0, 0, 0x1f80 };
+
+int stat64i32(const char *path, struct _stat64 *buf) {
+    return _stat64(path, buf);
+}
+
+struct timespec64 {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
+int nanosleep64(const struct timespec64 *req, struct timespec64 *rem) {
+    if (req == NULL) return -1;
+    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000);
+    if (ms > 0) Sleep(ms);
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    return 0;
+}
+
+#endif /* _WIN32 */
+STUB_EOF
+    fi
+
+    # Add c-sources to petsc-hs.cabal if not already present
+    if ! grep -q "hdf5_stub.c" "$PETSC_HS_CABAL" 2>/dev/null; then
+        log_info "Adding stub files to petsc-hs.cabal..."
+        sed -i 's/\(extra-libraries:\s*petsc\)/c-sources: cbits\/hdf5_stub.c\n             cbits\/mingw_stub.c\n  \1/g' "$PETSC_HS_CABAL"
+    fi
 fi
 
 # Use system packages or build from source
@@ -522,17 +584,13 @@ echo ""
 # -----------------------------------------------------------------------------
 
 if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
-    # System packages: libs in /usr/lib, includes in the petscdir/slepcdir paths
     PETSC_LIB_DIR="/usr/lib/x86_64-linux-gnu"
     SLEPC_LIB_DIR="/usr/lib/x86_64-linux-gnu"
     PETSC_INCLUDE_DIR="$PETSC_DIR/include"
     SLEPC_INCLUDE_DIR="$SLEPC_DIR/include"
 else
-    # Custom build: libs in PETSC_ARCH subdirectory, includes in both main and arch dirs
     PETSC_LIB_DIR="$PETSC_DIR/$PETSC_ARCH/lib"
     SLEPC_LIB_DIR="$SLEPC_DIR/$PETSC_ARCH/lib"
-    # Main headers (petscdm.h, etc.) are in $PETSC_DIR/include
-    # Arch-specific headers (petscconf.h, etc.) are in $PETSC_DIR/$PETSC_ARCH/include
     PETSC_INCLUDE_DIR="$PETSC_DIR/include"
     PETSC_ARCH_INCLUDE_DIR="$PETSC_DIR/$PETSC_ARCH/include"
     SLEPC_INCLUDE_DIR="$SLEPC_DIR/include"
@@ -540,6 +598,7 @@ else
 fi
 
 export LD_LIBRARY_PATH="$PETSC_LIB_DIR:$SLEPC_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
     export C_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$SLEPC_INCLUDE_DIR${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
     export CPLUS_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$SLEPC_INCLUDE_DIR${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
@@ -547,9 +606,17 @@ else
     export C_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$PETSC_ARCH_INCLUDE_DIR:$SLEPC_INCLUDE_DIR:$SLEPC_ARCH_INCLUDE_DIR${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
     export CPLUS_INCLUDE_PATH="$PETSC_INCLUDE_DIR:$PETSC_ARCH_INCLUDE_DIR:$SLEPC_INCLUDE_DIR:$SLEPC_ARCH_INCLUDE_DIR${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
 fi
+
 export PETSC_DIR
 export SLEPC_DIR
 export PETSC_ARCH
+
+# On Windows, add MSYS2 bin dir to PATH for DLL discovery
+if [[ "$OS" == "windows" ]]; then
+    # Use Windows path format for MSYS2 bin
+    MSYS2_BIN_WIN="/ucrt64/bin"
+    export PATH="$PETSC_LIB_DIR:$SLEPC_LIB_DIR:$MSYS2_BIN_WIN:$PATH"
+fi
 
 # -----------------------------------------------------------------------------
 # Clean if requested
@@ -582,8 +649,35 @@ extra-lib-dirs: $PETSC_LIB_DIR
 extra-include-dirs: $PETSC_INCLUDE_DIR
                   , $SLEPC_INCLUDE_DIR
 EOF
+elif [[ "$OS" == "windows" ]]; then
+    # Windows needs additional library paths and linker options
+    MSYS2_LIB_DIR="/ucrt64/lib"
+    GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
+
+    cat > cabal.project.local << EOF
+extra-lib-dirs: $PETSC_LIB_DIR
+              , $SLEPC_LIB_DIR
+              , $MSYS2_LIB_DIR
+extra-include-dirs: $PETSC_INCLUDE_DIR
+                  , $PETSC_ARCH_INCLUDE_DIR
+                  , $SLEPC_INCLUDE_DIR
+                  , $SLEPC_ARCH_INCLUDE_DIR
+
+-- Link MinGW runtime libs and OpenBLAS needed by PETSc (built with UCRT64)
+package fplca
+  ghc-options: -optl-L$GCC_LIB_DIR -optl-lgcc -optl-L$MSYS2_LIB_DIR -optl-lopenblas -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
+EOF
+
+    # Copy OpenBLAS DLLs for GHC to find
+    log_info "Copying OpenBLAS DLLs for GHC..."
+    for dll in $WINDOWS_OPENBLAS_DLLS; do
+        src="/ucrt64/bin/$dll"
+        if [[ -f "$src" ]]; then
+            cp "$src" "$SCRIPT_DIR/"
+        fi
+    done
 else
-    # Custom build needs both main and arch-specific include directories
+    # Linux/macOS custom build
     cat > cabal.project.local << EOF
 extra-lib-dirs: $PETSC_LIB_DIR
               , $SLEPC_LIB_DIR
@@ -651,9 +745,16 @@ echo "==========================================================================
 log_success "Build completed successfully!"
 echo "============================================================================="
 echo ""
-echo "To run fplca, first set up the library path:"
-echo ""
-echo "  export LD_LIBRARY_PATH=\"$PETSC_DIR/$PETSC_ARCH/lib:$SLEPC_DIR/$PETSC_ARCH/lib:\$LD_LIBRARY_PATH\""
+
+if [[ "$OS" == "windows" ]]; then
+    echo "To run fplca, first ensure the DLLs are in PATH:"
+    echo ""
+    echo "  export PATH=\"$PETSC_LIB_DIR:$SLEPC_LIB_DIR:/ucrt64/bin:\$PATH\""
+else
+    echo "To run fplca, first set up the library path:"
+    echo ""
+    echo "  export LD_LIBRARY_PATH=\"$PETSC_DIR/$PETSC_ARCH/lib:$SLEPC_DIR/$PETSC_ARCH/lib:\$LD_LIBRARY_PATH\""
+fi
 echo ""
 echo "Then run:"
 echo ""
@@ -661,7 +762,11 @@ echo "  cabal run fplca -- --help"
 echo ""
 
 # Find the built executable
-FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
+if [[ "$OS" == "windows" ]]; then
+    FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca.exe" -type f 2>/dev/null | head -1)
+else
+    FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
+fi
 if [[ -n "$FPLCA_BIN" ]]; then
     echo "Executable: $FPLCA_BIN"
     echo ""
