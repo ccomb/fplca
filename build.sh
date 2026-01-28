@@ -181,7 +181,7 @@ if ! check_command "npm"; then
 fi
 
 # Rust (needed for desktop build)
-check_command "rustc" "false"
+check_command "rustc"
 
 # Elm (needed for frontend build)
 check_command "elm" "false"
