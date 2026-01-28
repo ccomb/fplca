@@ -129,6 +129,10 @@ if [[ "$OS" == "windows" ]]; then
     if ! require_msys2_ucrt64; then
         exit 1
     fi
+    # PETSc requires cygwin/msys python, not mingw python (which reports win32)
+    PYTHON=/usr/bin/python3
+else
+    PYTHON=python3
 fi
 
 # -----------------------------------------------------------------------------
@@ -356,7 +360,7 @@ download_and_build_petsc() {
     log_info "This will download and build MPICH, MUMPS, and ScaLAPACK..."
 
     # Configure PETSc with unified options
-    python3 ./configure \
+    $PYTHON ./configure \
         $PETSC_CONFIGURE_COMMON \
         $PLATFORM_OPTS \
         COPTFLAGS="$PETSC_COPTFLAGS" \
@@ -407,7 +411,7 @@ download_and_build_slepc() {
     export SLEPC_DIR
     export PETSC_ARCH
 
-    python3 ./configure
+    $PYTHON ./configure
 
     log_info "Building SLEPc..."
     make -j SLEPC_DIR="$SLEPC_DIR" PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH"
