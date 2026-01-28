@@ -200,7 +200,7 @@ if [[ "$MISSING_DEPS" == "true" ]]; then
     if [[ "$OS" == "windows" ]]; then
         echo "On Windows (MSYS2 UCRT64):"
         echo "  pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gcc-fortran \\"
-        echo "            mingw-w64-ucrt-x86_64-openblas make python git"
+        echo "            mingw-w64-ucrt-x86_64-msmpi mingw-w64-ucrt-x86_64-openblas make python git"
         echo ""
     elif [[ "$OS" == "macos" ]]; then
         echo "On macOS:"
@@ -362,95 +362,31 @@ download_and_build_petsc() {
     local -a CONFIGURE_ARGS=($PETSC_CONFIGURE_COMMON $PLATFORM_OPTS)
     CONFIGURE_ARGS+=(COPTFLAGS="$PETSC_COPTFLAGS" FOPTFLAGS="$PETSC_FOPTFLAGS" PETSC_ARCH="$PETSC_ARCH")
 
-    # Windows: add MS-MPI paths (handled here due to spaces in paths)
+    # Windows: use MSYS2 msmpi package (provides GCC-compatible MPI with Fortran bindings)
     if [[ "$OS" == "windows" ]]; then
-        local MSMPI_SDK="/c/Program Files (x86)/Microsoft SDKs/MPI"
-        if [[ ! -d "$MSMPI_SDK" ]]; then
-            log_error "MS-MPI SDK not found at $MSMPI_SDK"
-            log_error "Install MS-MPI from https://github.com/microsoft/Microsoft-MPI/releases"
+        # Check for MSYS2 msmpi package
+        if [[ ! -f "/ucrt64/lib/libmsmpi.dll.a" ]]; then
+            log_error "MSYS2 msmpi package not found"
+            log_error "Install with: pacman -S mingw-w64-ucrt-x86_64-msmpi"
             exit 1
         fi
 
-        # Generate GCC-compatible import library from msmpi.dll if needed
-        local MSMPI_C_LIB="/ucrt64/lib/libmsmpi.a"
-        if [[ ! -f "$MSMPI_C_LIB" ]]; then
-            log_info "Generating GCC import library for MS-MPI..."
-            local tmpdir
-            tmpdir=$(mktemp -d)
-            gendef -o "$tmpdir/msmpi.def" /c/Windows/System32/msmpi.dll
-            dlltool -d "$tmpdir/msmpi.def" -l "$MSMPI_C_LIB" -D msmpi.dll
-            rm -rf "$tmpdir"
+        # Also need MS-MPI runtime installed for mpiexec
+        local MSMPI_BIN="/c/Program Files/Microsoft MPI/Bin"
+        if [[ ! -f "$MSMPI_BIN/mpiexec.exe" ]]; then
+            log_warn "MS-MPI runtime not found at $MSMPI_BIN"
+            log_warn "Install MS-MPI runtime from https://github.com/microsoft/Microsoft-MPI/releases"
         fi
 
-        # Create Fortran MPI wrappers (gfortran needs mpi_init_ but MS-MPI exports MPI_Init)
-        local MSMPI_F_LIB="/ucrt64/lib/libmsmpi_fortran.a"
-        if [[ ! -f "$MSMPI_F_LIB" ]]; then
-            log_info "Building Fortran MPI wrappers for MS-MPI..."
-            local tmpdir
-            tmpdir=$(mktemp -d)
-            cat > "$tmpdir/mpi_fortran_wrappers.c" << 'CWRAP'
-#include <mpi.h>
-/* Fortran MPI wrappers: gfortran appends underscore to symbol names */
-void mpi_init_(int *ierr) { *ierr = MPI_Init(0, 0); }
-void mpi_finalize_(int *ierr) { *ierr = MPI_Finalize(); }
-void mpi_comm_rank_(int *comm, int *rank, int *ierr) { *ierr = MPI_Comm_rank((MPI_Comm)*comm, rank); }
-void mpi_comm_size_(int *comm, int *size, int *ierr) { *ierr = MPI_Comm_size((MPI_Comm)*comm, size); }
-void mpi_abort_(int *comm, int *errorcode, int *ierr) { *ierr = MPI_Abort((MPI_Comm)*comm, *errorcode); }
-void mpi_barrier_(int *comm, int *ierr) { *ierr = MPI_Barrier((MPI_Comm)*comm); }
-void mpi_bcast_(void *buf, int *count, int *datatype, int *root, int *comm, int *ierr) {
-    *ierr = MPI_Bcast(buf, *count, (MPI_Datatype)*datatype, *root, (MPI_Comm)*comm);
-}
-void mpi_reduce_(void *sendbuf, void *recvbuf, int *count, int *datatype, int *op, int *root, int *comm, int *ierr) {
-    *ierr = MPI_Reduce(sendbuf, recvbuf, *count, (MPI_Datatype)*datatype, (MPI_Op)*op, *root, (MPI_Comm)*comm);
-}
-void mpi_allreduce_(void *sendbuf, void *recvbuf, int *count, int *datatype, int *op, int *comm, int *ierr) {
-    *ierr = MPI_Allreduce(sendbuf, recvbuf, *count, (MPI_Datatype)*datatype, (MPI_Op)*op, (MPI_Comm)*comm);
-}
-void mpi_send_(void *buf, int *count, int *datatype, int *dest, int *tag, int *comm, int *ierr) {
-    *ierr = MPI_Send(buf, *count, (MPI_Datatype)*datatype, *dest, *tag, (MPI_Comm)*comm);
-}
-void mpi_recv_(void *buf, int *count, int *datatype, int *source, int *tag, int *comm, void *status, int *ierr) {
-    *ierr = MPI_Recv(buf, *count, (MPI_Datatype)*datatype, *source, *tag, (MPI_Comm)*comm, (MPI_Status*)status);
-}
-void mpi_isend_(void *buf, int *count, int *datatype, int *dest, int *tag, int *comm, int *request, int *ierr) {
-    *ierr = MPI_Isend(buf, *count, (MPI_Datatype)*datatype, *dest, *tag, (MPI_Comm)*comm, (MPI_Request*)request);
-}
-void mpi_irecv_(void *buf, int *count, int *datatype, int *source, int *tag, int *comm, int *request, int *ierr) {
-    *ierr = MPI_Irecv(buf, *count, (MPI_Datatype)*datatype, *source, *tag, (MPI_Comm)*comm, (MPI_Request*)request);
-}
-void mpi_wait_(int *request, void *status, int *ierr) {
-    *ierr = MPI_Wait((MPI_Request*)request, (MPI_Status*)status);
-}
-void mpi_waitall_(int *count, int *requests, void *statuses, int *ierr) {
-    *ierr = MPI_Waitall(*count, (MPI_Request*)requests, (MPI_Status*)statuses);
-}
-void mpi_scatter_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *root, int *comm, int *ierr) {
-    *ierr = MPI_Scatter(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, *root, (MPI_Comm)*comm);
-}
-void mpi_gather_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *root, int *comm, int *ierr) {
-    *ierr = MPI_Gather(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, *root, (MPI_Comm)*comm);
-}
-void mpi_allgather_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *comm, int *ierr) {
-    *ierr = MPI_Allgather(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, (MPI_Comm)*comm);
-}
-void mpi_alltoall_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *comm, int *ierr) {
-    *ierr = MPI_Alltoall(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, (MPI_Comm)*comm);
-}
-void mpi_type_size_(int *datatype, int *size, int *ierr) {
-    *ierr = MPI_Type_size((MPI_Datatype)*datatype, size);
-}
-void mpi_wtime_(double *time) { *time = MPI_Wtime(); }
-/* Fortran MPI constants */
-int mpi_comm_world_ = 0x44000000;  /* MS-MPI MPI_COMM_WORLD value */
-CWRAP
-            gcc -c -I"$MSMPI_SDK/Include" "$tmpdir/mpi_fortran_wrappers.c" -o "$tmpdir/mpi_fortran_wrappers.o"
-            ar rcs "$MSMPI_F_LIB" "$tmpdir/mpi_fortran_wrappers.o"
-            rm -rf "$tmpdir"
+        # Use MSYS2 MPI compiler wrappers
+        CONFIGURE_ARGS+=("--with-cc=/ucrt64/bin/mpicc" "--with-fc=/ucrt64/bin/mpifort")
+        # Tell PETSc where mpiexec is (Windows path with spaces needs DOS short form)
+        if [[ -f "$MSMPI_BIN/mpiexec.exe" ]]; then
+            local MSMPI_BIN_SHORT
+            MSMPI_BIN_SHORT=$(cd "$MSMPI_BIN" 2>/dev/null && pwd || echo "$MSMPI_BIN")
+            CONFIGURE_ARGS+=("--with-mpiexec=$MSMPI_BIN_SHORT/mpiexec")
         fi
-
-        CONFIGURE_ARGS+=("--with-mpi-include=$MSMPI_SDK/Include")
-        CONFIGURE_ARGS+=("--with-mpi-lib=[$MSMPI_C_LIB,$MSMPI_F_LIB]")
-        log_info "Using MS-MPI from $MSMPI_SDK"
+        log_info "Using MSYS2 msmpi package with MS-MPI runtime"
     fi
 
     $PYTHON ./configure "${CONFIGURE_ARGS[@]}"
