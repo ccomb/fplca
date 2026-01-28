@@ -370,8 +370,20 @@ download_and_build_petsc() {
             log_error "Install MS-MPI from https://github.com/microsoft/Microsoft-MPI/releases"
             exit 1
         fi
+
+        # Generate GCC-compatible import library from msmpi.dll if needed
+        local MSMPI_LIB="/ucrt64/lib/libmsmpi.a"
+        if [[ ! -f "$MSMPI_LIB" ]]; then
+            log_info "Generating GCC import library for MS-MPI..."
+            local tmpdir
+            tmpdir=$(mktemp -d)
+            gendef -o "$tmpdir/msmpi.def" /c/Windows/System32/msmpi.dll
+            dlltool -d "$tmpdir/msmpi.def" -l "$MSMPI_LIB" -D msmpi.dll
+            rm -rf "$tmpdir"
+        fi
+
         CONFIGURE_ARGS+=("--with-mpi-include=$MSMPI_SDK/Include")
-        CONFIGURE_ARGS+=("--with-mpi-lib=[$MSMPI_SDK/Lib/x64/msmpi.lib,$MSMPI_SDK/Lib/x64/msmpifec.lib]")
+        CONFIGURE_ARGS+=("--with-mpi-lib=$MSMPI_LIB")
         log_info "Using MS-MPI from $MSMPI_SDK"
     fi
 
