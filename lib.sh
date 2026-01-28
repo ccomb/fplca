@@ -119,6 +119,7 @@ get_version() {
 # Args:
 #   command_name: The command to check
 #   required: "true" (default) to treat as error, "false" for warning
+# Returns: 0 if found or optional, 1 only if required and missing
 check_command() {
     local cmd="$1"
     local required="${2:-true}"
@@ -129,10 +130,11 @@ check_command() {
     else
         if [[ "$required" == "true" ]]; then
             log_error "$cmd not found"
+            return 1
         else
             log_warn "$cmd not found (optional)"
+            return 0  # Don't fail for optional commands
         fi
-        return 1
     fi
 }
 
