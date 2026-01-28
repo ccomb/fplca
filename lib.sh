@@ -38,7 +38,7 @@ detect_os() {
     case "$(uname -s)" in
         Linux*)  echo "linux" ;;
         Darwin*) echo "macos" ;;
-        MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+        MINGW*|MSYS*|CYGWIN*|*_NT*) echo "windows" ;;
         *)       echo "unknown" ;;
     esac
 }
