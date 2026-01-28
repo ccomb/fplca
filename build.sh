@@ -357,15 +357,25 @@ download_and_build_petsc() {
     PLATFORM_OPTS=$(get_petsc_configure_platform)
 
     log_info "Configuring PETSc (optimized, with MUMPS direct solver)..."
-    log_info "This will download and build MPICH, MUMPS, and ScaLAPACK..."
 
-    # Configure PETSc with unified options
-    $PYTHON ./configure \
-        $PETSC_CONFIGURE_COMMON \
-        $PLATFORM_OPTS \
-        COPTFLAGS="$PETSC_COPTFLAGS" \
-        FOPTFLAGS="$PETSC_FOPTFLAGS" \
-        PETSC_ARCH="$PETSC_ARCH"
+    # Build configure arguments
+    local -a CONFIGURE_ARGS=($PETSC_CONFIGURE_COMMON $PLATFORM_OPTS)
+    CONFIGURE_ARGS+=(COPTFLAGS="$PETSC_COPTFLAGS" FOPTFLAGS="$PETSC_FOPTFLAGS" PETSC_ARCH="$PETSC_ARCH")
+
+    # Windows: add MS-MPI paths (handled here due to spaces in paths)
+    if [[ "$OS" == "windows" ]]; then
+        local MSMPI_SDK="/c/Program Files (x86)/Microsoft SDKs/MPI"
+        if [[ ! -d "$MSMPI_SDK" ]]; then
+            log_error "MS-MPI SDK not found at $MSMPI_SDK"
+            log_error "Install MS-MPI from https://github.com/microsoft/Microsoft-MPI/releases"
+            exit 1
+        fi
+        CONFIGURE_ARGS+=("--with-mpi-include=$MSMPI_SDK/Include")
+        CONFIGURE_ARGS+=("--with-mpi-lib=[$MSMPI_SDK/Lib/x64/msmpi.lib,$MSMPI_SDK/Lib/x64/msmpifec.lib]")
+        log_info "Using MS-MPI from $MSMPI_SDK"
+    fi
+
+    $PYTHON ./configure "${CONFIGURE_ARGS[@]}"
 
     log_info "Building PETSc..."
     make -j PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH" all
