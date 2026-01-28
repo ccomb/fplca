@@ -372,18 +372,21 @@ download_and_build_petsc() {
         fi
 
         # Generate GCC-compatible import library from msmpi.dll if needed
-        local MSMPI_LIB="/ucrt64/lib/libmsmpi.a"
-        if [[ ! -f "$MSMPI_LIB" ]]; then
+        local MSMPI_C_LIB="/ucrt64/lib/libmsmpi.a"
+        if [[ ! -f "$MSMPI_C_LIB" ]]; then
             log_info "Generating GCC import library for MS-MPI..."
             local tmpdir
             tmpdir=$(mktemp -d)
             gendef -o "$tmpdir/msmpi.def" /c/Windows/System32/msmpi.dll
-            dlltool -d "$tmpdir/msmpi.def" -l "$MSMPI_LIB" -D msmpi.dll
+            dlltool -d "$tmpdir/msmpi.def" -l "$MSMPI_C_LIB" -D msmpi.dll
             rm -rf "$tmpdir"
         fi
 
+        # MS-MPI Fortran bindings: use MSVC import lib directly (GCC ld can read it)
+        local MSMPI_F_LIB="$MSMPI_SDK/Lib/x64/msmpifec.lib"
+
         CONFIGURE_ARGS+=("--with-mpi-include=$MSMPI_SDK/Include")
-        CONFIGURE_ARGS+=("--with-mpi-lib=$MSMPI_LIB")
+        CONFIGURE_ARGS+=("--with-mpi-lib=[$MSMPI_C_LIB,$MSMPI_F_LIB]")
         log_info "Using MS-MPI from $MSMPI_SDK"
     fi
 
