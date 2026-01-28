@@ -382,8 +382,71 @@ download_and_build_petsc() {
             rm -rf "$tmpdir"
         fi
 
-        # MS-MPI Fortran bindings: use MSVC import lib directly (GCC ld can read it)
-        local MSMPI_F_LIB="$MSMPI_SDK/Lib/x64/msmpifec.lib"
+        # Create Fortran MPI wrappers (gfortran needs mpi_init_ but MS-MPI exports MPI_Init)
+        local MSMPI_F_LIB="/ucrt64/lib/libmsmpi_fortran.a"
+        if [[ ! -f "$MSMPI_F_LIB" ]]; then
+            log_info "Building Fortran MPI wrappers for MS-MPI..."
+            local tmpdir
+            tmpdir=$(mktemp -d)
+            cat > "$tmpdir/mpi_fortran_wrappers.c" << 'CWRAP'
+#include <mpi.h>
+/* Fortran MPI wrappers: gfortran appends underscore to symbol names */
+void mpi_init_(int *ierr) { *ierr = MPI_Init(0, 0); }
+void mpi_finalize_(int *ierr) { *ierr = MPI_Finalize(); }
+void mpi_comm_rank_(int *comm, int *rank, int *ierr) { *ierr = MPI_Comm_rank((MPI_Comm)*comm, rank); }
+void mpi_comm_size_(int *comm, int *size, int *ierr) { *ierr = MPI_Comm_size((MPI_Comm)*comm, size); }
+void mpi_abort_(int *comm, int *errorcode, int *ierr) { *ierr = MPI_Abort((MPI_Comm)*comm, *errorcode); }
+void mpi_barrier_(int *comm, int *ierr) { *ierr = MPI_Barrier((MPI_Comm)*comm); }
+void mpi_bcast_(void *buf, int *count, int *datatype, int *root, int *comm, int *ierr) {
+    *ierr = MPI_Bcast(buf, *count, (MPI_Datatype)*datatype, *root, (MPI_Comm)*comm);
+}
+void mpi_reduce_(void *sendbuf, void *recvbuf, int *count, int *datatype, int *op, int *root, int *comm, int *ierr) {
+    *ierr = MPI_Reduce(sendbuf, recvbuf, *count, (MPI_Datatype)*datatype, (MPI_Op)*op, *root, (MPI_Comm)*comm);
+}
+void mpi_allreduce_(void *sendbuf, void *recvbuf, int *count, int *datatype, int *op, int *comm, int *ierr) {
+    *ierr = MPI_Allreduce(sendbuf, recvbuf, *count, (MPI_Datatype)*datatype, (MPI_Op)*op, (MPI_Comm)*comm);
+}
+void mpi_send_(void *buf, int *count, int *datatype, int *dest, int *tag, int *comm, int *ierr) {
+    *ierr = MPI_Send(buf, *count, (MPI_Datatype)*datatype, *dest, *tag, (MPI_Comm)*comm);
+}
+void mpi_recv_(void *buf, int *count, int *datatype, int *source, int *tag, int *comm, void *status, int *ierr) {
+    *ierr = MPI_Recv(buf, *count, (MPI_Datatype)*datatype, *source, *tag, (MPI_Comm)*comm, (MPI_Status*)status);
+}
+void mpi_isend_(void *buf, int *count, int *datatype, int *dest, int *tag, int *comm, int *request, int *ierr) {
+    *ierr = MPI_Isend(buf, *count, (MPI_Datatype)*datatype, *dest, *tag, (MPI_Comm)*comm, (MPI_Request*)request);
+}
+void mpi_irecv_(void *buf, int *count, int *datatype, int *source, int *tag, int *comm, int *request, int *ierr) {
+    *ierr = MPI_Irecv(buf, *count, (MPI_Datatype)*datatype, *source, *tag, (MPI_Comm)*comm, (MPI_Request*)request);
+}
+void mpi_wait_(int *request, void *status, int *ierr) {
+    *ierr = MPI_Wait((MPI_Request*)request, (MPI_Status*)status);
+}
+void mpi_waitall_(int *count, int *requests, void *statuses, int *ierr) {
+    *ierr = MPI_Waitall(*count, (MPI_Request*)requests, (MPI_Status*)statuses);
+}
+void mpi_scatter_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *root, int *comm, int *ierr) {
+    *ierr = MPI_Scatter(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, *root, (MPI_Comm)*comm);
+}
+void mpi_gather_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *root, int *comm, int *ierr) {
+    *ierr = MPI_Gather(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, *root, (MPI_Comm)*comm);
+}
+void mpi_allgather_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *comm, int *ierr) {
+    *ierr = MPI_Allgather(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, (MPI_Comm)*comm);
+}
+void mpi_alltoall_(void *sendbuf, int *sendcount, int *sendtype, void *recvbuf, int *recvcount, int *recvtype, int *comm, int *ierr) {
+    *ierr = MPI_Alltoall(sendbuf, *sendcount, (MPI_Datatype)*sendtype, recvbuf, *recvcount, (MPI_Datatype)*recvtype, (MPI_Comm)*comm);
+}
+void mpi_type_size_(int *datatype, int *size, int *ierr) {
+    *ierr = MPI_Type_size((MPI_Datatype)*datatype, size);
+}
+void mpi_wtime_(double *time) { *time = MPI_Wtime(); }
+/* Fortran MPI constants */
+int mpi_comm_world_ = 0x44000000;  /* MS-MPI MPI_COMM_WORLD value */
+CWRAP
+            gcc -c -I"$MSMPI_SDK/Include" "$tmpdir/mpi_fortran_wrappers.c" -o "$tmpdir/mpi_fortran_wrappers.o"
+            ar rcs "$MSMPI_F_LIB" "$tmpdir/mpi_fortran_wrappers.o"
+            rm -rf "$tmpdir"
+        fi
 
         CONFIGURE_ARGS+=("--with-mpi-include=$MSMPI_SDK/Include")
         CONFIGURE_ARGS+=("--with-mpi-lib=[$MSMPI_C_LIB,$MSMPI_F_LIB]")
