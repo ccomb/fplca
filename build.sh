@@ -183,8 +183,12 @@ fi
 # Rust (needed for desktop build)
 check_command "rustc"
 
-# Elm (needed for frontend build)
-check_command "elm" "false"
+# Elm (installed via npm in web/ directory)
+if command -v elm &>/dev/null; then
+    log_success "elm found: $(command -v elm)"
+else
+    log_info "elm will be installed via npm in web/"
+fi
 
 if [[ "$MISSING_DEPS" == "true" ]]; then
     log_error "Missing required dependencies. Please install them and try again."
