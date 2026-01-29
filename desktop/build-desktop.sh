@@ -301,7 +301,7 @@ else
             cargo tauri build --bundles dmg
             ;;
         windows)
-            cargo tauri build --bundles msi,nsis
+            cargo tauri build --bundles nsis
             ;;
         *)
             cargo tauri build
@@ -338,7 +338,7 @@ if [[ -d "$BUNDLE_DIR" ]]; then
             find "$BUNDLE_DIR" -type f -name "*.dmg" -exec echo "  {}" \;
             ;;
         windows)
-            find "$BUNDLE_DIR" -type f \( -name "*.msi" -o -name "*.exe" \) -exec echo "  {}" \;
+            find "$BUNDLE_DIR" -type f -name "*.exe" -exec echo "  {}" \;
             ;;
     esac
     echo ""
