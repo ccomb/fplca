@@ -185,6 +185,10 @@ ENV PETSC_OPTIONS="-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl
 
 WORKDIR /app
 
+# User data directory (uploads, cache) - mount as volume for persistence
+ENV FPLCA_DATA_DIR=/data
+VOLUME /data
+
 # Copy runtime config (edit fplca.docker.toml to add/remove databases)
 COPY fplca.docker.toml /app/fplca.toml
 

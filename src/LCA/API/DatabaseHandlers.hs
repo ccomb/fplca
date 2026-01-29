@@ -23,6 +23,7 @@ module LCA.API.DatabaseHandlers
 
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf)
+import LCA.UploadedDatabase (isUploadedPath)
 import Data.Text (Text)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
@@ -205,7 +206,7 @@ makeStatusFromConfig config = DatabaseStatusAPI
     , dsaLoadAtStartup = LCA.Config.dcLoad config
     , dsaLoaded = True
     , dsaCached = True
-    , dsaIsUploaded = "uploads/" `isPrefixOf` LCA.Config.dcPath config
+    , dsaIsUploaded = isUploadedPath (LCA.Config.dcPath config)
     , dsaPath = T.pack (LCA.Config.dcPath config)
     , dsaFormat = formatToDisplayText <$> LCA.Config.dcFormat config
     }

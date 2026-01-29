@@ -212,7 +212,7 @@ async fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
 }
 
 /// Spawn the fplca backend process
-fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
+fn spawn_backend(resource_dir: &PathBuf, port: u16, data_dir: &PathBuf) -> Result<Child, String> {
     let fplca_binary = get_binary_path(resource_dir);
     let web_dir = resource_dir.join("web");
     let lib_path = build_library_path(resource_dir);
@@ -231,6 +231,8 @@ fn spawn_backend(resource_dir: &PathBuf, port: u16) -> Result<Child, String> {
     let config_file = resource_dir.join("fplca.toml");
     let mut cmd = Command::new(&fplca_binary);
     cmd.env(lib_env_var, &lib_path);
+    cmd.env("FPLCA_DATA_DIR", data_dir);
+    cmd.current_dir(data_dir);
 
     // Use config file if it exists (enables BYOL mode)
     if config_file.exists() {
@@ -288,7 +290,13 @@ fn main() {
             let resource_dir = app.path().resource_dir()
                 .unwrap_or_else(|_| get_resource_dir_fallback());
 
+            // Determine data directory for user data (uploads, cache)
+            let data_dir = app.path().app_data_dir()
+                .unwrap_or_else(|_| resource_dir.clone());
+            let _ = std::fs::create_dir_all(&data_dir);
+
             println!("Resource directory: {}", resource_dir.display());
+            println!("Data directory: {}", data_dir.display());
 
             // List contents of resource dir for debugging
             if let Ok(entries) = std::fs::read_dir(&resource_dir) {
@@ -305,7 +313,7 @@ fn main() {
             // Spawn backend and wait for it to be ready
             std::thread::spawn(move || {
                 // Start the backend
-                match spawn_backend(&resource_dir, port) {
+                match spawn_backend(&resource_dir, port, &data_dir) {
                     Ok(mut child) => {
                         // Capture and print backend stdout/stderr for debugging
                         if let Some(stdout) = child.stdout.take() {

@@ -44,7 +44,7 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 import Data.Char (toLower)
-import Data.List (isPrefixOf)
+import LCA.UploadedDatabase (isUploadedPath)
 
 import LCA.Config
 import LCA.Matrix (precomputeMatrixFactorization, addFactorizationToDatabase, clearCachedKspSolver)
@@ -303,7 +303,7 @@ listDatabases manager = do
             , dsLoadAtStartup = dcLoad config
             , dsLoaded = isLoaded
             , dsCached = isLoaded  -- If loaded, we have it cached in memory
-            , dsIsUploaded = "uploads/" `isPrefixOf` dcPath config
+            , dsIsUploaded = isUploadedPath (dcPath config)
             , dsPath = T.pack (dcPath config)
             , dsFormat = dcFormat config
             }
@@ -560,7 +560,7 @@ removeDatabase manager dbName = do
         Nothing -> return $ Left $ "Database not found: " <> dbName
         Just dbConfig -> do
             -- Check if it's an uploaded database (only uploaded can be deleted)
-            if not ("uploads/" `isPrefixOf` dcPath dbConfig)
+            if not (isUploadedPath (dcPath dbConfig))
                 then return $ Left $ "Cannot delete configured database. Edit fplca.toml to remove it."
                 else if M.member dbName loadedDbs
                     then return $ Left $ "Cannot delete loaded database. Close it first."

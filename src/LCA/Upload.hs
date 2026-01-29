@@ -30,6 +30,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word8)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, copyFile)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>), takeExtension, takeFileName)
 import System.IO.Temp (withSystemTempFile)
 import System.IO (hClose)
@@ -75,10 +76,15 @@ data UploadResult = UploadResult
     , urFileCount :: !Int        -- Number of data files
     } deriving (Show, Eq, Generic)
 
--- | Get the uploads directory (relative to config file or cwd)
+-- | Get the uploads directory under the data directory
+-- Uses FPLCA_DATA_DIR env var, falls back to current directory
 getUploadsDir :: IO FilePath
 getUploadsDir = do
-    let dir = "uploads"
+    mdir <- lookupEnv "FPLCA_DATA_DIR"
+    let base = case mdir of
+            Just d  -> d
+            Nothing -> "."
+    let dir = base </> "uploads"
     createDirectoryIfMissing True dir
     return dir
 

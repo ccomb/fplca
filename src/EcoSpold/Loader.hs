@@ -58,7 +58,7 @@ import LCA.Progress
 import LCA.Types
 import qualified SimaPro.Parser as SimaPro
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
-import Data.List (isPrefixOf)
+import LCA.UploadedDatabase (getDataDir, isUploadedPath)
 import System.FilePath (takeBaseName, takeExtension, splitDirectories, (</>))
 import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
@@ -584,24 +584,27 @@ generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
 generateMatrixCacheFilename dbName dataPath = do
     let cacheFilename = "fplca.cache." ++ T.unpack dbName ++ ".bin"
     -- Check if this is an uploaded database
-    if "uploads/" `isPrefixOf` dataPath || "uploads" `isPrefixOf` dataPath
+    if isUploadedPath dataPath
         then do
-            -- For uploads, extract the upload directory (first two components: uploads/<slug>)
+            -- For uploads, extract the upload directory (first two components: .../uploads/<slug>)
             let uploadDir = getUploadDir dataPath
             return $ uploadDir </> cacheFilename
         else do
-            -- For configured databases, use cache/ subdirectory
-            createDirectoryIfMissing True "cache"
-            return $ "cache" </> cacheFilename
+            -- For configured databases, use cache/ subdirectory under data dir
+            base <- getDataDir
+            let cacheDir = base </> "cache"
+            createDirectoryIfMissing True cacheDir
+            return $ cacheDir </> cacheFilename
   where
     -- Extract upload directory from data path
-    -- e.g., "uploads/ecoinvent-3-11/datasets" -> "uploads/ecoinvent-3-11"
+    -- e.g., ".../uploads/ecoinvent-3-11/datasets" -> take up to and including the slug after "uploads"
     getUploadDir :: FilePath -> FilePath
     getUploadDir p =
         let parts = splitDirectories p
-        in case parts of
-            ("uploads" : slug : _) -> "uploads" </> slug
-            _ -> p  -- Fallback to original path
+            takeUntilUploadsSlug [] = []
+            takeUntilUploadsSlug ("uploads" : slug : _) = ["uploads", slug]
+            takeUntilUploadsSlug (x : xs) = x : takeUntilUploadsSlug xs
+        in foldl (</>) "" (takeUntilUploadsSlug parts)
 
 {- |
 Validate cache file integrity before attempting to decode.

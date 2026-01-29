@@ -13,6 +13,9 @@ module LCA.UploadedDatabase
       -- * Discovery
     , discoverUploadedDatabases
     , getUploadsDir
+      -- * Data directory
+    , getDataDir
+    , isUploadedPath
     ) where
 
 import Control.Exception (try, SomeException)
@@ -22,7 +25,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import GHC.Generics (Generic)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, createDirectoryIfMissing)
-import System.FilePath ((</>), takeFileName)
+import System.Environment (lookupEnv)
+import System.FilePath ((</>), takeFileName, splitDirectories)
 import Text.Read (readMaybe)
 
 -- Re-export DatabaseFormat from LCA.Upload (single definition)
@@ -41,12 +45,27 @@ data UploadMeta = UploadMeta
 metaFileName :: FilePath
 metaFileName = "meta.toml"
 
+-- | Get the base data directory (uploads, cache, etc.)
+-- Uses FPLCA_DATA_DIR env var, falls back to current directory
+getDataDir :: IO FilePath
+getDataDir = do
+    mdir <- lookupEnv "FPLCA_DATA_DIR"
+    case mdir of
+        Just d  -> return d
+        Nothing -> return "."
+
 -- | Get the uploads directory
 getUploadsDir :: IO FilePath
 getUploadsDir = do
-    let dir = "uploads"
+    base <- getDataDir
+    let dir = base </> "uploads"
     createDirectoryIfMissing True dir
     return dir
+
+-- | Check if a path belongs to the uploads directory
+isUploadedPath :: FilePath -> Bool
+isUploadedPath path =
+    "uploads" `elem` splitDirectories path
 
 -- | Read meta.toml from an upload directory
 -- Returns Nothing if file doesn't exist or can't be parsed
