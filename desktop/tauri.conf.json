@@ -53,6 +53,7 @@
         "bannerPath": "./icons/banner.bmp"
       },
       "nsis": {
+        "installMode": "both",
         "sidebarImage": "./icons/nsis-sidebar.bmp",
         "headerImage": "./icons/nsis-header.bmp"
       }
