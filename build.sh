@@ -146,7 +146,7 @@ MISSING_DEPS=false
 # Required build tools (platform-specific)
 if [[ "$OS" == "windows" ]]; then
     # On Windows/MSYS2, check for MinGW tools
-    for cmd in gcc make python3 curl tar git; do
+    for cmd in gcc make cmake python3 curl tar git; do
         if ! check_command "$cmd"; then
             MISSING_DEPS=true
         fi
@@ -379,7 +379,7 @@ download_and_build_petsc() {
         fi
 
         # Use MSYS2 MPI compiler wrappers
-        CONFIGURE_ARGS+=("--with-cc=/ucrt64/bin/mpicc" "--with-fc=/ucrt64/bin/mpifort")
+        CONFIGURE_ARGS+=("--with-cc=/ucrt64/bin/mpicc.exe" "--with-fc=/ucrt64/bin/mpifort.exe")
         # Tell PETSc where mpiexec is (Windows path with spaces needs DOS short form)
         if [[ -f "$MSMPI_BIN/mpiexec.exe" ]]; then
             local MSMPI_BIN_SHORT
@@ -683,21 +683,40 @@ extra-include-dirs: $PETSC_INCLUDE_DIR
 EOF
 elif [[ "$OS" == "windows" ]]; then
     # Windows needs additional library paths and linker options
-    MSYS2_LIB_DIR="/ucrt64/lib"
+    # GHC uses bundled clang/lld which needs native Windows paths (C:/...)
+    # MSYS2 paths like /ucrt64/lib or /c/msys64/... don't work with lld
+    MSYS2_LIB_DIR="C:/msys64/ucrt64/lib"
     GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
+    # Convert to Windows path for lld
+    GCC_LIB_DIR="C:/msys64${GCC_LIB_DIR}"
+
+    # Create isolated MPI include dir (full MSYS2 include dir conflicts with GHC's clang)
+    MPI_INCLUDE_DIR="$SCRIPT_DIR/petsc/arch-msys2-c-opt/include/mpi-headers"
+    mkdir -p "$MPI_INCLUDE_DIR"
+    cp -f /ucrt64/include/mpi.h /ucrt64/include/mpif.h /ucrt64/include/mpifptr.h "$MPI_INCLUDE_DIR/" 2>/dev/null || true
+
+    # Convert MSYS2 paths (/c/Users/...) to Windows paths (C:/Users/...) for GHC's lld
+    win_path() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
+    W_PETSC_LIB_DIR=$(win_path "$PETSC_LIB_DIR")
+    W_SLEPC_LIB_DIR=$(win_path "$SLEPC_LIB_DIR")
+    W_PETSC_INCLUDE_DIR=$(win_path "$PETSC_INCLUDE_DIR")
+    W_PETSC_ARCH_INCLUDE_DIR=$(win_path "$PETSC_ARCH_INCLUDE_DIR")
+    W_SLEPC_INCLUDE_DIR=$(win_path "$SLEPC_INCLUDE_DIR")
+    W_SLEPC_ARCH_INCLUDE_DIR=$(win_path "$SLEPC_ARCH_INCLUDE_DIR")
 
     cat > cabal.project.local << EOF
-extra-lib-dirs: $PETSC_LIB_DIR
-              , $SLEPC_LIB_DIR
+extra-lib-dirs: $W_PETSC_LIB_DIR
+              , $W_SLEPC_LIB_DIR
               , $MSYS2_LIB_DIR
-extra-include-dirs: $PETSC_INCLUDE_DIR
-                  , $PETSC_ARCH_INCLUDE_DIR
-                  , $SLEPC_INCLUDE_DIR
-                  , $SLEPC_ARCH_INCLUDE_DIR
+extra-include-dirs: $W_PETSC_INCLUDE_DIR
+                  , $W_PETSC_ARCH_INCLUDE_DIR
+                  , $W_SLEPC_INCLUDE_DIR
+                  , $W_SLEPC_ARCH_INCLUDE_DIR
+                  , $(win_path "$MPI_INCLUDE_DIR")
 
 -- Link MinGW runtime libs and OpenBLAS needed by PETSc (built with UCRT64)
 package fplca
-  ghc-options: -optl-L$GCC_LIB_DIR -optl-lgcc -optl-L$MSYS2_LIB_DIR -optl-lopenblas -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
+  ghc-options: -optl-Wl,--allow-multiple-definition -optl-L$GCC_LIB_DIR -optl-L$MSYS2_LIB_DIR -optl-L$W_PETSC_LIB_DIR -optl-lscalapack -optl-ldmumps -optl-lmumps_common -optl-lpord -optl-l:libmsmpi.dll.a -optl-lopenblas -optl-lgfortran -optl-lgcc -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
 EOF
 
     # Copy OpenBLAS DLLs for GHC to find
