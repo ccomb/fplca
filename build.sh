@@ -538,9 +538,10 @@ export PETSC_ARCH
 
 # On Windows, add MSYS2 bin dir to PATH for DLL discovery
 if [[ "$OS" == "windows" ]]; then
-    # Use Windows path format for MSYS2 bin
-    MSYS2_BIN_WIN="/ucrt64/bin"
+    # Resolve real MSYS2 bin path (native Windows processes can't use /ucrt64 mount)
+    MSYS2_BIN_WIN="$(dirname "$(command -v gcc)")"
     export PATH="$PETSC_LIB_DIR:$SLEPC_LIB_DIR:$MSYS2_BIN_WIN:$PATH"
+    export PKG_CONFIG_PATH="$MSYS2_BIN_WIN/../lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 fi
 
 # -----------------------------------------------------------------------------
