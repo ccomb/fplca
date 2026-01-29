@@ -38,7 +38,6 @@ RUN . /tmp/versions.env && . /tmp/petsc.env && \
     --download-mpich \
     --download-mumps \
     --download-scalapack \
-    --download-hdf5=yes \
     --with-debugging=no \
     COPTFLAGS=-O3 \
     CXXOPTFLAGS=-O3 \

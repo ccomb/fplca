@@ -461,107 +461,6 @@ if [[ ! -f "$TYPES_C2HS_GEN" ]]; then
     runhaskell "$PETSC_HS_DIR/src/Numerical/PETSc/Internal/C2HsGen/GenerateC2Hs.hs" > "$TYPES_C2HS_GEN"
 fi
 
-# Check if PETSc was built with MPI and patch petsc-hs.cabal accordingly
-PETSC_HS_CABAL="$PETSC_HS_DIR/petsc-hs.cabal"
-PETSC_LIB_CHECK="${PETSC_DIR:-$SCRIPT_DIR/petsc}/${PETSC_ARCH:-arch-linux-c-opt}/lib"
-if [[ -f "$PETSC_LIB_CHECK/libmpi.so" ]] || [[ -f "$PETSC_LIB_CHECK/libmpich.so" ]]; then
-    log_info "Patching petsc-hs.cabal for MPI..."
-    if grep -q "petsc, mpich, slepc" "$PETSC_HS_CABAL" 2>/dev/null; then
-        sed -i 's/petsc, mpich, slepc/petsc, mpi, slepc/g' "$PETSC_HS_CABAL"
-    fi
-elif grep -q "mpich" "$PETSC_HS_CABAL" 2>/dev/null; then
-    log_info "Patching petsc-hs.cabal to remove MPI dependency..."
-    sed -i 's/petsc, mpich, slepc/petsc, slepc/g' "$PETSC_HS_CABAL"
-fi
-
-# Windows-specific patches for petsc-hs
-if [[ "$OS" == "windows" ]]; then
-    # Add OpenBLAS library for Windows
-    if ! grep -q "openblas" "$PETSC_HS_CABAL" 2>/dev/null; then
-        log_info "Adding OpenBLAS library to petsc-hs.cabal..."
-        sed -i 's/\(extra-libraries:\s*petsc, slepc\)/\1, openblas/g' "$PETSC_HS_CABAL"
-    fi
-
-    # Create stub files for Windows compatibility
-    CBITS_DIR="$PETSC_HS_DIR/cbits"
-    mkdir -p "$CBITS_DIR"
-
-    # HDF5 stub (we build PETSc without HDF5 on Windows)
-    HDF5_STUB="$CBITS_DIR/hdf5_stub.c"
-    if [[ ! -f "$HDF5_STUB" ]]; then
-        log_info "Creating HDF5 stub for petsc-hs..."
-        cat > "$HDF5_STUB" << 'STUB_EOF'
-/* Stub for PetscViewerHDF5Open - PETSc built without HDF5 support */
-typedef int PetscErrorCode;
-typedef void* PetscViewer;
-typedef void* MPI_Comm;
-typedef int PetscFileMode;
-
-PetscErrorCode PetscViewerHDF5Open(MPI_Comm comm, const char name[], PetscFileMode type, PetscViewer *viewer) {
-    (void)comm; (void)name; (void)type; (void)viewer;
-    return -1; /* PETSC_ERR_SUP - not supported */
-}
-STUB_EOF
-    fi
-
-    # MinGW runtime stub
-    MINGW_STUB="$CBITS_DIR/mingw_stub.c"
-    if [[ ! -f "$MINGW_STUB" ]]; then
-        log_info "Creating MinGW runtime stub for petsc-hs..."
-        cat > "$MINGW_STUB" << 'STUB_EOF'
-/* Stubs for MinGW runtime symbols not found by ld.lld on Windows */
-#ifdef _WIN32
-
-#include <windows.h>
-#include <stdint.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <setjmp.h>
-
-typedef int (*setjmp_func_t)(jmp_buf);
-extern int __cdecl _setjmp(jmp_buf _Buf, void *_Ctx);
-void* __imp__setjmp = (void*)_setjmp;
-
-typedef struct {
-    unsigned int __cw;
-    unsigned int __sw;
-    unsigned int __tag;
-    unsigned int __ipoff;
-    unsigned int __cssel;
-    unsigned int __dataoff;
-    unsigned int __datasel;
-    unsigned int __mxcsr;
-} stub_fenv_t;
-
-const stub_fenv_t __mingw_fe_dfl_env = { 0x37f, 0, 0, 0, 0, 0, 0, 0x1f80 };
-
-int stat64i32(const char *path, struct _stat64 *buf) {
-    return _stat64(path, buf);
-}
-
-struct timespec64 {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
-int nanosleep64(const struct timespec64 *req, struct timespec64 *rem) {
-    if (req == NULL) return -1;
-    DWORD ms = (DWORD)(req->tv_sec * 1000 + req->tv_nsec / 1000000);
-    if (ms > 0) Sleep(ms);
-    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
-    return 0;
-}
-
-#endif /* _WIN32 */
-STUB_EOF
-    fi
-
-    # Add c-sources to petsc-hs.cabal if not already present
-    if ! grep -q "hdf5_stub.c" "$PETSC_HS_CABAL" 2>/dev/null; then
-        log_info "Adding stub files to petsc-hs.cabal..."
-        sed -i 's/\(extra-libraries:\s*petsc\)/c-sources: cbits\/hdf5_stub.c\n             cbits\/mingw_stub.c\n  \1/g' "$PETSC_HS_CABAL"
-    fi
-fi
 
 # Use system packages or build from source
 if [[ "$USE_SYSTEM_PETSC" == "true" ]]; then
@@ -574,12 +473,6 @@ if [[ "$USE_SYSTEM_PETSC" == "true" ]]; then
     # Debian uses libpetsc_real.so and libslepc_real.so
     PETSC_LIB_NAME="petsc_real"
     SLEPC_LIB_NAME="slepc_real"
-
-    # Patch petsc-hs.cabal to use system library names
-    if ! grep -q "petsc_real" "$PETSC_HS_CABAL" 2>/dev/null; then
-        log_info "Patching petsc-hs.cabal for system library names..."
-        sed -i 's/petsc, slepc/petsc_real, slepc_real/g' "$PETSC_HS_CABAL"
-    fi
 
     log_success "Using system PETSc: $PETSC_DIR"
     log_success "Using system SLEPc: $SLEPC_DIR"
@@ -680,6 +573,13 @@ extra-lib-dirs: $PETSC_LIB_DIR
               , $SLEPC_LIB_DIR
 extra-include-dirs: $PETSC_INCLUDE_DIR
                   , $SLEPC_INCLUDE_DIR
+
+-- System packages use petsc_real/slepc_real library names and system MPI
+package petsc-hs
+  ghc-options: -optl-lpetsc_real -optl-lslepc_real -optl-lmpi
+
+package fplca
+  ghc-options: -optl-lpetsc_real -optl-lslepc_real -optl-lmpi
 EOF
 elif [[ "$OS" == "windows" ]]; then
     # Windows needs additional library paths and linker options
@@ -736,6 +636,13 @@ extra-include-dirs: $PETSC_INCLUDE_DIR
                   , $PETSC_ARCH_INCLUDE_DIR
                   , $SLEPC_INCLUDE_DIR
                   , $SLEPC_ARCH_INCLUDE_DIR
+
+-- MPI library (MPICH downloaded by PETSc)
+package petsc-hs
+  ghc-options: -optl-lmpi
+
+package fplca
+  ghc-options: -optl-lmpi
 EOF
 fi
 
