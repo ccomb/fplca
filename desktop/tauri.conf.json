@@ -11,7 +11,7 @@
   "bundle": {
     "active": true,
     "category": "Education",
-    "targets": ["appimage", "deb", "msi", "nsis"],
+    "targets": ["appimage", "deb", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -47,10 +47,6 @@
       "timestampUrl": "",
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
-      },
-      "wix": {
-        "dialogImagePath": "./icons/dialog.bmp",
-        "bannerPath": "./icons/banner.bmp"
       },
       "nsis": {
         "installMode": "both",
