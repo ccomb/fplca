@@ -174,16 +174,23 @@ fn get_path_separator() -> &'static str {
 
 /// Build library path including bundled libraries (LD_LIBRARY_PATH on Unix, PATH on Windows)
 fn build_library_path(resource_dir: &PathBuf) -> String {
-    let lib_dir = resource_dir.join("lib");
-    let lib_path = lib_dir.to_string_lossy().to_string();
-    let env_var = get_library_path_env_var();
     let separator = get_path_separator();
+    let env_var = get_library_path_env_var();
+
+    // On Linux, bundled .so files go in lib/; on Windows, DLLs sit next to the binary
+    let lib_dir = resource_dir.join("lib");
+    let mut paths = vec![resource_dir.to_string_lossy().to_string()];
+    if lib_dir.exists() {
+        paths.push(lib_dir.to_string_lossy().to_string());
+    }
 
     // Prepend to existing path if any
-    match env::var(env_var) {
-        Ok(existing) if !existing.is_empty() => format!("{}{}{}", lib_path, separator, existing),
-        _ => lib_path,
+    if let Ok(existing) = env::var(env_var) {
+        if !existing.is_empty() {
+            paths.push(existing);
+        }
     }
+    paths.join(separator)
 }
 
 /// Wait for the backend to be ready by polling the health endpoint
