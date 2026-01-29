@@ -593,8 +593,16 @@ Windows builds require MSYS2 with UCRT64 environment. All builds use the same ba
 2. Open "MSYS2 UCRT64" terminal (from Start menu)
 3. Install dependencies:
    ```bash
-   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gcc-fortran \
-             mingw-w64-ucrt-x86_64-openblas make python git
+   pacman -S make python git \
+             mingw-w64-ucrt-x86_64-gcc \
+             mingw-w64-ucrt-x86_64-gcc-fortran \
+             mingw-w64-ucrt-x86_64-cmake \
+             mingw-w64-ucrt-x86_64-make \
+             mingw-w64-ucrt-x86_64-openblas \
+             mingw-w64-ucrt-x86_64-msmpi \
+             mingw-w64-ucrt-x86_64-pkgconf \
+             mingw-w64-ucrt-x86_64-zlib \
+             mingw-w64-ucrt-x86_64-tools-git
    ```
 4. Install Haskell toolchain:
    ```bash
