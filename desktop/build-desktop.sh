@@ -205,16 +205,29 @@ if [[ "$OS" == "windows" ]]; then
     # Copy OpenBLAS and MinGW runtime DLLs
     MSYS2_BIN="/ucrt64/bin"
     if [[ -d "$MSYS2_BIN" ]]; then
-        for dll in $WINDOWS_OPENBLAS_DLLS; do
+        for dll in $WINDOWS_RUNTIME_DLLS; do
             src="$MSYS2_BIN/$dll"
             if [[ -f "$src" ]]; then
                 cp "$src" "$RESOURCES_DIR/"
+            else
+                log_warn "DLL not found: $src"
             fi
         done
     fi
 
     DLL_COUNT=$(find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" | wc -l)
     log_success "Copied $DLL_COUNT DLLs"
+
+    # Download MS-MPI redistributable installer (embedded in NSIS installer)
+    MSMPI_SETUP="$RESOURCES_DIR/msmpisetup.exe"
+    MSMPI_URL="https://download.microsoft.com/download/7/2/7/72731ebb-b63c-4170-ade7-836966263a8f/msmpisetup.exe"
+    if [[ ! -f "$MSMPI_SETUP" ]]; then
+        log_info "Downloading MS-MPI redistributable..."
+        curl -fSL -o "$MSMPI_SETUP" "$MSMPI_URL"
+        log_success "Downloaded msmpisetup.exe ($(du -h "$MSMPI_SETUP" | cut -f1))"
+    else
+        log_success "MS-MPI redistributable already present"
+    fi
 else
     # On Linux/macOS, copy .so files
     for lib_dir in "$PETSC_LIB_DIR" "$SLEPC_LIB_DIR"; do

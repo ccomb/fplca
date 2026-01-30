@@ -622,7 +622,7 @@ EOF
 
     # Copy OpenBLAS DLLs for GHC to find
     log_info "Copying OpenBLAS DLLs for GHC..."
-    for dll in $WINDOWS_OPENBLAS_DLLS; do
+    for dll in $WINDOWS_RUNTIME_DLLS; do
         src="/ucrt64/bin/$dll"
         if [[ -f "$src" ]]; then
             cp "$src" "$SCRIPT_DIR/"
