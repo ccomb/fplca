@@ -361,10 +361,13 @@ fn main() {
                             let _ = main_window.eval(&format!("window.location.href = '{}'", url));
                         } else {
                             eprintln!("Backend failed to start within timeout");
+                            let _ = main_window.eval("showError('Backend did not respond within 120 seconds. Check logs for details.')");
                         }
                     }
                     Err(e) => {
                         eprintln!("Failed to start backend: {}", e);
+                        let msg = e.replace('\'', "\\'");
+                        let _ = main_window.eval(&format!("showError('{}')", msg));
                     }
                 }
             });

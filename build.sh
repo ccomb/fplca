@@ -15,7 +15,8 @@
 #   --clean             Clean build artifacts before building
 #   --all               Force re-download and rebuild of PETSc/SLEPc
 #   --test              Run tests after building
-#   --desktop           Build desktop application (Tauri bundle)
+#   --desktop           Build desktop application (Tauri bundle, release)
+#   --desktop-dev       Build desktop application (debug, no LTO — faster)
 #
 # Environment variables:
 #   PETSC_DIR           Path to PETSc installation
@@ -100,6 +101,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --desktop)
             BUILD_DESKTOP=true
+            shift
+            ;;
+        --desktop-dev)
+            BUILD_DESKTOP=true
+            DESKTOP_DEV=true
             shift
             ;;
         *)
@@ -690,7 +696,11 @@ fi
 if [[ "$BUILD_DESKTOP" == "true" ]]; then
     log_info "Building desktop application..."
     cd "$SCRIPT_DIR/desktop"
-    ./build-desktop.sh
+    if [[ "$DESKTOP_DEV" == "true" ]]; then
+        ./build-desktop.sh --dev
+    else
+        ./build-desktop.sh
+    fi
     log_success "Desktop application built"
     echo ""
 fi

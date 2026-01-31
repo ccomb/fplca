@@ -6,7 +6,7 @@
   "build": {
     "beforeBuildCommand": "",
     "devUrl": "http://localhost:8080",
-    "frontendDist": "../web/dist"
+    "frontendDist": "loading"
   },
   "bundle": {
     "active": true,
