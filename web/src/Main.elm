@@ -1203,7 +1203,7 @@ update msg model =
                                 Nav.replaceUrl model.key (routeToUrl (ActivityLCIARoute newDbName model.currentActivityId))
 
                             DatabasesPage ->
-                                Cmd.none
+                                Nav.replaceUrl model.key (routeToUrl (ActivitiesRoute { db = newDbName, name = Nothing, limit = Just 20 }))
 
                             UploadPage ->
                                 Cmd.none
@@ -1228,21 +1228,23 @@ update msg model =
                 )
 
             else
-                -- Activation failed (e.g., database not loaded) - redirect to Databases page
+                -- Activation failed (e.g., database not loaded) - show error on Databases page
                 ( { model
                     | activatingDatabase = False
                     , loading = False
                     , currentPage = DatabasesPage
+                    , error = Just response.message
                   }
                 , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
                 )
 
-        ActivateDatabaseResult (Err _) ->
-            -- Network error - redirect to Databases page
+        ActivateDatabaseResult (Err err) ->
+            -- Network error - show error on Databases page
             ( { model
                 | activatingDatabase = False
                 , loading = False
                 , currentPage = DatabasesPage
+                , error = Just ("Network error: " ++ httpErrorToString err)
               }
             , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
             )

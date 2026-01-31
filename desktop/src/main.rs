@@ -333,11 +333,18 @@ fn main() {
                             });
                         }
                         if let Some(stderr) = child.stderr.take() {
+                            let window_for_stderr = main_window.clone();
                             std::thread::spawn(move || {
                                 use std::io::{BufRead, BufReader};
                                 let reader = BufReader::new(stderr);
                                 for line in reader.lines().flatten() {
                                     eprintln!("[backend stderr] {}", line);
+                                    // Forward progress to loading screen and Elm app
+                                    let escaped = line.replace('\\', "\\\\").replace('\'', "\\'");
+                                    let _ = window_for_stderr.eval(&format!(
+                                        "if(typeof updateStatus==='function')updateStatus('{}');else if(typeof console!=='undefined')console.log('[backend] {}');",
+                                        escaped, escaped
+                                    ));
                                 }
                             });
                         }

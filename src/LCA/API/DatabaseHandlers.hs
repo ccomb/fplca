@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {- |
 Module      : LCA.API.DatabaseHandlers
@@ -21,6 +22,7 @@ module LCA.API.DatabaseHandlers
     , convertLoadedDbToStatus
     ) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf)
 import LCA.UploadedDatabase (isUploadedPath)
@@ -94,10 +96,12 @@ getCurrentDatabaseHandler dbManager = do
 -- | Load a database on demand
 loadDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse
 loadDatabaseHandler dbManager dbName = do
-    result <- liftIO $ loadDatabase dbManager dbName
-    case result of
-        Left err -> return $ ActivateResponse False err Nothing
-        Right loadedDb -> do
+    eitherResult <- liftIO $ try $ loadDatabase dbManager dbName
+    case eitherResult of
+        Left (ex :: SomeException) ->
+            return $ ActivateResponse False ("Server exception: " <> T.pack (show ex)) Nothing
+        Right (Left err) -> return $ ActivateResponse False err Nothing
+        Right (Right loadedDb) -> do
             let config = ldConfig loadedDb
                 status = makeStatusFromConfig config
             return $ ActivateResponse True ("Loaded database: " <> LCA.Config.dcDisplayName config) (Just status)
