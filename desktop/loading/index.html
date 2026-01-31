@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fpLCA — Starting</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f5f5f5;
+    color: #363636;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+  }
+  .container { text-align: center; }
+  .spinner {
+    width: 48px; height: 48px;
+    border: 4px solid #dbdbdb;
+    border-top-color: #3273dc;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 1.5rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .message { font-size: 1.1rem; color: #4a4a4a; }
+  .error-box {
+    display: none;
+    background: #feecf0;
+    border: 1px solid #f14668;
+    border-radius: 6px;
+    color: #cc0f35;
+    padding: 1rem 1.5rem;
+    margin-top: 1.5rem;
+    max-width: 500px;
+    text-align: left;
+    word-break: break-word;
+  }
+  .log {
+    margin-top: 1.5rem;
+    max-width: 600px;
+    max-height: 200px;
+    overflow-y: auto;
+    text-align: left;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.8rem;
+    color: #7a7a7a;
+    line-height: 1.4;
+  }
+  .log div { padding: 1px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="spinner" id="spinner"></div>
+  <div class="message" id="message">Starting fpLCA engine…</div>
+  <div class="error-box" id="error-box"></div>
+  <div class="log" id="log"></div>
+</div>
+<script>
+  function showError(msg) {
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('message').textContent = 'Failed to start';
+    var box = document.getElementById('error-box');
+    box.textContent = msg;
+    box.style.display = 'block';
+  }
+  function updateStatus(line) {
+    var msg = document.getElementById('message');
+    // Show last meaningful line as status
+    if (line.trim()) msg.textContent = line.trim();
+    // Append to log
+    var log = document.getElementById('log');
+    var div = document.createElement('div');
+    div.textContent = line;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+</script>
+</body>
+</html>
