@@ -51,7 +51,7 @@ update msg model =
             ( { model | description = desc }, Cmd.none )
 
         SelectFile ->
-            ( model, Select.file [ ".zip", ".7z", ".tar.gz", ".tgz", ".tar.xz", ".csv" ] FileSelected )
+            ( model, Select.file [ ".zip", ".csv" ] FileSelected )
 
         FileSelected file ->
             ( { model | selectedFile = Just file, error = Nothing }
@@ -90,7 +90,7 @@ view model =
                     ]
                 ]
             , p [ class "subtitle" ]
-                [ text "Upload a ZIP file containing your LCA database (EcoSpold v1/v2 or SimaPro CSV)" ]
+                [ text "Upload a ZIP or CSV file containing your LCA database (EcoSpold v1/v2 or SimaPro CSV)" ]
             , viewError model.error
             , viewSuccess model.success
             , viewForm model
@@ -160,17 +160,10 @@ viewForm model =
                 ]
             ]
         , div [ class "field" ]
-            [ label [ class "label" ] [ text "Database File (ZIP, 7z, tar.gz, CSV)" ]
+            [ label [ class "label" ] [ text "Database File (ZIP or CSV)" ]
             , div [ class "file has-name is-fullwidth" ]
-                [ label [ class "file-label" ]
-                    [ input
-                        [ class "file-input"
-                        , type_ "file"
-                        , accept ".zip,.7z,.tar.gz,.tgz,.tar.xz,.csv"
-                        , disabled model.uploading
-                        ]
-                        []
-                    , span
+                [ div [ class "file-label" ]
+                    [ span
                         [ class "file-cta"
                         , onClick SelectFile
                         ]

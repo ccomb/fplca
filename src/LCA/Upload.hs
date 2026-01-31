@@ -2,18 +2,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 module LCA.Upload
     ( -- * Types
       UploadData(..)
     , UploadResult(..)
     , DatabaseFormat(..)
-    , ArchiveFormat(..)
     , ProgressEvent(..)
       -- * Upload handling
     , handleUpload
     , detectDatabaseFormat
-    , detectArchiveFormat
     , slugify
     , getUploadsDir
     ) where
@@ -27,15 +26,11 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.Word (Word8)
 import GHC.Generics (Generic)
-import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, copyFile)
+import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, removeDirectoryRecursive)
 import System.Environment (lookupEnv)
-import System.FilePath ((</>), takeExtension, takeFileName)
-import System.IO.Temp (withSystemTempFile)
-import System.IO (hClose)
-import System.Exit (ExitCode(..))
-import System.Process (readProcessWithExitCode)
+import System.FilePath ((</>), takeExtension, takeDirectory)
+import qualified Codec.Archive.Zip as Zip
 
 -- | Detected database format
 data DatabaseFormat
@@ -43,15 +38,6 @@ data DatabaseFormat
     | EcoSpold1      -- EcoSpold v1 XML format
     | EcoSpold2      -- EcoSpold v2 XML format
     | UnknownFormat  -- Could not detect format
-    deriving (Show, Eq, Generic)
-
--- | Supported archive formats
-data ArchiveFormat
-    = SevenZ         -- 7-Zip archive (.7z)
-    | Zip            -- ZIP archive (.zip)
-    | TarGz          -- Gzipped tarball (.tar.gz, .tgz)
-    | TarXz          -- XZ-compressed tarball (.tar.xz)
-    | PlainCSV       -- Plain CSV file (no archive)
     deriving (Show, Eq, Generic)
 
 -- | Progress event for upload/loading operations
@@ -89,7 +75,7 @@ getUploadsDir = do
     return dir
 
 -- | Handle a database upload
--- Extracts archive to uploads/{slug}/ and detects format
+-- Extracts ZIP archive to uploads/{slug}/ and detects format
 handleUpload :: UploadData -> (ProgressEvent -> IO ()) -> IO (Either Text UploadResult)
 handleUpload UploadData{..} reportProgress = do
     let slug = slugify udName
@@ -110,24 +96,15 @@ handleUpload UploadData{..} reportProgress = do
                     -- Create target directory
                     createDirectoryIfMissing True targetDir
 
-                    -- Save uploaded file to temp and extract using system tools
                     reportProgress $ ProgressEvent "extracting" 10 "Extracting archive..."
 
-                    result <- try $ withSystemTempFile "upload" $ \tempPath tempHandle -> do
-                        -- Write archive data to temp file
-                        BL.hPut tempHandle udZipData
-                        hClose tempHandle
-
-                        -- Detect archive format from file content (magic bytes)
-                        let archiveFormat = detectArchiveFormatFromContent udZipData
-
-                        -- Extract using appropriate system tool
-                        extractArchive archiveFormat tempPath targetDir
-
+                    result <- try $ extractUpload udZipData targetDir
                     case result of
                         Left (e :: SomeException) -> do
+                            _ <- try @SomeException $ removeDirectoryRecursive targetDir
                             return $ Left $ "Failed to extract archive: " <> T.pack (show e)
                         Right (Left err) -> do
+                            _ <- try @SomeException $ removeDirectoryRecursive targetDir
                             return $ Left err
                         Right (Right ()) -> do
                             -- Find the actual data directory (may be nested)
@@ -146,96 +123,61 @@ handleUpload UploadData{..} reportProgress = do
 
                             return $ Right UploadResult
                                 { urSlug = slug
-                                , urPath = dataDir  -- Use the actual data directory
+                                , urPath = dataDir
                                 , urFormat = format
                                 , urFileCount = fileCount
                                 }
 
--- | Detect archive format from filename (fallback)
-detectArchiveFormat :: Text -> ArchiveFormat
-detectArchiveFormat filename =
-    let lower = T.toLower filename
-    in if ".7z" `T.isSuffixOf` lower then SevenZ
-       else if ".zip" `T.isSuffixOf` lower then Zip
-       else if ".tar.gz" `T.isSuffixOf` lower || ".tgz" `T.isSuffixOf` lower then TarGz
-       else if ".tar.xz" `T.isSuffixOf` lower then TarXz
-       else if ".csv" `T.isSuffixOf` lower then PlainCSV
-       else Zip  -- Default to ZIP for backwards compatibility
+-- | Extract upload data to target directory.
+-- Supports ZIP archives (detected by magic bytes) and plain CSV files.
+extractUpload :: BL.ByteString -> FilePath -> IO (Either Text ())
+extractUpload content targetDir
+    | isZipContent content = extractZip content targetDir
+    | isPlainCSV content   = do
+        -- Plain CSV: write directly
+        BL.writeFile (targetDir </> "data.csv") content
+        return $ Right ()
+    | otherwise = return $ Left "Unsupported file format. Please upload a ZIP archive or CSV file."
 
--- | Magic bytes for archive format detection
-sevenZipMagic :: [Word8]
-sevenZipMagic = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]  -- 7z
+-- | Check if content is a ZIP archive (magic bytes: PK)
+isZipContent :: BL.ByteString -> Bool
+isZipContent content =
+    BL.unpack (BL.take 2 content) == [0x50, 0x4B]
 
-zipMagic :: [Word8]
-zipMagic = [0x50, 0x4B]  -- PK
-
-gzipMagic :: [Word8]
-gzipMagic = [0x1F, 0x8B]
-
-xzMagic :: [Word8]
-xzMagic = [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]
-
--- | Check if content starts with given magic bytes
-matchesMagic :: [Word8] -> BL.ByteString -> Bool
-matchesMagic magic content =
-    BL.unpack (BL.take (fromIntegral $ length magic) content) == magic
-
--- | Check if first byte is printable ASCII (for plain text detection)
-isPrintableAscii :: BL.ByteString -> Bool
-isPrintableAscii content
+-- | Check if first byte is printable ASCII (plain text / CSV)
+isPlainCSV :: BL.ByteString -> Bool
+isPlainCSV content
     | BL.null content = False
     | otherwise = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
 
--- | Detect archive format from file content using magic bytes
--- This is more reliable than filename detection
-detectArchiveFormatFromContent :: BL.ByteString -> ArchiveFormat
-detectArchiveFormatFromContent content
-    | matchesMagic sevenZipMagic content = SevenZ
-    | matchesMagic zipMagic content      = Zip
-    | matchesMagic gzipMagic content     = TarGz
-    | matchesMagic xzMagic content       = TarXz
-    | isPrintableAscii content           = PlainCSV
-    | otherwise                          = Zip  -- Fallback
-
--- | Extract archive using system tools
-extractArchive :: ArchiveFormat -> FilePath -> FilePath -> IO (Either Text ())
-extractArchive format archivePath targetDir = case format of
-    SevenZ -> runExtractor "7z" ["x", archivePath, "-o" <> targetDir, "-y"]
-    Zip    -> runExtractor "unzip" ["-o", archivePath, "-d", targetDir]
-    TarGz  -> runExtractor "tar" ["xzf", archivePath, "-C", targetDir]
-    TarXz  -> runExtractor "tar" ["xJf", archivePath, "-C", targetDir]
-    PlainCSV -> do
-        -- For plain CSV, just copy the file
-        let csvName = takeFileName archivePath
-            destPath = targetDir </> (if ".csv" `isSuffixOf` map toLower csvName
-                                       then csvName
-                                       else csvName <> ".csv")
-        copyFile archivePath destPath
-        return $ Right ()
-
--- | Run extraction command and return result
-runExtractor :: FilePath -> [String] -> IO (Either Text ())
-runExtractor cmd args = do
-    result <- try $ readProcessWithExitCode cmd args ""
-    case result of
-        Left (e :: SomeException) ->
-            return $ Left $ "Failed to run " <> T.pack cmd <> ": " <> T.pack (show e)
-        Right (ExitSuccess, _, _) ->
+-- | Extract a ZIP archive using the zip library (pure Haskell, no system tools)
+extractZip :: BL.ByteString -> FilePath -> IO (Either Text ())
+extractZip zipData targetDir = do
+    case Zip.toArchiveOrFail zipData of
+        Left err -> return $ Left $ "Invalid ZIP file: " <> T.pack err
+        Right archive -> do
+            mapM_ (extractEntry targetDir) (Zip.zEntries archive)
             return $ Right ()
-        Right (ExitFailure code, _, stderr) ->
-            return $ Left $ T.pack cmd <> " failed with code " <> T.pack (show code)
-                         <> ": " <> T.pack stderr
+
+-- | Extract a single ZIP entry to disk
+extractEntry :: FilePath -> Zip.Entry -> IO ()
+extractEntry targetDir entry = do
+    let path = targetDir </> Zip.eRelativePath entry
+    if "/" `isSuffixOf` Zip.eRelativePath entry
+        then createDirectoryIfMissing True path
+        else do
+            createDirectoryIfMissing True (takeDirectory path)
+            BL.writeFile path (Zip.fromEntry entry)
 
 -- | Find the actual data directory
--- Archives often contain multiple folders (e.g., "datasets", "MasterData") - we need to find where the actual data files are
--- Prioritizes .spold files (EcoSpold2) over .csv files to avoid false positives from lookup files
+-- Archives often contain multiple folders (e.g., "datasets", "MasterData")
+-- Prioritizes .spold files (EcoSpold2) over .csv files
 findDataDirectory :: FilePath -> IO FilePath
 findDataDirectory dir = do
-    -- List all files in the directory
     files <- listDirectory dir
     let fullPaths = map (dir </>) files
 
-    -- First, check for a "datasets" directory (common in ecoinvent) - prioritize this
+    -- First, check for a "datasets" directory (common in ecoinvent)
     let datasetsDir = dir </> "datasets"
     hasDatasetsDir <- doesDirectoryExist datasetsDir
     if hasDatasetsDir
@@ -245,7 +187,7 @@ findDataDirectory dir = do
                 then return datasetsDir
                 else findDataDirectory datasetsDir
         else do
-            -- Check if there are .spold files directly in this directory (prioritize over CSV)
+            -- Check if there are .spold files directly in this directory
             hasSpold <- hasSpoldFilesIn dir
             if hasSpold
                 then return dir
@@ -277,25 +219,25 @@ findDataDirectory dir = do
 
 -- | Check if a directory contains .spold files (EcoSpold2)
 hasSpoldFilesIn :: FilePath -> IO Bool
-hasSpoldFilesIn dir = do
-    files <- listDirectory dir
-    let extensions = map (map toLower . takeExtension) files
+hasSpoldFilesIn d = do
+    fs <- listDirectory d
+    let extensions = map (map toLower . takeExtension) fs
     return $ any (== ".spold") extensions
 
--- | Check if a directory contains any data files directly (not recursively)
+-- | Check if a directory contains any data files directly
 anyDataFilesIn :: FilePath -> IO Bool
-anyDataFilesIn dir = do
-    files <- listDirectory dir
-    let extensions = map (map toLower . takeExtension) files
+anyDataFilesIn d = do
+    fs <- listDirectory d
+    let extensions = map (map toLower . takeExtension) fs
     return $ any isDataExtension extensions
   where
     isDataExtension ext = ext `elem` [".spold", ".xml", ".csv"]
 
 -- | Count data files based on format
 countDataFiles :: FilePath -> DatabaseFormat -> IO Int
-countDataFiles dir format = do
-    files <- listDirectoryRecursive dir
-    return $ length $ filter (isDataFile format) files
+countDataFiles d format = do
+    fs <- listDirectoryRecursive d
+    return $ length $ filter (isDataFile format) fs
   where
     isDataFile SimaProCSV f = ".csv" `isSuffixOf` map toLower f
     isDataFile EcoSpold1 f = ".xml" `isSuffixOf` map toLower f
@@ -304,10 +246,10 @@ countDataFiles dir format = do
 
 -- | Recursively list all files in a directory
 listDirectoryRecursive :: FilePath -> IO [FilePath]
-listDirectoryRecursive dir = do
-    entries <- listDirectory dir
+listDirectoryRecursive d = do
+    entries <- listDirectory d
     results <- forM entries $ \entry -> do
-        let path = dir </> entry
+        let path = d </> entry
         isDir <- doesDirectoryExist path
         if isDir
             then listDirectoryRecursive path
@@ -322,7 +264,6 @@ detectDatabaseFormat path = do
 
     if isFile
         then do
-            -- Single file: detect from extension and content
             let ext = map toLower (takeExtension path)
             case ext of
                 ".spold" -> return EcoSpold2
@@ -335,59 +276,50 @@ detectDatabaseFormat path = do
                 _ -> return UnknownFormat
         else if isDir
             then do
-                files <- listDirectoryRecursive path
-                let extensions = map (map toLower . takeExtension) files
-
-                -- Check for different formats
+                fs <- listDirectoryRecursive path
+                let extensions = map (map toLower . takeExtension) fs
                 let hasSpold = any (== ".spold") extensions
                     hasXml = any (== ".xml") extensions
                     hasCsv = any (== ".csv") extensions
-
-                -- EcoSpold2 uses .spold extension
                 if hasSpold
                     then return EcoSpold2
                     else if hasXml
                         then do
-                            -- Check if it's EcoSpold1 by looking at file content
-                            isEcoSpold1 <- checkForEcoSpold1 files
+                            isEcoSpold1 <- checkForEcoSpold1 fs
                             return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
                         else if hasCsv
                             then do
-                                -- Check if it's SimaPro CSV
-                                isSimaPro <- checkForSimaProCSV files
+                                isSimaPro <- checkForSimaProCSV fs
                                 return $ if isSimaPro then SimaProCSV else UnknownFormat
                             else return UnknownFormat
-            else return UnknownFormat  -- Path doesn't exist
+            else return UnknownFormat
 
 -- | Check if XML files are EcoSpold1 format
 checkForEcoSpold1 :: [FilePath] -> IO Bool
-checkForEcoSpold1 files = do
-    let xmlFiles = filter (\f -> ".xml" `isSuffixOf` map toLower f) files
+checkForEcoSpold1 fs = do
+    let xmlFiles = filter (\f -> ".xml" `isSuffixOf` map toLower f) fs
     case xmlFiles of
         [] -> return False
         (f:_) -> do
             result <- try $ TIO.readFile f
             case result of
                 Left (_ :: SomeException) -> return False
-                Right content ->
-                    -- EcoSpold1 has <ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold01"
-                    return $ T.isInfixOf "EcoSpold01" content || T.isInfixOf "ecoSpold" content
+                Right c ->
+                    return $ T.isInfixOf "EcoSpold01" c || T.isInfixOf "ecoSpold" c
 
 -- | Check if CSV files are SimaPro format
 -- Uses ByteString to avoid UTF-8 encoding issues (SimaPro files often use Latin1)
 checkForSimaProCSV :: [FilePath] -> IO Bool
-checkForSimaProCSV files = do
-    let csvFiles = filter (\f -> ".csv" `isSuffixOf` map toLower f) files
+checkForSimaProCSV fs = do
+    let csvFiles = filter (\f -> ".csv" `isSuffixOf` map toLower f) fs
     case csvFiles of
         [] -> return False
         (f:_) -> do
-            -- Read only first 100 bytes as ByteString (avoids encoding issues)
             result <- try $ BS.readFile f
             case result of
                 Left (_ :: SomeException) -> return False
-                Right content ->
-                    -- Check for SimaPro signature in first 100 bytes
-                    let header = BS.take 100 content
+                Right c ->
+                    let header = BS.take 100 c
                     in return $ "{SimaPro" `BS.isInfixOf` header
 
 -- | Convert name to URL-safe slug

@@ -65,6 +65,7 @@ executable fplca
                      , filelock
                      , temporary
                      , process
+                     , zip-archive
 
   -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
   if !os(windows)
