@@ -51,7 +51,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, pathInfo)
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
-import Network.Wai.Handler.Warp (run)
+import Network.Wai.Handler.Warp (run, runSettings, setPort, setTimeout, defaultSettings)
 import Servant
 import WaiAppStatic.Types (StaticSettings, toPiece, unsafeToPiece)
 
@@ -153,7 +153,8 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
-      run port finalApp
+          settings = setTimeout 600 $ setPort port defaultSettings
+      runSettings settings finalApp
 
 -- | Run config load-only mode (load all databases from config and exit)
 -- Useful for cache generation, validation, and benchmarking
@@ -259,7 +260,8 @@ runSingleDatabaseMode cliConfig = do
           finalApp = case password of
             Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
-      run port finalApp
+          settings = setTimeout 600 $ setPort port defaultSettings
+      runSettings settings finalApp
 
     Just cmd -> executeCommand cliConfig cmd database
 
@@ -352,7 +354,7 @@ reportConfiguration globalOpts dataDirectory = do
     Just opts -> do
       reportProgress Info "PETSc Solver Settings:"
       reportProgress Info $ "  " ++ opts
-      reportProgress Info "  → MUMPS direct solver with high precision"
+      reportProgress Info "  ->MUMPS direct solver with high precision"
     Nothing -> reportProgress Info "PETSc: Using default settings"
 
   -- Runtime configuration
@@ -456,13 +458,13 @@ validateDatabase db = do
       orphanedFlows = filter (`S.notMember` usedFlows) allFlows
 
   if null orphanedFlows
-    then reportProgress Info "  ✓ No orphaned flows found"
+    then reportProgress Info "  [OK]No orphaned flows found"
     else reportProgress Info $ "  ⚠ Found " ++ show (length orphanedFlows) ++ " orphaned flows (unused in any activity)"
 
   -- Check reference products
   let activitiesWithoutRef = filter (null . filter exchangeIsReference . exchanges) (V.toList $ dbActivities db)
   if null activitiesWithoutRef
-    then reportProgress Info "  ✓ All activities have reference products"
+    then reportProgress Info "  [OK]All activities have reference products"
     else reportProgress Info $ "  ⚠ Found " ++ show (length activitiesWithoutRef) ++ " activities without reference products"
 
   -- Check for extremely unbalanced activities (more than 100:1 ratio)
@@ -473,13 +475,13 @@ validateDatabase db = do
       avgOutputsPerActivity = fromIntegral (statsOutputCount stats) / fromIntegral (statsActivityCount stats) :: Double
       ratio = if avgInputsPerActivity > 0 then avgOutputsPerActivity / avgInputsPerActivity else 0
 
-  reportProgress Info $ "  ✓ Average exchange balance: " ++ printf "%.1f" ratio ++ ":1 (outputs:inputs)"
+  reportProgress Info $ "  [OK]Average exchange balance: " ++ printf "%.1f" ratio ++ ":1 (outputs:inputs)"
   -}
 
   -- Overall assessment
   let issues = length orphanedFlows + length activitiesWithoutRef
   if issues == 0
-    then reportProgress Info "  ✓ Database quality: Excellent"
+    then reportProgress Info "  [OK]Database quality: Excellent"
     else reportProgress Info $ "  ⚠ Database quality: Good (" ++ show issues ++ " minor issues found)"
 
   reportProgress Info ""

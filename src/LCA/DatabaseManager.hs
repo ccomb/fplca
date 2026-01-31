@@ -28,7 +28,7 @@ module LCA.DatabaseManager
     ) where
 
 import Control.Concurrent.STM
-import Control.Exception (SomeException)
+import Control.Exception (SomeException, try)
 import qualified Control.Exception
 import Control.Monad (forM, forM_, when)
 import System.Mem (performGC)
@@ -183,9 +183,9 @@ initDatabaseManager config synonymDB noCache _configPath = do
         case result of
             Right loaded -> do
                 atomically $ modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
-                reportProgress Info $ "  ✓ Loaded: " <> T.unpack (dcDisplayName dbConfig)
+                reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
             Left err ->
-                reportError $ "  ✗ Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
+                reportError $ "  [FAIL] Failed to load" <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
 
     -- Set current database to first actually loaded database (not just configured as default)
     loadedDbs <- readTVarIO loadedDbsVar
@@ -501,7 +501,9 @@ loadDatabase manager dbName = do
     -- Check if already loaded
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
-        Just loaded -> return $ Right loaded
+        Just loaded -> do
+            atomically $ writeTVar (dmCurrentName manager) (Just dbName)
+            return $ Right loaded
         Nothing -> do
             -- Check if it's configured
             availableDbs <- readTVarIO (dmAvailableDbs manager)
@@ -509,12 +511,14 @@ loadDatabase manager dbName = do
                 Nothing -> return $ Left $ "Database not found: " <> dbName
                 Just dbConfig -> do
                     reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
-                    result <- loadDatabaseFromConfig dbConfig (dmSynonymDB manager) (dmNoCache manager)
-                    case result of
-                        Left err -> return $ Left err
-                        Right loaded -> do
+                    eitherResult <- try $ loadDatabaseFromConfig dbConfig (dmSynonymDB manager) (dmNoCache manager)
+                    case eitherResult of
+                        Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
+                        Right (Left err) -> return $ Left err
+                        Right (Right loaded) -> do
                             atomically $ modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                            reportProgress Info $ "  ✓ Loaded: " <> T.unpack (dcDisplayName dbConfig)
+                            atomically $ writeTVar (dmCurrentName manager) (Just dbName)
+                            reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
                             return $ Right loaded
 
 -- | Unload a database from memory (keeps config for reloading)
