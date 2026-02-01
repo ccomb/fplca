@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Dom
 import Browser.Navigation as Nav
 import Dict
 import Html exposing (..)
@@ -9,6 +10,8 @@ import Html.Events exposing (..)
 import Http
 import Json.Decode
 import Json.Encode
+import Task
+import Time
 import Models.Activity exposing (ActivityInfo, ActivitySummary, ActivityTree, SearchResults, activityInfoDecoder, activitySummaryDecoder, activityTreeDecoder, searchResultsDecoder)
 import Models.Database exposing (ActivateResponse, DatabaseList, UploadResponse, activateResponseDecoder, databaseListDecoder, uploadResponseDecoder)
 import Models.Graph exposing (GraphData, graphDataDecoder)
@@ -82,6 +85,9 @@ type alias Model =
     , activatingDatabase : Bool -- Activating a database
     , uploadModel : UploadView.Model -- Upload page model
     , version : String -- Application version
+    , consoleLogs : List String -- Console log lines
+    , consoleLogIndex : Int -- Next index to fetch from
+    , showConsole : Bool -- Whether console overlay is visible
     }
 
 
@@ -101,6 +107,7 @@ type Msg
     | NavigateToParent
     | NodeClicked String
     | NavigateToPage Page
+    | CloseConsoleAndNavigate Page
     | UpdateSearchQuery String
     | SearchActivities String
     | ActivitiesSearchResults (Result Http.Error (SearchResults ActivitySummary))
@@ -127,6 +134,12 @@ type Msg
       -- Upload messages
     | UploadViewMsg UploadView.Msg
     | UploadDatabaseResult (Result Http.Error UploadResponse)
+      -- Console messages
+    | ToggleConsole
+    | CloseConsole
+    | NoOp
+    | PollConsoleLogs Time.Posix
+    | ConsoleLogsLoaded (Result Http.Error { lines : List String, nextIndex : Int })
 
 
 
@@ -417,6 +430,9 @@ init flags url key =
             , activatingDatabase = False
             , uploadModel = UploadView.init
             , version = flags.version
+            , consoleLogs = []
+            , consoleLogIndex = 0
+            , showConsole = False
             }
 
         cmd =
@@ -776,6 +792,28 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+        CloseConsole ->
+            ( { model | showConsole = False }, Cmd.none )
+
+        ToggleConsole ->
+            let
+                newShowConsole =
+                    not model.showConsole
+            in
+            ( { model | showConsole = newShowConsole }
+            , if newShowConsole then
+                Cmd.batch [ loadConsoleLogs model.consoleLogIndex, scrollConsoleToBottom ]
+
+              else
+                Cmd.none
+            )
+
+        CloseConsoleAndNavigate page ->
+            update (NavigateToPage page) { model | showConsole = False }
 
         NavigateToPage page ->
             let
@@ -1256,6 +1294,11 @@ update msg model =
             in
             -- Handle UploadDatabase by triggering API call
             case uploadMsg of
+                UploadView.CancelUpload ->
+                    ( { model | uploadModel = newUploadModel }
+                    , Nav.pushUrl model.key (routeToUrl DatabasesRoute)
+                    )
+
                 UploadView.UploadDatabase ->
                     case model.uploadModel.fileContent of
                         Just content ->
@@ -1306,6 +1349,21 @@ update msg model =
               }
             , Cmd.none
             )
+
+        PollConsoleLogs _ ->
+            ( model, loadConsoleLogs model.consoleLogIndex )
+
+        ConsoleLogsLoaded (Ok result) ->
+            ( { model
+                | consoleLogs = model.consoleLogs ++ result.lines
+                , consoleLogIndex = result.nextIndex
+                , loading = False
+              }
+            , scrollConsoleToBottom
+            )
+
+        ConsoleLogsLoaded (Err _) ->
+            ( { model | loading = False }, Cmd.none )
 
         LinkClicked urlRequest ->
             case urlRequest of
@@ -1672,6 +1730,11 @@ subscriptions model =
 
             Nothing ->
                 Sub.none
+        , if model.showConsole then
+            Time.every 2000 PollConsoleLogs
+
+          else
+            Sub.none
         ]
 
 
@@ -1707,10 +1770,16 @@ view model =
             (\msg ->
                 case msg of
                     LeftMenu.NavigateTo page ->
-                        NavigateToPage page
+                        CloseConsoleAndNavigate page
+
+                    LeftMenu.ToggleConsole ->
+                        ToggleConsole
+
+                    LeftMenu.CloseConsole ->
+                        CloseConsole
             )
-            (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName model.version)
-        , div [ class "main-content" ]
+            (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName model.version model.showConsole)
+        , div [ class "main-content", style "position" "relative" ]
             [ case model.currentPage of
                 ActivitiesPage ->
                     Html.map
@@ -1771,6 +1840,11 @@ view model =
 
                 UploadPage ->
                     Html.map UploadViewMsg (UploadView.view model.uploadModel)
+            , if model.showConsole then
+                viewConsoleOverlay model
+
+              else
+                text ""
             ]
         ]
 
@@ -2463,6 +2537,88 @@ uploadDatabase name description fileContent =
                 )
         , expect = Http.expectJson UploadDatabaseResult uploadResponseDecoder
         }
+
+
+scrollConsoleToBottom : Cmd Msg
+scrollConsoleToBottom =
+    Browser.Dom.getViewportOf "console-log-container"
+        |> Task.andThen (\info -> Browser.Dom.setViewportOf "console-log-container" 0 info.scene.height)
+        |> Task.attempt (\_ -> NoOp)
+
+
+loadConsoleLogs : Int -> Cmd Msg
+loadConsoleLogs since =
+    Http.get
+        { url = "/api/v1/logs?since=" ++ String.fromInt since
+        , expect =
+            Http.expectJson ConsoleLogsLoaded
+                (Json.Decode.map2 (\lines nextIndex -> { lines = lines, nextIndex = nextIndex })
+                    (Json.Decode.field "lines" (Json.Decode.list Json.Decode.string))
+                    (Json.Decode.field "nextIndex" Json.Decode.int)
+                )
+        }
+
+
+viewConsoleOverlay : Model -> Html Msg
+viewConsoleOverlay model =
+    div
+        [ style "position" "absolute"
+        , style "top" "0"
+        , style "left" "0"
+        , style "right" "0"
+        , style "bottom" "0"
+        , style "background" "rgba(0, 0, 0, 0.5)"
+        , style "z-index" "100"
+        , style "display" "flex"
+        , style "flex-direction" "column"
+        , style "padding" "2rem"
+        , onClick ToggleConsole
+        ]
+        [ div
+            [ style "display" "flex"
+            , style "flex-direction" "column"
+            , style "flex" "1"
+            , style "background" "#1a1a2e"
+            , style "border-radius" "8px"
+            , style "overflow" "hidden"
+            , Html.Events.stopPropagationOn "click" (Json.Decode.succeed ( NoOp, True ))
+            ]
+            [ div
+                [ style "display" "flex"
+                , style "justify-content" "space-between"
+                , style "align-items" "center"
+                , style "padding" "0.75rem 1rem"
+                , style "background" "#16213e"
+                , style "color" "#e0e0e0"
+                ]
+                [ span [ style "font-weight" "bold" ] [ text "Console output" ]
+                , button
+                    [ onClick ToggleConsole
+                    , style "background" "none"
+                    , style "border" "none"
+                    , style "color" "#e0e0e0"
+                    , style "cursor" "pointer"
+                    , style "font-size" "1.2rem"
+                    , style "padding" "0.25rem 0.5rem"
+                    ]
+                    [ text "\u{00D7}" ]
+                ]
+            , div
+                [ style "flex" "1"
+                , style "overflow-y" "auto"
+                , style "color" "#c8c8c8"
+                , style "font-family" "'Consolas', 'Monaco', monospace"
+                , style "font-size" "0.85rem"
+                , style "line-height" "1.5"
+                , style "padding" "1rem"
+                , id "console-log-container"
+                ]
+                (List.map
+                    (\line -> div [] [ text line ])
+                    model.consoleLogs
+                )
+            ]
+        ]
 
 
 httpErrorToString : Http.Error -> String
