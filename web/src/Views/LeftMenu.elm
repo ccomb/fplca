@@ -1,4 +1,4 @@
-module Views.LeftMenu exposing (Msg(..), viewLeftMenu)
+module Views.LeftMenu exposing (Msg(..), mapMsg, viewLeftMenu)
 
 import Char
 import Html exposing (Html, button, div, i, nav, p, span, text)
@@ -12,6 +12,19 @@ type Msg
     = NavigateTo Page
     | ToggleConsole
     | CloseConsole
+
+
+mapMsg : { onNavigate : Page -> msg, onToggleConsole : msg, onCloseConsole : msg } -> Msg -> msg
+mapMsg handlers msg =
+    case msg of
+        NavigateTo page ->
+            handlers.onNavigate page
+
+        ToggleConsole ->
+            handlers.onToggleConsole
+
+        CloseConsole ->
+            handlers.onCloseConsole
 
 
 viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> String -> Bool -> Html Msg

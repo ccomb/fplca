@@ -1738,6 +1738,15 @@ subscriptions model =
         ]
 
 
+leftMenuToMsg : LeftMenu.Msg -> Msg
+leftMenuToMsg =
+    LeftMenu.mapMsg
+        { onNavigate = CloseConsoleAndNavigate
+        , onToggleConsole = ToggleConsole
+        , onCloseConsole = CloseConsole
+        }
+
+
 view : Model -> Html Msg
 view model =
     let
@@ -1766,18 +1775,7 @@ view model =
                         |> Maybe.map .name
     in
     div [ class "app-container" ]
-        [ Html.map
-            (\msg ->
-                case msg of
-                    LeftMenu.NavigateTo page ->
-                        CloseConsoleAndNavigate page
-
-                    LeftMenu.ToggleConsole ->
-                        ToggleConsole
-
-                    LeftMenu.CloseConsole ->
-                        CloseConsole
-            )
+        [ Html.map leftMenuToMsg
             (LeftMenu.viewLeftMenu model.currentPage model.currentActivityId currentDatabaseName currentActivityName model.version model.showConsole)
         , div [ class "main-content", style "position" "relative" ]
             [ case model.currentPage of
