@@ -39,6 +39,7 @@
     word-break: break-word;
   }
   .log {
+    display: none;
     margin-top: 1.5rem;
     max-width: 600px;
     max-height: 200px;
@@ -60,23 +61,31 @@
   <div class="log" id="log"></div>
 </div>
 <script>
+  var logBuffer = [];
+  function flushLog() {
+    var log = document.getElementById('log');
+    for (var i = 0; i < logBuffer.length; i++) {
+      var div = document.createElement('div');
+      div.textContent = logBuffer[i];
+      log.appendChild(div);
+    }
+    logBuffer = [];
+    log.scrollTop = log.scrollHeight;
+  }
   function showError(msg) {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('message').textContent = 'Failed to start';
     var box = document.getElementById('error-box');
     box.textContent = msg;
     box.style.display = 'block';
+    flushLog();
+    document.getElementById('log').style.display = 'block';
   }
   function updateStatus(line) {
-    var msg = document.getElementById('message');
-    // Show last meaningful line as status
-    if (line.trim()) msg.textContent = line.trim();
-    // Append to log
-    var log = document.getElementById('log');
-    var div = document.createElement('div');
-    div.textContent = line;
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
+    if (line.trim()) {
+      document.getElementById('message').textContent = line.trim();
+    }
+    logBuffer.push(line);
   }
 </script>
 </body>

@@ -16,6 +16,7 @@ import LCA.SynonymDB (SynonymDB, emptySynonymDB)
 import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), getCurrentDatabase)
 import LCA.Upload (DatabaseFormat(..))
 import qualified LCA.API.DatabaseHandlers as DBHandlers
+import LCA.Progress (getLogLines)
 import LCA.Query
 import qualified LCA.Service
 import LCA.Tree (buildLoopAwareTree)
@@ -70,6 +71,8 @@ type LCAAPI =
                 :<|> "databases" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Upload endpoint (base64-encoded ZIP in JSON body)
                 :<|> "databases" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                -- Log endpoint
+                :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
            )
 
 -- | Get current database and solver from DatabaseManager
@@ -133,7 +136,17 @@ lcaServer dbManager maxTreeDepth methodsDir =
         :<|> DBHandlers.unloadDatabaseHandler dbManager
         :<|> DBHandlers.deleteDatabaseHandler dbManager
         :<|> DBHandlers.uploadDatabaseHandler dbManager
+        :<|> getLogsHandler
   where
+    getLogsHandler :: Maybe Int -> Handler Value
+    getLogsHandler sinceMaybe = do
+        let since = fromMaybe 0 sinceMaybe
+        (nextIndex, lines) <- liftIO $ getLogLines since
+        return $ object
+            [ "lines" .= lines
+            , "nextIndex" .= nextIndex
+            ]
+
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
     getActivityInfo processId = do

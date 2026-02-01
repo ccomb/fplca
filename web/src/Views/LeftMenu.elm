@@ -3,17 +3,20 @@ module Views.LeftMenu exposing (Msg(..), viewLeftMenu)
 import Char
 import Html exposing (Html, button, div, i, nav, p, span, text)
 import Html.Attributes exposing (class, classList, style)
-import Html.Events exposing (onClick)
+import Html.Events exposing (onClick, stopPropagationOn)
+import Json.Decode
 import Models.Page exposing (Page(..))
 
 
 type Msg
     = NavigateTo Page
+    | ToggleConsole
+    | CloseConsole
 
 
-viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> String -> Html Msg
-viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version =
-    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> String -> Bool -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version showConsole =
+    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%", onClick CloseConsole ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
             [ -- Database name as header (not clickable)
@@ -72,7 +75,7 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 Nothing ->
                     text ""
             ]
-        , -- fpLCA at bottom (fixed)
+        , -- Footer (fixed)
           div
             [ class "menu-footer"
             , style "flex-shrink" "0"
@@ -82,7 +85,24 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             , style "text-align" "center"
             , style "border-top" "1px solid #ddd"
             ]
-            [ div []
+            [ button
+                [ style "background" "none"
+                , style "border" "none"
+                , style "cursor" "pointer"
+                , style "color" (if showConsole then "#3273dc" else "#888")
+                , style "font-size" "0.8rem"
+                , style "font-family" "inherit"
+                , style "padding" "0.25rem 0"
+                , style "margin-bottom" "0.5rem"
+                , style "display" "inline-flex"
+                , style "align-items" "center"
+                , style "gap" "0.4rem"
+                , stopPropagationOn "click" (Json.Decode.succeed ( ToggleConsole, True ))
+                ]
+                [ i [ class "fas fa-terminal", style "font-size" "0.7rem" ] []
+                , span [] [ text "Console output" ]
+                ]
+            , div []
                 [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
                 , text "·"
                 , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]

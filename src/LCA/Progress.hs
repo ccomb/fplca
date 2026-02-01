@@ -13,6 +13,7 @@ Key features:
 - Automatic timing measurement for operations
 - Clean output suitable for production use
 - Stderr-based output that doesn't interfere with JSON responses
+- In-memory log buffer accessible via API
 -}
 
 module LCA.Progress (
@@ -33,13 +34,19 @@ module LCA.Progress (
     formatBytes,
     reportCacheInfo,
 
+    -- * Log buffer
+    getLogLines,
+
     -- * Types
     ProgressLevel(..)
 ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Exception (bracket_, try, SomeException)
+import Control.Exception (try, SomeException)
 import Control.Monad (when)
+import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Stats (getRTSStats, RTSStats(..))
 import System.Directory (getFileSize, doesFileExist)
@@ -56,11 +63,54 @@ data ProgressLevel
     | Error     -- ^ Error messages
     deriving (Eq, Show)
 
+-- | In-memory log buffer state
+data LogBuffer = LogBuffer
+    { lbLines   :: !(Seq String)  -- ^ Buffered log lines
+    , lbOffset  :: !Int           -- ^ Absolute index of first line in buffer
+    , lbMaxSize :: !Int           -- ^ Maximum number of lines to keep
+    }
+
 -- | Global mutex to serialize all progress output operations
 -- This prevents concurrent stderr output from corrupting the console and causing crashes
 {-# NOINLINE progressOutputMutex #-}
 progressOutputMutex :: MVar ()
 progressOutputMutex = unsafePerformIO $ newMVar ()
+
+-- | Global in-memory log buffer
+{-# NOINLINE logBufferRef #-}
+logBufferRef :: IORef LogBuffer
+logBufferRef = unsafePerformIO $ newIORef LogBuffer
+    { lbLines = Seq.empty
+    , lbOffset = 0
+    , lbMaxSize = 1000
+    }
+
+-- | Append a line to the global log buffer
+appendLogLine :: String -> IO ()
+appendLogLine line = atomicModifyIORef' logBufferRef $ \buf ->
+    let newLines = lbLines buf Seq.|> line
+        len = Seq.length newLines
+        maxSz = lbMaxSize buf
+    in if len > maxSz
+        then let drop' = len - maxSz
+             in ( buf { lbLines = Seq.drop drop' newLines
+                      , lbOffset = lbOffset buf + drop'
+                      }
+                , ()
+                )
+        else ( buf { lbLines = newLines }, () )
+
+-- | Get log lines since a given absolute index.
+-- Returns (nextIndex, newLines).
+getLogLines :: Int -> IO (Int, [String])
+getLogLines since = do
+    buf <- readIORef logBufferRef
+    let offset = lbOffset buf
+        len = Seq.length (lbLines buf)
+        nextIndex = offset + len
+        startInSeq = max 0 (since - offset)
+        slice = Seq.drop startInSeq (lbLines buf)
+    return (nextIndex, foldr (:) [] slice)
 
 -- | Report progress with consistent formatting and thread-safe output
 reportProgress :: ProgressLevel -> String -> IO ()
@@ -71,9 +121,12 @@ reportProgress level message = do
             Matrix -> "[MATRIX] "
             Solver -> "[SOLVER] "
             Error  -> "[ERROR] "
+        formatted = prefix ++ message
+    -- Append to in-memory buffer
+    appendLogLine formatted
     -- Serialize all output to prevent thread-unsafe stderr corruption
     withMVar progressOutputMutex $ \_ -> do
-        hPutStrLn stderr $ prefix ++ message
+        hPutStrLn stderr formatted
         hFlush stderr
 
 -- | Report progress with timing information

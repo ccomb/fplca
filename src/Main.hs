@@ -49,7 +49,8 @@ import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, pathInfo)
+import Network.HTTP.Types.Header (hCacheControl, hPragma)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, pathInfo, mapResponseHeaders)
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run, runSettings, setPort, setTimeout, defaultSettings)
 import Servant
@@ -521,11 +522,15 @@ createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode req resp
               { ssIndices = [unsafeToPiece (T.pack "index.html")] }
          in staticApp staticSettings staticReq respond
       else
-        -- Everything else: serve index.html for SPA routing
+        -- Everything else: serve index.html for SPA routing (no-cache so updated JS hash is picked up)
         let staticSettings = (defaultWebAppSettings staticDir)
               { ssIndices = [unsafeToPiece (T.pack "index.html")] }
             indexReq = req { rawPathInfo = C8.pack "/", pathInfo = [] }
-         in staticApp staticSettings indexReq respond
+            noCacheRespond res = respond $ mapResponseHeaders
+              (\hs -> (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
+                    : (hPragma, C8.pack "no-cache")
+                    : hs) res
+         in staticApp staticSettings indexReq noCacheRespond
 
 -- | Validate CLI configuration for consistency
 validateCLIConfig :: CLIConfig -> IO ()

@@ -37,11 +37,11 @@
             "justinmimbs/date": "4.1.0",
             "justinmimbs/time-extra": "1.2.0",
             "rtfeldman/elm-hex": "1.0.0",
-            "ryan-haskell/date-format": "1.0.0"
+            "ryan-haskell/date-format": "1.0.0",
+            "elm/time": "1.0.0"
         },
         "indirect": {
             "elm/bytes": "1.0.8",
-            "elm/time": "1.0.0",
             "elm/virtual-dom": "1.0.3"
         }
     },
