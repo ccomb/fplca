@@ -576,6 +576,8 @@ cd "$SCRIPT_DIR"
 # Write cabal.project.local with library paths
 if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
     cat > cabal.project.local << EOF
+optimization: 2
+
 extra-lib-dirs: $PETSC_LIB_DIR
               , $SLEPC_LIB_DIR
 extra-include-dirs: $PETSC_INCLUDE_DIR
@@ -612,6 +614,8 @@ elif [[ "$OS" == "windows" ]]; then
     W_SLEPC_ARCH_INCLUDE_DIR=$(win_path "$SLEPC_ARCH_INCLUDE_DIR")
 
     cat > cabal.project.local << EOF
+optimization: 2
+
 extra-lib-dirs: $W_PETSC_LIB_DIR
               , $W_SLEPC_LIB_DIR
               , $MSYS2_LIB_DIR
@@ -637,6 +641,8 @@ EOF
 else
     # Linux/macOS custom build
     cat > cabal.project.local << EOF
+optimization: 2
+
 extra-lib-dirs: $PETSC_LIB_DIR
               , $SLEPC_LIB_DIR
 extra-include-dirs: $PETSC_INCLUDE_DIR
@@ -657,7 +663,7 @@ if [[ "$USE_SYSTEM_LIBS" == "true" ]]; then
     log_info "Using system libraries: $PETSC_LIB_NAME, $SLEPC_LIB_NAME"
 fi
 
-cabal build -O2
+cabal build
 
 log_success "fplca built successfully"
 echo ""
@@ -731,11 +737,7 @@ echo "  cabal run fplca -- --help"
 echo ""
 
 # Find the built executable
-if [[ "$OS" == "windows" ]]; then
-    FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca.exe" -type f 2>/dev/null | head -1)
-else
-    FPLCA_BIN=$(find "$SCRIPT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
-fi
+FPLCA_BIN=$(cabal list-bin fplca 2>/dev/null || true)
 if [[ -n "$FPLCA_BIN" ]]; then
     echo "Executable: $FPLCA_BIN"
     echo ""
