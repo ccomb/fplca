@@ -156,11 +156,7 @@ if [[ "$OS" != "windows" ]]; then
 fi
 
 # Copy fplca binary
-if [[ "$OS" == "windows" ]]; then
-    FPLCA_BIN=$(find "$PROJECT_DIR/dist-newstyle" -name "fplca.exe" -type f 2>/dev/null | head -1)
-else
-    FPLCA_BIN=$(find "$PROJECT_DIR/dist-newstyle" -name "fplca" -type f -executable 2>/dev/null | head -1)
-fi
+FPLCA_BIN=$(cd "$PROJECT_DIR" && cabal list-bin fplca 2>/dev/null)
 
 if [[ -z "$FPLCA_BIN" ]]; then
     log_error "Could not find fplca binary"
