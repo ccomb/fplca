@@ -364,7 +364,12 @@ fn main() {
                             backend_ready.store(true, Ordering::SeqCst);
 
                             // Navigate main window to the backend URL
-                            let url = format!("http://127.0.0.1:{}/", port);
+                            // Use a cache-busting timestamp so the webview always fetches a fresh page
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis();
+                            let url = format!("http://127.0.0.1:{}/?t={}", port, timestamp);
                             let _ = main_window.eval(&format!("window.location.href = '{}'", url));
                         } else {
                             eprintln!("Backend failed to start within timeout");
