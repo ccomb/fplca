@@ -82,6 +82,13 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
+CHANGELOG="$SCRIPT_DIR/CHANGELOG.md"
+if ! grep -q "## \[$VERSION\]" "$CHANGELOG"; then
+    echo "Error: CHANGELOG.md has no entry for [$VERSION]"
+    echo "Please add a ## [$VERSION] section to CHANGELOG.md before releasing."
+    exit 1
+fi
+
 echo "Release plan:"
 echo "  Version:      $VERSION"
 echo "  Tag:          $TAG"
