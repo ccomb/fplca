@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0] - 2026-01-18
+
+### Added
+- Database upload: load and unload your own EcoSpold databases (BYOL)
+- Location aliases in configuration for targeted location overrides
+- Production amount displayed in search results and activity header
+- Product column in activity search results
+- Database format column on databases page
+
+### Changed
+- Inventory page split into separate Resources and Emissions tables
+- Redesigned left menu with white Explore/Lab sections
+- Unified column order and shared ActivityRow component across activity tables
+
+### Fixed
+- EcoSpold1 exchanges without location now resolved via name lookup
+- Zero-amount missing supplier exchange warnings suppressed
+- Dynamic CPU detection for parallel loading (no more hardcoded worker count)
+- Frontend minified with SWC for smaller bundles
+
 ## [0.3] - 2025-12-24
 
 ### Added
