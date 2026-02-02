@@ -74,6 +74,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     gfortran \
     libnuma-dev \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy versions.env for GHC version
@@ -126,30 +127,38 @@ COPY fplca.cabal /build/fplca/
 # Set up cabal.project with petsc-hs as local package
 RUN echo "packages: ./fplca ./petsc-hs" > /build/cabal.project \
     && echo "allow-newer: true" >> /build/cabal.project \
-    && echo "" > /build/cabal.project.local \
+    && echo "optimization: 2" > /build/cabal.project.local \
+    && echo "" >> /build/cabal.project.local \
     && echo "extra-lib-dirs: /opt/petsc/${PETSC_ARCH}/lib" >> /build/cabal.project.local \
     && echo "            , /opt/slepc/${PETSC_ARCH}/lib" >> /build/cabal.project.local \
     && echo "extra-include-dirs: /opt/petsc/include" >> /build/cabal.project.local \
     && echo "                  , /opt/petsc/${PETSC_ARCH}/include" >> /build/cabal.project.local \
     && echo "                  , /opt/slepc/include" >> /build/cabal.project.local \
-    && echo "                  , /opt/slepc/${PETSC_ARCH}/include" >> /build/cabal.project.local
+    && echo "                  , /opt/slepc/${PETSC_ARCH}/include" >> /build/cabal.project.local \
+    && echo "" >> /build/cabal.project.local \
+    && echo "-- MPI library (MPICH downloaded by PETSc)" >> /build/cabal.project.local \
+    && echo "package petsc-hs" >> /build/cabal.project.local \
+    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local \
+    && echo "" >> /build/cabal.project.local \
+    && echo "package fplca" >> /build/cabal.project.local \
+    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local
 
 # Update cabal and build ONLY dependencies (cached layer)
 RUN cabal update \
-    && cd /build && cabal build --only-dependencies -O2 fplca
+    && cd /build && cabal build --only-dependencies fplca
 
 # NOW copy the rest of the source
 COPY . /build/fplca
 
 # Build fplca (only recompiles app code, deps already cached)
-RUN cd /build && cabal build -O2 fplca
+RUN cd /build && cabal build fplca
 
 # Build Elm frontend (uses local npm packages)
 RUN cd /build/fplca/web && npm install && ./build.sh
 
 # Find and copy the executable
 RUN mkdir -p /build/output \
-    && cp $(find /build/dist-newstyle -name fplca -type f -executable) /build/output/fplca
+    && cp $(cd /build && cabal list-bin exe:fplca) /build/output/fplca
 
 # Stage 3: Runtime image
 FROM debian:bookworm-slim

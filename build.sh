@@ -737,7 +737,7 @@ echo "  cabal run fplca -- --help"
 echo ""
 
 # Find the built executable
-FPLCA_BIN=$(cabal list-bin fplca 2>/dev/null || true)
+FPLCA_BIN=$(cabal list-bin exe:fplca 2>/dev/null || true)
 if [[ -n "$FPLCA_BIN" ]]; then
     echo "Executable: $FPLCA_BIN"
     echo ""
