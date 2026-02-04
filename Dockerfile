@@ -141,7 +141,11 @@ RUN echo "packages: ./fplca ./petsc-hs" > /build/cabal.project \
     && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local \
     && echo "" >> /build/cabal.project.local \
     && echo "package fplca" >> /build/cabal.project.local \
-    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local
+    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local \
+    && echo "" >> /build/cabal.project.local \
+    && echo "-- Use bundled libarchive sources (no system library required)" >> /build/cabal.project.local \
+    && echo "package libarchive" >> /build/cabal.project.local \
+    && echo "  flags: -system-libarchive" >> /build/cabal.project.local
 
 # Update cabal and build ONLY dependencies (cached layer)
 RUN cabal update \
@@ -171,6 +175,7 @@ RUN apt-get update && apt-get install -y \
     libzstd1 \
     ca-certificates \
     locales \
+    7zip \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
