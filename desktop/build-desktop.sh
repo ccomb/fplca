@@ -261,8 +261,9 @@ if [[ "$OS" == "windows" ]]; then
     done
 
     if [[ "$SEVENZIP_STAGED" != "true" ]]; then
-        log_warn "7-Zip not found. Users will need to install it for .7z archive support."
-        log_warn "Download from: https://7-zip.org/"
+        log_error "7-Zip not found. Please install 7-Zip from https://7-zip.org/"
+        log_error "Expected location: C:\\Program Files\\7-Zip\\7z.exe"
+        exit 1
     fi
 
 elif [[ "$OS" == "linux" ]]; then
@@ -298,8 +299,9 @@ elif [[ "$OS" == "linux" ]]; then
     fi
 
     if [[ "$SEVENZIP_STAGED" != "true" ]]; then
-        log_warn "Could not stage 7z binary. Users will need to install 7zip for .7z archive support."
-        log_warn "Install with: apt install 7zip (or p7zip-full)"
+        log_error "Could not stage 7z binary."
+        log_error "Please install 7zip: apt install 7zip (or p7zip-full)"
+        exit 1
     fi
 
 elif [[ "$OS" == "macos" ]]; then
@@ -315,8 +317,8 @@ elif [[ "$OS" == "macos" ]]; then
         SEVENZIP_STAGED=true
         log_success "Copied system 7z binary"
     else
-        log_warn "7-Zip not found. Users will need to install it for .7z archive support."
-        log_warn "Install with: brew install p7zip"
+        log_error "7-Zip not found. Please install with: brew install p7zip"
+        exit 1
     fi
 fi
 
