@@ -17,20 +17,23 @@ module LCA.Upload
     , getUploadsDir
     ) where
 
-import Control.Exception (try, SomeException)
-import Control.Monad (forM)
+import Control.Exception (try, catch, SomeException)
+import Control.Monad (forM, filterM)
 import Data.Char (isAlphaNum, toLower)
-import Data.List (isSuffixOf)
+import Data.List (isSuffixOf, isPrefixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import GHC.Generics (Generic)
-import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, removeDirectoryRecursive)
+import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, removeDirectoryRecursive, removeFile)
 import System.Environment (lookupEnv)
+import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeExtension, takeDirectory)
-import qualified Codec.Archive.Zip as Zip
+import System.Info (os)
+import System.Process (readProcessWithExitCode)
+import qualified Codec.Archive as Archive
 
 -- | Detected database format
 data DatabaseFormat
@@ -128,46 +131,155 @@ handleUpload UploadData{..} reportProgress = do
                                 , urFileCount = fileCount
                                 }
 
+-- | Supported archive format (detected by magic bytes)
+data ArchiveFormat
+    = ArchiveZip     -- ZIP: 50 4B (PK)
+    | Archive7z      -- 7z:  37 7A BC AF 27 1C
+    | ArchiveGzip    -- gzip (tar.gz): 1F 8B
+    | ArchiveXz      -- XZ (tar.xz): FD 37 7A 58 5A 00
+    | ArchivePlainCSV
+    | ArchiveUnknown
+    deriving (Show, Eq)
+
+-- | Detect archive format from magic bytes
+detectArchiveFormat :: BL.ByteString -> ArchiveFormat
+detectArchiveFormat content
+    | BL.null content = ArchiveUnknown
+    | matchesMagic [0x50, 0x4B] = ArchiveZip
+    | matchesMagic [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] = Archive7z
+    | matchesMagic [0x1F, 0x8B] = ArchiveGzip
+    | matchesMagic [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] = ArchiveXz
+    | isPlainText = ArchivePlainCSV
+    | otherwise = ArchiveUnknown
+  where
+    bytes = BL.unpack (BL.take 6 content)
+    matchesMagic magic = take (length magic) bytes == magic
+    -- Check if first byte is printable ASCII (plain text / CSV)
+    isPlainText = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
+
 -- | Extract upload data to target directory.
--- Supports ZIP archives (detected by magic bytes) and plain CSV files.
+-- Supports ZIP, 7z, tar.gz, tar.xz archives (auto-detected) and plain CSV files.
 extractUpload :: BL.ByteString -> FilePath -> IO (Either Text ())
-extractUpload content targetDir
-    | isZipContent content = extractZip content targetDir
-    | isPlainCSV content   = do
-        -- Plain CSV: write directly
-        BL.writeFile (targetDir </> "data.csv") content
-        return $ Right ()
-    | otherwise = return $ Left "Unsupported file format. Please upload a ZIP archive or CSV file."
-
--- | Check if content is a ZIP archive (magic bytes: PK)
-isZipContent :: BL.ByteString -> Bool
-isZipContent content =
-    BL.unpack (BL.take 2 content) == [0x50, 0x4B]
-
--- | Check if first byte is printable ASCII (plain text / CSV)
-isPlainCSV :: BL.ByteString -> Bool
-isPlainCSV content
-    | BL.null content = False
-    | otherwise = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
-
--- | Extract a ZIP archive using the zip library (pure Haskell, no system tools)
-extractZip :: BL.ByteString -> FilePath -> IO (Either Text ())
-extractZip zipData targetDir = do
-    case Zip.toArchiveOrFail zipData of
-        Left err -> return $ Left $ "Invalid ZIP file: " <> T.pack err
-        Right archive -> do
-            mapM_ (extractEntry targetDir) (Zip.zEntries archive)
+extractUpload content targetDir = do
+    let format = detectArchiveFormat content
+    case format of
+        ArchivePlainCSV -> do
+            -- Plain CSV: write directly
+            BL.writeFile (targetDir </> "data.csv") content
             return $ Right ()
+        ArchiveUnknown ->
+            return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive or CSV file."
+        Archive7z -> extract7z content targetDir
+        _ -> extractArchive format content targetDir
 
--- | Extract a single ZIP entry to disk
-extractEntry :: FilePath -> Zip.Entry -> IO ()
-extractEntry targetDir entry = do
-    let path = targetDir </> Zip.eRelativePath entry
-    if "/" `isSuffixOf` Zip.eRelativePath entry
-        then createDirectoryIfMissing True path
-        else do
-            createDirectoryIfMissing True (takeDirectory path)
-            BL.writeFile path (Zip.fromEntry entry)
+-- | Extract 7z archive using external 7z command
+-- The Haskell libarchive package doesn't properly support 7z extraction
+extract7z :: BL.ByteString -> FilePath -> IO (Either Text ())
+extract7z archiveData targetDir = do
+    -- Write archive to a temp file
+    let tempArchive = targetDir </> ".temp.7z"
+    BL.writeFile tempArchive archiveData
+
+    -- Get list of 7z commands to try (platform-specific)
+    -- Checks for bundled binary first, then system paths
+    commands <- get7zCommands
+
+    -- Try each command until one works
+    result <- tryCommands commands tempArchive targetDir
+
+    -- Clean up temp file
+    _ <- try @SomeException $ removeFile tempArchive
+
+    case result of
+        Left err -> return $ Left err
+        Right () -> do
+            -- Verify files were extracted
+            files <- listDirectory targetDir
+            -- Filter out any remaining temp files
+            let actualFiles = filter (not . isPrefixOf ".temp") files
+            if null actualFiles
+                then return $ Left "7z extraction produced no files. The archive may be empty or corrupted."
+                else return $ Right ()
+  where
+    -- Get platform-specific 7z command candidates
+    -- Checks for bundled binary in FPLCA_DATA_DIR first, then system paths
+    get7zCommands :: IO [FilePath]
+    get7zCommands = do
+        mDataDir <- lookupEnv "FPLCA_DATA_DIR"
+        let bundledPaths = case mDataDir of
+                Just d  -> if isWindows
+                    then [d </> "7z.exe", d </> "7z"]
+                    else [d </> "7zz", d </> "7z"]
+                Nothing -> []
+        return $ bundledPaths ++ systemPaths
+      where
+        isWindows = os == "mingw32" || os == "windows"
+
+        systemPaths
+            | isWindows = windowsCommands
+            | otherwise = unixCommands
+
+        -- Windows: try common installation paths
+        windowsCommands =
+            [ "7z"  -- If in PATH
+            , "7z.exe"
+            , "C:\\Program Files\\7-Zip\\7z.exe"
+            , "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+            ]
+
+        -- Unix/Linux/macOS: try various package names
+        unixCommands =
+            [ "7zz"   -- 7-Zip standalone (newer)
+            , "7z"    -- p7zip-full
+            , "7zr"   -- p7zip (reduced, but supports 7z)
+            , "7za"   -- p7zip standalone
+            ]
+
+    tryCommands :: [FilePath] -> FilePath -> FilePath -> IO (Either Text ())
+    tryCommands [] _ _ = return $ Left $ T.concat
+        [ "7z extraction failed. Please install 7-Zip:\n"
+        , if os == "mingw32" || os == "windows"
+            then "  Windows: Download from https://7-zip.org/"
+            else "  Linux: apt install 7zip (or p7zip-full)\n  macOS: brew install p7zip"
+        ]
+    tryCommands (cmd:rest) archive target = do
+        result <- tryExtractWith cmd archive target
+        case result of
+            Right () -> return $ Right ()
+            Left _ -> tryCommands rest archive target
+
+    tryExtractWith :: FilePath -> FilePath -> FilePath -> IO (Either Text ())
+    tryExtractWith cmd archive target = do
+        result <- try @SomeException $
+            readProcessWithExitCode cmd ["x", "-y", "-o" ++ target, archive] ""
+        case result of
+            Left _ -> return $ Left "command not found"
+            Right (ExitSuccess, _, _) -> return $ Right ()
+            Right (ExitFailure _, _, stderr) -> return $ Left (T.pack stderr)
+
+-- | Extract any supported archive format using libarchive
+-- libarchive auto-detects the format from the content
+extractArchive :: ArchiveFormat -> BL.ByteString -> FilePath -> IO (Either Text ())
+extractArchive format archiveData targetDir = do
+    result <- try $ Archive.runArchiveM (Archive.unpackToDirLazy targetDir archiveData)
+    case result of
+        Left (e :: SomeException) ->
+            return $ Left $ "Failed to extract " <> formatName <> " archive: " <> T.pack (show e)
+        Right (Left archiveErr) ->
+            return $ Left $ formatName <> " extraction error: " <> T.pack (show archiveErr)
+        Right (Right _) -> do
+            -- Verify files were actually extracted
+            files <- listDirectory targetDir
+            if null files
+                then return $ Left $ formatName <> " extraction produced no files. The archive may be empty, corrupted, or require additional system libraries (e.g., p7zip for 7z support)."
+                else return $ Right ()
+  where
+    formatName = case format of
+        ArchiveZip  -> "ZIP"
+        Archive7z   -> "7z"
+        ArchiveGzip -> "tar.gz"
+        ArchiveXz   -> "tar.xz"
+        _           -> "archive"
 
 -- | Find the actual data directory
 -- Archives often contain multiple folders (e.g., "datasets", "MasterData")
@@ -209,13 +321,6 @@ findDataDirectory dir = do
                                         [] -> case subdirs of
                                             [singleSubdir] -> findDataDirectory singleSubdir
                                             _ -> return dir
-  where
-    filterM :: Monad m => (a -> m Bool) -> [a] -> m [a]
-    filterM _ [] = return []
-    filterM p (x:xs) = do
-        keep <- p x
-        rest <- filterM p xs
-        return $ if keep then x:rest else rest
 
 -- | Check if a directory contains .spold files (EcoSpold2)
 hasSpoldFilesIn :: FilePath -> IO Bool

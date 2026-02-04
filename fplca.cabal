@@ -65,7 +65,7 @@ executable fplca
                      , filelock
                      , temporary
                      , process
-                     , zip-archive
+                     , libarchive >= 3.0.0
 
   -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
   if !os(windows)
@@ -189,4 +189,6 @@ test-suite acv-tests
                      , xml-types
                      , conduit
                      , file-embed
+                     , libarchive >= 3.0.0
+                     , process
   default-language:    Haskell2010

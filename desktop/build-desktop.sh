@@ -91,14 +91,6 @@ if [[ -z "$VERSION" ]]; then
     VERSION="0.1.0"
 fi
 
-# Add -dev suffix for non-tagged versions
-if ! git describe --tags --exact-match HEAD 2>/dev/null; then
-    # For Windows MSI, version must be numeric only
-    if [[ "$OS" != "windows" ]]; then
-        VERSION="${VERSION}-dev"
-    fi
-fi
-
 log_info "Building version: $VERSION"
 echo ""
 
@@ -238,6 +230,96 @@ else
     log_success "Copied $LIB_COUNT libraries ($LIB_SIZE)"
 fi
 
+# -----------------------------------------------------------------------------
+# Copy 7z binary for archive extraction
+# -----------------------------------------------------------------------------
+
+log_info "Staging 7z binary for archive extraction..."
+
+SEVENZIP_STAGED=false
+
+if [[ "$OS" == "windows" ]]; then
+    # Windows: Copy from local 7-Zip installation
+    SEVENZIP_PATHS=(
+        "/c/Program Files/7-Zip/7z.exe"
+        "/c/Program Files (x86)/7-Zip/7z.exe"
+        "C:/Program Files/7-Zip/7z.exe"
+        "C:/Program Files (x86)/7-Zip/7z.exe"
+    )
+
+    for sevenzip_path in "${SEVENZIP_PATHS[@]}"; do
+        if [[ -f "$sevenzip_path" ]]; then
+            sevenzip_dir=$(dirname "$sevenzip_path")
+            cp "$sevenzip_path" "$RESOURCES_DIR/7z.exe"
+            if [[ -f "$sevenzip_dir/7z.dll" ]]; then
+                cp "$sevenzip_dir/7z.dll" "$RESOURCES_DIR/"
+            fi
+            SEVENZIP_STAGED=true
+            log_success "Copied 7z.exe from $sevenzip_dir"
+            break
+        fi
+    done
+
+    if [[ "$SEVENZIP_STAGED" != "true" ]]; then
+        log_warn "7-Zip not found. Users will need to install it for .7z archive support."
+        log_warn "Download from: https://7-zip.org/"
+    fi
+
+elif [[ "$OS" == "linux" ]]; then
+    # Linux: Download 7-Zip standalone binary
+    SEVENZIP_URL="https://7-zip.org/a/7z2408-linux-x64.tar.xz"
+    SEVENZIP_TMP="$RESOURCES_DIR/.7z-download"
+
+    # Try to find system 7zz first
+    if command -v 7zz &>/dev/null; then
+        cp "$(which 7zz)" "$RESOURCES_DIR/7zz"
+        chmod +x "$RESOURCES_DIR/7zz"
+        SEVENZIP_STAGED=true
+        log_success "Copied system 7zz binary"
+    elif command -v 7z &>/dev/null; then
+        cp "$(which 7z)" "$RESOURCES_DIR/7z"
+        chmod +x "$RESOURCES_DIR/7z"
+        SEVENZIP_STAGED=true
+        log_success "Copied system 7z binary"
+    else
+        # Download 7-Zip for Linux
+        log_info "Downloading 7-Zip for Linux..."
+        mkdir -p "$SEVENZIP_TMP"
+        if curl -fSL -o "$SEVENZIP_TMP/7z.tar.xz" "$SEVENZIP_URL" 2>/dev/null; then
+            tar -xJf "$SEVENZIP_TMP/7z.tar.xz" -C "$SEVENZIP_TMP" 2>/dev/null || true
+            if [[ -f "$SEVENZIP_TMP/7zz" ]]; then
+                cp "$SEVENZIP_TMP/7zz" "$RESOURCES_DIR/7zz"
+                chmod +x "$RESOURCES_DIR/7zz"
+                SEVENZIP_STAGED=true
+                log_success "Downloaded and staged 7zz binary"
+            fi
+        fi
+        rm -rf "$SEVENZIP_TMP"
+    fi
+
+    if [[ "$SEVENZIP_STAGED" != "true" ]]; then
+        log_warn "Could not stage 7z binary. Users will need to install 7zip for .7z archive support."
+        log_warn "Install with: apt install 7zip (or p7zip-full)"
+    fi
+
+elif [[ "$OS" == "macos" ]]; then
+    # macOS: Use Homebrew's 7zz if available
+    if command -v 7zz &>/dev/null; then
+        cp "$(which 7zz)" "$RESOURCES_DIR/7zz"
+        chmod +x "$RESOURCES_DIR/7zz"
+        SEVENZIP_STAGED=true
+        log_success "Copied Homebrew 7zz binary"
+    elif command -v 7z &>/dev/null; then
+        cp "$(which 7z)" "$RESOURCES_DIR/7z"
+        chmod +x "$RESOURCES_DIR/7z"
+        SEVENZIP_STAGED=true
+        log_success "Copied system 7z binary"
+    else
+        log_warn "7-Zip not found. Users will need to install it for .7z archive support."
+        log_warn "Install with: brew install p7zip"
+    fi
+fi
+
 echo ""
 
 # -----------------------------------------------------------------------------
@@ -264,10 +346,15 @@ if [[ "$OS" == "windows" ]]; then
     cp "$RESOURCES_DIR/fplca" "$TARGET_DIR/"
     # Copy DLLs to same directory
     find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" -exec cp {} "$TARGET_DIR/" \; 2>/dev/null || true
+    # Copy 7z binary if present
+    cp "$RESOURCES_DIR/7z.exe" "$TARGET_DIR/" 2>/dev/null || true
 else
     mkdir -p "$TARGET_DIR/lib"
     cp "$RESOURCES_DIR/fplca" "$TARGET_DIR/"
     cp -r "$RESOURCES_DIR/lib/"* "$TARGET_DIR/lib/" 2>/dev/null || true
+    # Copy 7z binary if present
+    cp "$RESOURCES_DIR/7zz" "$TARGET_DIR/" 2>/dev/null || true
+    cp "$RESOURCES_DIR/7z" "$TARGET_DIR/" 2>/dev/null || true
 fi
 
 cp "$RESOURCES_DIR/fplca.toml" "$TARGET_DIR/" 2>/dev/null || true
