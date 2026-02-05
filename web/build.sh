@@ -5,13 +5,12 @@ set -e
 echo "Building Elm frontend with asset hashing..."
 
 # Determine version from git
-# If HEAD is tagged, use the tag name; otherwise use cabal version + "-dev"
+# If HEAD is tagged, use the tag name; otherwise use cabal version
 if VERSION=$(git describe --tags --exact-match HEAD 2>/dev/null); then
     VERSION="${VERSION#v}"  # Remove leading 'v' if present
     echo "Building version: $VERSION (from tag)"
 else
-    CABAL_VERSION=$(grep "^version:" ../fplca.cabal | awk '{print $2}')
-    VERSION="${CABAL_VERSION}-dev"
+    VERSION=$(grep "^version:" ../fplca.cabal | awk '{print $2}')
     echo "Building version: $VERSION (development)"
 fi
 
