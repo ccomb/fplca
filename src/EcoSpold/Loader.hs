@@ -51,7 +51,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
-import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1)
+import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDatasetsFromFile1)
 import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
 import LCA.Progress
@@ -418,6 +418,10 @@ loadEcoSpoldDirectory locationAliases dir = do
     -- Determine which format to use based on what's found
     case (spold2Files, spold1Files) of
         ([], []) -> return $ Left $ T.pack $ "No EcoSpold files found in directory: " ++ dir
+        ([], [singleXml]) -> do
+            -- Single XML file: likely a multi-dataset EcoSpold1 file
+            reportProgress Info $ "Found single EcoSpold1 file: " ++ singleXml
+            loadSingleEcoSpold1File locationAliases singleXml
         ([], xs) -> do
             reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold1 (.XML) files for processing"
             loadWithWorkerParallelism xs True
@@ -566,6 +570,37 @@ loadEcoSpoldDirectory locationAliases dir = do
                     prodUUID = parseUUID prodUUIDText
                 in Right ((actUUID, prodUUID), activity)
             _ -> Left $ T.pack $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
+
+-- | Load a single EcoSpold1 file containing multiple datasets
+-- This handles files where <ecoSpold> contains multiple <dataset> elements
+loadSingleEcoSpold1File :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadSingleEcoSpold1File locationAliases filepath = do
+    reportProgress Info "Parsing multi-dataset EcoSpold1 file..."
+    results <- streamParseAllDatasetsFromFile1 filepath
+    reportProgress Info $ "Parsed " ++ show (length results) ++ " datasets from file"
+
+    -- Build activity map from all parsed activities
+    let procEntries = map buildProcEntryFromResult results
+        !procMap = M.fromList procEntries
+        !flowMap = M.fromList [(flowId f, f) | (_, flows, _) <- results, f <- flows]
+        !unitMap = M.fromList [(unitId u, u) | (_, _, units) <- results, u <- units]
+        simpleDb = SimpleDatabase procMap flowMap unitMap
+
+    -- Report statistics
+    let totalFlows = sum [length flows | (_, flows, _) <- results]
+    let totalUnits = sum [length units | (_, _, units) <- results]
+    reportProgress Info $ printf "  Activities: %d processes" (M.size procMap)
+    reportProgress Info $ printf "  Flows: %d unique (from %d raw)" (M.size flowMap) totalFlows
+    reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
+
+    -- Fix activity links using supplier lookup
+    Right <$> fixEcoSpold1ActivityLinks locationAliases simpleDb
+  where
+    buildProcEntryFromResult :: (Activity, [Flow], [Unit]) -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult (activity, _, _) =
+        let actUUID = generateActivityUUIDFromActivity activity
+            prodUUID = getReferenceProductUUID activity
+        in ((actUUID, prodUUID), activity)
 
 {- |
 Generate filename for matrix cache.

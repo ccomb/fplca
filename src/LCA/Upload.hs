@@ -137,6 +137,7 @@ data ArchiveFormat
     | Archive7z      -- 7z:  37 7A BC AF 27 1C
     | ArchiveGzip    -- gzip (tar.gz): 1F 8B
     | ArchiveXz      -- XZ (tar.xz): FD 37 7A 58 5A 00
+    | ArchivePlainXML -- Plain XML file (EcoSpold1)
     | ArchivePlainCSV
     | ArchiveUnknown
     deriving (Show, Eq)
@@ -149,26 +150,37 @@ detectArchiveFormat content
     | matchesMagic [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] = Archive7z
     | matchesMagic [0x1F, 0x8B] = ArchiveGzip
     | matchesMagic [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] = ArchiveXz
+    | isXmlFile = ArchivePlainXML  -- Check XML before plain text
     | isPlainText = ArchivePlainCSV
     | otherwise = ArchiveUnknown
   where
-    bytes = BL.unpack (BL.take 6 content)
+    bytes = BL.unpack (BL.take 10 content)
     matchesMagic magic = take (length magic) bytes == magic
+    -- Check for XML declaration "<?xml" (0x3C 0x3F 0x78 0x6D 0x6C)
+    -- or "<ecoSpold" (0x3C 0x65 0x63 0x6F)
+    -- or UTF-8 BOM (0xEF 0xBB 0xBF) followed by "<?xml"
+    isXmlFile = matchesMagic [0x3C, 0x3F, 0x78, 0x6D, 0x6C]
+             || matchesMagic [0x3C, 0x65, 0x63, 0x6F]
+             || matchesMagic [0xEF, 0xBB, 0xBF, 0x3C, 0x3F]
     -- Check if first byte is printable ASCII (plain text / CSV)
     isPlainText = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
 
 -- | Extract upload data to target directory.
--- Supports ZIP, 7z, tar.gz, tar.xz archives (auto-detected) and plain CSV files.
+-- Supports ZIP, 7z, tar.gz, tar.xz archives (auto-detected), plain XML, and CSV files.
 extractUpload :: BL.ByteString -> FilePath -> IO (Either Text ())
 extractUpload content targetDir = do
     let format = detectArchiveFormat content
     case format of
+        ArchivePlainXML -> do
+            -- Plain XML: write directly (e.g., EcoSpold1 multi-dataset file)
+            BL.writeFile (targetDir </> "data.xml") content
+            return $ Right ()
         ArchivePlainCSV -> do
             -- Plain CSV: write directly
             BL.writeFile (targetDir </> "data.csv") content
             return $ Right ()
         ArchiveUnknown ->
-            return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive or CSV file."
+            return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive, XML, or CSV file."
         Archive7z -> extract7z content targetDir
         _ -> extractArchive format content targetDir
 
