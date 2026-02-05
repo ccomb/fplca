@@ -57,6 +57,7 @@ import Text.Printf (printf)
 -- | Progress reporting levels
 data ProgressLevel
     = Info      -- ^ General information
+    | Warning   -- ^ Warning messages
     | Cache     -- ^ Cache operations
     | Matrix    -- ^ Matrix construction operations
     | Solver    -- ^ PETSc solver operations
@@ -116,11 +117,12 @@ getLogLines since = do
 reportProgress :: ProgressLevel -> String -> IO ()
 reportProgress level message = do
     let prefix = case level of
-            Info   -> ""
-            Cache  -> "[CACHE] "
-            Matrix -> "[MATRIX] "
-            Solver -> "[SOLVER] "
-            Error  -> "[ERROR] "
+            Info    -> ""
+            Warning -> "[WARN] "
+            Cache   -> "[CACHE] "
+            Matrix  -> "[MATRIX] "
+            Solver  -> "[SOLVER] "
+            Error   -> "[ERROR] "
         formatted = prefix ++ message
     -- Append to in-memory buffer
     appendLogLine formatted

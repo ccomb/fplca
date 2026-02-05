@@ -39,6 +39,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import Data.Char (toLower)
 import Data.Hashable (hash)
+import Data.List (sortBy, group, sort)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
@@ -60,8 +61,6 @@ import qualified SimaPro.Parser as SimaPro
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
 import LCA.UploadedDatabase (getDataDir, isUploadedPath)
 import System.FilePath (takeBaseName, takeExtension, splitDirectories, (</>))
-import System.IO (hPutStrLn, stderr)
-import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (printf)
 
 -- | Magic bytes to identify fpLCA cache files
@@ -124,6 +123,68 @@ Maps normalizedProductName → (activityUUID, productUUID, location)
 Used when exchange has no location attribute to find the activity's actual location
 -}
 type SupplierByNameWithLocation = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
+
+-- | Information about an unlinked technosphere exchange
+data UnlinkedExchange = UnlinkedExchange
+    { ueFlowName :: !T.Text
+    , ueLocation :: !T.Text
+    } deriving (Eq, Ord, Show)
+
+-- | Summary of unlinked exchanges grouped by consumer activity
+data UnlinkedSummary = UnlinkedSummary
+    { usActivities :: !(M.Map T.Text [UnlinkedExchange])  -- consumer name → list of unlinked exchanges
+    , usTotalLinks :: !Int
+    , usFoundLinks :: !Int
+    , usMissingLinks :: !Int
+    } deriving (Show)
+
+-- | Empty unlinked summary
+emptyUnlinkedSummary :: UnlinkedSummary
+emptyUnlinkedSummary = UnlinkedSummary M.empty 0 0 0
+
+-- | Merge two unlinked summaries
+mergeUnlinkedSummaries :: UnlinkedSummary -> UnlinkedSummary -> UnlinkedSummary
+mergeUnlinkedSummaries s1 s2 = UnlinkedSummary
+    { usActivities = M.unionWith (++) (usActivities s1) (usActivities s2)
+    , usTotalLinks = usTotalLinks s1 + usTotalLinks s2
+    , usFoundLinks = usFoundLinks s1 + usFoundLinks s2
+    , usMissingLinks = usMissingLinks s1 + usMissingLinks s2
+    }
+
+-- | Report grouped summary of unlinked exchanges
+reportUnlinkedSummary :: UnlinkedSummary -> IO ()
+reportUnlinkedSummary summary
+    | M.null (usActivities summary) = return ()  -- Nothing to report
+    | otherwise = do
+        let activities = usActivities summary
+            activityCount = M.size activities
+            -- Sort activities by number of unlinked exchanges (descending)
+            sortedActivities = take 10 $ reverse $ sortOn (length . snd) $ M.toList activities
+            remainingCount = activityCount - length sortedActivities
+
+        reportProgress Warning $
+            printf "Unlinked activities: %d activities affected" activityCount
+
+        -- Report top activities with their missing suppliers
+        forM_ sortedActivities $ \(actName, unlinkedExchanges) -> do
+            let uniqueExchanges = nub unlinkedExchanges  -- Remove duplicates
+                flowCount = length uniqueExchanges
+                topFlows = take 3 uniqueExchanges
+                remainingFlows = flowCount - length topFlows
+            reportProgress Warning $
+                printf "  - %s: %d missing suppliers" (T.unpack actName) flowCount
+            forM_ topFlows $ \ue ->
+                if T.null (ueLocation ue)
+                    then reportProgress Warning $ printf "      * %s" (T.unpack (ueFlowName ue))
+                    else reportProgress Warning $ printf "      * %s [%s]" (T.unpack (ueFlowName ue)) (T.unpack (ueLocation ue))
+            when (remainingFlows > 0) $
+                reportProgress Warning $ printf "      ... and %d more" remainingFlows
+
+        when (remainingCount > 0) $
+            reportProgress Warning $ printf "  ... and %d more activities" remainingCount
+  where
+    sortOn f = sortBy (\a b -> compare (f a) (f b))
+    nub = map head . group . sort
 
 -- | Normalize text for matching: lowercase and strip whitespace
 normalizeText :: T.Text -> T.Text
@@ -188,45 +249,43 @@ fixEcoSpold1ActivityLinks locationAliases db = do
             (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, linkStats) = fixAllActivities locationAliases supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
-    let (totalLinks, foundLinks, missingLinks) = linkStats
+    let (fixedActivities, summary) = fixAllActivities locationAliases supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
 
     reportProgress Info $
         printf
             "Activity linking: %d/%d resolved (%.1f%%), %d unresolved"
-            foundLinks
-            totalLinks
-            (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
-            missingLinks
+            (usFoundLinks summary)
+            (usTotalLinks summary)
+            (if usTotalLinks summary > 0 then 100.0 * fromIntegral (usFoundLinks summary) / fromIntegral (usTotalLinks summary) else 0.0 :: Double)
+            (usMissingLinks summary)
+
+    -- Report grouped summary of unlinked exchanges
+    reportUnlinkedSummary summary
 
     return $ db{sdbActivities = fixedActivities}
 
--- | Fix all activities and return statistics
-fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+-- | Fix all activities and return statistics with unlinked summary
+fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
 fixAllActivities locationAliases idx nameIdx flowDb activities =
     let results = M.map (\act -> fixActivityExchanges locationAliases idx nameIdx flowDb act) activities
-        statsList = map snd $ M.elems results
-        totalLinks = sum $ map (\(t, _, _) -> t) statsList
-        foundLinks = sum $ map (\(_, f, _) -> f) statsList
-        missingLinks = sum $ map (\(_, _, m) -> m) statsList
+        summaries = map snd $ M.elems results
+        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
         fixedActivities = M.map fst results
-     in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+     in (fixedActivities, combinedSummary)
 
--- | Fix activity exchanges and return (fixed activity, (total, found, missing))
-fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+-- | Fix activity exchanges and return (fixed activity, UnlinkedSummary)
+fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchanges locationAliases idx nameIdx flowDb act =
-    let (fixedExchanges, stats) = unzip $ map (fixExchangeLink locationAliases idx nameIdx flowDb (activityName act)) (exchanges act)
-        totalLinks = sum $ map (\(t, _, _) -> t) stats
-        foundLinks = sum $ map (\(_, f, _) -> f) stats
-        missingLinks = sum $ map (\(_, _, m) -> m) stats
-     in (act{exchanges = fixedExchanges}, (totalLinks, foundLinks, missingLinks))
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink locationAliases idx nameIdx flowDb (activityName act)) (exchanges act)
+        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+     in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link
-Returns (fixed exchange, (total attempts, found, missing))
+Returns (fixed exchange, UnlinkedSummary)
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 When exchange has no location, uses name-only lookup to find the activity's location
 -}
-fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLink locationAliases idx nameIdx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
     | isInp -- Fix all technosphere inputs (with or without location)
         =
@@ -247,30 +306,17 @@ fixExchangeLink locationAliases idx nameIdx flowDb consumerName ex@(Technosphere
                         Just (actUUID, prodUUID) ->
                             -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
                             -- This is critical because the matrix lookup uses (activityLinkId, flowId) as the key
-                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
-                        Nothing -> do
-                            -- Supplier not found - log warning
-                            let !_ =
-                                    unsafePerformIO $
-                                        hPutStrLn stderr $
-                                            "[WARNING] No supplier found for technosphere input:\n"
-                                                ++ "  Flow: \""
-                                                ++ T.unpack (flowName flow)
-                                                ++ "\"\n"
-                                                ++ "  Location: \""
-                                                ++ T.unpack lookupLoc
-                                                ++ "\" (original: \""
-                                                ++ T.unpack loc
-                                                ++ "\")\n"
-                                                ++ "  Consumer: \""
-                                                ++ T.unpack consumerName
-                                                ++ "\""
-                            (ex, (1, 0, 1))
+                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
+                        Nothing ->
+                            -- Supplier not found - collect unlinked exchange info
+                            let unlinked = UnlinkedExchange (flowName flow) lookupLoc
+                                unlinkedMap = M.singleton consumerName [unlinked]
+                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
-                (ex, (1, 0, 1))
-    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange (outputs/references)
-fixExchangeLink _ _ _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
+                (ex, UnlinkedSummary M.empty 1 0 1)
+    | otherwise = (ex, emptyUnlinkedSummary) -- Not a linkable exchange (outputs/references)
+fixExchangeLink _ _ _ _ _ ex = (ex, emptyUnlinkedSummary) -- BiosphereExchange - no linking needed
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -337,43 +383,41 @@ fixSimaProActivityLinks db = do
     reportProgress Info $ printf "Built name-only supplier index with %d entries for SimaPro linking" (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, linkStats) = fixAllActivitiesByName nameIndex (sdbFlows db) (sdbActivities db)
-    let (totalLinks, foundLinks, missingLinks) = linkStats
+    let (fixedActivities, summary) = fixAllActivitiesByName nameIndex (sdbFlows db) (sdbActivities db)
 
     reportProgress Info $
         printf
             "SimaPro activity linking: %d/%d resolved (%.1f%%), %d unresolved"
-            foundLinks
-            totalLinks
-            (if totalLinks > 0 then 100.0 * fromIntegral foundLinks / fromIntegral totalLinks else 0.0 :: Double)
-            missingLinks
+            (usFoundLinks summary)
+            (usTotalLinks summary)
+            (if usTotalLinks summary > 0 then 100.0 * fromIntegral (usFoundLinks summary) / fromIntegral (usTotalLinks summary) else 0.0 :: Double)
+            (usMissingLinks summary)
+
+    -- Report grouped summary of unlinked exchanges
+    reportUnlinkedSummary summary
 
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities using name-only matching
-fixAllActivitiesByName :: NameOnlyIndex -> FlowDB -> ActivityMap -> (ActivityMap, (Int, Int, Int))
+fixAllActivitiesByName :: NameOnlyIndex -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
 fixAllActivitiesByName idx flowDb activities =
     let results = M.map (\act -> fixActivityExchangesByName idx flowDb act) activities
-        statsList = map snd $ M.elems results
-        totalLinks = sum $ map (\(t, _, _) -> t) statsList
-        foundLinks = sum $ map (\(_, f, _) -> f) statsList
-        missingLinks = sum $ map (\(_, _, m) -> m) statsList
+        summaries = map snd $ M.elems results
+        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
         fixedActivities = M.map fst results
-     in (fixedActivities, (totalLinks, foundLinks, missingLinks))
+     in (fixedActivities, combinedSummary)
 
 -- | Fix activity exchanges using name-only matching
-fixActivityExchangesByName :: NameOnlyIndex -> FlowDB -> Activity -> (Activity, (Int, Int, Int))
+fixActivityExchangesByName :: NameOnlyIndex -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchangesByName idx flowDb act =
-    let (fixedExchanges, stats) = unzip $ map (fixExchangeLinkByName idx flowDb (activityName act)) (exchanges act)
-        totalLinks = sum $ map (\(t, _, _) -> t) stats
-        foundLinks = sum $ map (\(_, f, _) -> f) stats
-        missingLinks = sum $ map (\(_, _, m) -> m) stats
-     in (act{exchanges = fixedExchanges}, (totalLinks, foundLinks, missingLinks))
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx flowDb (activityName act)) (exchanges act)
+        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+     in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link using name-only matching
-Returns (fixed exchange, (total attempts, found, missing))
+Returns (fixed exchange, UnlinkedSummary)
 -}
-fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, (Int, Int, Int))
+fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
     | isInp -- All technosphere inputs (no location check!)
         =
@@ -383,28 +427,17 @@ fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt u
                  in case M.lookup key idx of
                         Just (actUUID, prodUUID) ->
                             -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
-                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, (1, 1, 0))
-                        Nothing -> do
-                            -- Supplier not found - log warning (only first few)
-                            let !_ =
-                                    unsafePerformIO $
-                                        hPutStrLn stderr $
-                                            "[WARNING] No supplier found for technosphere input:\n"
-                                                ++ "  Flow: \""
-                                                ++ T.unpack (flowName flow)
-                                                ++ "\"\n"
-                                                ++ "  Location: \""
-                                                ++ T.unpack loc
-                                                ++ "\"\n"
-                                                ++ "  Consumer: \""
-                                                ++ T.unpack consumerName
-                                                ++ "\""
-                            (ex, (1, 0, 1))
+                            (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
+                        Nothing ->
+                            -- Supplier not found - collect unlinked exchange info
+                            let unlinked = UnlinkedExchange (flowName flow) loc
+                                unlinkedMap = M.singleton consumerName [unlinked]
+                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
-                (ex, (1, 0, 1))
-    | otherwise = (ex, (0, 0, 0)) -- Not a linkable exchange (outputs/references)
-fixExchangeLinkByName _ _ _ ex = (ex, (0, 0, 0)) -- BiosphereExchange - no linking needed
+                (ex, UnlinkedSummary M.empty 1 0 1)
+    | otherwise = (ex, emptyUnlinkedSummary) -- Not a linkable exchange (outputs/references)
+fixExchangeLinkByName _ _ _ ex = (ex, emptyUnlinkedSummary) -- BiosphereExchange - no linking needed
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)

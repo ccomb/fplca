@@ -88,6 +88,7 @@ type alias Model =
     , consoleLogs : List String -- Console log lines
     , consoleLogIndex : Int -- Next index to fetch from
     , showConsole : Bool -- Whether console overlay is visible
+    , consoleAtBottom : Bool -- True if user is at/near bottom of console
     }
 
 
@@ -140,6 +141,7 @@ type Msg
     | NoOp
     | PollConsoleLogs Time.Posix
     | ConsoleLogsLoaded (Result Http.Error { lines : List String, nextIndex : Int })
+    | ConsoleScrolled Bool -- True if at bottom
 
 
 
@@ -433,6 +435,7 @@ init flags url key =
             , consoleLogs = []
             , consoleLogIndex = 0
             , showConsole = False
+            , consoleAtBottom = True
             }
 
         cmd =
@@ -1359,11 +1362,18 @@ update msg model =
                 , consoleLogIndex = result.nextIndex
                 , loading = False
               }
-            , scrollConsoleToBottom
+            , if model.consoleAtBottom && not (List.isEmpty result.lines) then
+                scrollConsoleToBottom
+
+              else
+                Cmd.none
             )
 
         ConsoleLogsLoaded (Err _) ->
             ( { model | loading = False }, Cmd.none )
+
+        ConsoleScrolled atBottom ->
+            ( { model | consoleAtBottom = atBottom }, Cmd.none )
 
         LinkClicked urlRequest ->
             case urlRequest of
@@ -2544,6 +2554,19 @@ scrollConsoleToBottom =
         |> Task.attempt (\_ -> NoOp)
 
 
+{-| Decoder to check if scroll position is at or near the bottom of a container
+-}
+decodeScrollAtBottom : Json.Decode.Decoder Msg
+decodeScrollAtBottom =
+    Json.Decode.map3
+        (\scrollTop scrollHeight clientHeight ->
+            ConsoleScrolled (scrollTop + clientHeight >= scrollHeight - 10)
+        )
+        (Json.Decode.at [ "target", "scrollTop" ] Json.Decode.float)
+        (Json.Decode.at [ "target", "scrollHeight" ] Json.Decode.float)
+        (Json.Decode.at [ "target", "clientHeight" ] Json.Decode.float)
+
+
 loadConsoleLogs : Int -> Cmd Msg
 loadConsoleLogs since =
     Http.get
@@ -2610,6 +2633,7 @@ viewConsoleOverlay model =
                 , style "line-height" "1.5"
                 , style "padding" "1rem"
                 , id "console-log-container"
+                , Html.Events.on "scroll" decodeScrollAtBottom
                 ]
                 (List.map
                     (\line -> div [] [ text line ])
