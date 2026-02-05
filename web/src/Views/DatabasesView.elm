@@ -76,6 +76,7 @@ viewDatabasesList dbList =
                         [ th [ style "background-color" "white", style "width" "50px" ] [ text "" ]
                         , th [ style "background-color" "white" ] [ text "Name" ]
                         , th [ style "background-color" "white" ] [ text "Description" ]
+                        , th [ style "background-color" "white", style "width" "100px" ] [ text "Source" ]
                         , th [ style "background-color" "white", style "width" "120px" ] [ text "Format" ]
                         , th [ style "background-color" "white", style "width" "120px" ] [ text "Status" ]
                         , th [ style "background-color" "white", style "width" "200px" ] [ text "Actions" ]
@@ -117,13 +118,6 @@ viewDatabaseRow currentDb db =
             else
                 span [ class "has-text-grey" ] [ text "Closed" ]
 
-        sourceText =
-            if db.isUploaded then
-                span [ class "has-text-warning-dark", style "margin-left" "0.5rem" ] [ text "(uploaded)" ]
-
-            else
-                text ""
-
         activeIndicator =
             if isCurrent then
                 span [ class "has-text-success", style "font-size" "1.2rem" ] [ text "●" ]
@@ -158,10 +152,16 @@ viewDatabaseRow currentDb db =
 
               else
                 text db.displayName
-            , sourceText
             ]
         , td [ class "has-text-grey" ]
             [ text (db.description |> Maybe.withDefault "") ]
+        , td [ class "has-text-grey" ]
+            [ if db.isUploaded then
+                text "Uploaded"
+
+              else
+                text "Preinstalled"
+            ]
         , td [ class "has-text-grey" ]
             [ text (db.format |> Maybe.withDefault "") ]
         , td []

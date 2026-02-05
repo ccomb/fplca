@@ -115,6 +115,7 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 [ i [ class "fas fa-terminal", style "font-size" "0.7rem" ] []
                 , span [] [ text "Console output" ]
                 ]
+            , div [ style "border-top" "1px solid #ddd", style "margin" "0.5rem 0" ] []
             , div []
                 [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
                 , text "·"
