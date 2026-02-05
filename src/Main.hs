@@ -54,7 +54,7 @@ import Network.Wai (Application, Request (..), Response, ResponseReceived (..), 
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run, runSettings, setPort, setTimeout, defaultSettings)
 import Servant
-import WaiAppStatic.Types (StaticSettings, toPiece, unsafeToPiece)
+import WaiAppStatic.Types (StaticSettings, toPiece, unsafeToPiece, MaxAge(..), ssMaxAge)
 
 -- | Main entry point for the refactored CLI
 main :: IO ()
@@ -519,12 +519,16 @@ createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode req resp
               other -> other
             staticReq = req { rawPathInfo = strippedPath, pathInfo = newPathInfo }
             staticSettings = (defaultWebAppSettings staticDir)
-              { ssIndices = [unsafeToPiece (T.pack "index.html")] }
+              { ssIndices = [unsafeToPiece (T.pack "index.html")]
+              , ssMaxAge = NoMaxAge  -- Prevent wai-app-static from adding cache headers
+              }
          in staticApp staticSettings staticReq respond
       else
         -- Everything else: serve index.html for SPA routing (no-cache so updated JS hash is picked up)
         let staticSettings = (defaultWebAppSettings staticDir)
-              { ssIndices = [unsafeToPiece (T.pack "index.html")] }
+              { ssIndices = [unsafeToPiece (T.pack "index.html")]
+              , ssMaxAge = NoMaxAge  -- Prevent wai-app-static from adding cache headers
+              }
             indexReq = req { rawPathInfo = C8.pack "/", pathInfo = [] }
             noCacheRespond res = respond $ mapResponseHeaders
               (\hs -> (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
