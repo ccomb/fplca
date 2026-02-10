@@ -13,8 +13,8 @@ import Route
 import Shared exposing (RemoteData(..))
 import Spa.Page
 import View exposing (View)
+import Views.ActivityHeader
 import Views.InventoryView as InventoryView
-import Views.LCIAView
 
 
 type alias Model =
@@ -31,6 +31,7 @@ type Msg
     = ActivityInfoLoaded (Result Http.Error ActivityInfo)
     | InventoryLoaded (Result Http.Error InventoryExport)
     | InventoryViewMsg InventoryView.Msg
+    | NavigateBack
     | RequestLoadDatabase
 
 
@@ -132,6 +133,11 @@ update shared msg model =
                 InventoryView.UpdateEmissionsSearch query ->
                     ( { model | emissionsSearch = query }, Effect.none )
 
+        NavigateBack ->
+            ( model
+            , Effect.fromCmd (Nav.back shared.key 1)
+            )
+
         RequestLoadDatabase ->
             ( model
             , Effect.fromShared (Shared.LoadDatabase model.dbName)
@@ -151,29 +157,29 @@ viewBody shared model =
         viewLoadDatabasePrompt shared model.dbName
 
     else
-        let
-            activityNameInfo =
-                case model.activityInfo of
-                    Loaded info ->
-                        Just ( info.name, info.location )
+        div [ class "details-page-container" ]
+            [ case ( model.activityInfo, model.inventory ) of
+                ( Loading, _ ) ->
+                    div [ class "has-text-centered" ]
+                        [ div [ class "is-size-3" ] [ text "Loading..." ]
+                        , progress [ class "progress is-primary", attribute "max" "100" ] []
+                        ]
 
-                    _ ->
-                        Nothing
-        in
-        div [ class "inventory-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
-            [ Views.LCIAView.viewPageNavbar "Life Cycle Inventory (LCI)" activityNameInfo
-            , case model.inventory of
-                Loading ->
-                    div [ class "has-text-centered", style "padding" "2rem" ]
+                ( Failed err, _ ) ->
+                    div [ class "notification is-danger" ]
+                        [ strong [] [ text "Error: " ], text err ]
+
+                ( _, Loading ) ->
+                    div [ class "has-text-centered" ]
                         [ div [ class "is-size-3" ] [ text "Loading inventory..." ]
                         , progress [ class "progress is-primary", attribute "max" "100" ] []
                         ]
 
-                Failed err ->
-                    div [ class "notification is-danger", style "margin" "1rem" ]
+                ( _, Failed err ) ->
+                    div [ class "notification is-danger" ]
                         [ strong [] [ text "Error: " ], text err ]
 
-                Loaded inventory ->
+                ( Loaded activityInfo, Loaded inventory ) ->
                     let
                         resourcesCount =
                             List.length (List.filter (not << .ifdIsEmission) inventory.ieFlows)
@@ -181,18 +187,23 @@ viewBody shared model =
                         emissionsCount =
                             List.length (List.filter .ifdIsEmission inventory.ieFlows)
                     in
-                    div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0", style "padding" "0.5rem" ]
-                        [ Html.map InventoryViewMsg
-                            (InventoryView.viewInventoryTables
-                                model.resourcesSearch
-                                model.emissionsSearch
-                                resourcesCount
-                                emissionsCount
-                                inventory.ieFlows
-                            )
+                    div [ style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+                        [ div [ style "flex-shrink" "0" ]
+                            [ Views.ActivityHeader.viewActivityHeader activityInfo "Life Cycle Inventory (LCI)" NavigateBack
+                            ]
+                        , div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0", style "padding" "0.5rem" ]
+                            [ Html.map InventoryViewMsg
+                                (InventoryView.viewInventoryTables
+                                    model.resourcesSearch
+                                    model.emissionsSearch
+                                    resourcesCount
+                                    emissionsCount
+                                    inventory.ieFlows
+                                )
+                            ]
                         ]
 
-                NotAsked ->
+                _ ->
                     text ""
             ]
 
