@@ -178,6 +178,14 @@ update msg model =
 
         DatabasesLoaded (Ok dbList) ->
             let
+                isInitialLoad =
+                    case model.databases of
+                        Loading ->
+                            True
+
+                        _ ->
+                            False
+
                 -- Check if we need to redirect from root to default database
                 needsRootRedirect =
                     case model.currentRoute of
@@ -215,7 +223,11 @@ update msg model =
               }
             , Cmd.batch
                 [ cmd
-                , Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
+                , if isInitialLoad then
+                    Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
+
+                  else
+                    Cmd.none
                 ]
             )
 
