@@ -1,7 +1,7 @@
 module Views.ActivitiesView exposing (viewActivitiesPage, Msg(..))
 
 import Html exposing (Html, button, div, input, option, select, table, tbody, text, th, thead, tr, h2, p, span)
-import Html.Attributes exposing (class, placeholder, style, value, type_, disabled, selected)
+import Html.Attributes exposing (class, disabled, id, placeholder, selected, style, type_, value)
 import Html.Events exposing (onInput, onClick)
 import Models.Activity exposing (ActivitySummary, SearchResults)
 import Models.Database exposing (DatabaseList, DatabaseStatus)
@@ -94,7 +94,7 @@ viewSearchResults maybeResults isLoading loadingMore =
                             [ text (String.fromInt (List.length results.results) ++ " / " ++ String.fromInt results.totalCount ++ " activities")
                             ]
                         ]
-                    , div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
+                    , div [ id "search-results-container", style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
                         [ table [ class "table is-striped is-hoverable is-fullwidth" ]
                             [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                                 [ tr []

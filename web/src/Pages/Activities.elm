@@ -1,5 +1,6 @@
 module Pages.Activities exposing (Model, Msg, page)
 
+import Browser.Dom
 import Browser.Navigation as Nav
 import Effect exposing (Effect)
 import Html exposing (..)
@@ -9,6 +10,7 @@ import Models.Database exposing (DatabaseList)
 import Route exposing (Route(..))
 import Shared exposing (RemoteData(..))
 import Spa.Page
+import Task
 import Url.Builder
 import View exposing (View)
 import Views.ActivitiesView as ActivitiesView
@@ -35,6 +37,7 @@ type Msg
     | SearchResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | MoreResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | NewFlags Route.ActivitiesFlags
+    | ScrollDone
 
 
 page : Shared.Model -> Spa.Page.Page Route.ActivitiesFlags Shared.Msg (View Msg) Model Msg
@@ -200,7 +203,7 @@ update shared msg model =
                                     , hasMore = newResults.hasMore
                                 }
                       }
-                    , Effect.none
+                    , Effect.fromCmd (scrollToBottom "search-results-container")
                     )
 
                 _ ->
@@ -215,6 +218,9 @@ update shared msg model =
 
                 _ ->
                     ( model, Effect.none )
+
+        ScrollDone ->
+            ( model, Effect.none )
 
         NewFlags flags ->
             let
@@ -321,6 +327,13 @@ searchActivities dbName query =
                 ]
         , expect = Http.expectJson SearchResultsLoaded (searchResultsDecoder activitySummaryDecoder)
         }
+
+
+scrollToBottom : String -> Cmd Msg
+scrollToBottom containerId =
+    Browser.Dom.getViewportOf containerId
+        |> Task.andThen (\info -> Browser.Dom.setViewportOf containerId 0 info.scene.height)
+        |> Task.attempt (\_ -> ScrollDone)
 
 
 searchActivitiesWithOffset : String -> String -> Int -> Int -> Cmd Msg
