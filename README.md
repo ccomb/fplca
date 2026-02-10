@@ -1,249 +1,67 @@
 # fplca
 
-**fplca** is a high-performance Life Cycle Assessment (LCA) engine written in Haskell. It runs entirely in memory and provides both a command-line interface and REST API for LCA computations.
+**fplca** is a high-performance Life Cycle Assessment (LCA) engine written in Haskell. It provides a command-line interface, REST API, web interface, and native desktop application for analyzing environmental impacts across product supply chains.
 
-## Features
+## What It Does
 
-- **📊 LCA Computations**: Complete life cycle inventory (LCI) and impact assessment (LCIA)
-- **🌳 Supply Chain Trees**: Recursive dependency tree visualization and analysis
-- **🔍 Search & Discovery**: Find activities and flows across LCA databases
-- **📈 Multiple Output Formats**: JSON, CSV with JSONPath extraction, Pretty tables
-- **🚀 High Performance**: In-memory processing with PETSc linear algebra
-- **🌐 REST API**: HTTP server with comprehensive endpoints and web UI
-- **💾 Smart Caching**: Automatic schema-based cache invalidation
-- **🗄️ Multi-Database**: Load and switch between multiple databases instantly
-- **📋 Multiple Formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV
+fplca computes environmental impacts by:
+- Loading LCA databases (EcoSpold2, EcoSpold1, SimaPro CSV)
+- Building supply chain dependency trees
+- Computing life cycle inventories (LCI) using sparse matrix algebra
+- Applying characterization methods for impact assessment (LCIA)
+
+All computations run in-memory with PETSc-accelerated linear solvers for performance on large databases (25,000+ activities).
 
 ---
 
-## Overview & Capabilities
+## Key Features
 
-### Core LCA Functions
-- **Load LCA databases** in multiple formats:
-  - EcoSpold2 (.spold) - Ecoinvent 3.x
-  - EcoSpold1 (.xml) - Ecoinvent 2.x, BAFU
-  - SimaPro CSV - Agribalyse
-- **Build process dependency trees** with circular dependency handling
-- **Compute life cycle inventories** (LCI) via matrix operations
-- **Apply characterization methods** for impact assessment (LCIA)
-- **Export results** in multiple formats (ILCD XML, CSV, JSON)
-
-### Advanced Features
-- **Matrix-based computation** using PETSc for efficient large-scale solving
-- **Automatic loop detection** in supply chains
-- **Flexible tree depth limits** for performance optimization
-- **Multi-threaded processing** with automatic CPU core detection
-- **Database quality validation** with comprehensive health checks
+- **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV
+- **Database upload**: Bring your own databases via web UI (zip, 7z, tar archives)
+- **Cross-database linking**: Reference processes across different databases (e.g., Agribalyse → Ecoinvent)
+- **Web interface**: Single-page app with search, visualization, and analysis tools
+- **Desktop application**: Native Windows/Linux app with bundled backend (no installation needed)
+- **CLI and REST API**: Scriptable interface for automation and integration
+- **Smart caching**: Automatic schema-based cache invalidation, sub-second startup
+- **Multiple output formats**: JSON, CSV, pretty-printed tables
 
 ---
 
-## Command Reference
+## Getting Started
 
-### Global Options
+### Desktop Application (Recommended)
 
-| Option | Description | Example |
-|--------|-------------|---------|
-| `--config FILE` | Configuration file with multiple databases | `--config fplca.toml` |
-| `--data PATH` | Single database path (alternative to --config) | `--data ./ECOINVENT3.9.1` |
-| `--format FORMAT` | Output format: `json\|csv\|table\|pretty` | `--format json` |
-| `--jsonpath PATH` | JSONPath for CSV extraction (required with CSV) | `--jsonpath "srResults"` |
-| `--tree-depth N` | Maximum tree depth for calculations | `--tree-depth 3` |
-| `--no-cache` | Disable caching (for development) | `--no-cache` |
+Download and run the installer for Windows or Linux from the releases page. The desktop app bundles the complete backend and requires no additional setup.
 
-**Note:** Use `--config` for multi-database mode or `--data` for single-database mode (not both).
+### Web Server
 
-### Commands
-
-#### 🔍 Search Commands
-
-**Search Activities**
 ```bash
-# Find activities by name
-fplca --data ./data activities --name "electricity"
+# Build and run (requires PETSc/SLEPc, see Building section)
+./build.sh
+cabal run fplca -- --config fplca.toml server
 
-# Geographic filtering
-fplca activities --name "transport" --geo "DE" --limit 5
-
-# Product-based search
-fplca activities --product "steel" --limit 10 --offset 20
+# Open browser to http://localhost:8080
 ```
 
-**Search Flows**
+### Command-Line Interface
+
 ```bash
-# Find flows by keyword
-fplca flows --query "carbon dioxide" --limit 5
+# Search for activities
+fplca --data ./ECOINVENT3.12 activities --name "electricity" --geo "DE"
 
-# Language-specific search
-fplca flows --query "CO2" --lang "en" --limit 10
-```
+# Build supply chain tree
+fplca tree "12345678-1234-1234-1234-123456789abc" --tree-depth 3
 
-#### 📊 Activity Analysis
-
-**Activity Information**
-```bash
-# Get complete activity details
-fplca activity "12345678-1234-1234-1234-123456789abc"
-```
-
-**Supply Chain Tree**
-```bash
-# Build dependency tree (default depth: 2)
-fplca tree "12345678-1234-1234-1234-123456789abc"
-
-# Custom tree depth
-fplca --tree-depth 4 tree "12345678-1234-1234-1234-123456789abc"
-```
-
-**Life Cycle Inventory**
-```bash
-# Compute full inventory
+# Compute inventory
 fplca inventory "12345678-1234-1234-1234-123456789abc"
-```
 
-#### 🧮 Impact Assessment
-
-**LCIA Computation**
-```bash
-# Compute impacts with method file
-fplca lcia "12345678-1234-1234-1234-123456789abc" \
-  --method "./methods/PEF_v3.1.xml"
-
-# Export to XML and CSV
-fplca lcia "12345678-1234-1234-1234-123456789abc" \
-  --method "./methods/PEF_v3.1.xml" \
-  --output results.xml \
-  --csv results.csv
-```
-
-#### 🔧 Matrix Export & Debugging
-
-**Export Matrices (Ecoinvent Universal Format)**
-```bash
-# Export full database matrices in universal format
-fplca export-matrices ./output_dir
-```
-
-**Debug Matrices**
-```bash
-# Export targeted matrix slices for debugging
-fplca debug-matrices "12345678-1234-1234-1234-123456789abc" \
-  --output ./debug_output
-```
-
-#### 🌐 API Server
-
-**Start Server**
-```bash
-# Start on default port (8080)
-fplca --data ./data server
-
-# Custom port
-fplca --data ./data server --port 3000
-
-# With password protection (HTTP Basic Auth)
-fplca --data ./data server --password mysecret
-# Or via environment variable
-FPLCA_PASSWORD=mysecret fplca --data ./data server
-
-# Web interface available at http://localhost:8080/
-# API endpoints at http://localhost:8080/api/v1/
+# Impact assessment
+fplca lcia "12345678-1234-1234-1234-123456789abc" --method ./methods/EF-3.1.xml
 ```
 
 ---
 
-## Output Formats
-
-### JSON Format
-```bash
-fplca --format json activities --limit 2
-```
-```json
-{
-  "srResults": [
-    {"prsId": "12345...", "prsName": "electricity production", "prsLocation": "DE"},
-    {"prsId": "67890...", "prsName": "transport by truck", "prsLocation": "EU"}
-  ],
-  "srTotal": 156,
-  "srLimit": 2
-}
-```
-
-### Pretty Format (Default)
-```bash
-fplca activities --limit 2  # Uses pretty format by default
-```
-```json
-{
-    "srResults": [
-        {
-            "prsId": "12345678-1234-1234-1234-123456789abc",
-            "prsLocation": "DE",
-            "prsName": "electricity production"
-        }
-    ],
-    "srTotal": 156
-}
-```
-
-### CSV Format with JSONPath
-
-**⚠️ Important: CSV format requires `--jsonpath` to specify which data to extract**
-
-#### Extract Search Results
-```bash
-fplca --format csv --jsonpath "srResults" activities --limit 5
-```
-```csv
-prsId,prsLocation,prsName
-12345678-1234-1234-1234-123456789abc,DE,electricity production
-87654321-4321-4321-4321-cba987654321,FR,transport by truck
-```
-
-#### Extract Activity Exchanges
-```bash
-fplca --format csv --jsonpath "piActivity.pfaExchanges" activity "12345..."
-```
-```csv
-ewuFlowName,ewuFlowCategory,ewuUnitName,ewuExchange.techAmount,ewuExchange.techIsInput
-electricity,technosphere,kWh,1.0,false
-natural gas,technosphere,m3,2.5,true
-carbon dioxide,air,kg,0.85,false
-```
-
-#### Extract Tree Edges
-```bash
-fplca --format csv --jsonpath "teEdges" tree "12345..."
-```
-```csv
-teFlow.fiName,teFlow.fiCategory,teFrom,teTo,teQuantity,teUnit
-electricity,technosphere,12345...,67890...,1.0,kWh
-natural gas,technosphere,67890...,11111...,2.5,m3
-```
-
-#### Extract Inventory Flows
-```bash
-fplca --format csv --jsonpath "ieFlows" inventory "12345..."
-```
-```csv
-ifdFlow.flowName,ifdFlow.flowCategory,ifdQuantity,ifdUnitName,ifdIsEmission
-carbon dioxide,air,1.25,kg,true
-methane,air,0.02,kg,true
-coal,natural resources,-2.5,kg,false
-```
-
-### JSONPath Reference
-
-| Command | Recommended JSONPath | Extracts |
-|---------|---------------------|----------|
-| `activities` | `srResults` | Activity search results |
-| `flows` | `srResults` | Flow search results |
-| `activity <uuid>` | `piActivity.pfaExchanges` | Activity exchanges |
-| `tree <uuid>` | `teEdges` | Supply chain connections |
-| `inventory <uuid>` | `ieFlows` | Environmental flows |
-
----
-
-## Configuration File
+## Configuration
 
 For multi-database setups, use a TOML configuration file:
 
@@ -263,26 +81,11 @@ description = "Ecoinvent 3.12 Cutoff System Model"
 active = true
 default = true
 
-# Ecoinvent 3.9.1 (EcoSpold2 format)
-[[databases]]
-name = "ecoinvent-3.9.1"
-displayName = "Ecoinvent 3.9.1"
-path = "../ecoinvent/ECOINVENT3.9.1/datasets"
-active = true
-
 # Agribalyse (SimaPro CSV format)
 [[databases]]
 name = "agribalyse-3.2"
 displayName = "Agribalyse 3.2"
 path = "../agribalyse/AGB32_final.CSV"
-description = "French LCI database (SimaPro CSV format)"
-active = true
-
-# BAFU (EcoSpold1 format)
-[[databases]]
-name = "bafu-2025"
-displayName = "BAFU 2025"
-path = "../BAFU/LCI ecoSpold v1 Files"
 active = true
 
 # LCIA Methods
@@ -292,286 +95,185 @@ path = "../EF-v3.1/ILCD/lciamethods"
 active = true
 ```
 
-### Database Options
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Internal identifier (used in cache filenames) |
-| `displayName` | Yes | Human-readable name for UI |
-| `path` | Yes | Path to database files |
-| `description` | No | Optional description |
-| `active` | Yes | If true, database is pre-loaded at startup |
-| `default` | No | If true, this database is selected by default |
-
-### Activity Aliases
-
-For EcoSpold1 databases, you may need to map flow names to activity names when supplier links are ambiguous:
-
-```toml
-[[databases]]
-name = "bafu-2025"
-path = "../BAFU/LCI ecoSpold v1 Files"
-active = true
-# Map "flow name" → "activity name|location"
-activityAliases."Electricity, production mix {ENTSO-E}" = "Electricity, high voltage, at grid {ENTSO-E}|ENTSO-E"
-activityAliases."Natural gas, at consumer {RER}" = "Natural gas, high pressure, at consumer {DE}|DE"
+Then run:
+```bash
+fplca --config fplca.toml server
 ```
 
 ---
 
-## REST API Endpoints
+## Web Interface
 
-When running in server mode, the following endpoints are available:
+The web UI provides:
 
-### Databases
+- **Activity Search**: Find processes by name, product, or geography with pagination
+- **Supply Chain Tree**: Hierarchical view of upstream dependencies
+- **Graph View**: Force-directed network visualization
+- **Inventory**: Environmental flows split into Emissions and Resources tables
+- **LCIA**: Impact assessment scores across environmental categories
+- **Database Management**: Load, unload, and configure databases with cross-database linking
+- **Upload**: Import your own databases (zip/7z/tar archives with EcoSpold files)
+- **Console**: Live log streaming from the backend
+
+The UI is a single-page Elm application with URL routing for bookmarkable views.
+
+---
+
+## REST API
+
+Start the server:
+```bash
+fplca --config fplca.toml server [--port 8080] [--password secret]
+```
+
+### Endpoints
+
+**Databases**
 - `GET /api/v1/databases` - List all configured databases with status
-- `POST /api/v1/databases/{name}/activate` - Switch to a different database
+- `POST /api/v1/databases` - Upload database archive
+- `DELETE /api/v1/databases/{name}` - Remove uploaded database
 
-### Activities
-- `GET /api/v1/activities` - Search activities
+**Activities**
+- `GET /api/v1/activities?db={name}&name={query}` - Search activities
 - `GET /api/v1/activity/{uuid}` - Get activity details
-- `GET /api/v1/activity/{uuid}/tree` - Get supply chain tree
-- `GET /api/v1/activity/{uuid}/inventory` - Get life cycle inventory
+- `GET /api/v1/activity/{uuid}/tree` - Supply chain tree
+- `GET /api/v1/activity/{uuid}/inventory` - Life cycle inventory
 
-### Flows
-- `GET /api/v1/flows` - Search flows
-- `GET /api/v1/flow/{uuid}` - Get flow details
+**Flows**
+- `GET /api/v1/flows?db={name}&query={term}` - Search flows
 
-### Impact Assessment
+**Impact Assessment**
 - `GET /api/v1/methods` - List available LCIA methods
 - `POST /api/v1/lcia/{uuid}` - Compute LCIA with method
 
-### Example API Usage
+**Console**
+- `GET /api/v1/console-stream` - Server-sent events for log streaming
+
+### Authentication
+
+Optional HTTP Basic Auth:
 ```bash
-# Start server with config file
-fplca --config fplca.toml server
+# Via command-line flag
+fplca --config fplca.toml server --password mysecret
 
-# List databases
-curl "http://localhost:8080/api/v1/databases"
-
-# Switch database
-curl -X POST "http://localhost:8080/api/v1/databases/ecoinvent-3.9.1/activate"
-
-# Search activities
-curl "http://localhost:8080/api/v1/activities?name=electricity&limit=5"
-
-# Get activity tree
-curl "http://localhost:8080/api/v1/activity/12345.../tree?depth=3"
-
-# Compute inventory
-curl "http://localhost:8080/api/v1/activity/12345.../inventory"
+# Via environment variable
+FPLCA_PASSWORD=mysecret fplca --config fplca.toml server
 ```
 
 ---
 
-## Usage Examples
+## CLI Commands
 
-### Basic Workflow
+### Global Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `--config FILE` | Configuration file with multiple databases | `--config fplca.toml` |
+| `--data PATH` | Single database path (alternative to --config) | `--data ./ECOINVENT3.9.1` |
+| `--format FORMAT` | Output format: `json\|csv\|table\|pretty` | `--format json` |
+| `--jsonpath PATH` | JSONPath for CSV extraction (required with CSV) | `--jsonpath "srResults"` |
+| `--tree-depth N` | Maximum tree depth for calculations | `--tree-depth 3` |
+| `--no-cache` | Disable caching (for development) | `--no-cache` |
+
+### Search Commands
+
 ```bash
-# 1. Search for an activity
-fplca --data ./ECOINVENT3.9.1 activities --name "electricity production" --geo "DE" --limit 1
+# Find activities by name
+fplca --data ./data activities --name "electricity"
 
-# 2. Get the activity UUID from results, then analyze its supply chain
+# Geographic filtering
+fplca activities --name "transport" --geo "DE" --limit 5
+
+# Product-based search
+fplca activities --product "steel" --limit 10 --offset 20
+
+# Find flows by keyword
+fplca flows --query "carbon dioxide" --limit 5
+```
+
+### Analysis Commands
+
+```bash
+# Activity details
+fplca activity "12345678-1234-1234-1234-123456789abc"
+
+# Supply chain tree (default depth: 2)
 fplca tree "12345678-1234-1234-1234-123456789abc"
 
-# 3. Compute environmental inventory
+# Life cycle inventory
 fplca inventory "12345678-1234-1234-1234-123456789abc"
 
-# 4. Export tree edges to CSV for further analysis
-fplca --format csv --jsonpath "teEdges" tree "12345678-1234-1234-1234-123456789abc" > supply_chain.csv
+# Impact assessment
+fplca lcia "12345678-1234-1234-1234-123456789abc" \
+  --method "./methods/EF-3.1.xml" \
+  --output results.xml \
+  --csv results.csv
 ```
 
-### Data Analysis Workflows
+### Matrix Export
 
-**Export Activity Network to CSV**
 ```bash
-# Get all exchanges for detailed analysis
-fplca --format csv --jsonpath "piActivity.pfaExchanges" \
-  activity "12345678-1234-1234-1234-123456789abc" > exchanges.csv
-```
+# Export full database matrices (Ecoinvent universal format)
+fplca export-matrices ./output_dir
 
-**Inventory Analysis**
-```bash
-# Extract biosphere flows for impact assessment
-fplca --format csv --jsonpath "ieFlows" \
-  inventory "12345678-1234-1234-1234-123456789abc" > inventory.csv
-```
-
-**Multi-format Output**
-```bash
-# JSON for programmatic use
-fplca --format json inventory "12345..." > inventory.json
-
-# CSV for spreadsheet analysis
-fplca --format csv --jsonpath "ieFlows" inventory "12345..." > inventory.csv
-
-# Pretty format for human reading
-fplca --format pretty inventory "12345..."
-```
-
-### Performance Optimization
-
-**Caching**
-```bash
-# First run builds cache (slower)
-fplca --data ./ECOINVENT3.9.1 activities --name "steel"
-
-# Subsequent runs use cache (much faster)
-fplca --data ./ECOINVENT3.9.1 activities --name "aluminum"
-
-# Disable cache for development
-fplca --no-cache --data ./ECOINVENT3.9.1 activities --name "cement"
-```
-
-**Tree Depth Control**
-```bash
-# Fast shallow analysis
-fplca --tree-depth 1 tree "12345..."
-
-# Comprehensive deep analysis (slower but complete)
-fplca --tree-depth 5 tree "12345..."
+# Debug targeted matrix slices
+fplca debug-matrices "12345678-1234-1234-1234-123456789abc" \
+  --output ./debug_output
 ```
 
 ---
 
-## Data Quality & Validation
+## Output Formats
 
-The engine performs automatic database validation:
-
-- ✅ **Orphaned flows check**: Ensures all flows are properly linked
-- ✅ **Reference products**: Validates all activities have reference outputs
-- ✅ **Exchange balance**: Checks input/output ratios for sanity
-- ✅ **Geographic coverage**: Reports available locations
-- ✅ **Unit consistency**: Validates unit relationships
-- ✅ **Matrix properties**: Analyzes sparsity and conditioning
-
-### Sample Validation Output
-```
-Database Quality Validation:
-  ✓ No orphaned flows found
-  ✓ All activities have reference products
-  ✓ Average exchange balance: 2.8:1 (outputs:inputs)
-  ✓ Database quality: Excellent
-
-Performance Characteristics:
-  Matrix density: 12.4% (very sparse - excellent for performance)
-  Total matrix entries: 2,847,392 non-zero values
-  Solver complexity: O(n^1.5) for 15,842 activities
-  Expected solve time: ~15-25 seconds (MUMPS direct solver)
-```
-
----
-
-## Performance & Scaling
-
-### Memory Management
-- **In-memory processing**: Entire database loaded into RAM for speed
-- **Smart caching**: Per-database cache files (`fplca.cache.{dbName}.bin.zst`) with automatic schema-based invalidation
-- **Matrix optimization**: Unboxed sparse matrix storage with minimal overhead
-- **Memory optimizations**: UUID interning, unboxed vectors, strict evaluation
-- **Configurable limits**: GHC RTS options to control memory usage (see below)
-
-### Cache System
-Cache files are stored in the working directory with the format `fplca.cache.{dbName}.bin.zst`. The cache includes:
-- Pre-parsed activities, flows, and units
-- Pre-computed sparse matrices (technosphere A, biosphere B)
-- Automatic invalidation when the data schema changes (no manual version bumping needed)
-
-### Computation Performance
-- **PETSc integration**: High-performance linear algebra via MUMPS solver
-- **Multi-threading**: Automatic CPU core detection and utilization
-- **Matrix precomputation**: Pre-factored matrices for fast repeated solves
-- **Depth limiting**: Configurable tree depth to balance accuracy vs speed
-
-### Scaling Guidelines
-
-| Database Size | Live Data | Cache Load (RSS) | Cold Start | Cache Time | Tree Solve |
-|---------------|-----------|------------------|------------|------------|------------|
-| Sample (3 activities) | ~10 MB | ~50 MB | ~1s | < 0.1s | < 100ms |
-| EcoInvent 3.11 (25k activities) | ~305 MB | ~500 MB* | ~45s | ~0.5s | 5-15s |
-| Custom large DB (50k+ activities) | ~600 MB | ~1 GB* | ~120s | ~1s | 15-60s |
-
-*With GHC RTS heap cap (`+RTS -M1G`). Without cap, GHC may allocate 5-7GB arena but only use ~300MB live data.
-
-### Memory Control with GHC RTS Options
-
-You can control memory usage using GHC runtime system (RTS) options. Add them after your command:
-
-**Cache Load (Memory-Efficient)**
+### JSON (Default)
 ```bash
-# Limit heap to 800MB for shared systems
-fplca --data ./data activities --limit 5 +RTS -M800M -H256M -A16M -c -RTS
+fplca --format json activities --limit 2
+```
+```json
+{
+  "srResults": [
+    {"prsId": "12345...", "prsName": "electricity production", "prsLocation": "DE"}
+  ],
+  "srTotal": 156,
+  "srLimit": 2
+}
 ```
 
-**Cold Start (Performance)**
+### CSV with JSONPath
+
+CSV format requires `--jsonpath` to specify which data to extract:
+
 ```bash
-# Allow larger heap for initial parsing
-fplca --no-cache --data ./data activities +RTS -M5G -H2G -A64M -RTS
+# Extract search results
+fplca --format csv --jsonpath "srResults" activities --limit 5
+```
+```csv
+prsId,prsLocation,prsName
+12345678-1234-1234-1234-123456789abc,DE,electricity production
 ```
 
-**Web Server (Balanced)**
 ```bash
-# Moderate heap with automatic garbage collection
-fplca --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
+# Extract activity exchanges
+fplca --format csv --jsonpath "piActivity.pfaExchanges" activity "12345..."
 ```
 
-**RTS Options Explained:**
-- `-M<size>`: Maximum heap size (hard cap, prevents excessive memory use)
-- `-H<size>`: Initial heap size (pre-allocates for performance)
-- `-A<size>`: Allocation area size (nursery for young generation GC)
-- `-c`: Enable compacting GC (reduces memory fragmentation)
-- `-I<sec>`: Idle GC interval (forces cleanup during idle periods)
-
-**Why use RTS options?**
-- GHC pre-allocates large heap (~5-7GB) by default for performance
-- Actual live data is much smaller (~300MB for EcoInvent 3.11)
-- RTS caps prevent memory waste on shared systems
-- No performance penalty when caps are reasonable
-
----
-
-## Error Handling & Troubleshooting
-
-### Common Issues
-
-**CSV Format Errors**
 ```bash
-# ❌ Error: CSV requires JSONPath
-fplca --format csv activities
-
-# ✅ Correct: Specify JSONPath
-fplca --format csv --jsonpath "srResults" activities
+# Extract tree edges
+fplca --format csv --jsonpath "teEdges" tree "12345..."
 ```
 
-**Invalid JSONPath**
 ```bash
-# ❌ Error: Path not found
-fplca --format csv --jsonpath "invalidPath" activities
-# Output: Error extracting JSONPath 'invalidPath': Path component 'invalidPath' not found
-
-# ✅ Correct paths for each command
-fplca --format csv --jsonpath "srResults" activities      # Search results
-fplca --format csv --jsonpath "teEdges" tree "uuid"       # Tree edges
-fplca --format csv --jsonpath "ieFlows" inventory "uuid"  # Inventory flows
+# Extract inventory flows
+fplca --format csv --jsonpath "ieFlows" inventory "12345..."
 ```
 
-**Memory Issues**
-```bash
-# If running out of memory, cap the heap with RTS options
-fplca inventory "uuid" +RTS -M1G -RTS
-
-# Or reduce tree depth for complex calculations
-fplca --tree-depth 1 inventory "uuid"
-
-# Or disable caching during development
-fplca --no-cache inventory "uuid"
-```
-
-### Validation Errors
-The CLI validates options before execution:
-- `--format csv` requires `--jsonpath`
-- `--jsonpath` can only be used with `--format csv`
-- Invalid UUIDs are caught early with helpful messages
+| Command | Recommended JSONPath | Extracts |
+|---------|---------------------|----------|
+| `activities` | `srResults` | Activity search results |
+| `flows` | `srResults` | Flow search results |
+| `activity <uuid>` | `piActivity.pfaExchanges` | Activity exchanges |
+| `tree <uuid>` | `teEdges` | Supply chain connections |
+| `inventory <uuid>` | `ieFlows` | Environmental flows |
 
 ---
 
@@ -585,34 +287,30 @@ The CLI validates options before execution:
 ./build.sh --desktop    # Build desktop application
 ```
 
-### Windows
+The build script automatically downloads and compiles PETSc and SLEPc if not already present.
 
-Windows builds require MSYS2 with UCRT64 environment. All builds use the same bash script.
+### Windows (MSYS2)
 
 1. Install MSYS2 from https://www.msys2.org/
-2. Open "MSYS2 UCRT64" terminal (from Start menu)
+2. Open "MSYS2 UCRT64" terminal from Start menu
 3. Install dependencies:
    ```bash
    pacman -S make python git \
              mingw-w64-ucrt-x86_64-gcc \
              mingw-w64-ucrt-x86_64-gcc-fortran \
              mingw-w64-ucrt-x86_64-cmake \
-             mingw-w64-ucrt-x86_64-make \
              mingw-w64-ucrt-x86_64-openblas \
              mingw-w64-ucrt-x86_64-msmpi \
-             mingw-w64-ucrt-x86_64-pkgconf \
-             mingw-w64-ucrt-x86_64-zlib \
-             mingw-w64-ucrt-x86_64-tools-git
+             mingw-w64-ucrt-x86_64-zlib
    ```
-4. Install Haskell toolchain:
+4. Install Haskell:
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
    ```
-5. Run build:
+5. Build:
    ```bash
    ./build.sh              # Same script as Linux/macOS
-   ./build.sh --test
-   ./build.sh --desktop
+   ./build.sh --desktop    # Builds Windows installer (.exe)
    ```
 
 ### Docker
@@ -622,11 +320,119 @@ docker build -t fplca .
 docker run -p 8080:8080 -v /path/to/data:/data fplca
 ```
 
-### Configuration Files
+---
 
-- `versions.env` - Central version definitions for all tools (PETSc, GHC, Node, etc.)
-- `petsc.env` - PETSc/SLEPc build configuration
-- `lib.sh` - Shared bash functions for build scripts
+## Performance
+
+### Memory Management
+- **In-memory processing**: Entire database loaded into RAM for speed
+- **Smart caching**: Per-database cache files (`fplca.cache.{dbName}.bin.zst`) with automatic schema-based invalidation
+- **Matrix optimization**: Sparse unboxed matrix storage with minimal overhead
+
+### Scaling Guidelines
+
+| Database Size | Cache Load (RSS) | Cold Start | Cache Time | Tree Solve |
+|---------------|------------------|------------|------------|------------|
+| Sample (3 activities) | ~50 MB | ~1s | < 0.1s | < 100ms |
+| EcoInvent 3.12 (25k activities) | ~500 MB* | ~45s | ~0.5s | 5-15s |
+| Custom large DB (50k+ activities) | ~1 GB* | ~120s | ~1s | 15-60s |
+
+*With GHC RTS heap cap (`+RTS -M1G`). Without cap, GHC may allocate 5-7GB arena but only use ~300MB live data.
+
+### Memory Control with GHC RTS
+
+Control memory usage using GHC runtime options:
+
+```bash
+# Limit heap to 800MB for shared systems
+fplca --data ./data activities --limit 5 +RTS -M800M -H256M -A16M -c -RTS
+
+# Web server with moderate heap
+fplca --data ./data server +RTS -M1G -H512M -A16M -c -I30 -RTS
+```
+
+**RTS Options:**
+- `-M<size>`: Maximum heap size (hard cap)
+- `-H<size>`: Initial heap size (pre-allocates for performance)
+- `-A<size>`: Allocation area size (nursery for young generation GC)
+- `-c`: Enable compacting GC (reduces fragmentation)
+- `-I<sec>`: Idle GC interval (forces cleanup during idle)
+
+---
+
+## Cross-Database Linking
+
+fplca supports linking processes across different databases. For example, Agribalyse activities can reference Ecoinvent background processes.
+
+When uploading or configuring a database, the system:
+1. Analyzes missing supplier references
+2. Suggests dependency databases that can fulfill those references
+3. Auto-loads dependency databases when finalizing
+4. Validates completeness metrics (% of suppliers resolved)
+
+This is managed through the database setup page in the web UI or via the setup API endpoints.
+
+---
+
+## Database Upload
+
+The web interface supports uploading your own databases:
+
+1. Navigate to the Upload page
+2. Select a database archive (zip, 7z, or tar)
+3. Supported formats:
+   - EcoSpold2 directories (.spold files)
+   - EcoSpold1 directories (.xml files)
+   - Single EcoSpold1 XML files with multiple datasets
+   - SimaPro CSV files
+4. Configure cross-database dependencies if needed
+5. Database is loaded and cached for instant future access
+
+Uploaded databases are stored in the `uploads/` directory and persist across server restarts.
+
+---
+
+## Testing
+
+The project includes 31 automated tests covering:
+- **Matrix construction**: Validates sign convention (prevents double negation bug)
+- **Inventory calculation**: Golden tests with SAMPLE.min3 (CO2=0.96kg, Zinc=0.00072kg)
+- **Parser tests**: Validates parsers with SAMPLE datasets
+- **Matrix export**: Validates Ecoinvent universal matrix format compliance
+
+Run tests:
+```bash
+./build.sh --test
+
+# Or manually
+cabal test --test-show-details=streaming
+```
+
+---
+
+## Architecture
+
+### Backend (Haskell)
+- **LCA.Types**: Core data structures (Process, Exchange, Flow, ProcessTree)
+- **LCA.Tree**: Process tree construction with circular dependency handling
+- **LCA.Inventory**: LCI calculation via recursive tree traversal
+- **LCA.Matrix**: Sparse matrix computation with PETSc solvers
+- **LCA.DatabaseManager**: Multi-database state management with STM
+- **EcoSpold.Loader**: Lazy on-demand loading with caching
+- **EcoSpold.CrossDatabaseLinking**: Cross-database supplier resolution
+- **SimaPro.Parser**: SimaPro CSV format parser
+
+### Frontend (Elm)
+- **Single-page architecture**: Custom Spa.Page framework with Effect type
+- **Shared state**: Cross-page state in Shared.elm (databases, caches, console)
+- **Page modules**: Activities, Tree, Graph, Inventory, LCIA, Databases, Upload, DatabaseSetup
+- **RemoteData pattern**: `NotAsked | Loading | Loaded a | Failed String` for async state
+- **URL routing**: Bookmarkable views with Route.elm
+
+### Desktop (Tauri + Rust)
+- Bundles Haskell backend with WebView-based frontend
+- Includes loading screen with progress logs
+- Windows installer packages all dependencies (PETSc, SLEPc, MS-MPI)
 
 ---
 
@@ -635,3 +441,9 @@ docker run -p 8080:8080 -v /path/to/data:/data fplca
 GNU AFFERO GENERAL PUBLIC LICENSE 3.0 or later - See LICENSE file for details.
 
 ---
+
+## Version
+
+Current version: 0.6.0-dev
+
+See CHANGELOG.md for release history and detailed changes.
