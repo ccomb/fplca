@@ -1,7 +1,7 @@
 module Views.ActivityRow exposing (ActivityRowData, viewActivityRow)
 
-import Html exposing (Html, a, td, text, tr)
-import Html.Attributes exposing (class, href, style)
+import Html exposing (Html, span, td, text, tr)
+import Html.Attributes exposing (class, style)
 import Html.Events exposing (onClick)
 import Utils.Format as Format
 
@@ -29,9 +29,8 @@ viewActivityRow data =
         [ td []
             [ case data.id of
                 Just activityId ->
-                    a
-                        [ href "#"
-                        , class "has-text-link"
+                    span
+                        [ class "has-text-link"
                         , style "cursor" "pointer"
                         , onClick (data.onNavigate activityId)
                         ]

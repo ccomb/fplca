@@ -556,7 +556,7 @@ viewAllProductRow currentProcessId onNavigate product =
                     ]
 
               else
-                a [ href "#" ] [ text product.name ]
+                span [ class "has-text-link" ] [ text product.name ]
             ]
         , td [] [ text product.location ]
         ]

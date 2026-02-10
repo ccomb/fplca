@@ -148,8 +148,34 @@ update shared msg model =
                             ( model, Effect.none )
 
                 ActivitiesView.SelectDatabase dbName ->
-                    ( { model | dbName = dbName }
-                    , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = Nothing, limit = Just 20 })))
+                    let
+                        queryName =
+                            if String.isEmpty model.searchQuery then
+                                Nothing
+
+                            else
+                                Just model.searchQuery
+
+                        shouldSearch =
+                            not (String.isEmpty model.searchQuery)
+                    in
+                    ( { model
+                        | dbName = dbName
+                        , results =
+                            if shouldSearch then
+                                Searching
+
+                            else
+                                NotSearched
+                      }
+                    , Effect.batch
+                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, limit = Just 20 })))
+                        , if shouldSearch then
+                            Effect.fromCmd (searchActivities dbName model.searchQuery)
+
+                          else
+                            Effect.none
+                        ]
                     )
 
         SearchResultsLoaded (Ok results) ->
