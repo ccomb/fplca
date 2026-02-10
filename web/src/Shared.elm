@@ -13,6 +13,7 @@ module Shared exposing
     )
 
 import Browser.Dom
+import Browser.Events
 import Browser.Navigation as Nav
 import Dict exposing (Dict)
 import Http
@@ -344,7 +345,20 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     case model.console.visibility of
         Visible _ ->
-            Time.every 2000 PollConsoleLogs
+            Sub.batch
+                [ Time.every 2000 PollConsoleLogs
+                , Browser.Events.onKeyDown
+                    (Json.Decode.field "key" Json.Decode.string
+                        |> Json.Decode.andThen
+                            (\key ->
+                                if key == "Escape" then
+                                    Json.Decode.succeed CloseConsole
+
+                                else
+                                    Json.Decode.fail "not Escape"
+                            )
+                    )
+                ]
 
         Hidden ->
             Sub.none

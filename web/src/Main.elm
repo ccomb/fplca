@@ -44,15 +44,15 @@ toDocument shared pageView =
     , body =
         [ div [ class "app-container" ]
             [ viewLeftMenu shared
-            , div [ class "main-content", style "position" "relative" ]
+            , div [ class "main-content" ]
                 [ pageView.body
-                , case shared.console.visibility of
-                    Visible _ ->
-                        viewConsoleOverlay shared
-
-                    Hidden ->
-                        text ""
                 ]
+            , case shared.console.visibility of
+                Visible _ ->
+                    viewConsoleOverlay shared
+
+                Hidden ->
+                    text ""
             ]
         ]
     }
@@ -198,7 +198,7 @@ routeToActivityId route =
 viewConsoleOverlay : Shared.Model -> Html (Spa.Msg Shared.Msg pageMsg)
 viewConsoleOverlay shared =
     div
-        [ style "position" "absolute"
+        [ style "position" "fixed"
         , style "top" "0"
         , style "left" "0"
         , style "right" "0"
