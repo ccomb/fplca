@@ -589,10 +589,6 @@ package petsc-hs
 
 package fplca
   ghc-options: -optl-lpetsc_real -optl-lslepc_real -optl-lmpi
-
--- Use bundled libarchive sources (no system library required)
-package libarchive
-  flags: -system-libarchive
 EOF
 elif [[ "$OS" == "windows" ]]; then
     # Windows needs additional library paths and linker options
@@ -632,10 +628,6 @@ extra-include-dirs: $W_PETSC_INCLUDE_DIR
 -- Link MinGW runtime libs and OpenBLAS needed by PETSc (built with UCRT64)
 package fplca
   ghc-options: -optl-Wl,--allow-multiple-definition -optl-L$GCC_LIB_DIR -optl-L$MSYS2_LIB_DIR -optl-L$W_PETSC_LIB_DIR -optl-lscalapack -optl-ldmumps -optl-lmumps_common -optl-lpord -optl-l:libmsmpi.dll.a -optl-lopenblas -optl-lgfortran -optl-lgcc -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
-
--- Use bundled libarchive sources (no system library required)
-package libarchive
-  flags: -system-libarchive
 EOF
 
     # Copy OpenBLAS DLLs for GHC to find
@@ -664,10 +656,6 @@ package petsc-hs
 
 package fplca
   ghc-options: -optl-lmpi
-
--- Use bundled libarchive sources (no system library required)
-package libarchive
-  flags: -system-libarchive
 EOF
 fi
 

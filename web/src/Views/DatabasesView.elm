@@ -8,10 +8,11 @@ import Models.Database exposing (DatabaseList, DatabaseStatus)
 
 
 type Msg
-    = ActivateDatabase String
+    = NavigateToDatabase String
     | LoadDatabase String
     | UnloadDatabase String
     | DeleteDatabase String
+    | SetupDatabase String
 
 
 viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Html Msg
@@ -83,27 +84,24 @@ viewDatabasesList dbList =
                         ]
                     ]
                 , tbody []
-                    (List.map (viewDatabaseRow dbList.current) dbList.databases)
+                    (List.map viewDatabaseRow dbList.databases)
                 ]
             ]
         ]
 
 
-viewDatabaseRow : Maybe String -> DatabaseStatus -> Html Msg
-viewDatabaseRow currentDb db =
+viewDatabaseRow : DatabaseStatus -> Html Msg
+viewDatabaseRow db =
     let
         isLoaded =
             db.loaded
-
-        isCurrent =
-            currentDb == Just db.name
 
         -- Permission checks
         canLoad =
             not isLoaded
 
         canUnload =
-            isLoaded  -- Can always close if loaded (even if current)
+            isLoaded
 
         canDelete =
             db.isUploaded && not isLoaded
@@ -118,41 +116,28 @@ viewDatabaseRow currentDb db =
             else
                 span [ class "has-text-grey" ] [ text "Closed" ]
 
-        activeIndicator =
-            if isCurrent then
+        statusIndicator =
+            if isLoaded then
                 span [ class "has-text-success", style "font-size" "1.2rem" ] [ text "●" ]
 
             else
                 span [ class "has-text-grey-lighter", style "font-size" "1.2rem" ] [ text "○" ]
 
-        rowStyle =
-            if isCurrent then
-                [ style "background-color" "#effaf5" ]
-
-            else
-                []
-
         rowAttrs =
             if isLoaded then
                 [ class "is-clickable"
                 , style "cursor" "pointer"
-                , onClick (ActivateDatabase db.name)
+                , onClick (NavigateToDatabase db.name)
                 ]
-                    ++ rowStyle
 
             else
-                rowStyle
+                []
     in
     tr rowAttrs
         [ td [ style "text-align" "center", style "vertical-align" "middle" ]
-            [ activeIndicator ]
+            [ statusIndicator ]
         , td []
-            [ if isCurrent then
-                strong [] [ text db.displayName ]
-
-              else
-                text db.displayName
-            ]
+            [ text db.displayName ]
         , td [ class "has-text-grey" ]
             [ text (db.description |> Maybe.withDefault "") ]
         , td [ class "has-text-grey" ]
@@ -173,6 +158,12 @@ viewDatabaseRow currentDb db =
 
 viewActionButtons : DatabaseStatus -> Bool -> Bool -> Bool -> Html Msg
 viewActionButtons db canLoad canUnload canDelete =
+    let
+        -- Setup is available for uploaded databases that are NOT loaded
+        -- (Setup auto-stages the database and shows configuration page)
+        canSetup =
+            db.isUploaded && not db.loaded
+    in
     div [ class "buttons are-small" ]
         [ if canLoad then
             button
@@ -190,6 +181,17 @@ viewActionButtons db canLoad canUnload canDelete =
                 ]
                 [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
                 , span [] [ text "Close" ]
+                ]
+
+          else
+            text ""
+        , if canSetup then
+            button
+                [ class "button is-info is-small is-outlined"
+                , stopPropagationOn "click" (Decode.succeed ( SetupDatabase db.name, True ))
+                ]
+                [ span [ class "icon is-small" ] [ i [ class "fas fa-cog" ] [] ]
+                , span [] [ text "Setup" ]
                 ]
 
           else

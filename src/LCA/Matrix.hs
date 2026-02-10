@@ -33,6 +33,7 @@ module LCA.Matrix (
     Vector,
     Inventory,
     computeInventoryMatrix,
+    computeInventoryWithDependencies,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
@@ -363,6 +364,108 @@ computeInventoryMatrix db rootProcessId =
                            | (uuid, idx) <- M.toList bioFlowIndex
                            , idx < U.length inventoryVec]
      in result
+
+{- |
+Compute inventory with cross-database dependencies.
+
+This function implements the block matrix back-substitution algorithm:
+1. Solve the local database system: (I - A_local) × s_local = f
+2. For each cross-database link, accumulate demand on the supplier
+3. Group demand by dependency database
+4. Recursively solve each dependency database
+5. Sum inventories from all databases
+
+Arguments:
+- lookupDb: Function to look up a database by supplier UUID pair
+- db: The current database (e.g., Ginko)
+- rootProcessId: The root activity to solve for
+
+Returns:
+- Combined inventory from current database and all dependencies
+
+Note: Cross-DB links store raw exchange amounts. We need to multiply by the
+consumer's scaling factor (supply vector value) to get actual demand.
+-}
+computeInventoryWithDependencies
+    :: (UUID -> UUID -> Maybe Database)  -- ^ Lookup dependency DB by supplier (actUUID, prodUUID)
+    -> Database                          -- ^ Current database
+    -> ProcessId                         -- ^ Root activity
+    -> Inventory
+computeInventoryWithDependencies lookupDb db rootProcessId =
+    let -- Step 1: Compute local inventory (same as computeInventoryMatrix)
+        activityCount = dbActivityCount db
+        bioFlowCount = dbBiosphereCount db
+        techTriples = dbTechnosphereTriples db
+        bioTriples = dbBiosphereTriples db
+        activityIndex = dbActivityIndex db
+        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0..]
+
+        demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
+
+        -- Solve local system
+        localSupplyVec = case dbCachedFactorization db of
+            Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
+            Nothing -> solveSparseLinearSystem
+                [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+                (fromIntegral activityCount)
+                demandVec
+
+        -- Calculate local inventory
+        localInventoryVec = applySparseMatrix
+            [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
+            (fromIntegral bioFlowCount)
+            localSupplyVec
+        localInventory = M.fromList
+            [(uuid, localInventoryVec U.! idx) | (uuid, idx) <- M.toList bioFlowIndex, idx < U.length localInventoryVec]
+
+        -- Step 2: Compute demand for cross-DB links
+        -- For each cross-DB link, the demand on the supplier is:
+        --   demand = coefficient × supply[consumer]
+        -- where supply[consumer] is the scaling factor for the consumer activity
+        crossLinks = dbCrossDBLinks db
+        processIdLookup = dbProcessIdLookup db
+
+        -- Group links by supplier database (determined by looking up each supplier)
+        -- and accumulate demand
+        crossDBDemands :: M.Map (UUID, UUID) Double  -- (supplierActUUID, supplierProdUUID) -> total demand
+        crossDBDemands = foldr accumulateDemand M.empty crossLinks
+          where
+            accumulateDemand :: CrossDBLink -> M.Map (UUID, UUID) Double -> M.Map (UUID, UUID) Double
+            accumulateDemand link acc =
+                let consumerKey = (cdlConsumerActUUID link, cdlConsumerProdUUID link)
+                    supplierKey = (cdlSupplierActUUID link, cdlSupplierProdUUID link)
+                in case M.lookup consumerKey processIdLookup of
+                    Nothing -> acc  -- Consumer not found (shouldn't happen)
+                    Just consumerPid ->
+                        let consumerIdx = fromIntegral $ activityIndex V.! fromIntegral consumerPid
+                            consumerScale = localSupplyVec U.! consumerIdx
+                            -- Demand = amount per unit output × scaling factor
+                            demand = cdlCoefficient link * consumerScale
+                        in M.insertWith (+) supplierKey demand acc
+
+        -- Step 3: For each supplier, find its database and compute its inventory
+        -- Then sum all inventories
+        crossDBInventory :: Inventory
+        crossDBInventory = M.foldrWithKey processSupplier M.empty crossDBDemands
+          where
+            processSupplier :: (UUID, UUID) -> Double -> Inventory -> Inventory
+            processSupplier (supplierActUUID, supplierProdUUID) demand acc =
+                case lookupDb supplierActUUID supplierProdUUID of
+                    Nothing -> acc  -- Supplier database not loaded (warning could be issued)
+                    Just depDb ->
+                        case M.lookup (supplierActUUID, supplierProdUUID) (dbProcessIdLookup depDb) of
+                            Nothing -> acc  -- Supplier not found in its database
+                            Just supplierPid ->
+                                -- Recursively compute inventory (could recurse further if depDb has dependencies)
+                                let depInventory = computeInventoryWithDependencies lookupDb depDb supplierPid
+                                    -- Scale by demand
+                                    scaledInventory = M.map (* demand) depInventory
+                                in M.unionWith (+) acc scaledInventory
+
+        -- Step 4: Sum local and cross-DB inventories
+        totalInventory = M.unionWith (+) localInventory crossDBInventory
+
+     in totalInventory
 
 {- |
 Compute inventory matrix using worker pool for thread-safe concurrent processing.

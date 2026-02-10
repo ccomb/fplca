@@ -200,7 +200,7 @@ defaultUnits = M.fromList $ concat
       mkAliases [1,0,0,0,0,0,0,0] 1.0      ["kg", "kilogram"]
     , mkAliases [1,0,0,0,0,0,0,0] 0.001    ["g", "gram"]
     , mkAliases [1,0,0,0,0,0,0,0] 1e-6     ["mg", "milligram"]
-    , mkAliases [1,0,0,0,0,0,0,0] 1000.0   ["t", "tonne", "metric ton"]
+    , mkAliases [1,0,0,0,0,0,0,0] 1000.0   ["t", "ton", "tonne", "metric ton"]
     , mkAliases [1,0,0,0,0,0,0,0] 0.45359237 ["pound", "lb"]
     , mkAliases [1,0,0,0,0,0,0,0] 0.0283495231 ["ounce avoirdupois", "oz"]
 
@@ -228,6 +228,7 @@ defaultUnits = M.fromList $ concat
     , mkAliases [0,0,0,1,0,0,0,0] 1e9      ["gj", "gigajoule"]
     , mkAliases [0,0,0,1,0,0,0,0] 1e12     ["tj", "terajoule"]
     , mkAliases [0,0,0,1,0,0,0,0] 3.6e6    ["kwh", "kilowatt hour", "kilowatt-hour"]
+    , mkAliases [0,0,0,1,0,0,0,0] 3.6e9    ["mwh", "megawatt hour", "megawatt-hour"]
     , mkAliases [0,0,0,1,0,0,0,0] 3600.0   ["wh", "watt hour", "watt-hour"]
     , mkAliases [0,0,0,1,0,0,0,0] 4184.0   ["kcal", "kilocalorie"]
     , mkAliases [0,0,0,1,0,0,0,0] 4.184    ["cal", "calorie"]
@@ -249,6 +250,7 @@ defaultUnits = M.fromList $ concat
       -- Count (dimensionless)
     , mkAliases [0,0,0,0,0,0,1,0] 1.0      ["unit", "units", "p", "pcs", "piece", "pieces", "item", "items"]
     , mkAliases [0,0,0,0,0,0,1,0] 1.0      ["dimensionless"]
+    , mkAliases [0,0,0,0,0,0,1,0] 1.0      ["kgy", "kilo-gray"]
 
       -- Currency
     , mkAliases [0,0,0,0,0,0,0,1] 1.0      ["eur", "eur2005", "euro"]
@@ -275,8 +277,11 @@ defaultUnits = M.fromList $ concat
     , mkAliases [0,0,-1,0,0,0,0,0] 1.0     ["bq", "becquerel"]
 
       -- Area×Time (land use)
-    , mkAliases [0,0,1,0,1,0,0,0] 1.0      ["m2*year", "m²*year", "m2.year", "m2*a"]
-    , mkAliases [0,0,1,0,1,0,0,0] 315360000000.0 ["ha*year", "hectare*year", "ha.year", "ha*a"]
+    , mkAliases [0,0,1,0,1,0,0,0] 1.0      ["m2*year", "m²*year", "m2.year", "m2*a", "m2a"]
+    , mkAliases [0,0,1,0,1,0,0,0] 315360000000.0 ["ha*year", "hectare*year", "ha.year", "ha*a", "ha a"]
+
+      -- Volume×Time
+    , mkAliases [0,0,1,0,0,1,0,0] 31536000.0 ["m3*year", "m³*year", "m3.year", "m3*a", "m3y"]
 
       -- Mass×Time (some specific processes)
     , mkAliases [1,0,1,0,0,0,0,0] 31536000.0 ["kg*year", "kg.year", "kg*a"]

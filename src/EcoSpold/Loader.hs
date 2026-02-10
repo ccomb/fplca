@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {- |
@@ -26,7 +27,26 @@ Cache performance (Ecoinvent 3.8 with 18K activities):
 
 The cache keeps day-to-day execution fast while preserving reproducibility.
 -}
-module EcoSpold.Loader (loadAllSpoldsWithFlows, loadAllSpoldsWithLocationAliases, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices, loadDatabaseFromCacheFile) where
+module EcoSpold.Loader
+    ( -- * Main Loading Functions
+      loadAllSpoldsWithFlows
+    , loadAllSpoldsWithLocationAliases
+    , loadAllSpoldsWithCrossDBLinking
+      -- * Cache Operations
+    , loadCachedDatabaseWithMatrices
+    , saveCachedDatabaseWithMatrices
+    , loadDatabaseFromCacheFile
+      -- * Cross-Database Linking
+    , fixActivityLinksWithCrossDB
+    , CrossDBLinkingStats(..)
+    , crossDBLinksCount
+    , unresolvedCount
+    , crossDBBySource
+    , collectUnlinkedProductNames
+      -- * Database Analysis
+    , countTotalTechInputs
+    , countUnlinkedExchanges
+    ) where
 
 import qualified Codec.Compression.Zstd as Zstd
 import Control.Concurrent.Async
@@ -42,6 +62,7 @@ import Data.Hashable (hash)
 import Data.List (sortBy, group, sort)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
@@ -53,10 +74,23 @@ import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
 import EcoSpold.Parser (streamParseActivityAndFlowsFromFile)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDatasetsFromFile1)
+import EcoSpold.CrossDatabaseLinking
+    ( LinkingContext(..)
+    , CrossDBLinkResult(..)
+    , LinkBlocker(..)
+    , LinkWarning(..)
+    , IndexedDatabase(..)
+    , SupplierEntry(..)
+    , findSupplierAcrossDatabases
+    , buildIndexedDatabase
+    , defaultLinkingThreshold
+    )
 import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
 import LCA.Progress
 import LCA.Types
+import LCA.SynonymDB (SynonymDB, emptySynonymDB)
+import qualified LCA.UnitConversion as UC
 import qualified SimaPro.Parser as SimaPro
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
 import LCA.UploadedDatabase (getDataDir, isUploadedPath)
@@ -930,3 +964,291 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
                 ++ " tech entries, "
                 ++ show (VU.length $ dbBiosphereTriples db)
                 ++ " bio entries, compressed)"
+
+--------------------------------------------------------------------------------
+-- Cross-Database Linking
+--------------------------------------------------------------------------------
+
+-- | Statistics from cross-database linking
+-- Only essential state is stored; counts are derived via accessor functions.
+data CrossDBLinkingStats = CrossDBLinkingStats
+    { cdlLinks              :: ![CrossDBLink]                        -- ^ Resolved cross-DB links
+    , cdlUnresolvedProducts :: !(M.Map T.Text (Int, LinkBlocker))   -- ^ Product name → (count, reason)
+    , cdlUnknownUnits       :: !(S.Set T.Text)                      -- ^ Unknown units from sdbUnits
+    }
+
+-- | Empty stats
+emptyCrossDBLinkingStats :: CrossDBLinkingStats
+emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty
+
+-- | Merge two CrossDBLinkingStats
+mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
+mergeCrossDBStats s1 s2 = CrossDBLinkingStats
+    { cdlLinks = cdlLinks s1 ++ cdlLinks s2
+    , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
+    , cdlUnknownUnits = S.union (cdlUnknownUnits s1) (cdlUnknownUnits s2)
+    }
+  where
+    mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
+
+-- | Number of resolved cross-DB links
+crossDBLinksCount :: CrossDBLinkingStats -> Int
+crossDBLinksCount = length . cdlLinks
+
+-- | Number of unresolved inputs
+unresolvedCount :: CrossDBLinkingStats -> Int
+unresolvedCount = sum . map fst . M.elems . cdlUnresolvedProducts
+
+-- | Cross-DB links grouped by source database
+crossDBBySource :: CrossDBLinkingStats -> M.Map T.Text Int
+crossDBBySource = M.fromListWith (+) . map (\l -> (cdlSourceDatabase l, 1)) . cdlLinks
+
+{- | Load EcoSpold files with cross-database linking support.
+
+This function loads EcoSpold files and then attempts to resolve unlinked
+technosphere exchanges by searching across other already-loaded databases.
+
+The loading sequence:
+1. Parse XML files into SimpleDatabase
+2. Build supplier index for THIS database
+3. Attempt linking within THIS database (standard behavior)
+4. For remaining unlinked exchanges, search OTHER databases
+5. Report linking summary with cross-DB statistics
+-}
+loadAllSpoldsWithCrossDBLinking
+    :: M.Map T.Text T.Text       -- ^ Location aliases (wrongLocation → correctLocation)
+    -> [IndexedDatabase]         -- ^ Pre-built indexes from other databases
+    -> SynonymDB                  -- ^ Synonym database for name matching
+    -> UC.UnitConfig              -- ^ Unit configuration for compatibility checking
+    -> FilePath                   -- ^ Path to load from
+    -> IO (Either T.Text (SimpleDatabase, CrossDBLinkingStats))
+loadAllSpoldsWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig path = do
+    -- First, load the database using the standard loader
+    result <- loadAllSpoldsWithLocationAliases locationAliases path
+    case result of
+        Left err -> return $ Left err
+        Right simpleDb -> do
+            -- Detect unknown units from the database's unit definitions
+            let !unknownUnits = S.fromList
+                    [ unitName u
+                    | u <- M.elems (sdbUnits simpleDb)
+                    , not (UC.isKnownUnit unitConfig (unitName u))
+                    , not (T.null (unitName u))
+                    ]
+            unless (S.null unknownUnits) $
+                reportProgress Warning $ printf "%d unknown unit(s): %s — add to [units.aliases] in fplca.toml"
+                    (S.size unknownUnits)
+                    (T.unpack $ T.intercalate ", " $ map (\u -> "\"" <> u <> "\"") $ S.toList unknownUnits)
+
+            -- If there are other databases to search, perform cross-DB linking
+            if null otherIndexes
+                then do
+                    -- No cross-DB linking needed
+                    let stats = emptyCrossDBLinkingStats { cdlUnknownUnits = unknownUnits }
+                    return $ Right (simpleDb, stats)
+                else do
+                    -- Perform cross-database linking using pre-built indexes
+                    (linkedDb, stats) <- fixActivityLinksWithCrossDB
+                        otherIndexes synonymDB unitConfig simpleDb
+                    return $ Right (linkedDb, stats { cdlUnknownUnits = unknownUnits })
+
+{- | Fix activity links using cross-database lookup.
+
+For each unlinked technosphere input (where activityLinkId is nil),
+search across other loaded databases to find a matching supplier.
+
+Matching criteria:
+- Product name must match (exact, synonym, or fuzzy)
+- Units must be compatible
+- Location scoring with hierarchy fallback
+
+Cross-database links are stored in CrossDBLinkingStats.cdlLinks for use
+in chained inventory solving. The exchanges are NOT modified - they
+remain "unlinked" from the perspective of the internal matrix, but the
+CrossDBLinks provide the information needed to resolve them at solve time.
+-}
+fixActivityLinksWithCrossDB
+    :: [IndexedDatabase]            -- ^ Pre-built indexes from other databases
+    -> SynonymDB                    -- ^ Synonym database
+    -> UC.UnitConfig                -- ^ Unit configuration
+    -> SimpleDatabase               -- ^ Database to fix
+    -> IO (SimpleDatabase, CrossDBLinkingStats)
+fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig db = do
+    -- Count unlinked exchanges before
+    let unlinkedBefore = countUnlinkedExchanges db
+
+    -- If no unlinked exchanges, skip
+    if unlinkedBefore == 0
+        then do
+            reportProgress Info "No unlinked exchanges to resolve via cross-DB linking"
+            return (db, emptyCrossDBLinkingStats)
+        else do
+            reportProgress Info $
+                printf "Cross-database linking: %d unlinked exchanges, searching %d database(s)..."
+                    unlinkedBefore (length indexedDbs)
+
+            -- Report index stats
+            forM_ indexedDbs $ \idb ->
+                reportProgress Info $
+                    printf "  - %s: %d products indexed"
+                        (T.unpack (idbName idb))
+                        (M.size (idbByProductName idb))
+
+            -- Build the linking context with pre-built indexes
+            let linkingCtx = LinkingContext
+                    { lcIndexedDatabases = indexedDbs
+                    , lcSynonymDB = synonymDB
+                    , lcUnitConfig = unitConfig
+                    , lcThreshold = defaultLinkingThreshold
+                    }
+
+            -- Process all activities to find cross-DB links
+            reportProgress Info "Finding cross-database suppliers..."
+            let stats = findAllCrossDBLinks
+                    linkingCtx (sdbFlows db) (sdbUnits db) (sdbActivities db)
+
+            -- Report statistics
+            reportCrossDBLinkingStats stats
+
+            when (not (null (cdlLinks stats))) $
+                reportProgress Info $
+                    printf "Found %d cross-database links (stored for chained solving)"
+                        (length (cdlLinks stats))
+
+            -- Return the original database unchanged, along with the cross-DB links
+            -- The links will be stored in the Database.dbCrossDBLinks field later
+            return (db, stats)
+
+-- | Collect unlinked product names from a database (for databases without cross-DB linking)
+collectUnlinkedProductNames :: SimpleDatabase -> M.Map T.Text Int
+collectUnlinkedProductNames db =
+    M.fromListWith (+)
+        [ (flowName flow, 1)
+        | act <- M.elems (sdbActivities db)
+        , TechnosphereExchange fid _ _ True _ linkId _ _ <- exchanges act
+        , linkId == UUID.nil
+        , Just flow <- [M.lookup fid (sdbFlows db)]
+        ]
+
+-- | Count unlinked technosphere exchanges in a database
+countUnlinkedExchanges :: SimpleDatabase -> Int
+countUnlinkedExchanges db =
+    sum [ 1
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , isUnlinkedTechInput ex
+        ]
+  where
+    isUnlinkedTechInput :: Exchange -> Bool
+    isUnlinkedTechInput (TechnosphereExchange _ _ _ isInp _ linkId _ _) =
+        isInp && linkId == UUID.nil
+    isUnlinkedTechInput _ = False
+
+-- | Count total technosphere input exchanges in a database
+countTotalTechInputs :: SimpleDatabase -> Int
+countTotalTechInputs db =
+    sum [ 1
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , isTechInput ex
+        ]
+  where
+    isTechInput :: Exchange -> Bool
+    isTechInput (TechnosphereExchange _ _ _ isInp _ _ _ _) = isInp
+    isTechInput _ = False
+
+-- | Find all cross-database links without modifying activities
+-- Returns statistics including the CrossDBLinks for chained solving
+findAllCrossDBLinks
+    :: LinkingContext
+    -> FlowDB
+    -> UnitDB
+    -> ActivityMap
+    -> CrossDBLinkingStats
+findAllCrossDBLinks ctx flowDb unitDb activities =
+    let results = M.mapWithKey (findActivityCrossDBLinks ctx flowDb unitDb) activities
+    in foldr mergeCrossDBStats emptyCrossDBLinkingStats (M.elems results)
+
+-- | Find cross-database links for one activity's exchanges
+findActivityCrossDBLinks
+    :: LinkingContext
+    -> FlowDB
+    -> UnitDB
+    -> (UUID.UUID, UUID.UUID)    -- ^ Consumer activity key (actUUID, prodUUID)
+    -> Activity
+    -> CrossDBLinkingStats
+findActivityCrossDBLinks ctx flowDb unitDb (consumerActUUID, consumerProdUUID) act =
+    let stats = map (findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
+    in foldr mergeCrossDBStats emptyCrossDBLinkingStats stats
+
+-- | Find cross-database link for a single exchange
+--
+-- Only attempts cross-DB linking if:
+-- 1. Exchange is a technosphere input
+-- 2. Exchange is currently unlinked (activityLinkId is nil)
+--
+-- When a link is found, a CrossDBLink is created and returned in stats.
+-- The exchange itself is NOT modified.
+findExchangeCrossDBLink
+    :: LinkingContext
+    -> FlowDB
+    -> UnitDB
+    -> UUID.UUID                 -- ^ Consumer activity UUID
+    -> UUID.UUID                 -- ^ Consumer product UUID
+    -> Exchange
+    -> CrossDBLinkingStats
+findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (TechnosphereExchange fid amt _uid isInp _isRef linkId _procLink loc)
+    | isInp && linkId == UUID.nil = -- Unlinked technosphere input
+        case M.lookup fid flowDb of
+            Nothing ->
+                -- Flow not found in FlowDB - can't name it
+                CrossDBLinkingStats [] M.empty S.empty
+            Just flow ->
+                -- Get unit name from UnitDB
+                let flowUnitName = case M.lookup (flowUnitId flow) unitDb of
+                        Just u  -> unitName u
+                        Nothing -> ""  -- Unknown unit
+                in case findSupplierAcrossDatabases ctx (flowName flow) loc flowUnitName of
+                    CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc _warnings ->
+                        -- Successfully found cross-DB supplier
+                        let !crossLink = CrossDBLink
+                                { cdlConsumerActUUID = consumerActUUID
+                                , cdlConsumerProdUUID = consumerProdUUID
+                                , cdlSupplierActUUID = supplierActUUID
+                                , cdlSupplierProdUUID = supplierProdUUID
+                                , cdlCoefficient = amt
+                                , cdlFlowName = prodName
+                                , cdlLocation = supplierLoc
+                                , cdlSourceDatabase = dbName
+                                }
+                        in CrossDBLinkingStats [crossLink] M.empty S.empty
+                    CrossDBNotLinked blocker ->
+                        -- Record as unresolved with the blocker reason
+                        CrossDBLinkingStats [] (M.singleton (flowName flow) (1, blocker)) S.empty
+    | otherwise =
+        emptyCrossDBLinkingStats
+findExchangeCrossDBLink _ _ _ _ _ _ = emptyCrossDBLinkingStats
+
+-- | Report cross-database linking statistics
+reportCrossDBLinkingStats :: CrossDBLinkingStats -> IO ()
+reportCrossDBLinkingStats stats = do
+    let nLinks = crossDBLinksCount stats
+        nUnresolved = unresolvedCount stats
+        total = nLinks + nUnresolved
+        resolutionRate = if total > 0
+            then 100.0 * fromIntegral nLinks / fromIntegral total
+            else 0.0 :: Double
+
+    reportProgress Info $
+        printf "Cross-DB linking: %d/%d resolved (%.1f%%)"
+            nLinks total resolutionRate
+
+    -- Report per-database breakdown
+    forM_ (M.toList (crossDBBySource stats)) $ \(dbName, count) ->
+        reportProgress Info $
+            printf "  - %s: %d links resolved" (T.unpack dbName) count
+
+    when (nUnresolved > 0) $
+        reportProgress Warning $
+            printf "%d exchanges could not be linked (no matching supplier found)"
+                nUnresolved

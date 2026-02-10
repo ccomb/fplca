@@ -31,13 +31,14 @@ import LCA.CLI.Parser
 import LCA.CLI.Types
 import LCA.CLI.Types (Command(Server), ServerOptions(..))
 import LCA.Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), MethodConfig(..))
-import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager, getCurrentDatabase)
+import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager)
 import LCA.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
 import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import LCA.Progress
 import LCA.Query (buildDatabaseWithMatrices)
 import LCA.SynonymDB (loadEmbeddedSynonymDB)
 import LCA.Types
+import Control.Concurrent.STM (readTVarIO)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified EcoSpold.Loader
 import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
@@ -95,12 +96,10 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
       dbManager <- initDatabaseManager effectiveConfig synonymDB (noCache (globalOptions cliConfig)) (Just cfgFile)
 
       -- Log database status (allow starting with no databases for BYOL mode)
-      maybeLoaded <- getCurrentDatabase dbManager
-      case maybeLoaded of
-        Nothing ->
-          reportProgress Info "No database currently active - upload or load one via the web interface"
-        Just loadedDb ->
-          reportProgress Info $ "Current database: " ++ T.unpack (dcName (ldConfig loadedDb))
+      loadedDbs <- readTVarIO (dmLoadedDbs dbManager)
+      if M.null loadedDbs
+        then reportProgress Info "No databases loaded - upload or load one via the web interface"
+        else reportProgress Info $ "Loaded databases: " ++ intercalate ", " (map T.unpack (M.keys loadedDbs))
 
       let port = serverPort serverOpts
 

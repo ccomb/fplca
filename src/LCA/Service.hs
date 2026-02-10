@@ -772,6 +772,16 @@ convertActivityForAPI unitCfg db processId activity =
         , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
         }
   where
+    -- Build cross-DB link lookup by normalized flow name for this consumer activity
+    crossDBLinkMap = case processIdToUUIDs db processId of
+        Just (actUUID, _) ->
+            M.fromList
+                [ (T.toLower (cdlFlowName link), link)
+                | link <- dbCrossDBLinks db
+                , cdlConsumerActUUID link == actUUID
+                ]
+        Nothing -> M.empty
+
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
@@ -790,7 +800,14 @@ convertActivityForAPI unitCfg db processId activity =
                         case findProcessIdByProductFlowWithFallback unitCfg db flowId of
                             Just pid | Just act <- getActivity db pid ->
                                 (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
-                            _ -> (Nothing, Nothing, Nothing)
+                            _ -> -- Try cross-DB links
+                                case flowInfo >>= \flow -> M.lookup (T.toLower (flowName flow)) crossDBLinkMap of
+                                    Just link ->
+                                        let crossPid = cdlSourceDatabase link <> "::"
+                                                <> UUID.toText (cdlSupplierActUUID link) <> "_"
+                                                <> UUID.toText (cdlSupplierProdUUID link)
+                                        in (Just (cdlFlowName link), Just (cdlLocation link), Just crossPid)
+                                    Nothing -> (Nothing, Nothing, Nothing)
                     | otherwise -> (Nothing, Nothing, Nothing)
                 BiosphereExchange _ _ _ _ _ -> (Nothing, Nothing, Nothing)
          in ExchangeWithUnit

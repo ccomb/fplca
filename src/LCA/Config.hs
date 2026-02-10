@@ -59,6 +59,7 @@ data DatabaseConfig = DatabaseConfig
     , dcDefault     :: !Bool
     , dcLocationAliases :: !(Map Text Text)  -- Wrong location → correct location (e.g., "ENTSO" → "ENTSO-E")
     , dcFormat      :: !(Maybe DatabaseFormat)  -- Detected format (EcoSpold2, EcoSpold1, SimaProCSV)
+    , dcIsUploaded  :: !Bool           -- True for uploaded databases (vs. configured in TOML)
     } deriving (Show, Eq, Generic)
 
 -- | Method configuration
@@ -143,6 +144,7 @@ instance DecodeTOML DatabaseConfig where
             Just m  -> pure m
             Nothing -> pure M.empty
         let dcFormat = Nothing  -- Format is detected at runtime, not stored in config
+        let dcIsUploaded = False  -- Databases from TOML are not uploaded
         pure DatabaseConfig{..}
 
 instance DecodeTOML MethodConfig where

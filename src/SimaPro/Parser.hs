@@ -22,6 +22,8 @@ import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Csv as Csv
 import Data.Char (toLower)
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
@@ -231,6 +233,7 @@ updateConfigFromHeader cfg key value = case BS8.map toLower key of
 detectSection :: BS.ByteString -> Maybe SectionType
 detectSection line = case BS8.strip line of
     "Products" -> Just SecProducts
+    "Waste treatment" -> Just SecProducts
     "Avoided products" -> Just SecAvoidedProducts
     "Materials/fuels" -> Just SecMaterials
     "Electricity/heat" -> Just SecElectricity
@@ -282,9 +285,14 @@ parseAmount decimalSep bs
             [(val, _)] -> val  -- Allow trailing characters
             _ -> 0.0
 
--- | Split a CSV line by delimiter (ByteString)
+-- | Split a CSV line by delimiter, respecting RFC 4180 quoted fields.
 splitCSV :: Char -> BS.ByteString -> [BS.ByteString]
-splitCSV delim = BS8.split delim
+splitCSV delim bs =
+    let opts = Csv.defaultDecodeOptions
+            { Csv.decDelimiter = fromIntegral (fromEnum delim) }
+    in case Csv.decodeWith opts Csv.NoHeader (BL.fromStrict bs) of
+        Right rows | not (V.null rows) -> V.toList (V.head rows)
+        _ -> BS8.split delim bs  -- fallback to naive on parse error
 
 -- | Parse a product row (ByteString input, Text output)
 parseProductRow :: SimaProConfig -> BS.ByteString -> Maybe ProductRow
@@ -511,7 +519,7 @@ processBlockToActivity ProcessBlock{..} =
 
         -- Convert technosphere inputs (shared across all activities)
         techExchanges = concatMap (techRowToExchange True) (pbMaterials ++ pbElectricity)
-        wasteExchanges = concatMap (techRowToExchange False) pbWasteToTreatment
+        wasteExchanges = concatMap (techRowToExchange True) pbWasteToTreatment
 
         -- Convert biosphere exchanges (shared across all activities)
         resourceExchanges = map (bioRowToExchange True "resource") pbResources

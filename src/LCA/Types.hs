@@ -357,6 +357,9 @@ data Database = Database
     , dbBiosphereFlows :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
     , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)
     , dbBiosphereCount :: !Int32 -- Number of biosphere flows (matrix dimension)
+    -- Cross-database linking (serialized to cache)
+    , dbCrossDBLinks :: ![CrossDBLink] -- Cross-database supplier links (for chained solving)
+    , dbDependsOn :: ![Text] -- Names of databases this database depends on
     -- Runtime-only fields (not serialized to cache)
     , dbCachedFactorization :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
     , dbSynonymDB :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
@@ -384,6 +387,9 @@ instance Binary Database where
         Binary.put (dbBiosphereFlows db)
         Binary.put (dbActivityCount db)
         Binary.put (dbBiosphereCount db)
+        -- Cross-database linking fields
+        Binary.put (dbCrossDBLinks db)
+        Binary.put (dbDependsOn db)
         -- Runtime-only fields are NOT serialized
 
     get = do
@@ -402,6 +408,8 @@ instance Binary Database where
         biosphereFlows <- Binary.get
         activityCount <- Binary.get
         biosphereCount <- Binary.get
+        crossDBLinks <- Binary.get
+        dependsOn <- Binary.get
         return Database
             { dbProcessIdTable = processIdTable
             , dbProcessIdLookup = processIdLookup
@@ -418,6 +426,9 @@ instance Binary Database where
             , dbBiosphereFlows = biosphereFlows
             , dbActivityCount = activityCount
             , dbBiosphereCount = biosphereCount
+            -- Cross-database linking fields
+            , dbCrossDBLinks = crossDBLinks
+            , dbDependsOn = dependsOn
             -- Runtime-only fields set to defaults
             , dbCachedFactorization = Nothing
             , dbSynonymDB = Nothing
@@ -534,6 +545,27 @@ data ImpactCategory = ImpactCategory
     , categoryName :: !Text
     }
     deriving (Eq, Ord, Show)
+
+-- | Cross-database link: records that an exchange in this database
+-- sources from a supplier in another database.
+--
+-- At solve time, these links are used to compute demand for the
+-- dependency database and chain the inventory calculations.
+--
+-- Note: We store both consumer and supplier as UUIDs for flexibility.
+-- Consumer UUIDs are resolved to ProcessIds at solve time via dbProcessIdLookup.
+-- Supplier UUIDs are looked up across loaded databases at solve time.
+data CrossDBLink = CrossDBLink
+    { cdlConsumerActUUID :: !UUID           -- ^ Consumer activity UUID (in this database)
+    , cdlConsumerProdUUID :: !UUID          -- ^ Consumer product UUID (in this database)
+    , cdlSupplierActUUID :: !UUID           -- ^ Supplier activity UUID (in another database)
+    , cdlSupplierProdUUID :: !UUID          -- ^ Supplier product UUID (in another database)
+    , cdlCoefficient    :: !Double          -- ^ Amount consumed per unit output of consumer
+    , cdlFlowName       :: !Text            -- ^ Product name (for display/debugging)
+    , cdlLocation       :: !Text            -- ^ Supplier location (for display)
+    , cdlSourceDatabase :: !Text            -- ^ Source database name
+    }
+    deriving (Generic, NFData, Binary, Show, Eq)
 
 -- | Facteur de caractérisation (lié à une méthode LCIA)
 data CF = CF

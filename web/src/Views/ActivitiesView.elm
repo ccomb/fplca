@@ -12,16 +12,16 @@ type Msg
     = UpdateSearchQuery String
     | SelectActivity String
     | LoadMore
-    | ActivateDatabase String
+    | SelectDatabase String
 
 
-viewActivitiesPage : String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Html Msg
-viewActivitiesPage searchQuery searchResults searchLoading loadingMore error maybeDatabaseList =
+viewActivitiesPage : String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Html Msg
+viewActivitiesPage currentDbName searchQuery searchResults searchLoading loadingMore error maybeDatabaseList =
     div [ class "activities-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ div [ class "box", style "margin-bottom" "0", style "flex-shrink" "0" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-            , viewSearchBar maybeDatabaseList searchQuery searchLoading
+            , viewSearchBar maybeDatabaseList currentDbName searchQuery searchLoading
             , case error of
                 Just err ->
                     div [ class "notification is-danger" ]
@@ -34,8 +34,8 @@ viewActivitiesPage searchQuery searchResults searchLoading loadingMore error may
         ]
 
 
-viewSearchBar : Maybe DatabaseList -> String -> Bool -> Html Msg
-viewSearchBar maybeDatabaseList query isLoading =
+viewSearchBar : Maybe DatabaseList -> String -> String -> Bool -> Html Msg
+viewSearchBar maybeDatabaseList currentDbName query isLoading =
     div [ class "field is-grouped", style "margin-bottom" "1.5rem" ]
         [ -- Database selector on the left
           case maybeDatabaseList of
@@ -46,14 +46,11 @@ viewSearchBar maybeDatabaseList query isLoading =
                 let
                     loadedDatabases =
                         List.filter .loaded dbList.databases
-
-                    currentDbName =
-                        dbList.current |> Maybe.withDefault ""
                 in
                 div [ class "control" ]
                     [ div [ class "select is-large" ]
                         [ select
-                            [ onInput ActivateDatabase ]
+                            [ onInput SelectDatabase ]
                             (List.map (viewDatabaseOption currentDbName) loadedDatabases)
                         ]
                     ]
@@ -65,7 +62,6 @@ viewSearchBar maybeDatabaseList query isLoading =
                 , placeholder "Search activities by name..."
                 , value query
                 , onInput UpdateSearchQuery
-                , disabled isLoading
                 ]
                 []
             , span [ class "icon is-left" ]

@@ -65,7 +65,7 @@ executable fplca
                      , filelock
                      , temporary
                      , process
-                     , libarchive >= 3.0.0
+                     , cassava
 
   -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
   if !os(windows)
@@ -95,6 +95,7 @@ executable fplca
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
                      , EcoSpold.Loader
+                     , EcoSpold.CrossDatabaseLinking
                      , SimaPro.Parser
                      , LCA.SynonymDB
                      , LCA.SynonymDB.Types
@@ -144,6 +145,8 @@ test-suite acv-tests
                      , ParserSpec
                      , MatrixExportSpec
                      , MethodSpec
+                     , SimaProParserSpec
+                     , SimaPro.Parser
                      , LCA.Types
                      , LCA.Types.API
                      , LCA.Query
@@ -158,6 +161,7 @@ test-suite acv-tests
                      , EcoSpold.Loader
                      , EcoSpold.Parser
                      , EcoSpold.Parser1
+                     , EcoSpold.CrossDatabaseLinking
                      , LCA.Method.Types
                      , LCA.Method.Parser
                      , LCA.SynonymDB
@@ -189,6 +193,6 @@ test-suite acv-tests
                      , xml-types
                      , conduit
                      , file-embed
-                     , libarchive >= 3.0.0
                      , process
+                     , cassava
   default-language:    Haskell2010

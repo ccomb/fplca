@@ -245,10 +245,9 @@ data UnmappedFlowAPI = UnmappedFlowAPI
     }
     deriving (Generic)
 
--- | Database list response with current database info
+-- | Database list response
 data DatabaseListResponse = DatabaseListResponse
     { dlrDatabases :: [DatabaseStatusAPI]  -- All available databases
-    , dlrCurrent :: Maybe Text             -- Name of currently loaded database
     }
     deriving (Generic)
 

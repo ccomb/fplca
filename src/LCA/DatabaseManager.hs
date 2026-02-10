@@ -9,20 +9,27 @@ module LCA.DatabaseManager
       DatabaseManager(..)
     , LoadedDatabase(..)
     , DatabaseStatus(..)
+    , StagedDatabase(..)
+    , DatabaseSetupInfo(..)
+    , MissingSupplier(..)
+    , DependencySuggestion(..)
       -- * Initialization
     , initDatabaseManager
     , initSingleDatabaseManager
       -- * Operations
-    , activateDatabase
     , getDatabase
-    , getCurrentDatabase
-    , getCurrentDatabaseName
     , listDatabases
       -- * Load/Unload
     , loadDatabase
     , unloadDatabase
     , addDatabase
     , removeDatabase
+      -- * Staged Database Operations
+    , getStagedDatabase
+    , getDatabaseSetupInfo
+    , addDependencyToStaged
+    , removeDependencyFromStaged
+    , finalizeDatabase
       -- * Internal (for Main.hs to load database)
     , loadDatabaseFromConfig
     ) where
@@ -30,13 +37,14 @@ module LCA.DatabaseManager
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, unless, when, void)
 import System.Mem (performGC)
 import Data.Aeson (ToJSON(..), FromJSON(..), (.=), (.:), (.:?))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson as A
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
@@ -44,7 +52,8 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 import Data.Char (toLower)
-import LCA.UploadedDatabase (isUploadedPath)
+import Data.List (sortOn)
+import Data.Ord (Down(..))
 
 import LCA.Config
 import LCA.Matrix (precomputeMatrixFactorization, addFactorizationToDatabase, clearCachedKspSolver)
@@ -52,9 +61,12 @@ import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
 import LCA.Progress (reportProgress, reportError, ProgressLevel(..))
 import LCA.Query (buildDatabaseWithMatrices)
 import LCA.SynonymDB (SynonymDB)
-import LCA.Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference)
+import LCA.Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference, CrossDBLink(..))
 import qualified LCA.UnitConversion as UnitConversion
 import qualified EcoSpold.Loader as Loader
+import EcoSpold.Loader (CrossDBLinkingStats(..))
+import EcoSpold.CrossDatabaseLinking (IndexedDatabase(..), LinkBlocker(..), buildIndexedDatabaseFromDB)
+import qualified EcoSpold.CrossDatabaseLinking
 import qualified LCA.Upload as Upload
 import qualified LCA.UploadedDatabase as UploadedDB
 import qualified SimaPro.Parser as SimaPro
@@ -67,6 +79,84 @@ data LoadedDatabase = LoadedDatabase
     , ldSharedSolver :: !SharedSolver
     , ldConfig       :: !DatabaseConfig
     }
+
+-- | A staged database awaiting dependency configuration
+-- This is the intermediate state before building matrices
+data StagedDatabase = StagedDatabase
+    { sdSimpleDB        :: !SimpleDatabase                -- ^ Parsed data (activities, flows, units)
+    , sdConfig          :: !DatabaseConfig                -- ^ Configuration
+    , sdUnlinkedCount   :: !Int                           -- ^ Total unlinked exchanges
+    , sdMissingProducts :: ![(Text, Int, LinkBlocker)]    -- ^ (product name, count, reason)
+    , sdSelectedDeps    :: ![Text]                        -- ^ Selected dependency database names
+    , sdCrossDBLinks    :: ![CrossDBLink]                 -- ^ Cross-DB links found so far
+    , sdLinkingStats    :: !CrossDBLinkingStats           -- ^ Linking statistics
+    }
+
+-- | Information about a missing supplier product
+data MissingSupplier = MissingSupplier
+    { msProductName :: !Text
+    , msCount       :: !Int           -- ^ Number of activities needing this supplier
+    , msLocation    :: !(Maybe Text)  -- ^ Most common location requested
+    , msReason      :: !Text          -- ^ "unit_incompatible", "location_unavailable", "no_name_match"
+    , msDetail      :: !(Maybe Text)  -- ^ e.g. "kg vs ton", "FR not available"
+    } deriving (Show, Eq, Generic)
+
+instance ToJSON MissingSupplier where
+    toJSON MissingSupplier{..} = A.object
+        [ "productName" .= msProductName
+        , "count" .= msCount
+        , "location" .= msLocation
+        , "reason" .= msReason
+        , "detail" .= msDetail
+        ]
+
+-- | Suggestion for a dependency database
+data DependencySuggestion = DependencySuggestion
+    { dsgDatabaseName :: !Text
+    , dsgDisplayName  :: !Text
+    , dsgMatchCount   :: !Int    -- ^ How many missing suppliers it can provide
+    } deriving (Show, Eq, Generic)
+
+instance ToJSON DependencySuggestion where
+    toJSON DependencySuggestion{..} = A.object
+        [ "databaseName" .= dsgDatabaseName
+        , "displayName" .= dsgDisplayName
+        , "matchCount" .= dsgMatchCount
+        ]
+
+-- | Setup info for a database (for the setup page)
+data DatabaseSetupInfo = DatabaseSetupInfo
+    { dsiName               :: !Text
+    , dsiDisplayName        :: !Text
+    , dsiActivityCount      :: !Int
+    , dsiInputCount         :: !Int          -- ^ Total technosphere inputs
+    , dsiCompleteness       :: !Double       -- ^ Percentage of resolved links (0-100)
+    , dsiInternalLinks      :: !Int          -- ^ Links resolved within this database
+    , dsiCrossDBLinks       :: !Int          -- ^ Links resolved via dependencies
+    , dsiUnresolvedLinks    :: !Int          -- ^ Still unresolved
+    , dsiMissingSuppliers   :: ![MissingSupplier]  -- ^ Top missing suppliers
+    , dsiSelectedDeps       :: ![Text]       -- ^ Currently selected dependencies
+    , dsiSuggestions        :: ![DependencySuggestion]  -- ^ Suggested dependencies
+    , dsiIsReady            :: !Bool         -- ^ True if can be finalized
+    , dsiUnknownUnits       :: ![Text]       -- ^ Unknown units from sdbUnits
+    } deriving (Show, Eq, Generic)
+
+instance ToJSON DatabaseSetupInfo where
+    toJSON DatabaseSetupInfo{..} = A.object
+        [ "name" .= dsiName
+        , "displayName" .= dsiDisplayName
+        , "activityCount" .= dsiActivityCount
+        , "inputCount" .= dsiInputCount
+        , "completeness" .= dsiCompleteness
+        , "internalLinks" .= dsiInternalLinks
+        , "crossDBLinks" .= dsiCrossDBLinks
+        , "unresolvedLinks" .= dsiUnresolvedLinks
+        , "missingSuppliers" .= dsiMissingSuppliers
+        , "selectedDependencies" .= dsiSelectedDeps
+        , "suggestions" .= dsiSuggestions
+        , "isReady" .= dsiIsReady
+        , "unknownUnits" .= dsiUnknownUnits
+        ]
 
 -- | Status of a database for API responses
 data DatabaseStatus = DatabaseStatus
@@ -122,7 +212,8 @@ instance FromJSON DatabaseStatus where
 -- Databases with load=true are pre-loaded at startup for instant switching
 data DatabaseManager = DatabaseManager
     { dmLoadedDbs     :: !(TVar (Map Text LoadedDatabase))  -- All loaded databases
-    , dmCurrentName   :: !(TVar (Maybe Text))               -- Name of current database
+    , dmStagedDbs     :: !(TVar (Map Text StagedDatabase))  -- Staged databases (parsed but not finalized)
+    , dmIndexedDbs    :: !(TVar (Map Text IndexedDatabase)) -- Pre-built indexes for cross-DB linking
     , dmAvailableDbs  :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
     , dmSynonymDB     :: !SynonymDB                         -- Shared synonym database
     , dmNoCache       :: !Bool                              -- Caching disabled flag
@@ -163,12 +254,14 @@ initDatabaseManager config synonymDB noCache _configPath = do
 
     -- Create TVars
     loadedDbsVar <- newTVarIO M.empty
-    currentNameVar <- newTVarIO Nothing
+    stagedDbsVar <- newTVarIO M.empty  -- Staged databases awaiting finalization
+    indexedDbsVar <- newTVarIO M.empty  -- Pre-built indexes for cross-DB linking
     availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- allDbs]
 
     let manager = DatabaseManager
             { dmLoadedDbs = loadedDbsVar
-            , dmCurrentName = currentNameVar
+            , dmStagedDbs = stagedDbsVar
+            , dmIndexedDbs = indexedDbsVar
             , dmAvailableDbs = availableDbsVar
             , dmSynonymDB = synonymDB
             , dmNoCache = noCache
@@ -176,24 +269,24 @@ initDatabaseManager config synonymDB noCache _configPath = do
             }
 
     -- Pre-load databases with load=true at startup
+    -- Load in sequence to enable cross-DB linking (earlier DBs available to later ones)
     reportProgress Info $ "Pre-loading " ++ show (length loadableDbs) ++ " database(s) with load=true..."
     forM_ loadableDbs $ \dbConfig -> do
         reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
-        result <- loadDatabaseFromConfig dbConfig synonymDB noCache
+        -- Get currently loaded IndexedDatabases for cross-DB linking
+        currentIndexedDbs <- readTVarIO indexedDbsVar
+        let otherIndexes = M.elems currentIndexedDbs
+        result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes
         case result of
             Right loaded -> do
-                atomically $ modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
+                -- Build index from the loaded Database for future cross-DB linking
+                let indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
+                atomically $ do
+                    modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
+                    modifyTVar' indexedDbsVar (M.insert (dcName dbConfig) indexedDb)
                 reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
             Left err ->
                 reportError $ "  [FAIL] Failed to load" <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
-
-    -- Set current database to first actually loaded database (not just configured as default)
-    loadedDbs <- readTVarIO loadedDbsVar
-    case M.keys loadedDbs of
-        (firstLoaded:_) -> do
-            atomically $ writeTVar currentNameVar (Just firstLoaded)
-            reportProgress Info $ "Current database set to: " <> T.unpack firstLoaded
-        [] -> reportProgress Info "No databases loaded at startup"
 
     -- Report final status
     loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
@@ -221,6 +314,7 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
     , dcDefault = False
     , dcLocationAliases = M.empty
     , dcFormat = Just (UploadedDB.umFormat meta)
+    , dcIsUploaded = True  -- Discovered from uploads/ directory
     }
 
 -- | Initialize a single-database manager (for --data mode)
@@ -239,6 +333,7 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
             , dcDefault = True
             , dcLocationAliases = M.empty
             , dcFormat = Just format
+            , dcIsUploaded = False  -- Command-line specified, not uploaded
             }
 
     let config = Config
@@ -250,49 +345,17 @@ initSingleDatabaseManager dataPath synonymDB noCache = do
 
     initDatabaseManager config synonymDB noCache Nothing
 
--- | Activate a database by name (instant switch - already loaded)
-activateDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
-activateDatabase manager dbName = do
-    loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Nothing -> do
-            -- Check if it's configured but not loaded
-            availableDbs <- readTVarIO (dmAvailableDbs manager)
-            case M.lookup dbName availableDbs of
-                Nothing -> return $ Left $ "Database not found: " <> dbName
-                Just cfg | not (dcLoad cfg) ->
-                    return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
-                Just _ ->
-                    return $ Left $ "Database not loaded (load=true but not in memory): " <> dbName
-        Just loaded -> do
-            -- Instant switch - just update current name
-            atomically $ writeTVar (dmCurrentName manager) (Just dbName)
-            return $ Right loaded
-
 -- | Get a database by name
 getDatabase :: DatabaseManager -> Text -> IO (Maybe LoadedDatabase)
 getDatabase manager dbName = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     return $ M.lookup dbName loadedDbs
 
--- | Get the currently active database
-getCurrentDatabase :: DatabaseManager -> IO (Maybe LoadedDatabase)
-getCurrentDatabase manager = do
-    currentName <- readTVarIO (dmCurrentName manager)
-    case currentName of
-        Nothing -> return Nothing
-        Just name -> getDatabase manager name
-
--- | Get the name of the currently active database
-getCurrentDatabaseName :: DatabaseManager -> IO (Maybe Text)
-getCurrentDatabaseName manager = readTVarIO (dmCurrentName manager)
-
 -- | List all databases with their status
 listDatabases :: DatabaseManager -> IO [DatabaseStatus]
 listDatabases manager = do
     availableDbs <- readTVarIO (dmAvailableDbs manager)
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    currentName <- readTVarIO (dmCurrentName manager)
 
     forM (M.toList availableDbs) $ \(name, config) -> do
         let isLoaded = M.member name loadedDbs
@@ -303,7 +366,7 @@ listDatabases manager = do
             , dsLoadAtStartup = dcLoad config
             , dsLoaded = isLoaded
             , dsCached = isLoaded  -- If loaded, we have it cached in memory
-            , dsIsUploaded = isUploadedPath (dcPath config)
+            , dsIsUploaded = dcIsUploaded config
             , dsPath = T.pack (dcPath config)
             , dsFormat = dcFormat config
             }
@@ -315,9 +378,21 @@ isCacheFile path =
         ext2 = takeExtension (dropExtension path)
     in ext == ".bin" || (ext == ".zst" && ext2 == ".bin")
 
--- | Load a database from its configuration
+-- | Load a database from its configuration (without cross-DB linking)
+-- This is the original function, kept for backward compatibility
 loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text LoadedDatabase)
-loadDatabaseFromConfig dbConfig synonymDB noCache = do
+loadDatabaseFromConfig dbConfig synonymDB noCache =
+    loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache []
+
+-- | Load a database from its configuration with cross-database linking support
+loadDatabaseFromConfigWithCrossDB
+    :: DatabaseConfig
+    -> SynonymDB
+    -> UnitConversion.UnitConfig
+    -> Bool  -- noCache
+    -> [IndexedDatabase]  -- Pre-built indexes from other databases for cross-DB linking
+    -> IO (Either Text LoadedDatabase)
+loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes = do
     let path = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
 
@@ -328,9 +403,9 @@ loadDatabaseFromConfig dbConfig synonymDB noCache = do
     if not isFile && not isDir
         then return $ Left $ "Path does not exist: " <> T.pack path
         else do
-            -- Load raw database
+            -- Load raw database with cross-DB linking
             reportProgress Info $ "Loading database from: " <> path
-            dbResult <- loadDatabaseRaw (dcName dbConfig) locationAliases path noCache
+            dbResult <- loadDatabaseRawWithCrossDB (dcName dbConfig) locationAliases path noCache synonymDB unitConfig otherIndexes
 
             case dbResult of
                 Left err -> return $ Left err
@@ -495,47 +570,237 @@ loadDatabaseRaw dbName locationAliases path noCache = do
                                             Loader.saveCachedDatabaseWithMatrices dbName path db
                                             return $ Right db
 
--- | Load a database on demand (for databases not loaded at startup)
+-- | Load raw database from path with cross-database linking support
+loadDatabaseRawWithCrossDB
+    :: T.Text                       -- ^ Database name
+    -> M.Map T.Text T.Text          -- ^ Location aliases
+    -> FilePath                     -- ^ Path to load from
+    -> Bool                         -- ^ noCache flag
+    -> SynonymDB                    -- ^ Synonym database
+    -> UnitConversion.UnitConfig    -- ^ Unit configuration
+    -> [IndexedDatabase]            -- ^ Pre-built indexes from other databases
+    -> IO (Either Text Database)
+loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitConfig otherIndexes = do
+    isFile <- doesFileExist path
+    if isFile && isCacheFile path
+        then do
+            -- Direct cache file - no cross-DB linking needed (already built)
+            mDb <- Loader.loadDatabaseFromCacheFile path
+            case mDb of
+                Just db -> return $ Right db
+                Nothing -> return $ Left $ "Failed to load cache file: " <> T.pack path
+        else do
+            format <- detectDirectoryFormat path
+            case format of
+                FormatCSV -> do
+                    -- CSV format - no cross-DB linking for CSV (yet)
+                    isFileCheck <- doesFileExist path
+                    csvFile <- if isFileCheck
+                        then return path
+                        else do
+                            csvFiles <- findCSVFiles path
+                            case csvFiles of
+                                [] -> error $ "No CSV files found in: " ++ path
+                                (f:_) -> return f
+                    if noCache
+                        then do
+                            reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
+                            (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                            reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+                            let activityMap = buildActivityMap activities
+                            !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                            return $ Right db
+                        else do
+                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
+                            case mCachedDb of
+                                Just db -> return $ Right db
+                                Nothing -> do
+                                    reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
+                                    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                                    reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+                                    let activityMap = buildActivityMap activities
+                                    !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                                    Loader.saveCachedDatabaseWithMatrices dbName path db
+                                    return $ Right db
+                FormatUnknown ->
+                    return $ Left $ "No supported database files found in: " <> T.pack path <>
+                                   ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv)"
+                -- FormatSpold and FormatXML use the same loader - WITH cross-DB linking
+                _ -> do
+                    if noCache
+                        then do
+                            -- No caching: load with cross-DB linking
+                            loadResult <- Loader.loadAllSpoldsWithCrossDBLinking
+                                locationAliases otherIndexes synonymDB unitConfig path
+                            case loadResult of
+                                Left err -> return $ Left err
+                                Right (simpleDb, stats) -> do
+                                    !db <- buildDatabaseWithMatrices
+                                        (sdbActivities simpleDb)
+                                        (sdbFlows simpleDb)
+                                        (sdbUnits simpleDb)
+                                    -- Store cross-DB links and dependency info
+                                    let crossLinks = Loader.cdlLinks stats
+                                        depDbs = M.keys (Loader.crossDBBySource stats)
+                                        dbWithLinks = db
+                                            { dbCrossDBLinks = crossLinks
+                                            , dbDependsOn = depDbs
+                                            }
+                                    return $ Right dbWithLinks
+                        else do
+                            -- Try cache first
+                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
+                            case mCachedDb of
+                                Just db -> return $ Right db
+                                Nothing -> do
+                                    -- Build with cross-DB linking
+                                    loadResult <- Loader.loadAllSpoldsWithCrossDBLinking
+                                        locationAliases otherIndexes synonymDB unitConfig path
+                                    case loadResult of
+                                        Left err -> return $ Left err
+                                        Right (simpleDb, stats) -> do
+                                            !db <- buildDatabaseWithMatrices
+                                                (sdbActivities simpleDb)
+                                                (sdbFlows simpleDb)
+                                                (sdbUnits simpleDb)
+                                            -- Store cross-DB links and dependency info
+                                            let crossLinks = Loader.cdlLinks stats
+                                                depDbs = M.keys (Loader.crossDBBySource stats)
+                                                dbWithLinks = db
+                                                    { dbCrossDBLinks = crossLinks
+                                                    , dbDependsOn = depDbs
+                                                    }
+                                            -- Save to cache (with cross-DB links)
+                                            Loader.saveCachedDatabaseWithMatrices dbName path dbWithLinks
+                                            return $ Right dbWithLinks
+
+-- | Load a single database without auto-loading dependencies
+loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
+loadDatabaseSingle manager dbName = do
+    -- Check if already staged -> finalize it first
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    case M.lookup dbName stagedDbs of
+        Just _staged -> do
+            -- Database is staged - finalize it to load
+            finalizeDatabase manager dbName
+        Nothing -> do
+            -- Check if already loaded
+            loadedDbs <- readTVarIO (dmLoadedDbs manager)
+            case M.lookup dbName loadedDbs of
+                Just loaded -> return $ Right loaded
+                Nothing -> do
+                    -- Check if it's configured
+                    availableDbs <- readTVarIO (dmAvailableDbs manager)
+                    case M.lookup dbName availableDbs of
+                        Nothing -> return $ Left $ "Database not found: " <> dbName
+                        Just dbConfig -> do
+                            reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
+                            -- Get currently loaded IndexedDatabases for cross-DB linking
+                            currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
+                            let otherIndexes = M.elems currentIndexedDbs
+                            eitherResult <- try $ loadDatabaseFromConfigWithCrossDB
+                                dbConfig
+                                (dmSynonymDB manager)
+                                (dmUnitConfig manager)
+                                (dmNoCache manager)
+                                otherIndexes
+                            case eitherResult of
+                                Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
+                                Right (Left err) -> return $ Left err
+                                Right (Right loaded) -> do
+                                    -- Build index from the loaded Database for future cross-DB linking
+                                    let indexedDb = buildIndexedDatabaseFromDB dbName (dmSynonymDB manager) (ldDatabase loaded)
+                                    atomically $ do
+                                        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+                                        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                                    reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
+                                    return $ Right loaded
+
+-- | Load a database on demand with automatic dependency loading
+-- Uses cross-database linking to resolve supplier references from other loaded databases
 loadDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
 loadDatabase manager dbName = do
-    -- Check if already loaded
-    loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Just loaded -> do
-            atomically $ writeTVar (dmCurrentName manager) (Just dbName)
-            return $ Right loaded
-        Nothing -> do
-            -- Check if it's configured
-            availableDbs <- readTVarIO (dmAvailableDbs manager)
-            case M.lookup dbName availableDbs of
-                Nothing -> return $ Left $ "Database not found: " <> dbName
-                Just dbConfig -> do
-                    reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
-                    eitherResult <- try $ loadDatabaseFromConfig dbConfig (dmSynonymDB manager) (dmNoCache manager)
-                    case eitherResult of
-                        Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
-                        Right (Left err) -> return $ Left err
-                        Right (Right loaded) -> do
-                            atomically $ modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                            atomically $ writeTVar (dmCurrentName manager) (Just dbName)
-                            reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
-                            return $ Right loaded
+    result <- loadDatabaseSingle manager dbName
+    case result of
+        Left err -> return (Left err)
+        Right loaded -> do
+            -- Auto-load dependencies (from cache metadata)
+            let deps = dbDependsOn (ldDatabase loaded)
+            forM_ deps $ \depName -> do
+                isLoaded <- M.member depName <$> readTVarIO (dmLoadedDbs manager)
+                unless isLoaded $ do
+                    reportProgress Info $ "Auto-loading dependency: " <> T.unpack depName
+                    void $ loadDatabaseSingle manager depName
+            return (Right loaded)
+
+-- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
+stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
+stageUploadedDatabase manager dbConfig = do
+    let path = dcPath dbConfig
+        locationAliases = dcLocationAliases dbConfig
+        dbName = dcName dbConfig
+
+    -- Get currently loaded IndexedDatabases for cross-DB linking
+    currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
+    let otherIndexes = M.elems currentIndexedDbs
+
+    -- Detect format to find the correct file path (CSV needs file, not directory)
+    format <- detectDirectoryFormat path
+    loadPath <- case format of
+        FormatCSV -> do
+            isFile <- doesFileExist path
+            if isFile
+                then return path
+                else do
+                    csvFiles <- findCSVFiles path
+                    case csvFiles of
+                        []    -> return path  -- let loader produce the error
+                        (f:_) -> return f
+        _ -> return path
+
+    -- Parse and run cross-DB linking (but don't build matrices)
+    loadResult <- Loader.loadAllSpoldsWithCrossDBLinking
+        locationAliases
+        otherIndexes
+        (dmSynonymDB manager)
+        (dmUnitConfig manager)
+        loadPath
+
+    case loadResult of
+        Left err -> return $ Left err
+        Right (simpleDb, stats) -> do
+            -- Create staged database
+            let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts stats)]
+                fromScan  = if null fromStats && Loader.crossDBLinksCount stats == 0
+                            then [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList (Loader.collectUnlinkedProductNames simpleDb)]
+                            else fromStats
+                staged = StagedDatabase
+                    { sdSimpleDB = simpleDb
+                    , sdConfig = dbConfig
+                    , sdUnlinkedCount = Loader.unresolvedCount stats
+                    , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) fromScan
+                    , sdSelectedDeps = M.keys (Loader.crossDBBySource stats)
+                    , sdCrossDBLinks = Loader.cdlLinks stats
+                    , sdLinkingStats = stats
+                    }
+
+            -- Store in staged map
+            atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
+            reportProgress Info $ "  [OK] Staged: " <> T.unpack (dcDisplayName dbConfig)
+            return $ Right ()
 
 -- | Unload a database from memory (keeps config for reloading)
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 unloadDatabase manager dbName = do
-    currentName <- readTVarIO (dmCurrentName manager)
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
 
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
         Just _ -> do
-            -- If unloading the current database, clear the current pointer
-            when (currentName == Just dbName) $
-                atomically $ writeTVar (dmCurrentName manager) Nothing
-
-            -- Remove from loaded databases
-            atomically $ modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
+            -- Remove from loaded databases and IndexedDatabases (for cross-DB linking)
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
+                modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
 
             -- Clear the cached KSP solver to release PETSc memory
             clearCachedKspSolver dbName
@@ -553,10 +818,9 @@ addDatabase manager dbConfig = do
     reportProgress Info $ "Added database config: " <> T.unpack (dcDisplayName dbConfig)
 
 -- | Remove a database from the manager
--- Fails if database is loaded or is the current database
+-- Fails if database is loaded
 removeDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 removeDatabase manager dbName = do
-    currentName <- readTVarIO (dmCurrentName manager)
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     availableDbs <- readTVarIO (dmAvailableDbs manager)
 
@@ -564,13 +828,11 @@ removeDatabase manager dbName = do
         Nothing -> return $ Left $ "Database not found: " <> dbName
         Just dbConfig -> do
             -- Check if it's an uploaded database (only uploaded can be deleted)
-            if not (isUploadedPath (dcPath dbConfig))
+            if not (dcIsUploaded dbConfig)
                 then return $ Left $ "Cannot delete configured database. Edit fplca.toml to remove it."
                 else if M.member dbName loadedDbs
                     then return $ Left $ "Cannot delete loaded database. Close it first."
-                    else if currentName == Just dbName
-                        then return $ Left $ "Cannot delete current database. Activate another database first."
-                        else do
+                    else do
                             -- Get the upload directory (uploads/<slug>/)
                             uploadsDir <- UploadedDB.getUploadsDir
                             let uploadDir = uploadsDir </> T.unpack dbName
@@ -599,3 +861,259 @@ removeFromMemory manager dbName = do
     atomically $ modifyTVar' (dmAvailableDbs manager) (M.delete dbName)
     reportProgress Info $ "Removed database: " <> T.unpack dbName
     return $ Right ()
+
+--------------------------------------------------------------------------------
+-- Staged Database Operations
+--------------------------------------------------------------------------------
+
+-- | Get a staged database by name
+getStagedDatabase :: DatabaseManager -> Text -> IO (Maybe StagedDatabase)
+getStagedDatabase manager dbName = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    return $ M.lookup dbName stagedDbs
+
+-- | Get setup info for a database (for the setup page)
+-- Works for both staged and loaded databases
+-- Auto-stages uploaded databases if they're not yet staged
+getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either Text DatabaseSetupInfo)
+getDatabaseSetupInfo manager dbName = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    indexedDbs <- readTVarIO (dmIndexedDbs manager)
+
+    case M.lookup dbName stagedDbs of
+        Just staged -> return $ Right $ buildStagedSetupInfo staged availableDbs indexedDbs
+        Nothing -> case M.lookup dbName loadedDbs of
+            Just loaded -> return $ Right $ buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded)
+            Nothing ->
+                -- Not staged or loaded - try to stage it if it's an uploaded database
+                case M.lookup dbName availableDbs of
+                    Nothing -> return $ Left $ "Database not found: " <> dbName
+                    Just dbConfig ->
+                        if dcIsUploaded dbConfig
+                            then do
+                                -- Stage the uploaded database
+                                stageResult <- stageUploadedDatabase manager dbConfig
+                                case stageResult of
+                                    Left err -> return $ Left err
+                                    Right () -> do
+                                        -- Now get the staged info
+                                        stagedDbs' <- readTVarIO (dmStagedDbs manager)
+                                        indexedDbs' <- readTVarIO (dmIndexedDbs manager)
+                                        case M.lookup dbName stagedDbs' of
+                                            Just staged -> return $ Right $ buildStagedSetupInfo staged availableDbs indexedDbs'
+                                            Nothing -> return $ Left $ "Failed to stage database: " <> dbName
+                            else
+                                return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
+
+-- | Build setup info from a staged database
+buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
+buildStagedSetupInfo staged configs indexedDbs =
+    let stats = sdLinkingStats staged
+        -- Count from the actual database, not from cross-DB linking stats
+        totalInputs = Loader.countTotalTechInputs (sdSimpleDB staged)
+        unlinked = Loader.countUnlinkedExchanges (sdSimpleDB staged)
+        crossDBLinks = Loader.crossDBLinksCount stats
+        internalLinks = totalInputs - unlinked
+        unresolvedLinks = max 0 (unlinked - crossDBLinks)
+        resolved = internalLinks + crossDBLinks
+        completeness = if totalInputs > 0
+            then 100.0 * fromIntegral resolved / fromIntegral totalInputs
+            else 100.0
+        -- Convert missing products to MissingSupplier with reason/detail
+        missingSuppliers = take 10 $ map blockerToMissingSupplier (sdMissingProducts staged)
+        blockerToMissingSupplier (name, cnt, blocker) =
+            let (reason, detail) = case blocker of
+                    NoNameMatch -> ("no_name_match", Nothing)
+                    UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
+                    LocationUnavailable loc -> ("location_unavailable", Just loc)
+            in MissingSupplier name cnt Nothing reason detail
+        -- Build suggestions from available databases
+        suggestions = buildDependencySuggestions staged configs indexedDbs
+        -- Database is ready only when it has activities and all inputs are resolved
+        activityCount = M.size (sdbActivities (sdSimpleDB staged))
+        isReady = activityCount > 0 && unresolvedLinks == 0
+    in DatabaseSetupInfo
+        { dsiName = dcName (sdConfig staged)
+        , dsiDisplayName = dcDisplayName (sdConfig staged)
+        , dsiActivityCount = activityCount
+        , dsiInputCount = totalInputs
+        , dsiCompleteness = completeness
+        , dsiInternalLinks = internalLinks
+        , dsiCrossDBLinks = crossDBLinks
+        , dsiUnresolvedLinks = unresolvedLinks
+        , dsiMissingSuppliers = missingSuppliers
+        , dsiSelectedDeps = sdSelectedDeps staged
+        , dsiSuggestions = suggestions
+        , dsiIsReady = isReady
+        , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
+        }
+
+-- | Build setup info from a loaded database (already finalized)
+buildLoadedSetupInfo :: DatabaseConfig -> Database -> DatabaseSetupInfo
+buildLoadedSetupInfo config db =
+    DatabaseSetupInfo
+        { dsiName = dcName config
+        , dsiDisplayName = dcDisplayName config
+        , dsiActivityCount = fromIntegral (dbActivityCount db)
+        , dsiInputCount = 0  -- Not tracked for loaded databases
+        , dsiCompleteness = 100.0  -- Loaded = complete
+        , dsiInternalLinks = 0  -- Not tracked
+        , dsiCrossDBLinks = length (dbCrossDBLinks db)
+        , dsiUnresolvedLinks = 0  -- Loaded = no unresolved
+        , dsiMissingSuppliers = []
+        , dsiSelectedDeps = dbDependsOn db
+        , dsiSuggestions = []  -- No suggestions for loaded databases
+        , dsiIsReady = True
+        , dsiUnknownUnits = []  -- Not tracked for loaded databases
+        }
+
+-- | Build dependency suggestions for a staged database
+buildDependencySuggestions :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> [DependencySuggestion]
+buildDependencySuggestions _staged configs indexedDbs =
+    -- For now, suggest all other loaded databases
+    -- TODO: Actually count how many missing suppliers each can provide
+    [ DependencySuggestion
+        { dsgDatabaseName = name
+        , dsgDisplayName = maybe name dcDisplayName (M.lookup name configs)
+        , dsgMatchCount = M.size (idbByProductName idx)  -- Use total products as estimate
+        }
+    | (name, idx) <- M.toList indexedDbs
+    ]
+  where
+    idbByProductName = EcoSpold.CrossDatabaseLinking.idbByProductName
+
+-- | Add a dependency to a staged database
+-- Runs cross-DB linking against the new dependency
+addDependencyToStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
+addDependencyToStaged manager dbName depName = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    indexedDbs <- readTVarIO (dmIndexedDbs manager)
+
+    case M.lookup dbName stagedDbs of
+        Nothing -> return $ Left $ "Staged database not found: " <> dbName
+        Just staged -> case M.lookup depName indexedDbs of
+            Nothing -> return $ Left $ "Dependency database not loaded: " <> depName
+            Just _depIdx -> do
+                -- Run cross-DB linking with the new dependency
+                let allIndexes = M.elems indexedDbs
+                (_, newStats) <- Loader.fixActivityLinksWithCrossDB
+                    allIndexes
+                    (dmSynonymDB manager)
+                    (dmUnitConfig manager)
+                    (sdSimpleDB staged)
+
+                -- Update staged database with new stats and dependency
+                let newDeps = if depName `elem` sdSelectedDeps staged
+                        then sdSelectedDeps staged
+                        else depName : sdSelectedDeps staged
+                    updatedStaged = staged
+                        { sdSelectedDeps = newDeps
+                        , sdCrossDBLinks = Loader.cdlLinks newStats
+                        , sdLinkingStats = newStats
+                        , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                        }
+
+                -- Save updated staged database
+                atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+
+                -- Return updated setup info
+                getDatabaseSetupInfo manager dbName
+
+-- | Remove a dependency from a staged database
+removeDependencyFromStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
+removeDependencyFromStaged manager dbName depName = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+
+    case M.lookup dbName stagedDbs of
+        Nothing -> return $ Left $ "Staged database not found: " <> dbName
+        Just staged -> do
+            let newDeps = filter (/= depName) (sdSelectedDeps staged)
+
+            -- Re-run cross-DB linking without the removed dependency
+            indexedDbs <- readTVarIO (dmIndexedDbs manager)
+            let remainingIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
+            (_, newStats) <- Loader.fixActivityLinksWithCrossDB
+                remainingIndexes
+                (dmSynonymDB manager)
+                (dmUnitConfig manager)
+                (sdSimpleDB staged)
+
+            -- Update staged database
+            let updatedStaged = staged
+                    { sdSelectedDeps = newDeps
+                    , sdCrossDBLinks = Loader.cdlLinks newStats
+                    , sdLinkingStats = newStats
+                    , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                    }
+
+            atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+            getDatabaseSetupInfo manager dbName
+
+-- | Finalize a staged database (build matrices and make it ready for queries)
+finalizeDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
+finalizeDatabase manager dbName = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+
+    case M.lookup dbName stagedDbs of
+        Nothing -> return $ Left $ "Staged database not found: " <> dbName
+        Just staged -> do
+            -- Reject finalization if there are unresolved links
+            let unlinked = Loader.countUnlinkedExchanges (sdSimpleDB staged)
+                crossDBLinks = Loader.crossDBLinksCount (sdLinkingStats staged)
+                unresolvedLinks = max 0 (unlinked - crossDBLinks)
+            let activityCount = M.size (sdbActivities (sdSimpleDB staged))
+            if activityCount == 0
+              then return $ Left $
+                "Cannot finalize: database contains 0 activities. "
+                <> "The data file may be corrupted or in an unsupported format."
+            else if unresolvedLinks > 0
+              then return $ Left $
+                "Cannot finalize: " <> T.pack (show unresolvedLinks)
+                <> " unresolved inputs. Add dependencies to resolve them first."
+              else do
+                reportProgress Info $ "Finalizing database: " <> T.unpack dbName
+
+                -- Build the database with matrices
+                !db <- buildDatabaseWithMatrices
+                    (sdbActivities (sdSimpleDB staged))
+                    (sdbFlows (sdSimpleDB staged))
+                    (sdbUnits (sdSimpleDB staged))
+
+                -- Add cross-DB links and dependency info
+                let dbWithLinks = db
+                        { dbCrossDBLinks = sdCrossDBLinks staged
+                        , dbDependsOn = sdSelectedDeps staged
+                        }
+
+                -- Initialize runtime fields
+                let dbWithRuntime = initializeRuntimeFields dbWithLinks (dmSynonymDB manager)
+
+                -- Precompute factorization and create shared solver
+                let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
+                    activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
+                factorization <- precomputeMatrixFactorization dbName techTriplesInt activityCountInt
+                let dbWithFactorization = addFactorizationToDatabase dbWithRuntime factorization
+
+                -- Create shared solver with the factorization
+                sharedSolver <- createSharedSolver (Just factorization) techTriplesInt activityCountInt
+
+                let loaded = LoadedDatabase
+                        { ldDatabase = dbWithFactorization
+                        , ldSharedSolver = sharedSolver
+                        , ldConfig = sdConfig staged
+                        }
+
+                -- Move from staged to loaded
+                let indexedDb = buildIndexedDatabaseFromDB dbName (dmSynonymDB manager) dbWithFactorization
+                atomically $ do
+                    modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+                    modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+                    modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+
+                -- Save to cache
+                Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithFactorization
+
+                reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
+                return $ Right loaded

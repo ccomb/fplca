@@ -1,10 +1,14 @@
 module Models.Database exposing
     ( ActivateResponse
     , DatabaseList
+    , DatabaseSetupInfo
     , DatabaseStatus
+    , DependencySuggestion
+    , MissingSupplier
     , UploadResponse
     , activateResponseDecoder
     , databaseListDecoder
+    , databaseSetupInfoDecoder
     , databaseStatusDecoder
     , uploadResponseDecoder
     )
@@ -28,11 +32,10 @@ type alias DatabaseStatus =
     }
 
 
-{-| List of databases with current database info
+{-| List of databases
 -}
 type alias DatabaseList =
     { databases : List DatabaseStatus
-    , current : Maybe String
     }
 
 
@@ -67,7 +70,6 @@ databaseListDecoder : Decoder DatabaseList
 databaseListDecoder =
     Decode.succeed DatabaseList
         |> required "dlrDatabases" (Decode.list databaseStatusDecoder)
-        |> optional "dlrCurrent" (Decode.nullable Decode.string) Nothing
 
 
 {-| JSON decoder for ActivateResponse
@@ -99,3 +101,84 @@ uploadResponseDecoder =
         |> required "uprMessage" Decode.string
         |> optional "uprSlug" (Decode.nullable Decode.string) Nothing
         |> optional "uprFormat" (Decode.nullable Decode.string) Nothing
+
+
+{-| Information about a missing supplier product
+-}
+type alias MissingSupplier =
+    { productName : String
+    , count : Int
+    , location : Maybe String
+    , reason : String
+    , detail : Maybe String
+    }
+
+
+{-| Suggestion for a dependency database
+-}
+type alias DependencySuggestion =
+    { databaseName : String
+    , displayName : String
+    , matchCount : Int
+    }
+
+
+{-| Setup info for a database (for the setup page)
+-}
+type alias DatabaseSetupInfo =
+    { name : String
+    , displayName : String
+    , activityCount : Int
+    , inputCount : Int
+    , completeness : Float
+    , internalLinks : Int
+    , crossDBLinks : Int
+    , unresolvedLinks : Int
+    , missingSuppliers : List MissingSupplier
+    , selectedDependencies : List String
+    , suggestions : List DependencySuggestion
+    , isReady : Bool
+    , unknownUnits : List String
+    }
+
+
+{-| JSON decoder for MissingSupplier
+-}
+missingSupplierDecoder : Decoder MissingSupplier
+missingSupplierDecoder =
+    Decode.succeed MissingSupplier
+        |> required "productName" Decode.string
+        |> required "count" Decode.int
+        |> optional "location" (Decode.nullable Decode.string) Nothing
+        |> optional "reason" Decode.string "no_name_match"
+        |> optional "detail" (Decode.nullable Decode.string) Nothing
+
+
+{-| JSON decoder for DependencySuggestion
+-}
+dependencySuggestionDecoder : Decoder DependencySuggestion
+dependencySuggestionDecoder =
+    Decode.succeed DependencySuggestion
+        |> required "databaseName" Decode.string
+        |> required "displayName" Decode.string
+        |> required "matchCount" Decode.int
+
+
+{-| JSON decoder for DatabaseSetupInfo
+-}
+databaseSetupInfoDecoder : Decoder DatabaseSetupInfo
+databaseSetupInfoDecoder =
+    Decode.succeed DatabaseSetupInfo
+        |> required "name" Decode.string
+        |> required "displayName" Decode.string
+        |> required "activityCount" Decode.int
+        |> required "inputCount" Decode.int
+        |> required "completeness" Decode.float
+        |> required "internalLinks" Decode.int
+        |> required "crossDBLinks" Decode.int
+        |> required "unresolvedLinks" Decode.int
+        |> required "missingSuppliers" (Decode.list missingSupplierDecoder)
+        |> required "selectedDependencies" (Decode.list Decode.string)
+        |> required "suggestions" (Decode.list dependencySuggestionDecoder)
+        |> required "isReady" Decode.bool
+        |> optional "unknownUnits" (Decode.list Decode.string) []

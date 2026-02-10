@@ -260,6 +260,9 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
             , dbBiosphereFlows = bioFlowUUIDs
             , dbActivityCount = activityCount
             , dbBiosphereCount = bioFlowCount
+            -- Cross-database linking (empty by default, populated during cross-DB linking)
+            , dbCrossDBLinks = []
+            , dbDependsOn = []
             -- Runtime-only fields (not cached)
             , dbCachedFactorization = Nothing
             , dbSynonymDB = Nothing  -- Will be populated at runtime from embedded DB

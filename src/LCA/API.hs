@@ -13,7 +13,7 @@ import LCA.Method.Mapping (mapMethodFlows, MatchStrategy(..), MappingStats(..), 
 import LCA.Method.Parser (parseMethodFile)
 import LCA.Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import LCA.SynonymDB (SynonymDB, emptySynonymDB)
-import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), getCurrentDatabase)
+import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase)
 import LCA.Upload (DatabaseFormat(..))
 import qualified LCA.API.DatabaseHandlers as DBHandlers
 import LCA.Progress (getLogLines)
@@ -37,6 +37,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import GHC.Generics
 import Servant
+import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.IO.Class (liftIO)
 
 -- | API type definition - RESTful design with focused endpoints
@@ -52,37 +53,60 @@ type LCAAPI =
                 :<|> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
                 :<|> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
-                :<|> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
-                :<|> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
+                :<|> "flow" :> Capture "flowId" Text :> QueryParam "db" Text :> Get '[JSON] FlowDetail
+                :<|> "flow" :> Capture "flowId" Text :> "activities" :> QueryParam "db" Text :> Get '[JSON] [ActivitySummary]
                 :<|> "methods" :> Get '[JSON] [MethodSummary]
                 :<|> "method" :> Capture "methodId" Text :> Get '[JSON] MethodDetail
                 :<|> "method" :> Capture "methodId" Text :> "factors" :> Get '[JSON] [MethodFactorAPI]
-                :<|> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
-                :<|> "search" :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "search" :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "method" :> Capture "methodId" Text :> "mapping" :> QueryParam "db" Text :> Get '[JSON] MappingStatus
+                :<|> "search" :> "flows" :> QueryParam "db" Text :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
+                :<|> "search" :> "activities" :> QueryParam "db" Text :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
                 :<|> "databases" :> Get '[JSON] DatabaseListResponse
-                :<|> "databases" :> Capture "dbName" Text :> "activate" :> Post '[JSON] ActivateResponse
-                :<|> "databases" :> "current" :> Get '[JSON] (Maybe DatabaseStatusAPI)
                 -- Load/Unload/Delete endpoints
                 :<|> "databases" :> Capture "dbName" Text :> "load" :> Post '[JSON] ActivateResponse
                 :<|> "databases" :> Capture "dbName" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "databases" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Upload endpoint (base64-encoded ZIP in JSON body)
                 :<|> "databases" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                -- Database setup endpoints (for cross-DB linking configuration)
+                :<|> "databases" :> Capture "dbName" Text :> "setup" :> Get '[JSON] DatabaseSetupInfo
+                :<|> "databases" :> Capture "dbName" Text :> "add-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
+                :<|> "databases" :> Capture "dbName" Text :> "remove-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
+                :<|> "databases" :> Capture "dbName" Text :> "finalize" :> Post '[JSON] ActivateResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
            )
 
--- | Get current database and solver from DatabaseManager
--- Throws 500 error if no database is loaded
-requireCurrentDatabase :: DatabaseManager -> Handler (Database, SharedSolver)
-requireCurrentDatabase dbManager = do
-    maybeLoaded <- liftIO $ getCurrentDatabase dbManager
+-- | Get database by name, throw 404 if not loaded
+requireDatabaseByName :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
+requireDatabaseByName dbManager dbName = do
+    maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
-        Nothing -> throwError err500{errBody = "No database loaded"}
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
+        Nothing -> throwError err404{errBody = "Database not loaded: " <> BSL.fromStrict (T.encodeUtf8 dbName)}
+
+-- | Get database for a processId, searching all loaded databases
+requireDatabaseForProcessId :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
+requireDatabaseForProcessId dbManager processIdText = do
+    allDbs <- liftIO $ readTVarIO (dmLoadedDbs dbManager)
+    case [ld | ld <- M.elems allDbs, isValidProcessId (ldDatabase ld)] of
+        (ld:_) -> return (ldDatabase ld, ldSharedSolver ld)
+        [] -> throwError err404{errBody = "No loaded database contains process: " <> BSL.fromStrict (T.encodeUtf8 processIdText)}
+  where
+    isValidProcessId db = case parseProcessId db processIdText of
+        Just _  -> True
+        Nothing -> False
+
+-- | Get database from explicit db query param, falling back to first loaded database
+requireDatabaseByParam :: DatabaseManager -> Maybe Text -> Handler (Database, SharedSolver)
+requireDatabaseByParam dbManager (Just dbName) = requireDatabaseByName dbManager dbName
+requireDatabaseByParam dbManager Nothing = do
+    allDbs <- liftIO $ readTVarIO (dmLoadedDbs dbManager)
+    case M.elems allDbs of
+        (ld:_) -> return (ldDatabase ld, ldSharedSolver ld)
+        [] -> throwError err404{errBody = "No database loaded"}
 
 -- | Helper function to validate ProcessId and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
@@ -130,12 +154,14 @@ lcaServer dbManager maxTreeDepth methodsDir =
         :<|> searchActivitiesWithCount
         :<|> postLCIA
         :<|> DBHandlers.getDatabases dbManager
-        :<|> DBHandlers.activateDatabaseHandler dbManager
-        :<|> DBHandlers.getCurrentDatabaseHandler dbManager
         :<|> DBHandlers.loadDatabaseHandler dbManager
         :<|> DBHandlers.unloadDatabaseHandler dbManager
         :<|> DBHandlers.deleteDatabaseHandler dbManager
         :<|> DBHandlers.uploadDatabaseHandler dbManager
+        :<|> DBHandlers.getDatabaseSetupHandler dbManager
+        :<|> DBHandlers.addDependencyHandler dbManager
+        :<|> DBHandlers.removeDependencyHandler dbManager
+        :<|> DBHandlers.finalizeDatabaseHandler dbManager
         :<|> getLogsHandler
   where
     getLogsHandler :: Maybe Int -> Handler Value
@@ -150,7 +176,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo
     getActivityInfo processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         let unitCfg = dmUnitConfig dbManager
         case LCA.Service.getActivityInfo unitCfg db processId of
             Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -162,28 +188,28 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Activity flows sub-resource
     getActivityFlows :: Text -> Handler [FlowSummary]
     getActivityFlows processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \activity ->
             return $ LCA.Service.getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
     getActivityInputs :: Text -> Handler [ExchangeDetail]
     getActivityInputs processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \activity ->
             return $ LCA.Service.getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
     getActivityOutputs :: Text -> Handler [ExchangeDetail]
     getActivityOutputs processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \activity ->
             return $ LCA.Service.getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
     getActivityReferenceProduct :: Text -> Handler FlowDetail
     getActivityReferenceProduct processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \activity -> do
             case LCA.Service.getActivityReferenceProductDetail db activity of
                 Nothing -> throwError err404{errBody = "No reference product found"}
@@ -192,7 +218,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Activity tree export for visualization (configurable depth)
     getActivityTree :: Text -> Handler TreeExport
     getActivityTree processId = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \activity -> do
             -- Use CLI --tree-depth option for configurable depth
             -- Default depth limit prevents DOS attacks via deep tree requests
@@ -209,7 +235,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Activity inventory calculation (full supply chain LCI)
     getActivityInventory :: Text -> Handler InventoryExport
     getActivityInventory processId = do
-        (db, sharedSolver) <- requireCurrentDatabase dbManager
+        (db, sharedSolver) <- requireDatabaseForProcessId dbManager processId
         result <- liftIO $ LCA.Service.getActivityInventoryWithSharedSolver sharedSolver db processId
         case result of
             Left (LCA.Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -220,7 +246,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Activity graph endpoint for network visualization
     getActivityGraph :: Text -> Maybe Double -> Handler GraphExport
     getActivityGraph processId maybeCutoff = do
-        (db, sharedSolver) <- requireCurrentDatabase dbManager
+        (db, sharedSolver) <- requireDatabaseForProcessId dbManager processId
         let cutoffPercent = fromMaybe 1.0 maybeCutoff  -- Default to 1% cutoff
         result <- liftIO $ LCA.Service.buildActivityGraph db sharedSolver processId cutoffPercent
         case result of
@@ -233,7 +259,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- Activity LCIA endpoint
     getActivityLCIA :: Text -> Text -> Handler LCIAResult
     getActivityLCIA processIdText methodIdText = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processIdText
         -- Load the method
         method <- loadMethodByUUID methodIdText
 
@@ -269,18 +295,18 @@ lcaServer dbManager maxTreeDepth methodsDir =
                     }
 
     -- Flow detail endpoint
-    getFlowDetail :: Text -> Handler FlowDetail
-    getFlowDetail flowIdText = do
-        (db, _) <- requireCurrentDatabase dbManager
+    getFlowDetail :: Text -> Maybe Text -> Handler FlowDetail
+    getFlowDetail flowIdText dbParam = do
+        (db, _) <- requireDatabaseByParam dbManager dbParam
         withValidatedFlow db flowIdText $ \flow -> do
             let usageCount = LCA.Service.getFlowUsageCount db (flowId flow)
             let unitName = getUnitNameForFlow (dbUnits db) flow
             return $ FlowDetail flow unitName usageCount
 
     -- Activities using a specific flow
-    getFlowActivities :: Text -> Handler [ActivitySummary]
-    getFlowActivities flowIdText = do
-        (db, _) <- requireCurrentDatabase dbManager
+    getFlowActivities :: Text -> Maybe Text -> Handler [ActivitySummary]
+    getFlowActivities flowIdText dbParam = do
+        (db, _) <- requireDatabaseByParam dbManager dbParam
         withValidatedFlow db flowIdText $ \flow ->
             return $ LCA.Service.getActivitiesUsingFlow db (flowId flow)
 
@@ -315,9 +341,9 @@ lcaServer dbManager maxTreeDepth methodsDir =
         return $ map cfToAPI (methodFactors method)
 
     -- Get method flow mapping status
-    getMethodMapping :: Text -> Handler MappingStatus
-    getMethodMapping methodIdText = do
-        (db, _) <- requireCurrentDatabase dbManager
+    getMethodMapping :: Text -> Maybe Text -> Handler MappingStatus
+    getMethodMapping methodIdText dbParam = do
+        (db, _) <- requireDatabaseByParam dbManager dbParam
         method <- loadMethodByUUID methodIdText
         -- Get SynonymDB and flow name index from database
         let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
@@ -394,15 +420,15 @@ lcaServer dbManager maxTreeDepth methodsDir =
         }
 
     -- Search flows by name or synonym with optional language filtering and pagination
-    searchFlows :: Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-    searchFlows queryParam langParam limitParam offsetParam = do
-        (db, _) <- requireCurrentDatabase dbManager
+    searchFlows :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
+    searchFlows dbParam queryParam langParam limitParam offsetParam = do
+        (db, _) <- requireDatabaseByParam dbManager dbParam
         searchFlowsInternal db queryParam langParam limitParam offsetParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount nameParam geoParam productParam limitParam offsetParam = do
-        (db, _) <- requireCurrentDatabase dbManager
+    searchActivitiesWithCount :: Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbParam nameParam geoParam productParam limitParam offsetParam = do
+        (db, _) <- requireDatabaseByParam dbManager dbParam
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
         result <- liftIO $ LCA.Service.searchActivities db nameParam geoParam productParam limitParam offsetParam
@@ -415,7 +441,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
     -- LCIA computation
     postLCIA :: Text -> LCIARequest -> Handler Value
     postLCIA processId lciaReq = do
-        (db, _) <- requireCurrentDatabase dbManager
+        (db, _) <- requireDatabaseForProcessId dbManager processId
         withValidatedActivity db processId $ \_ -> do
             -- This would implement LCIA computation with the provided method
             -- For now, return a placeholder

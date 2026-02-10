@@ -18,6 +18,7 @@ type Route
     | ActivityLCIARoute String String -- db, ProcessId (LCIA view)
     | DatabasesRoute -- Databases management page (global, no db prefix)
     | UploadRoute -- Database upload page (global, no db prefix)
+    | DatabaseSetupRoute String -- Database setup page (configure dependencies)
     | NotFoundRoute
 
 
@@ -37,3 +38,4 @@ type Page
     | LCIAPage
     | DatabasesPage
     | UploadPage
+    | DatabaseSetupPage

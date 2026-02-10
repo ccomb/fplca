@@ -1,0 +1,227 @@
+module Pages.Inventory exposing (Model, Msg, page)
+
+import Browser.Navigation as Nav
+import Dict
+import Effect exposing (Effect)
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (..)
+import Http
+import Models.Activity exposing (ActivityInfo, activityInfoDecoder)
+import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
+import Route
+import Shared exposing (RemoteData(..))
+import Spa.Page
+import View exposing (View)
+import Views.InventoryView as InventoryView
+import Views.LCIAView
+
+
+type alias Model =
+    { activityId : String
+    , dbName : String
+    , activityInfo : RemoteData ActivityInfo
+    , inventory : RemoteData InventoryExport
+    , resourcesSearch : String
+    , emissionsSearch : String
+    }
+
+
+type Msg
+    = ActivityInfoLoaded (Result Http.Error ActivityInfo)
+    | InventoryLoaded (Result Http.Error InventoryExport)
+    | InventoryViewMsg InventoryView.Msg
+    | RequestLoadDatabase
+
+
+page : Shared.Model -> Spa.Page.Page ( String, String ) Shared.Msg (View Msg) Model Msg
+page shared =
+    Spa.Page.element
+        { init = init shared
+        , update = update shared
+        , view = view shared
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+init : Shared.Model -> ( String, String ) -> ( Model, Effect Shared.Msg Msg )
+init shared ( db, activityId ) =
+    if not (Shared.isDatabaseLoaded shared db) then
+        ( { activityId = activityId
+          , dbName = db
+          , activityInfo = NotAsked
+          , inventory = NotAsked
+          , resourcesSearch = ""
+          , emissionsSearch = ""
+          }
+        , Effect.none
+        )
+
+    else
+        let
+            cachedInfo =
+                Dict.get activityId shared.cachedActivityInfo
+
+            cachedInventory =
+                Dict.get activityId shared.cachedInventories
+        in
+        ( { activityId = activityId
+          , dbName = db
+          , activityInfo =
+                case cachedInfo of
+                    Just info ->
+                        Loaded info
+
+                    Nothing ->
+                        Loading
+          , inventory =
+                case cachedInventory of
+                    Just inv ->
+                        Loaded inv
+
+                    Nothing ->
+                        Loading
+          , resourcesSearch = ""
+          , emissionsSearch = ""
+          }
+        , Effect.batch
+            [ case cachedInfo of
+                Just _ ->
+                    Effect.none
+
+                Nothing ->
+                    Effect.fromCmd (loadActivityInfo activityId)
+            , case cachedInventory of
+                Just _ ->
+                    Effect.none
+
+                Nothing ->
+                    Effect.fromCmd (loadInventory activityId)
+            ]
+        )
+
+
+update : Shared.Model -> Msg -> Model -> ( Model, Effect Shared.Msg Msg )
+update shared msg model =
+    case msg of
+        ActivityInfoLoaded (Ok info) ->
+            ( { model | activityInfo = Loaded info }
+            , Effect.fromShared (Shared.CacheActivityInfo model.activityId info)
+            )
+
+        ActivityInfoLoaded (Err error) ->
+            ( { model | activityInfo = Failed (Shared.httpErrorToString error) }
+            , Effect.none
+            )
+
+        InventoryLoaded (Ok inventory) ->
+            ( { model | inventory = Loaded inventory }
+            , Effect.fromShared (Shared.CacheInventory model.activityId inventory)
+            )
+
+        InventoryLoaded (Err error) ->
+            ( { model | inventory = Failed (Shared.httpErrorToString error) }
+            , Effect.none
+            )
+
+        InventoryViewMsg viewMsg ->
+            case viewMsg of
+                InventoryView.UpdateResourcesSearch query ->
+                    ( { model | resourcesSearch = query }, Effect.none )
+
+                InventoryView.UpdateEmissionsSearch query ->
+                    ( { model | emissionsSearch = query }, Effect.none )
+
+        RequestLoadDatabase ->
+            ( model
+            , Effect.fromShared (Shared.LoadDatabase model.dbName)
+            )
+
+
+view : Shared.Model -> Model -> View Msg
+view shared model =
+    { title = "Inventory"
+    , body = viewBody shared model
+    }
+
+
+viewBody : Shared.Model -> Model -> Html Msg
+viewBody shared model =
+    if not (Shared.isDatabaseLoaded shared model.dbName) then
+        viewLoadDatabasePrompt shared model.dbName
+
+    else
+        let
+            activityNameInfo =
+                case model.activityInfo of
+                    Loaded info ->
+                        Just ( info.name, info.location )
+
+                    _ ->
+                        Nothing
+        in
+        div [ class "inventory-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+            [ Views.LCIAView.viewPageNavbar "Life Cycle Inventory (LCI)" activityNameInfo
+            , case model.inventory of
+                Loading ->
+                    div [ class "has-text-centered", style "padding" "2rem" ]
+                        [ div [ class "is-size-3" ] [ text "Loading inventory..." ]
+                        , progress [ class "progress is-primary", attribute "max" "100" ] []
+                        ]
+
+                Failed err ->
+                    div [ class "notification is-danger", style "margin" "1rem" ]
+                        [ strong [] [ text "Error: " ], text err ]
+
+                Loaded inventory ->
+                    let
+                        resourcesCount =
+                            List.length (List.filter (not << .ifdIsEmission) inventory.ieFlows)
+
+                        emissionsCount =
+                            List.length (List.filter .ifdIsEmission inventory.ieFlows)
+                    in
+                    div [ style "flex" "1", style "display" "flex", style "flex-direction" "column", style "min-height" "0", style "padding" "0.5rem" ]
+                        [ Html.map InventoryViewMsg
+                            (InventoryView.viewInventoryTables
+                                model.resourcesSearch
+                                model.emissionsSearch
+                                resourcesCount
+                                emissionsCount
+                                inventory.ieFlows
+                            )
+                        ]
+
+                NotAsked ->
+                    text ""
+            ]
+
+
+
+viewLoadDatabasePrompt : Shared.Model -> String -> Html Msg
+viewLoadDatabasePrompt shared dbName =
+    div [ class "notification is-warning", style "margin" "2rem" ]
+        [ p [] [ text ("Database '" ++ Shared.getDatabaseDisplayName shared dbName ++ "' is not loaded.") ]
+        , button [ class "button is-primary", style "margin-top" "1rem", onClick RequestLoadDatabase ]
+            [ text ("Load " ++ Shared.getDatabaseDisplayName shared dbName) ]
+        ]
+
+
+
+-- HTTP
+
+
+loadActivityInfo : String -> Cmd Msg
+loadActivityInfo activityId =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId
+        , expect = Http.expectJson ActivityInfoLoaded activityInfoDecoder
+        }
+
+
+loadInventory : String -> Cmd Msg
+loadInventory activityId =
+    Http.get
+        { url = "/api/v1/activity/" ++ activityId ++ "/inventory"
+        , expect = Http.expectJson InventoryLoaded inventoryExportDecoder
+        }

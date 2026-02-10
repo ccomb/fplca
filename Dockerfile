@@ -141,11 +141,7 @@ RUN echo "packages: ./fplca ./petsc-hs" > /build/cabal.project \
     && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local \
     && echo "" >> /build/cabal.project.local \
     && echo "package fplca" >> /build/cabal.project.local \
-    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local \
-    && echo "" >> /build/cabal.project.local \
-    && echo "-- Use bundled libarchive sources (no system library required)" >> /build/cabal.project.local \
-    && echo "package libarchive" >> /build/cabal.project.local \
-    && echo "  flags: -system-libarchive" >> /build/cabal.project.local
+    && echo "  ghc-options: -optl-L/opt/petsc/${PETSC_ARCH}/lib -optl-lmpi" >> /build/cabal.project.local
 
 # Update cabal and build ONLY dependencies (cached layer)
 RUN cabal update \

@@ -5,16 +5,16 @@ import Html exposing (Html, button, div, i, nav, p, span, text)
 import Html.Attributes exposing (class, classList, style)
 import Html.Events exposing (onClick, stopPropagationOn)
 import Json.Decode
-import Models.Page exposing (Page(..))
+import Route exposing (ActivePage(..))
 
 
 type Msg
-    = NavigateTo Page
+    = NavigateTo ActivePage
     | ToggleConsole
     | CloseConsole
 
 
-mapMsg : { onNavigate : Page -> msg, onToggleConsole : msg, onCloseConsole : msg } -> Msg -> msg
+mapMsg : { onNavigate : ActivePage -> msg, onToggleConsole : msg, onCloseConsole : msg } -> Msg -> msg
 mapMsg handlers msg =
     case msg of
         NavigateTo page ->
@@ -27,9 +27,9 @@ mapMsg handlers msg =
             handlers.onCloseConsole
 
 
-viewLeftMenu : Page -> String -> Maybe String -> Maybe String -> String -> Bool -> Html Msg
+viewLeftMenu : ActivePage -> String -> Maybe String -> Maybe String -> String -> Bool -> Html Msg
 viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version showConsole =
-    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%", onClick CloseConsole ]
+    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
             [ -- Database name as header (not clickable)
@@ -47,20 +47,20 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                     Nothing ->
                         span [ style "color" "#888" ]
                             [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
-                            , text "·"
+                            , text "\u{00B7}"
                             , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
-                            , text "·LCA"
+                            , text "\u{00B7}LCA"
                             ]
                 ]
             , -- DATABASES section
               div [ class "menu-items" ]
                 [ menuLabel "Databases"
-                , menuItem currentPage DatabasesPage "fas fa-database" "Databases" False
+                , menuItem currentPage DatabasesActive "fas fa-database" "Databases" False
                 ]
             , -- SEARCH section
               div [ class "menu-items" ]
                 [ menuLabel "Search"
-                , menuItem currentPage ActivitiesPage "fas fa-search" "Activities" False
+                , menuItem currentPage ActivitiesActive "fas fa-search" "Activities" False
                 ]
             , -- Activity section (only show if an activity is selected)
               -- White background to look like vertical tabs connected to main content
@@ -74,15 +74,15 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                         , style "border-radius" "6px 0 0 6px"
                         ]
                         [ menuLabel "Explore"
-                        , menuItem currentPage UpstreamPage "fas fa-arrow-up" "Upstream activities" False
-                        , menuItem currentPage EmissionsPage "fas fa-cloud" "Direct emissions" False
-                        , menuItem currentPage ResourcesPage "fas fa-leaf" "Natural resources" False
-                        , menuItem currentPage ProductsPage "fas fa-box" "Outgoing products" False
-                        , menuItem currentPage InventoryPage "fas fa-list-ul" "Inventory" False
+                        , menuItem currentPage UpstreamActive "fas fa-arrow-up" "Upstream activities" False
+                        , menuItem currentPage EmissionsActive "fas fa-cloud" "Direct emissions" False
+                        , menuItem currentPage ResourcesActive "fas fa-leaf" "Natural resources" False
+                        , menuItem currentPage ProductsActive "fas fa-box" "Outgoing products" False
+                        , menuItem currentPage InventoryActive "fas fa-list-ul" "Inventory" False
                         , menuLabel "Lab"
-                        , menuItem currentPage LCIAPage "fas fa-chart-bar" "Impacts" True
-                        , menuItem currentPage TreePage "fas fa-project-diagram" "Tree" True
-                        , menuItem currentPage GraphPage "fas fa-network-wired" "Graph" True
+                        , menuItem currentPage LCIAActive "fas fa-chart-bar" "Impacts" True
+                        , menuItem currentPage TreeActive "fas fa-project-diagram" "Tree" True
+                        , menuItem currentPage GraphActive "fas fa-network-wired" "Graph" True
                         ]
 
                 Nothing ->
@@ -118,9 +118,9 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             , div [ style "border-top" "1px solid #ddd", style "margin" "0.5rem 0" ] []
             , div []
                 [ span [ style "color" "#00d1b2", style "font-style" "italic" ] [ text "f" ]
-                , text "·"
+                , text "\u{00B7}"
                 , span [ style "color" "#e87c23", style "font-style" "italic" ] [ text "p" ]
-                , text "·LCA"
+                , text "\u{00B7}LCA"
                 ]
             , div [ style "font-size" "0.8em", style "margin-top" "0.25rem" ]
                 [ text (formatVersion version) ]
@@ -154,7 +154,7 @@ menuLabel label =
         [ text label ]
 
 
-menuItem : Page -> Page -> String -> String -> Bool -> Html Msg
+menuItem : ActivePage -> ActivePage -> String -> String -> Bool -> Html Msg
 menuItem currentPage targetPage iconClass label isLab =
     button
         [ classList

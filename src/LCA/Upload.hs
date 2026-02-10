@@ -33,7 +33,6 @@ import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeExtension, takeDirectory)
 import System.Info (os)
 import System.Process (readProcessWithExitCode)
-import qualified Codec.Archive as Archive
 
 -- | Detected database format
 data DatabaseFormat
@@ -182,6 +181,7 @@ extractUpload content targetDir = do
         ArchiveUnknown ->
             return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive, XML, or CSV file."
         Archive7z -> extract7z content targetDir
+        ArchiveZip -> extractZip content targetDir
         _ -> extractArchive format content targetDir
 
 -- | Extract 7z archive using external 7z command
@@ -269,26 +269,88 @@ extract7z archiveData targetDir = do
             Right (ExitSuccess, _, _) -> return $ Right ()
             Right (ExitFailure _, _, stderr) -> return $ Left (T.pack stderr)
 
--- | Extract any supported archive format using libarchive
--- libarchive auto-detects the format from the content
-extractArchive :: ArchiveFormat -> BL.ByteString -> FilePath -> IO (Either Text ())
-extractArchive format archiveData targetDir = do
-    result <- try $ Archive.runArchiveM (Archive.unpackToDirLazy targetDir archiveData)
+-- | Extract ZIP archive using external commands
+-- The Haskell libarchive package produces null-byte files for ZIP extraction
+extractZip :: BL.ByteString -> FilePath -> IO (Either Text ())
+extractZip archiveData targetDir = do
+    let tempArchive = targetDir </> ".temp.zip"
+    BL.writeFile tempArchive archiveData
+
+    commands <- getUnzipCommands
+    result <- tryZipCommands commands tempArchive targetDir
+
+    _ <- try @SomeException $ removeFile tempArchive
+
     case result of
-        Left (e :: SomeException) ->
-            return $ Left $ "Failed to extract " <> formatName <> " archive: " <> T.pack (show e)
-        Right (Left archiveErr) ->
-            return $ Left $ formatName <> " extraction error: " <> T.pack (show archiveErr)
-        Right (Right _) -> do
-            -- Verify files were actually extracted
+        Left err -> return $ Left err
+        Right () -> do
             files <- listDirectory targetDir
-            if null files
-                then return $ Left $ formatName <> " extraction produced no files. The archive may be empty, corrupted, or require additional system libraries (e.g., p7zip for 7z support)."
+            let actualFiles = filter (not . isPrefixOf ".temp") files
+            if null actualFiles
+                then return $ Left "ZIP extraction produced no files."
                 else return $ Right ()
   where
+    getUnzipCommands :: IO [(FilePath, [String] -> [String])]
+    getUnzipCommands = do
+        mDataDir <- lookupEnv "FPLCA_DATA_DIR"
+        let bundled7z = case mDataDir of
+                Just d -> if isWindows
+                    then [(d </> "7z.exe", args7z), (d </> "7z", args7z)]
+                    else [(d </> "7zz", args7z), (d </> "7z", args7z)]
+                Nothing -> []
+        return $ if isWindows
+            then [("tar", argsTar)] ++ bundled7z ++ [("7z", args7z), ("7z.exe", args7z)]
+            else [("unzip", argsUnzip)] ++ bundled7z ++ [("7zz", args7z), ("7z", args7z)]
+
+    isWindows = os == "mingw32" || os == "windows"
+
+    argsUnzip [archive, target] = ["-o", "-q", archive, "-d", target]
+    argsUnzip _ = []
+    argsTar   [archive, target] = ["-xf", archive, "-C", target]
+    argsTar   _ = []
+    args7z    [archive, target] = ["x", "-y", "-o" ++ target, archive]
+    args7z    _ = []
+
+    tryZipCommands :: [(FilePath, [String] -> [String])] -> FilePath -> FilePath -> IO (Either Text ())
+    tryZipCommands [] _ _ = return $ Left $ T.concat
+        [ "ZIP extraction failed. Please install an extraction tool:\n"
+        , if isWindows
+            then "  Windows: tar should be built-in, or install 7-Zip from https://7-zip.org/"
+            else "  Linux: apt install unzip\n  macOS: brew install unzip (usually pre-installed)"
+        ]
+    tryZipCommands ((cmd, mkArgs):rest) archive target = do
+        let args = mkArgs [archive, target]
+        result <- try @SomeException $ readProcessWithExitCode cmd args ""
+        case result of
+            Left _ -> tryZipCommands rest archive target
+            Right (ExitSuccess, _, _) -> return $ Right ()
+            Right (ExitFailure _, _, _) -> tryZipCommands rest archive target
+
+-- | Extract tar.gz/tar.xz archives using system tar command
+extractArchive :: ArchiveFormat -> BL.ByteString -> FilePath -> IO (Either Text ())
+extractArchive format archiveData targetDir = do
+    let ext = case format of
+            ArchiveGzip -> ".tar.gz"
+            ArchiveXz   -> ".tar.xz"
+            _           -> ".tar"
+    let tempArchive = targetDir </> ".temp" <> ext
+    BL.writeFile tempArchive archiveData
+    result <- try @SomeException $
+        readProcessWithExitCode "tar" ["-xf", tempArchive, "-C", targetDir] ""
+    _ <- try @SomeException $ removeFile tempArchive
+    case result of
+        Left e ->
+            return $ Left $ "Failed to extract " <> formatName <> " archive: " <> T.pack (show e)
+        Right (ExitSuccess, _, _) -> do
+            files <- listDirectory targetDir
+            let actualFiles = filter (not . isPrefixOf ".temp") files
+            if null actualFiles
+                then return $ Left $ formatName <> " extraction produced no files."
+                else return $ Right ()
+        Right (ExitFailure _, _, stderr) ->
+            return $ Left $ formatName <> " extraction failed: " <> T.pack stderr
+  where
     formatName = case format of
-        ArchiveZip  -> "ZIP"
-        Archive7z   -> "7z"
         ArchiveGzip -> "tar.gz"
         ArchiveXz   -> "tar.xz"
         _           -> "archive"
