@@ -160,7 +160,7 @@ view : Shared.Model -> Model -> View Msg
 view shared model =
     if not (Shared.isDatabaseLoaded shared model.dbName) then
         { title = "Graph"
-        , body = viewLoadDatabasePrompt shared model.dbName
+        , body = Shared.viewLoadDatabasePrompt shared model.dbName RequestLoadDatabase
         }
 
     else
@@ -249,15 +249,6 @@ viewLoaded shared model =
                 ]
             ]
     }
-
-
-viewLoadDatabasePrompt : Shared.Model -> String -> Html Msg
-viewLoadDatabasePrompt shared dbName =
-    div [ class "notification is-warning", style "margin" "2rem" ]
-        [ p [] [ text ("Database '" ++ Shared.getDatabaseDisplayName shared dbName ++ "' is not loaded.") ]
-        , button [ class "button is-primary", style "margin-top" "1rem", onClick RequestLoadDatabase ]
-            [ text ("Load " ++ Shared.getDatabaseDisplayName shared dbName) ]
-        ]
 
 
 viewPageNavbar : String -> Maybe ( String, String ) -> Html Msg

@@ -8,14 +8,19 @@ module Shared exposing
     , subscriptions
     , getCurrentDbName
     , isDatabaseLoaded
+    , isDatabaseLoading
     , getDatabaseDisplayName
     , httpErrorToString
+    , viewLoadDatabasePrompt
     )
 
 import Browser.Dom
 import Browser.Events
 import Browser.Navigation as Nav
 import Dict exposing (Dict)
+import Html exposing (Html)
+import Html.Attributes
+import Html.Events
 import Http
 import Json.Decode
 import Models.Activity exposing (ActivityInfo, ActivityTree)
@@ -23,6 +28,7 @@ import Models.Database exposing (ActivateResponse, DatabaseList, activateRespons
 import Models.Graph exposing (GraphData)
 import Models.Inventory exposing (InventoryExport)
 import Route exposing (Route(..))
+import Set exposing (Set)
 import Task
 import Time
 
@@ -58,6 +64,7 @@ type alias Model =
     , cachedActivityInfo : Dict String ActivityInfo
     , cachedInventories : Dict String InventoryExport
     , cachedGraphs : Dict String GraphData
+    , loadingDatabases : Set String
     }
 
 
@@ -99,6 +106,7 @@ init flags key =
       , cachedActivityInfo = Dict.empty
       , cachedInventories = Dict.empty
       , cachedGraphs = Dict.empty
+      , loadingDatabases = Set.empty
       }
     , loadDatabases
     )
@@ -205,7 +213,10 @@ update msg model =
                     else
                         model.currentDatabaseId
               }
-            , cmd
+            , Cmd.batch
+                [ cmd
+                , Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
+                ]
             )
 
         DatabasesLoaded (Err error) ->
@@ -214,7 +225,7 @@ update msg model =
             )
 
         LoadDatabase dbName ->
-            ( model
+            ( { model | loadingDatabases = Set.insert dbName model.loadingDatabases }
             , loadDatabaseCmd dbName
             )
 
@@ -226,6 +237,7 @@ update msg model =
                     , cachedActivityInfo = Dict.empty
                     , cachedInventories = Dict.empty
                     , cachedGraphs = Dict.empty
+                    , loadingDatabases = Set.remove dbName model.loadingDatabases
                   }
                 , Cmd.batch
                     [ loadDatabases
@@ -234,12 +246,12 @@ update msg model =
                 )
 
             else
-                ( model
+                ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
                 , Cmd.none
                 )
 
-        LoadDatabaseResult _ (Err _) ->
-            ( model
+        LoadDatabaseResult dbName (Err _) ->
+            ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
             , Cmd.none
             )
 
@@ -406,6 +418,47 @@ getDatabaseDisplayName model dbName =
 
         _ ->
             dbName
+
+
+isDatabaseLoading : Model -> String -> Bool
+isDatabaseLoading model dbName =
+    Set.member dbName model.loadingDatabases
+
+
+viewLoadDatabasePrompt : Model -> String -> msg -> Html msg
+viewLoadDatabasePrompt model dbName loadMsg =
+    let
+        loading =
+            isDatabaseLoading model dbName
+
+        displayName =
+            getDatabaseDisplayName model dbName
+    in
+    Html.div [ Html.Attributes.class "notification is-warning", Html.Attributes.style "margin" "2rem" ]
+        [ Html.p [] [ Html.text ("Database '" ++ displayName ++ "' is not loaded.") ]
+        , Html.button
+            [ Html.Attributes.class
+                ("button is-primary"
+                    ++ (if loading then
+                            " is-loading"
+
+                        else
+                            ""
+                       )
+                )
+            , Html.Attributes.style "margin-top" "1rem"
+            , Html.Attributes.disabled loading
+            , Html.Events.onClick loadMsg
+            ]
+            [ Html.text
+                (if loading then
+                    "Loading..."
+
+                 else
+                    "Load " ++ displayName
+                )
+            ]
+        ]
 
 
 

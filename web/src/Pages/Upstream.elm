@@ -122,7 +122,7 @@ view shared model =
 viewBody : Shared.Model -> Model -> Html Msg
 viewBody shared model =
     if not (Shared.isDatabaseLoaded shared model.dbName) then
-        viewLoadDatabasePrompt shared model.dbName
+        Shared.viewLoadDatabasePrompt shared model.dbName RequestLoadDatabase
 
     else
         div [ class "details-page-container" ]
@@ -156,16 +156,6 @@ viewBody shared model =
                 NotAsked ->
                     text ""
             ]
-
-
-
-viewLoadDatabasePrompt : Shared.Model -> String -> Html Msg
-viewLoadDatabasePrompt shared dbName =
-    div [ class "notification is-warning", style "margin" "2rem" ]
-        [ p [] [ text ("Database '" ++ Shared.getDatabaseDisplayName shared dbName ++ "' is not loaded.") ]
-        , button [ class "button is-primary", style "margin-top" "1rem", onClick RequestLoadDatabase ]
-            [ text ("Load " ++ Shared.getDatabaseDisplayName shared dbName) ]
-        ]
 
 
 
