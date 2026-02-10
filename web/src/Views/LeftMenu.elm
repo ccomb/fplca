@@ -27,9 +27,9 @@ mapMsg handlers msg =
             handlers.onCloseConsole
 
 
-viewLeftMenu : ActivePage -> String -> Maybe String -> Maybe String -> String -> Bool -> Html Msg
-viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version showConsole =
-    nav [ class "left-menu", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
+viewLeftMenu : ActivePage -> String -> Maybe String -> Maybe String -> String -> Bool -> Bool -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version showConsole menuOpen =
+    nav [ classList [ ( "left-menu", True ), ( "is-active", menuOpen ) ], style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
             [ -- Database name as header (not clickable)

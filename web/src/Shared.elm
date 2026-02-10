@@ -53,6 +53,7 @@ type alias Model =
     , databases : RemoteData DatabaseList
     , version : String
     , console : ConsoleModel
+    , menuOpen : Bool
     , cachedTrees : Dict String ActivityTree
     , cachedActivityInfo : Dict String ActivityInfo
     , cachedInventories : Dict String InventoryExport
@@ -76,6 +77,8 @@ type Msg
     | CacheActivityInfo String ActivityInfo
     | CacheInventory String InventoryExport
     | CacheGraph String GraphData
+    | ToggleMenu
+    | CloseMenu
     | NoOp
 
 
@@ -91,6 +94,7 @@ init flags key =
             , nextIndex = 0
             , visibility = Hidden
             }
+      , menuOpen = False
       , cachedTrees = Dict.empty
       , cachedActivityInfo = Dict.empty
       , cachedInventories = Dict.empty
@@ -147,6 +151,7 @@ update msg model =
             in
             ( { model
                 | currentRoute = route
+                , menuOpen = False
                 , currentDatabaseId =
                     case urlDatabase of
                         Just _ ->
@@ -336,6 +341,12 @@ update msg model =
             ( { model | cachedGraphs = Dict.insert activityId graphData model.cachedGraphs }
             , Cmd.none
             )
+
+        ToggleMenu ->
+            ( { model | menuOpen = not model.menuOpen }, Cmd.none )
+
+        CloseMenu ->
+            ( { model | menuOpen = False }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )

@@ -43,7 +43,33 @@ toDocument shared pageView =
     { title = pageView.title ++ " - fpLCA"
     , body =
         [ div [ class "app-container" ]
-            [ viewLeftMenu shared
+            [ -- Hamburger button (mobile only)
+              button
+                [ class "button is-dark is-hidden-tablet"
+                , style "position" "fixed"
+                , style "top" "0.5rem"
+                , style "left" "0.5rem"
+                , style "z-index" "41"
+                , onClick (Spa.mapSharedMsg Shared.ToggleMenu)
+                ]
+                [ span [ class "icon" ] [ Html.i [ class "fas fa-bars" ] [] ] ]
+            , -- Backdrop (mobile only, when menu open)
+              if shared.menuOpen then
+                div
+                    [ style "position" "fixed"
+                    , style "top" "0"
+                    , style "left" "0"
+                    , style "right" "0"
+                    , style "bottom" "0"
+                    , style "background" "rgba(0,0,0,0.4)"
+                    , style "z-index" "39"
+                    , onClick (Spa.mapSharedMsg Shared.CloseMenu)
+                    ]
+                    []
+
+              else
+                text ""
+            , viewLeftMenu shared
             , div [ class "main-content" ]
                 [ pageView.body
                 ]
@@ -110,6 +136,7 @@ viewLeftMenu shared =
             currentActivityName
             shared.version
             showConsole
+            shared.menuOpen
         )
 
 

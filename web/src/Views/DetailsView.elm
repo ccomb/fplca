@@ -320,7 +320,7 @@ viewBiosphereExchanges exchanges =
                 ]
                     |> List.filter (\( _, items ) -> not (List.isEmpty items))
         in
-        div [ class "columns is-desktop is-multiline" ]
+        div [ class "columns is-multiline" ]
             (compartments
                 |> List.map
                     (\( name, items ) ->
@@ -366,7 +366,7 @@ viewEmissionsExchanges exchanges =
                     |> List.filter (\( _, subgroups ) -> not (List.isEmpty subgroups))
         in
         div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
-            [ div [ class "columns is-desktop is-multiline" ]
+            [ div [ class "columns is-multiline" ]
                 (columns
                     |> List.map
                         (\( mainName, subgroups ) ->
@@ -586,7 +586,7 @@ viewNaturalResourcesExchanges exchanges =
                     |> List.filter (\( _, items ) -> not (List.isEmpty items))
         in
         div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
-            [ div [ class "columns is-desktop is-multiline" ]
+            [ div [ class "columns is-multiline" ]
                 (compartments
                     |> List.map
                         (\( name, items ) ->

@@ -71,7 +71,8 @@ viewDatabasesList dbList =
                 [ text (String.fromInt dbCount ++ " databases") ]
             ]
         , div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
-            [ table [ class "table is-striped is-hoverable is-fullwidth" ]
+            [ div [ class "table-container" ]
+              [ table [ class "table is-striped is-hoverable is-fullwidth" ]
                 [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
                         [ th [ style "background-color" "white", style "width" "50px" ] [ text "" ]
@@ -86,6 +87,7 @@ viewDatabasesList dbList =
                 , tbody []
                     (List.map viewDatabaseRow dbList.databases)
                 ]
+              ]
             ]
         ]
 

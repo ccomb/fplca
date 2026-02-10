@@ -36,7 +36,7 @@ viewActivitiesPage currentDbName searchQuery searchResults searchLoading loading
 
 viewSearchBar : Maybe DatabaseList -> String -> String -> Bool -> Html Msg
 viewSearchBar maybeDatabaseList currentDbName query isLoading =
-    div [ class "field is-grouped", style "margin-bottom" "1.5rem" ]
+    div [ class "field is-grouped is-grouped-multiline", style "margin-bottom" "1.5rem" ]
         [ -- Database selector on the left
           case maybeDatabaseList of
             Nothing ->

@@ -167,6 +167,23 @@
             background-color: #00d1b2;
             color: #363636 !important;
         }
+
+        /* Mobile: off-canvas sidebar */
+        @media (max-width: 768px) {
+            .left-menu {
+                position: fixed;
+                left: -250px;
+                height: 100vh;
+                z-index: 40;
+                transition: left 0.2s;
+            }
+            .left-menu.is-active {
+                left: 0;
+            }
+            .main-content {
+                padding-top: 3rem;
+            }
+        }
     </style>
 </head>
 <body>

@@ -47,7 +47,8 @@ viewTableWithTitle title iconClass iconColor searchQuery onSearch flows invertSt
             , text title
             ]
         , div [ style "flex" "1", style "overflow-y" "auto", style "min-height" "0" ]
-            [ table [ class "table is-hoverable is-fullwidth" ]
+            [ div [ class "table-container" ]
+              [ table [ class "table is-hoverable is-fullwidth" ]
                 [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
                         [ th [ class "has-text-right", style "background-color" "white" ] [ text "Amount" ]
@@ -79,6 +80,7 @@ viewTableWithTitle title iconClass iconColor searchQuery onSearch flows invertSt
                 , tbody []
                     (List.indexedMap (viewInventoryRow invertStripes) flows)
                 ]
+              ]
             ]
         ]
 
