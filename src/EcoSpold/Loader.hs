@@ -949,8 +949,8 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
     withProgressTiming Cache "Matrix cache save with zstd compression" $ do
         -- Serialize to ByteString
         let serialized = encode db
-        -- Compress with zstd (level 3 = good balance of compression and speed)
-        let compressed = Zstd.compress 3 (BSL.toStrict serialized)
+        -- Compress with zstd (level 1 = fast compression, ~5% larger than level 3)
+        let compressed = Zstd.compress 1 (BSL.toStrict serialized)
         -- Build header: magic (8 bytes) + schema signature (8 bytes)
         let signatureBytes = BSL.toStrict $ encode schemaSignature
         let header = cacheMagic <> signatureBytes
