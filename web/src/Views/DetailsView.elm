@@ -551,12 +551,12 @@ viewAllProductRow currentProcessId onNavigate product =
         [ td []
             [ if isCurrent then
                 span []
-                    [ strong [] [ text product.name ]
+                    [ strong [] [ text product.product ]
                     , span [ class "tag is-info is-light ml-2" ] [ text "Current" ]
                     ]
 
               else
-                span [ class "has-text-link" ] [ text product.name ]
+                span [ class "has-text-link" ] [ text product.product ]
             ]
         , td [] [ text product.location ]
         ]

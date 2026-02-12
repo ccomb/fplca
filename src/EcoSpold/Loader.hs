@@ -93,8 +93,8 @@ import LCA.SynonymDB (SynonymDB, emptySynonymDB)
 import qualified LCA.UnitConversion as UC
 import qualified SimaPro.Parser as SimaPro
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
-import LCA.UploadedDatabase (getDataDir, isUploadedPath)
-import System.FilePath (takeBaseName, takeExtension, splitDirectories, (</>))
+import LCA.UploadedDatabase (getDataDir)
+import System.FilePath (takeBaseName, takeExtension, (</>))
 import Text.Printf (printf)
 
 -- | Magic bytes to identify fpLCA cache files
@@ -683,30 +683,12 @@ Cache invalidation is handled by a schema signature stored inside
 the cache file, not by the filename.
 -}
 generateMatrixCacheFilename :: T.Text -> FilePath -> IO FilePath
-generateMatrixCacheFilename dbName dataPath = do
+generateMatrixCacheFilename dbName _dataPath = do
     let cacheFilename = "fplca.cache." ++ T.unpack dbName ++ ".bin"
-    -- Check if this is an uploaded database
-    if isUploadedPath dataPath
-        then do
-            -- For uploads, extract the upload directory (first two components: .../uploads/<slug>)
-            let uploadDir = getUploadDir dataPath
-            return $ uploadDir </> cacheFilename
-        else do
-            -- For configured databases, use cache/ subdirectory under data dir
-            base <- getDataDir
-            let cacheDir = base </> "cache"
-            createDirectoryIfMissing True cacheDir
-            return $ cacheDir </> cacheFilename
-  where
-    -- Extract upload directory from data path
-    -- e.g., ".../uploads/ecoinvent-3-11/datasets" -> take up to and including the slug after "uploads"
-    getUploadDir :: FilePath -> FilePath
-    getUploadDir p =
-        let parts = splitDirectories p
-            takeUntilUploadsSlug [] = []
-            takeUntilUploadsSlug ("uploads" : slug : _) = ["uploads", slug]
-            takeUntilUploadsSlug (x : xs) = x : takeUntilUploadsSlug xs
-        in foldl (</>) "" (takeUntilUploadsSlug parts)
+    base <- getDataDir
+    let cacheDir = base </> "cache"
+    createDirectoryIfMissing True cacheDir
+    return $ cacheDir </> cacheFilename
 
 {- |
 Validate cache file integrity before attempting to decode.
