@@ -1,6 +1,7 @@
 module Shared exposing
     ( Model
     , Msg(..)
+    , AuthState(..)
     , RemoteData(..)
     , ConsoleVisibility(..)
     , init
@@ -23,6 +24,7 @@ import Html.Attributes
 import Html.Events
 import Http
 import Json.Decode
+import Json.Encode
 import Models.Activity exposing (ActivityInfo, ActivityTree)
 import Models.Database exposing (ActivateResponse, DatabaseList, activateResponseDecoder, databaseListDecoder)
 import Models.Graph exposing (GraphData)
@@ -38,6 +40,12 @@ type RemoteData a
     | Loading
     | Loaded a
     | Failed String
+
+
+type AuthState
+    = AuthChecking
+    | NeedsAuth { code : String, error : Maybe String }
+    | Authenticated
 
 
 type alias ConsoleModel =
@@ -65,6 +73,7 @@ type alias Model =
     , cachedInventories : Dict String InventoryExport
     , cachedGraphs : Dict String GraphData
     , loadingDatabases : Set String
+    , authState : AuthState
     }
 
 
@@ -86,6 +95,9 @@ type Msg
     | CacheGraph String GraphData
     | ToggleMenu
     | CloseMenu
+    | UpdateAuthCode String
+    | SubmitAuthCode
+    | AuthResult (Result Http.Error ())
     | NoOp
 
 
@@ -107,6 +119,7 @@ init flags key =
       , cachedInventories = Dict.empty
       , cachedGraphs = Dict.empty
       , loadingDatabases = Set.empty
+      , authState = AuthChecking
       }
     , loadDatabases
     )
@@ -212,6 +225,7 @@ update msg model =
             in
             ( { model
                 | databases = Loaded dbList
+                , authState = Authenticated
                 , currentDatabaseId =
                     if model.currentDatabaseId == Nothing then
                         List.filter .loaded dbList.databases
@@ -232,9 +246,16 @@ update msg model =
             )
 
         DatabasesLoaded (Err error) ->
-            ( { model | databases = Failed (httpErrorToString error) }
-            , Cmd.none
-            )
+            case error of
+                Http.BadStatus 401 ->
+                    ( { model | authState = NeedsAuth { code = "", error = Nothing } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( { model | databases = Failed (httpErrorToString error) }
+                    , Cmd.none
+                    )
 
         LoadDatabase dbName ->
             ( { model | loadingDatabases = Set.insert dbName model.loadingDatabases }
@@ -372,6 +393,38 @@ update msg model =
         CloseMenu ->
             ( { model | menuOpen = False }, Cmd.none )
 
+        UpdateAuthCode code ->
+            case model.authState of
+                NeedsAuth state ->
+                    ( { model | authState = NeedsAuth { state | code = code } }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SubmitAuthCode ->
+            case model.authState of
+                NeedsAuth state ->
+                    ( model, postAuthCode state.code )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        AuthResult (Ok _) ->
+            -- Cookie is now set, reload databases
+            ( { model | authState = AuthChecking, databases = Loading }
+            , loadDatabases
+            )
+
+        AuthResult (Err _) ->
+            case model.authState of
+                NeedsAuth state ->
+                    ( { model | authState = NeedsAuth { state | error = Just "Invalid code" } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -491,6 +544,15 @@ loadDatabaseCmd dbName =
         { url = "/api/v1/databases/" ++ dbName ++ "/load"
         , body = Http.emptyBody
         , expect = Http.expectJson (LoadDatabaseResult dbName) activateResponseDecoder
+        }
+
+
+postAuthCode : String -> Cmd Msg
+postAuthCode code =
+    Http.post
+        { url = "/api/v1/auth"
+        , body = Http.jsonBody (Json.Encode.object [ ( "code", Json.Encode.string code ) ])
+        , expect = Http.expectWhatever AuthResult
         }
 
 

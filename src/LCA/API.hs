@@ -39,6 +39,7 @@ import GHC.Generics
 import Servant
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.IO.Class (liftIO)
+import Network.HTTP.Types.Header (hSetCookie)
 
 -- | API type definition - RESTful design with focused endpoints
 type LCAAPI =
@@ -77,6 +78,8 @@ type LCAAPI =
                 :<|> "databases" :> Capture "dbName" Text :> "finalize" :> Post '[JSON] ActivateResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
+                -- Auth endpoint (login)
+                :<|> "auth" :> ReqBody '[JSON] LoginRequest :> Post '[JSON] (Headers '[Header "Set-Cookie" String] Value)
            )
 
 -- | Get database by name, throw 404 if not loaded
@@ -131,10 +134,19 @@ withValidatedFlow db uuid action = do
                         Nothing -> throwError err404{errBody = "Flow not found"}
                         Just flow -> action flow
 
+-- | Login request body
+data LoginRequest = LoginRequest
+    { lrCode :: Text
+    } deriving (Generic)
+
+instance FromJSON LoginRequest where
+    parseJSON = withObject "LoginRequest" $ \v ->
+        LoginRequest <$> v .: "code"
+
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
-lcaServer :: DatabaseManager -> Int -> Maybe FilePath -> Server LCAAPI
-lcaServer dbManager maxTreeDepth methodsDir =
+lcaServer :: DatabaseManager -> Int -> Maybe FilePath -> Maybe String -> Server LCAAPI
+lcaServer dbManager maxTreeDepth methodsDir password =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -163,6 +175,7 @@ lcaServer dbManager maxTreeDepth methodsDir =
         :<|> DBHandlers.removeDependencyHandler dbManager
         :<|> DBHandlers.finalizeDatabaseHandler dbManager
         :<|> getLogsHandler
+        :<|> postAuth
   where
     getLogsHandler :: Maybe Int -> Handler Value
     getLogsHandler sinceMaybe = do
@@ -172,6 +185,20 @@ lcaServer dbManager maxTreeDepth methodsDir =
             [ "lines" .= lines
             , "nextIndex" .= nextIndex
             ]
+
+    postAuth :: LoginRequest -> Handler (Headers '[Header "Set-Cookie" String] Value)
+    postAuth loginReq =
+        case password of
+            Nothing ->
+                -- No password configured, auth always succeeds
+                return $ noHeader $ object ["ok" .= True]
+            Just pwd ->
+                if T.unpack (lrCode loginReq) == pwd
+                then
+                    let cookieValue = "fplca_session=" ++ pwd ++ "; Path=/; HttpOnly; SameSite=Strict"
+                    in return $ addHeader cookieValue $ object ["ok" .= True]
+                else
+                    throwError err401{errBody = "{\"error\":\"invalid code\"}"}
 
     -- Core activity endpoint - streamlined data
     getActivityInfo :: Text -> Handler ActivityInfo

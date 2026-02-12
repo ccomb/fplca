@@ -40,48 +40,127 @@ toDocument :
     -> View (Spa.Msg Shared.Msg pageMsg)
     -> Document (Spa.Msg Shared.Msg pageMsg)
 toDocument shared pageView =
-    { title = pageView.title ++ " - fpLCA"
-    , body =
-        [ div [ class "app-container" ]
-            [ -- Hamburger button (mobile only)
-              button
-                [ class "button is-dark is-hidden-tablet"
-                , style "position" "fixed"
-                , style "top" "0.5rem"
-                , style "left" "0.5rem"
-                , style "z-index" "41"
-                , onClick (Spa.mapSharedMsg Shared.ToggleMenu)
-                ]
-                [ span [ class "icon" ] [ Html.i [ class "fas fa-bars" ] [] ] ]
-            , -- Backdrop (mobile only, when menu open)
-              if shared.menuOpen then
-                div
-                    [ style "position" "fixed"
-                    , style "top" "0"
-                    , style "left" "0"
-                    , style "right" "0"
-                    , style "bottom" "0"
-                    , style "background" "rgba(0,0,0,0.4)"
-                    , style "z-index" "39"
-                    , onClick (Spa.mapSharedMsg Shared.CloseMenu)
+    case shared.authState of
+        Shared.AuthChecking ->
+            { title = "Loading - fpLCA"
+            , body =
+                [ div
+                    [ style "display" "flex"
+                    , style "justify-content" "center"
+                    , style "align-items" "center"
+                    , style "height" "100vh"
                     ]
-                    []
-
-              else
-                text ""
-            , viewLeftMenu shared
-            , div [ class "main-content" ]
-                [ pageView.body
+                    [ div [ class "has-text-centered" ]
+                        [ span [ class "icon is-large" ]
+                            [ Html.i [ class "fas fa-spinner fa-pulse fa-3x" ] [] ]
+                        , p [ style "margin-top" "1rem" ] [ text "Loading..." ]
+                        ]
+                    ]
                 ]
-            , case shared.console.visibility of
-                Visible _ ->
-                    viewConsoleOverlay shared
+            }
 
-                Hidden ->
+        Shared.NeedsAuth state ->
+            { title = "Login - fpLCA"
+            , body =
+                [ viewLoginForm state ]
+            }
+
+        Shared.Authenticated ->
+            { title = pageView.title ++ " - fpLCA"
+            , body =
+                [ div [ class "app-container" ]
+                    [ -- Hamburger button (mobile only)
+                      button
+                        [ class "button is-dark is-hidden-tablet"
+                        , style "position" "fixed"
+                        , style "top" "0.5rem"
+                        , style "left" "0.5rem"
+                        , style "z-index" "41"
+                        , onClick (Spa.mapSharedMsg Shared.ToggleMenu)
+                        ]
+                        [ span [ class "icon" ] [ Html.i [ class "fas fa-bars" ] [] ] ]
+                    , -- Backdrop (mobile only, when menu open)
+                      if shared.menuOpen then
+                        div
+                            [ style "position" "fixed"
+                            , style "top" "0"
+                            , style "left" "0"
+                            , style "right" "0"
+                            , style "bottom" "0"
+                            , style "background" "rgba(0,0,0,0.4)"
+                            , style "z-index" "39"
+                            , onClick (Spa.mapSharedMsg Shared.CloseMenu)
+                            ]
+                            []
+
+                      else
+                        text ""
+                    , viewLeftMenu shared
+                    , div [ class "main-content" ]
+                        [ pageView.body
+                        ]
+                    , case shared.console.visibility of
+                        Visible _ ->
+                            viewConsoleOverlay shared
+
+                        Hidden ->
+                            text ""
+                    ]
+                ]
+            }
+
+
+viewLoginForm : { code : String, error : Maybe String } -> Html (Spa.Msg Shared.Msg pageMsg)
+viewLoginForm state =
+    div
+        [ style "display" "flex"
+        , style "justify-content" "center"
+        , style "align-items" "center"
+        , style "height" "100vh"
+        , style "background" "#f5f5f5"
+        ]
+        [ div
+            [ class "box"
+            , style "width" "400px"
+            , style "max-width" "90vw"
+            ]
+            [ h2 [ class "title is-4 has-text-centered" ] [ text "fpLCA" ]
+            , p [ class "has-text-centered", style "margin-bottom" "1.5rem" ]
+                [ text "Enter your access code to continue." ]
+            , case state.error of
+                Just err ->
+                    div [ class "notification is-danger is-light" ]
+                        [ text err ]
+
+                Nothing ->
                     text ""
+            , Html.form
+                [ Html.Events.onSubmit (Spa.mapSharedMsg Shared.SubmitAuthCode) ]
+                [ div [ class "field" ]
+                    [ div [ class "control has-icons-left" ]
+                        [ Html.input
+                            [ class "input"
+                            , Html.Attributes.type_ "password"
+                            , Html.Attributes.placeholder "Access code"
+                            , Html.Attributes.value state.code
+                            , Html.Attributes.autofocus True
+                            , Html.Events.onInput (\v -> Spa.mapSharedMsg (Shared.UpdateAuthCode v))
+                            ]
+                            []
+                        , span [ class "icon is-small is-left" ]
+                            [ Html.i [ class "fas fa-lock" ] [] ]
+                        ]
+                    ]
+                , div [ class "field" ]
+                    [ button
+                        [ class "button is-primary is-fullwidth"
+                        , Html.Attributes.type_ "submit"
+                        ]
+                        [ text "Login" ]
+                    ]
+                ]
             ]
         ]
-    }
 
 
 viewLeftMenu : Shared.Model -> Html (Spa.Msg Shared.Msg pageMsg)

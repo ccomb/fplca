@@ -25,7 +25,7 @@ import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
 
 -- fpLCA imports
-import LCA.Auth (basicAuthMiddleware)
+import LCA.Auth (authMiddleware)
 import LCA.CLI.Command
 import LCA.CLI.Parser
 import LCA.CLI.Types
@@ -144,14 +144,14 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
             Just dir -> reportProgress Info $ "Methods directory: " ++ dir
             Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
           case password of
-            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+            Just _ -> reportProgress Info "Authentication: ENABLED"
             Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
           reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
       -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir staticDir desktopMode
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir staticDir desktopMode password
           finalApp = case password of
-            Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
+            Just pwd -> authMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
           settings = setTimeout 600 $ setPort port defaultSettings
       runSettings settings finalApp
@@ -252,13 +252,13 @@ runSingleDatabaseMode cliConfig = do
             Just dir -> reportProgress Info $ "Methods directory: " ++ dir
             Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods to enable LCIA)"
           case password of
-            Just _ -> reportProgress Info "Authentication: ENABLED (HTTP Basic Auth)"
+            Just _ -> reportProgress Info "Authentication: ENABLED"
             Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
           reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig)) staticDir desktopMode
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig)) staticDir desktopMode password
           finalApp = case password of
-            Just pwd -> basicAuthMiddleware (C8.pack pwd) baseApp
+            Just pwd -> authMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
           settings = setTimeout 600 $ setPort port defaultSettings
       runSettings settings finalApp
@@ -490,8 +490,8 @@ validateDatabase db = do
 -- API handlers dynamically fetch current database from DatabaseManager on each request
 -- staticDir: directory to serve static files from (default: "web/dist")
 -- desktopMode: if True, suppress request logging for cleaner output
-createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> FilePath -> Bool -> Application
-createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode req respond = do
+createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> FilePath -> Bool -> Maybe String -> Application
+createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode password req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
@@ -506,7 +506,7 @@ createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode req resp
   if C8.pack "/api/" `BS.isPrefixOf` path
     then
       -- API requests go to Servant with DatabaseManager
-      serve lcaAPI (lcaServer dbManager maxTreeDepth methodsDir) req respond
+      serve lcaAPI (lcaServer dbManager maxTreeDepth methodsDir password) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         -- Static files: strip /static prefix and serve from staticDir
