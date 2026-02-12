@@ -40,6 +40,9 @@ module EcoSpold.CrossDatabaseLinking
       -- * Location Hierarchy
     , isSubregionOf
     , locationHierarchy
+      -- * Compound Name Parsing
+    , extractProductPrefixes
+    , extractBracketedLocation
       -- * Re-exports
     , normalizeText
     ) where
@@ -120,6 +123,46 @@ defaultLinkingThreshold = 55
 -- | Normalize text for matching: lowercase and strip whitespace
 normalizeText :: Text -> Text
 normalizeText = T.toLower . T.strip
+
+-- | Separators that may appear between product name and additional info
+-- in SimaPro compound process names (e.g. "product//[GLO] activity name").
+-- Ordered by priority.
+compoundSeparators :: [Text]
+compoundSeparators = ["//", " {", " [", " |"]
+
+-- | Extract product name prefixes from a compound name.
+-- Tries splitting at each separator and returns candidate prefixes (stripped).
+-- Returns empty list if no separator is found (name is already clean).
+extractProductPrefixes :: Text -> [Text]
+extractProductPrefixes name =
+    [ T.strip prefix
+    | sep <- compoundSeparators
+    , let (prefix, rest) = T.breakOn sep name
+    , not (T.null rest)       -- separator was found
+    , not (T.null prefix)     -- non-empty prefix
+    ]
+
+-- | Extract a location code from any bracket pattern in a name.
+-- Looks for [XX] first, then {XX}. Returns the content of the first match,
+-- or empty text if no brackets found.
+extractBracketedLocation :: Text -> Text
+extractBracketedLocation name =
+    case extractFromBrackets '[' ']' name of
+        Just loc | not (T.null loc) -> loc
+        _ -> case extractFromBrackets '{' '}' name of
+            Just loc -> loc
+            Nothing  -> ""
+  where
+    extractFromBrackets :: Char -> Char -> Text -> Maybe Text
+    extractFromBrackets open close txt =
+        let (_, afterOpen) = T.breakOn (T.singleton open) txt
+        in if T.null afterOpen
+            then Nothing
+            else let inside = T.drop 1 afterOpen  -- skip the open bracket
+                     (content, afterClose) = T.breakOn (T.singleton close) inside
+                 in if T.null afterClose
+                    then Nothing
+                    else Just (T.strip content)
 
 -- | Build an indexed database for fast cross-DB lookups
 -- This should be called once when a database is loaded
@@ -220,7 +263,15 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                 Nothing -> []
             else []
-        allCandidates = exactCandidates ++ synonymCandidates
+        -- Fallback: try prefix-based splitting for compound names (e.g. SimaPro)
+        prefixCandidates = if null exactCandidates && null synonymCandidates
+            then tryPrefixes (extractProductPrefixes productName)
+            else []
+        allCandidates = exactCandidates ++ synonymCandidates ++ prefixCandidates
+        -- Effective location: if raw location is empty, try extracting from compound name
+        effectiveLocation = if T.null location
+            then extractBracketedLocation productName
+            else location
     in if null allCandidates
         then CrossDBNotLinked NoNameMatch
         else
@@ -232,17 +283,17 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                     let (_, firstSe) = head allCandidates
                     in CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
                 else
-                    -- Score by location
-                    let scoredCandidates = map (scoreEntry location) unitCompatible
+                    -- Score by effective location
+                    let scoredCandidates = map (scoreEntry effectiveLocation) unitCompatible
                         !best = maximumBy (comparing cdbScore) scoredCandidates
                     in if cdbScore best >= lcThreshold
                         then
                             -- Build warnings
-                            let warnings = buildWarnings location (cdbLocation best)
+                            let warnings = buildWarnings effectiveLocation (cdbLocation best)
                             in CrossDBLinked (cdbActivityUUID best) (cdbProductUUID best)
                                             (cdbDatabaseName best) (cdbScore best)
                                             (cdbProductName best) (cdbLocation best) warnings
-                        else CrossDBNotLinked (LocationUnavailable location)
+                        else CrossDBNotLinked (LocationUnavailable effectiveLocation)
   where
     lookupExact :: Text -> IndexedDatabase -> [(Text, SupplierEntry)]
     lookupExact name idb =
@@ -251,6 +302,21 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     lookupBySynonym :: Int -> IndexedDatabase -> [(Text, SupplierEntry)]
     lookupBySynonym groupId idb =
         [(idbName idb, entry) | entry <- fromMaybe [] (M.lookup groupId (idbBySynonymGroup idb))]
+
+    -- Try each prefix from compound name splitting, return first match
+    tryPrefixes :: [Text] -> [(Text, SupplierEntry)]
+    tryPrefixes [] = []
+    tryPrefixes (p:ps) =
+        let normalized = normalizeText p
+            candidates = concatMap (lookupExact normalized) lcIndexedDatabases
+        in if null candidates
+            then -- Also try synonym match for this prefix
+                case lookupSynonymGroup lcSynonymDB (normalizeName p) of
+                    Just groupId ->
+                        let synCandidates = concatMap (lookupBySynonym groupId) lcIndexedDatabases
+                        in if null synCandidates then tryPrefixes ps else synCandidates
+                    Nothing -> tryPrefixes ps
+            else candidates
 
     scoreEntry :: Text -> (Text, SupplierEntry) -> CrossDBCandidate
     scoreEntry queryLoc (dbName, SupplierEntry{..}) =

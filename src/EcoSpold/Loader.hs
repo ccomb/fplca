@@ -84,6 +84,7 @@ import EcoSpold.CrossDatabaseLinking
     , findSupplierAcrossDatabases
     , buildIndexedDatabase
     , defaultLinkingThreshold
+    , extractProductPrefixes
     )
 import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
@@ -463,10 +464,20 @@ fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt u
                             -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
                             (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
                         Nothing ->
-                            -- Supplier not found - collect unlinked exchange info
-                            let unlinked = UnlinkedExchange (flowName flow) loc
-                                unlinkedMap = M.singleton consumerName [unlinked]
-                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
+                            -- Fallback: try splitting compound name at separators
+                            let prefixes = extractProductPrefixes (flowName flow)
+                                tryPrefix [] = Nothing
+                                tryPrefix (p:ps) = case M.lookup (normalizeText p) idx of
+                                    Just result -> Just result
+                                    Nothing     -> tryPrefix ps
+                            in case tryPrefix prefixes of
+                                Just (actUUID, prodUUID) ->
+                                    (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
+                                Nothing ->
+                                    -- Supplier not found - collect unlinked exchange info
+                                    let unlinked = UnlinkedExchange (flowName flow) loc
+                                        unlinkedMap = M.singleton consumerName [unlinked]
+                                     in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
                 -- Flow not in database - shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)
