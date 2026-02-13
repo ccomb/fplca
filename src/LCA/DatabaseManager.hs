@@ -13,6 +13,8 @@ module LCA.DatabaseManager
     , DatabaseSetupInfo(..)
     , MissingSupplier(..)
     , DependencySuggestion(..)
+      -- * Re-exports
+    , DepLoadResult(..)
       -- * Initialization
     , initDatabaseManager
     , initSingleDatabaseManager
@@ -37,7 +39,8 @@ module LCA.DatabaseManager
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
-import Control.Monad (forM, forM_, unless, when, void)
+import Control.Monad (forM, forM_, when)
+import Data.Maybe (catMaybes)
 import System.Mem (performGC)
 import Data.Aeson (ToJSON(..), FromJSON(..), (.=), (.:), (.:?))
 import Data.Aeson.Types (Parser)
@@ -72,6 +75,7 @@ import qualified LCA.UploadedDatabase as UploadedDB
 import qualified SimaPro.Parser as SimaPro
 import System.FilePath (takeExtension, dropExtension, (</>))
 import System.Directory (removeDirectoryRecursive)
+import LCA.Types.API (DepLoadResult(..))
 
 -- | A fully loaded database with solver ready for queries
 data LoadedDatabase = LoadedDatabase
@@ -139,6 +143,7 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     , dsiSuggestions        :: ![DependencySuggestion]  -- ^ Suggested dependencies
     , dsiIsReady            :: !Bool         -- ^ True if can be finalized
     , dsiUnknownUnits       :: ![Text]       -- ^ Unknown units from sdbUnits
+    , dsiLocationFallbacks  :: ![(Text, Text, Text)]  -- ^ (product, requestedLoc, actualLoc)
     } deriving (Show, Eq, Generic)
 
 instance ToJSON DatabaseSetupInfo where
@@ -156,7 +161,11 @@ instance ToJSON DatabaseSetupInfo where
         , "suggestions" .= dsiSuggestions
         , "isReady" .= dsiIsReady
         , "unknownUnits" .= dsiUnknownUnits
+        , "locationFallbacks" .= map encodeFallback dsiLocationFallbacks
         ]
+      where
+        encodeFallback (prod, req, act) = A.object
+            [ "product" .= prod, "requested" .= req, "actual" .= act ]
 
 -- | Status of a database for API responses
 data DatabaseStatus = DatabaseStatus
@@ -213,6 +222,7 @@ instance FromJSON DatabaseStatus where
 data DatabaseManager = DatabaseManager
     { dmLoadedDbs     :: !(TVar (Map Text LoadedDatabase))  -- All loaded databases
     , dmStagedDbs     :: !(TVar (Map Text StagedDatabase))  -- Staged databases (parsed but not finalized)
+    , dmStagingDbs    :: !(TVar (S.Set Text))               -- Databases currently being staged
     , dmIndexedDbs    :: !(TVar (Map Text IndexedDatabase)) -- Pre-built indexes for cross-DB linking
     , dmAvailableDbs  :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
     , dmSynonymDB     :: !SynonymDB                         -- Shared synonym database
@@ -255,12 +265,14 @@ initDatabaseManager config synonymDB noCache _configPath = do
     -- Create TVars
     loadedDbsVar <- newTVarIO M.empty
     stagedDbsVar <- newTVarIO M.empty  -- Staged databases awaiting finalization
+    stagingDbsVar <- newTVarIO S.empty -- Databases currently being staged (race guard)
     indexedDbsVar <- newTVarIO M.empty  -- Pre-built indexes for cross-DB linking
     availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- allDbs]
 
     let manager = DatabaseManager
             { dmLoadedDbs = loadedDbsVar
             , dmStagedDbs = stagedDbsVar
+            , dmStagingDbs = stagingDbsVar
             , dmIndexedDbs = indexedDbsVar
             , dmAvailableDbs = availableDbsVar
             , dmSynonymDB = synonymDB
@@ -718,7 +730,7 @@ loadDatabaseSingle manager dbName = do
 
 -- | Load a database on demand with automatic dependency loading
 -- Uses cross-database linking to resolve supplier references from other loaded databases
-loadDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
+loadDatabase :: DatabaseManager -> Text -> IO (Either Text (LoadedDatabase, [DepLoadResult]))
 loadDatabase manager dbName = do
     result <- loadDatabaseSingle manager dbName
     case result of
@@ -726,12 +738,21 @@ loadDatabase manager dbName = do
         Right loaded -> do
             -- Auto-load dependencies (from cache metadata)
             let deps = dbDependsOn (ldDatabase loaded)
-            forM_ deps $ \depName -> do
+            depResults <- fmap catMaybes $ forM deps $ \depName -> do
                 isLoaded <- M.member depName <$> readTVarIO (dmLoadedDbs manager)
-                unless isLoaded $ do
-                    reportProgress Info $ "Auto-loading dependency: " <> T.unpack depName
-                    void $ loadDatabaseSingle manager depName
-            return (Right loaded)
+                if isLoaded
+                    then return Nothing
+                    else do
+                        reportProgress Info $ "Auto-loading dependency: " <> T.unpack depName
+                        depResult <- loadDatabaseSingle manager depName
+                        case depResult of
+                            Right _ -> do
+                                reportProgress Info $ "  [OK] Auto-loaded: " <> T.unpack depName
+                                return (Just (DepLoaded depName))
+                            Left err -> do
+                                reportProgress Error $ "  [FAIL] " <> T.unpack depName <> ": " <> T.unpack err
+                                return (Just (DepLoadFailed depName err))
+            return (Right (loaded, depResults))
 
 -- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
@@ -872,40 +893,62 @@ getStagedDatabase manager dbName = do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     return $ M.lookup dbName stagedDbs
 
+data StageAction = AlreadyDone | NeedToStage
+
 -- | Get setup info for a database (for the setup page)
 -- Works for both staged and loaded databases
 -- Auto-stages uploaded databases if they're not yet staged
+-- Uses STM to prevent concurrent staging of the same database
 getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either Text DatabaseSetupInfo)
 getDatabaseSetupInfo manager dbName = do
-    stagedDbs <- readTVarIO (dmStagedDbs manager)
-    loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    availableDbs <- readTVarIO (dmAvailableDbs manager)
-    indexedDbs <- readTVarIO (dmIndexedDbs manager)
+    -- Atomic decision: already staged? already staging? need to stage?
+    action <- atomically $ do
+        stagedDbs  <- readTVar (dmStagedDbs manager)
+        loadedDbs  <- readTVar (dmLoadedDbs manager)
+        stagingDbs <- readTVar (dmStagingDbs manager)
+        case M.lookup dbName stagedDbs of
+            Just _  -> return $ Right AlreadyDone
+            Nothing -> case M.lookup dbName loadedDbs of
+                Just _  -> return $ Right AlreadyDone
+                Nothing -> if S.member dbName stagingDbs
+                    then retry  -- another thread is staging; STM blocks until done
+                    else do
+                        availableDbs <- readTVar (dmAvailableDbs manager)
+                        case M.lookup dbName availableDbs of
+                            Nothing -> return $ Left $ "Database not found: " <> dbName
+                            Just dbConfig
+                                | dcIsUploaded dbConfig -> do
+                                    modifyTVar' (dmStagingDbs manager) (S.insert dbName)
+                                    return $ Right NeedToStage
+                                | otherwise ->
+                                    return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
 
+    case action of
+        Left err -> return $ Left err
+        Right AlreadyDone -> buildSetupResult manager dbName
+        Right NeedToStage -> do
+            -- Do the slow work, ensuring we always unmark on exception
+            availableDbs <- readTVarIO (dmAvailableDbs manager)
+            let dbConfig = availableDbs M.! dbName  -- safe: checked above
+            stageResult <- Control.Exception.finally
+                (stageUploadedDatabase manager dbConfig)
+                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
+            case stageResult of
+                Left err -> return $ Left err
+                Right () -> buildSetupResult manager dbName
+
+-- | Read current state and build setup info for a database
+buildSetupResult :: DatabaseManager -> Text -> IO (Either Text DatabaseSetupInfo)
+buildSetupResult manager dbName = do
+    stagedDbs    <- readTVarIO (dmStagedDbs manager)
+    loadedDbs    <- readTVarIO (dmLoadedDbs manager)
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    indexedDbs   <- readTVarIO (dmIndexedDbs manager)
     case M.lookup dbName stagedDbs of
         Just staged -> return $ Right $ buildStagedSetupInfo staged availableDbs indexedDbs
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded -> return $ Right $ buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded)
-            Nothing ->
-                -- Not staged or loaded - try to stage it if it's an uploaded database
-                case M.lookup dbName availableDbs of
-                    Nothing -> return $ Left $ "Database not found: " <> dbName
-                    Just dbConfig ->
-                        if dcIsUploaded dbConfig
-                            then do
-                                -- Stage the uploaded database
-                                stageResult <- stageUploadedDatabase manager dbConfig
-                                case stageResult of
-                                    Left err -> return $ Left err
-                                    Right () -> do
-                                        -- Now get the staged info
-                                        stagedDbs' <- readTVarIO (dmStagedDbs manager)
-                                        indexedDbs' <- readTVarIO (dmIndexedDbs manager)
-                                        case M.lookup dbName stagedDbs' of
-                                            Just staged -> return $ Right $ buildStagedSetupInfo staged availableDbs indexedDbs'
-                                            Nothing -> return $ Left $ "Failed to stage database: " <> dbName
-                            else
-                                return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
+            Nothing -> return $ Left $ "Failed to stage database: " <> dbName
 
 -- | Build setup info from a staged database
 buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
@@ -948,6 +991,7 @@ buildStagedSetupInfo staged configs indexedDbs =
         , dsiSuggestions = suggestions
         , dsiIsReady = isReady
         , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
+        , dsiLocationFallbacks = cdlLocationFallbacks stats
         }
 
 -- | Build setup info from a loaded database (already finalized)
@@ -967,6 +1011,7 @@ buildLoadedSetupInfo config db =
         , dsiSuggestions = []  -- No suggestions for loaded databases
         , dsiIsReady = True
         , dsiUnknownUnits = []  -- Not tracked for loaded databases
+        , dsiLocationFallbacks = []  -- Not tracked for loaded databases
         }
 
 -- | Build dependency suggestions for a staged database
