@@ -72,7 +72,14 @@ update shared msg model =
                                         , ( "urFileData", Json.Encode.string content )
                                         ]
                             in
-                            ( { model | uploadState = Uploading }
+                            let
+                                updatedView =
+                                    model.uploadView
+                            in
+                            ( { model
+                                | uploadState = Uploading
+                                , uploadView = { updatedView | uploading = True }
+                              }
                             , Effect.fromCmd (uploadDatabase body)
                             )
 
