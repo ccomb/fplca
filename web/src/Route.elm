@@ -21,6 +21,7 @@ module Route exposing
     )
 
 import Url exposing (Url)
+import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, string, top)
 import Url.Parser.Query as Query
 
@@ -157,20 +158,18 @@ routeToUrl route =
         ActivitiesRoute { db, name, limit } ->
             let
                 queryParams =
-                    [ Maybe.map (\n -> "name=" ++ n) name
-                    , Maybe.map (\l -> "limit=" ++ String.fromInt l) limit
+                    [ Maybe.map (Url.Builder.string "name") name
+                    , Maybe.map (Url.Builder.int "limit") limit
                     ]
                         |> List.filterMap identity
-                        |> String.join "&"
-
-                queryString =
-                    if String.isEmpty queryParams then
+            in
+            "/db/" ++ db ++ "/activities"
+                ++ (if List.isEmpty queryParams then
                         ""
 
                     else
-                        "?" ++ queryParams
-            in
-            "/db/" ++ db ++ "/activities" ++ queryString
+                        Url.Builder.toQuery queryParams
+                   )
 
         ActivityRoute db processId ->
             "/db/" ++ db ++ "/activity/" ++ processId

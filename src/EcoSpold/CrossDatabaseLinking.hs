@@ -43,10 +43,13 @@ module EcoSpold.CrossDatabaseLinking
       -- * Compound Name Parsing
     , extractProductPrefixes
     , extractBracketedLocation
-      -- * Re-exports
+    , stripTrailingDBTag
+      -- * Text Normalization
     , normalizeText
+    , normalizeUnicode
     ) where
 
+import Data.Char (isUpper, isAlpha)
 import Data.List (maximumBy)
 import Data.Maybe (mapMaybe, fromMaybe)
 import qualified Data.Map.Strict as M
@@ -120,9 +123,25 @@ data LinkBlocker
 defaultLinkingThreshold :: Int
 defaultLinkingThreshold = 55
 
--- | Normalize text for matching: lowercase and strip whitespace
+-- | Normalize Unicode characters to ASCII equivalents for matching.
+-- Handles soft hyphens, various dash types, and non-breaking spaces that
+-- appear in SimaPro CSV exports but not in ecoinvent's ASCII names.
+normalizeUnicode :: Text -> Text
+normalizeUnicode = T.map replaceChar
+  where
+    replaceChar '\x00AD' = '-'   -- Soft hyphen → ASCII hyphen
+    replaceChar '\x2010' = '-'   -- Hyphen → ASCII hyphen
+    replaceChar '\x2011' = '-'   -- Non-breaking hyphen → ASCII hyphen
+    replaceChar '\x2012' = '-'   -- Figure dash → ASCII hyphen
+    replaceChar '\x2013' = '-'   -- En dash → ASCII hyphen
+    replaceChar '\x2014' = '-'   -- Em dash → ASCII hyphen
+    replaceChar '\x00A0' = ' '   -- Non-breaking space → space
+    replaceChar '\x202F' = ' '   -- Narrow no-break space → space
+    replaceChar c = c
+
+-- | Normalize text for matching: lowercase, strip whitespace, normalize Unicode
 normalizeText :: Text -> Text
-normalizeText = T.toLower . T.strip
+normalizeText = T.toLower . T.strip . normalizeUnicode
 
 -- | Separators that may appear between product name and additional info
 -- in SimaPro compound process names (e.g. "product//[GLO] activity name").
@@ -130,17 +149,45 @@ normalizeText = T.toLower . T.strip
 compoundSeparators :: [Text]
 compoundSeparators = ["//", " {", " [", " |"]
 
+-- | Strip a trailing database tag from a product name.
+-- Matches patterns like "(WFLDB)", "(AGRIBALYSE)", "(SALCA)" — a parenthesized
+-- suffix where the content is all uppercase letters.
+-- Returns Just strippedName if a tag was found, Nothing otherwise.
+stripTrailingDBTag :: Text -> Maybe Text
+stripTrailingDBTag name
+    | T.null name = Nothing
+    | T.last name /= ')' = Nothing
+    | otherwise =
+        let withoutClose = T.init name  -- drop trailing ')'
+            (before, tag) = T.breakOnEnd "(" withoutClose
+        in if T.null before
+            then Nothing  -- no opening paren found
+            else let prefix = T.init before  -- drop the '(' at end of 'before'
+                     stripped = T.strip prefix
+                 in if not (T.null tag)
+                       && T.all (\c -> isUpper c || c == '-') tag
+                       && T.any isAlpha tag  -- at least one letter
+                       && not (T.null stripped)
+                    then Just stripped
+                    else Nothing
+
 -- | Extract product name prefixes from a compound name.
 -- Tries splitting at each separator and returns candidate prefixes (stripped).
--- Returns empty list if no separator is found (name is already clean).
+-- As a last resort, tries stripping a trailing database tag like "(WFLDB)".
+-- Returns empty list if no separator is found and no tag detected.
 extractProductPrefixes :: Text -> [Text]
 extractProductPrefixes name =
-    [ T.strip prefix
-    | sep <- compoundSeparators
-    , let (prefix, rest) = T.breakOn sep name
-    , not (T.null rest)       -- separator was found
-    , not (T.null prefix)     -- non-empty prefix
-    ]
+    let separatorPrefixes =
+            [ T.strip prefix
+            | sep <- compoundSeparators
+            , let (prefix, rest) = T.breakOn sep name
+            , not (T.null rest)       -- separator was found
+            , not (T.null prefix)     -- non-empty prefix
+            ]
+        tagStripped = case stripTrailingDBTag name of
+            Just stripped -> [stripped]
+            Nothing       -> []
+    in separatorPrefixes ++ tagStripped
 
 -- | Extract a location code from any bracket pattern in a name.
 -- Looks for [XX] first, then {XX}. Returns the content of the first match,
@@ -169,10 +216,12 @@ extractBracketedLocation name =
 buildIndexedDatabase :: Text -> SynonymDB -> SimpleDatabase -> IndexedDatabase
 buildIndexedDatabase dbName synDB db =
     let entries = buildSupplierEntries db
-        -- Index by normalized product name
+        -- Index by normalized product name + extracted prefixes
         byName = M.fromListWith (++)
-            [ (normalizeText prodName, [entry])
+            [ (normalizeText name, [entry])
             | (prodName, entry) <- entries
+            , name <- prodName : extractProductPrefixes prodName
+            , not (T.null (normalizeText name))
             ]
         -- Index by synonym group (for synonym matching)
         bySynonym = M.fromListWith (++)
@@ -209,10 +258,12 @@ buildSupplierEntries db =
 buildIndexedDatabaseFromDB :: Text -> SynonymDB -> Database -> IndexedDatabase
 buildIndexedDatabaseFromDB dbName synDB db =
     let entries = buildSupplierEntriesFromDB db
-        -- Index by normalized product name
+        -- Index by normalized product name + extracted prefixes
         byName = M.fromListWith (++)
-            [ (normalizeText prodName, [entry])
+            [ (normalizeText name, [entry])
             | (prodName, entry) <- entries
+            , name <- prodName : extractProductPrefixes prodName
+            , not (T.null (normalizeText name))
             ]
         -- Index by synonym group (for synonym matching)
         bySynonym = M.fromListWith (++)
@@ -374,9 +425,10 @@ areSynonyms synDB name1 name2 =
 matchLocation :: Text -> Text -> Int
 matchLocation queryLoc candidateLoc
     | queryLoc == candidateLoc                        = 30  -- Exact
-    | isSubregionOf queryLoc candidateLoc             = 20  -- FR ⊂ Europe
+    | isSubregionOf queryLoc candidateLoc             = 20  -- Widening (FR→GLO, FR→RER)
     | candidateLoc `elem` ["GLO", "RoW"]              = 10  -- Global fallback
-    | otherwise                                       = 5   -- Different but not blocking
+    | isSubregionOf candidateLoc queryLoc             = 0   -- Narrowing (GLO→FR) — blocked
+    | otherwise                                       = 5   -- Unrelated
 
 -- | Check if one location is a subregion of another
 isSubregionOf :: Text -> Text -> Bool

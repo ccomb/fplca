@@ -282,6 +282,8 @@ defaultUnits = M.fromList $ concat
 
       -- Volume×Time
     , mkAliases [0,0,1,0,0,1,0,0] 31536000.0 ["m3*year", "m³*year", "m3.year", "m3*a", "m3y"]
+    , mkAliases [0,0,1,0,0,1,0,0] 86.4       ["l*day", "l.day", "l*d", "liter*day", "litre*day"]
+    , mkAliases [0,0,1,0,0,1,0,0] 31536.0    ["l*year", "l.year", "l*a", "liter*year", "litre*year"]
 
       -- Mass×Time (some specific processes)
     , mkAliases [1,0,1,0,0,0,0,0] 31536000.0 ["kg*year", "kg.year", "kg*a"]

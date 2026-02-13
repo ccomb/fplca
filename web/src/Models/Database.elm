@@ -3,13 +3,18 @@ module Models.Database exposing
     , DatabaseList
     , DatabaseSetupInfo
     , DatabaseStatus
+    , DepLoadResult(..)
     , DependencySuggestion
+    , LoadDatabaseResponse(..)
+    , LocationFallback
     , MissingSupplier
     , UploadResponse
     , activateResponseDecoder
     , databaseListDecoder
     , databaseSetupInfoDecoder
     , databaseStatusDecoder
+    , depLoadResultDecoder
+    , loadDatabaseResponseDecoder
     , uploadResponseDecoder
     )
 
@@ -82,6 +87,62 @@ activateResponseDecoder =
         |> optional "arDatabase" (Decode.nullable databaseStatusDecoder) Nothing
 
 
+{-| Result of auto-loading a single dependency
+-}
+type DepLoadResult
+    = DepLoaded String
+    | DepLoadFailed String String
+
+
+{-| Response for the load database endpoint
+-}
+type LoadDatabaseResponse
+    = LoadFailed String
+    | LoadSucceeded DatabaseStatus (List DepLoadResult)
+
+
+{-| JSON decoder for DepLoadResult
+-}
+depLoadResultDecoder : Decoder DepLoadResult
+depLoadResultDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "DepLoaded" ->
+                        Decode.map DepLoaded (Decode.field "dlrName" Decode.string)
+
+                    "DepLoadFailed" ->
+                        Decode.map2 DepLoadFailed
+                            (Decode.field "dlfName" Decode.string)
+                            (Decode.field "dlfError" Decode.string)
+
+                    _ ->
+                        Decode.fail ("Unknown DepLoadResult tag: " ++ tag)
+            )
+
+
+{-| JSON decoder for LoadDatabaseResponse
+-}
+loadDatabaseResponseDecoder : Decoder LoadDatabaseResponse
+loadDatabaseResponseDecoder =
+    Decode.field "tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "LoadFailed" ->
+                        Decode.map LoadFailed (Decode.field "ldrError" Decode.string)
+
+                    "LoadSucceeded" ->
+                        Decode.map2 LoadSucceeded
+                            (Decode.field "ldrDatabase" databaseStatusDecoder)
+                            (Decode.field "ldrDeps" (Decode.list depLoadResultDecoder))
+
+                    _ ->
+                        Decode.fail ("Unknown LoadDatabaseResponse tag: " ++ tag)
+            )
+
+
 {-| Response from uploading a database
 -}
 type alias UploadResponse =
@@ -125,6 +186,13 @@ type alias DependencySuggestion =
 
 {-| Setup info for a database (for the setup page)
 -}
+type alias LocationFallback =
+    { product : String
+    , requested : String
+    , actual : String
+    }
+
+
 type alias DatabaseSetupInfo =
     { name : String
     , displayName : String
@@ -139,6 +207,7 @@ type alias DatabaseSetupInfo =
     , suggestions : List DependencySuggestion
     , isReady : Bool
     , unknownUnits : List String
+    , locationFallbacks : List LocationFallback
     }
 
 
@@ -182,3 +251,14 @@ databaseSetupInfoDecoder =
         |> required "suggestions" (Decode.list dependencySuggestionDecoder)
         |> required "isReady" Decode.bool
         |> optional "unknownUnits" (Decode.list Decode.string) []
+        |> optional "locationFallbacks" (Decode.list locationFallbackDecoder) []
+
+
+{-| JSON decoder for LocationFallback
+-}
+locationFallbackDecoder : Decoder LocationFallback
+locationFallbackDecoder =
+    Decode.succeed LocationFallback
+        |> required "product" Decode.string
+        |> required "requested" Decode.string
+        |> required "actual" Decode.string

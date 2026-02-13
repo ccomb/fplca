@@ -26,7 +26,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Models.Activity exposing (ActivityInfo, ActivityTree)
-import Models.Database exposing (ActivateResponse, DatabaseList, activateResponseDecoder, databaseListDecoder)
+import Models.Database exposing (DatabaseList, LoadDatabaseResponse(..), databaseListDecoder, loadDatabaseResponseDecoder)
 import Models.Graph exposing (GraphData)
 import Models.Inventory exposing (InventoryExport)
 import Route exposing (Route(..))
@@ -83,7 +83,7 @@ type Msg
     | LoadDatabases
     | DatabasesLoaded (Result Http.Error DatabaseList)
     | LoadDatabase String
-    | LoadDatabaseResult String (Result Http.Error ActivateResponse)
+    | LoadDatabaseResult String (Result Http.Error LoadDatabaseResponse)
     | ToggleConsole
     | CloseConsole
     | PollConsoleLogs Time.Posix
@@ -263,25 +263,26 @@ update msg model =
             )
 
         LoadDatabaseResult dbName (Ok response) ->
-            if response.success then
-                ( { model
-                    | currentDatabaseId = Just dbName
-                    , cachedTrees = Dict.empty
-                    , cachedActivityInfo = Dict.empty
-                    , cachedInventories = Dict.empty
-                    , cachedGraphs = Dict.empty
-                    , loadingDatabases = Set.remove dbName model.loadingDatabases
-                  }
-                , Cmd.batch
-                    [ loadDatabases
-                    , Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
-                    ]
-                )
+            case response of
+                LoadSucceeded _ _ ->
+                    ( { model
+                        | currentDatabaseId = Just dbName
+                        , cachedTrees = Dict.empty
+                        , cachedActivityInfo = Dict.empty
+                        , cachedInventories = Dict.empty
+                        , cachedGraphs = Dict.empty
+                        , loadingDatabases = Set.remove dbName model.loadingDatabases
+                      }
+                    , Cmd.batch
+                        [ loadDatabases
+                        , Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
+                        ]
+                    )
 
-            else
-                ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
-                , Cmd.none
-                )
+                LoadFailed _ ->
+                    ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
+                    , Cmd.none
+                    )
 
         LoadDatabaseResult dbName (Err _) ->
             ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
@@ -543,7 +544,7 @@ loadDatabaseCmd dbName =
     Http.post
         { url = "/api/v1/databases/" ++ dbName ++ "/load"
         , body = Http.emptyBody
-        , expect = Http.expectJson (LoadDatabaseResult dbName) activateResponseDecoder
+        , expect = Http.expectJson (LoadDatabaseResult dbName) loadDatabaseResponseDecoder
         }
 
 

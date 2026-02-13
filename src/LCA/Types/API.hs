@@ -273,6 +273,18 @@ data ActivateResponse = ActivateResponse
     }
     deriving (Generic)
 
+-- | Result of auto-loading a single dependency
+data DepLoadResult
+    = DepLoaded    { dlrName :: Text }
+    | DepLoadFailed { dlfName :: Text, dlfError :: Text }
+    deriving (Generic)
+
+-- | Response for the load database endpoint
+data LoadDatabaseResponse
+    = LoadFailed    { ldrError :: Text }
+    | LoadSucceeded { ldrDatabase :: DatabaseStatusAPI, ldrDeps :: [DepLoadResult] }
+    deriving (Generic)
+
 -- | Request for database upload (base64-encoded ZIP)
 data UploadRequest = UploadRequest
     { urName        :: Text        -- Display name for the database
@@ -425,10 +437,14 @@ instance FromJSON LCIARequest
 instance ToJSON DatabaseListResponse
 instance ToJSON DatabaseStatusAPI
 instance ToJSON ActivateResponse
+instance ToJSON DepLoadResult
+instance ToJSON LoadDatabaseResponse
 instance ToJSON UploadRequest
 instance ToJSON UploadResponse
 instance FromJSON DatabaseListResponse
 instance FromJSON DatabaseStatusAPI
 instance FromJSON ActivateResponse
+instance FromJSON DepLoadResult
+instance FromJSON LoadDatabaseResponse
 instance FromJSON UploadRequest
 instance FromJSON UploadResponse

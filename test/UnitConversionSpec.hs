@@ -66,6 +66,12 @@ spec = do
         it "unknown units are not compatible" $ do
             unitsCompatible cfg "unknown_unit" "kg" `shouldBe` False
 
+        it "l*day is a known unit" $ do
+            isKnownUnit cfg "l*day" `shouldBe` True
+
+        it "l*day and m3*year are compatible (both volume×time)" $ do
+            unitsCompatible cfg "l*day" "m3*year" `shouldBe` True
+
     describe "Unit Conversion" $ do
         let cfg = defaultUnitConfig
 
@@ -91,6 +97,11 @@ spec = do
 
         it "returns Nothing for unknown units" $ do
             convertUnit cfg "unknown" "kg" 1.0 `shouldBe` Nothing
+
+        it "converts 1 m3*year to 365000 l*day" $ do
+            case convertUnit cfg "m3*year" "l*day" 1.0 of
+                Just v -> v `shouldSatisfy` (\x -> abs (x - 365000.0) < 1.0)
+                Nothing -> expectationFailure "conversion failed"
 
     describe "Backward Compatibility" $ do
         it "convertExchangeAmount converts tkm to kgkm" $ do

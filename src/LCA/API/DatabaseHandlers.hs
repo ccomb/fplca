@@ -44,6 +44,7 @@ import LCA.DatabaseManager
     ( DatabaseManager
     , DatabaseStatus(..)
     , DatabaseSetupInfo(..)
+    , DepLoadResult(..)
     , LoadedDatabase(..)
     , addDatabase
     , addDependencyToStaged
@@ -57,6 +58,7 @@ import LCA.DatabaseManager
     )
 import LCA.Types.API
     ( ActivateResponse(..)
+    , LoadDatabaseResponse(..)
     , DatabaseListResponse(..)
     , DatabaseStatusAPI(..)
     , UploadRequest(..)
@@ -78,17 +80,17 @@ getDatabases dbManager = do
     return $ DatabaseListResponse statusList
 
 -- | Load a database on demand
-loadDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse
+loadDatabaseHandler :: DatabaseManager -> Text -> Handler LoadDatabaseResponse
 loadDatabaseHandler dbManager dbName = do
     eitherResult <- liftIO $ try $ loadDatabase dbManager dbName
     case eitherResult of
         Left (ex :: SomeException) ->
-            return $ ActivateResponse False ("Server exception: " <> T.pack (show ex)) Nothing
-        Right (Left err) -> return $ ActivateResponse False err Nothing
-        Right (Right loadedDb) -> do
+            return $ LoadFailed ("Server exception: " <> T.pack (show ex))
+        Right (Left err) -> return $ LoadFailed err
+        Right (Right (loadedDb, depResults)) -> do
             let config = ldConfig loadedDb
                 status = makeStatusFromConfig config
-            return $ ActivateResponse True ("Loaded database: " <> LCA.Config.dcDisplayName config) (Just status)
+            return $ LoadSucceeded status depResults
 
 -- | Unload a database from memory
 unloadDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse

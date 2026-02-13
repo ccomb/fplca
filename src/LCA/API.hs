@@ -23,7 +23,7 @@ import LCA.Tree (buildLoopAwareTree)
 import LCA.Types
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
-import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), UploadRequest(..), UploadResponse(..))
+import LCA.Types.API (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -66,7 +66,7 @@ type LCAAPI =
                 -- Database management endpoints
                 :<|> "databases" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
-                :<|> "databases" :> Capture "dbName" Text :> "load" :> Post '[JSON] ActivateResponse
+                :<|> "databases" :> Capture "dbName" Text :> "load" :> Post '[JSON] LoadDatabaseResponse
                 :<|> "databases" :> Capture "dbName" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "databases" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Upload endpoint (base64-encoded ZIP in JSON body)

@@ -665,6 +665,66 @@ collectUnits products techs bios =
         }
 
 -- ============================================================================
+-- Encoding Conversion
+-- ============================================================================
+
+-- | Ensure ByteString is proper UTF-8, converting from Windows-1252 if needed.
+-- SimaPro CSV files use Windows-1252 encoding (no encoding header in the format).
+-- Handles three cases:
+--   1. Already valid UTF-8 with no C1 controls -> pass through
+--   2. Valid UTF-8 but contains C1 controls (bad prior conversion) -> fix C1 chars
+--   3. Raw Windows-1252 bytes (not valid UTF-8) -> full Win-1252 decode
+ensureUtf8 :: BS.ByteString -> BS.ByteString
+ensureUtf8 bs = case TE.decodeUtf8' bs of
+    Right text
+        | T.any isC1Control text -> TE.encodeUtf8 (fixWindows1252Controls text)
+        | otherwise -> bs  -- Already proper UTF-8, no changes needed
+    Left _ -> TE.encodeUtf8 (decodeWindows1252 bs)
+  where
+    isC1Control c = c >= '\x0080' && c <= '\x009F'
+
+-- | Decode raw Windows-1252 bytes to Text.
+-- decodeLatin1 maps each byte to the same-valued Unicode codepoint,
+-- then fixWindows1252Controls corrects the 0x80-0x9F range.
+decodeWindows1252 :: BS.ByteString -> Text
+decodeWindows1252 = fixWindows1252Controls . TE.decodeLatin1
+
+-- | Map C1 control characters (U+0080-U+009F) to their Windows-1252 equivalents.
+-- These control characters never appear in real text; when present, they're
+-- always Win-1252 bytes that were incorrectly mapped to Unicode codepoints.
+fixWindows1252Controls :: Text -> Text
+fixWindows1252Controls = T.map fixChar
+  where
+    fixChar '\x0080' = '\x20AC'  -- Euro sign
+    fixChar '\x0082' = '\x201A'  -- Single low-9 quotation mark
+    fixChar '\x0083' = '\x0192'  -- Latin small f with hook
+    fixChar '\x0084' = '\x201E'  -- Double low-9 quotation mark
+    fixChar '\x0085' = '\x2026'  -- Horizontal ellipsis
+    fixChar '\x0086' = '\x2020'  -- Dagger
+    fixChar '\x0087' = '\x2021'  -- Double dagger
+    fixChar '\x0088' = '\x02C6'  -- Modifier letter circumflex
+    fixChar '\x0089' = '\x2030'  -- Per mille sign
+    fixChar '\x008A' = '\x0160'  -- Latin capital S with caron
+    fixChar '\x008B' = '\x2039'  -- Single left-pointing angle quote
+    fixChar '\x008C' = '\x0152'  -- Latin capital ligature OE
+    fixChar '\x008E' = '\x017D'  -- Latin capital Z with caron
+    fixChar '\x0091' = '\x2018'  -- Left single quotation mark
+    fixChar '\x0092' = '\x2019'  -- Right single quotation mark
+    fixChar '\x0093' = '\x201C'  -- Left double quotation mark
+    fixChar '\x0094' = '\x201D'  -- Right double quotation mark
+    fixChar '\x0095' = '\x2022'  -- Bullet
+    fixChar '\x0096' = '\x2013'  -- En dash
+    fixChar '\x0097' = '\x2014'  -- Em dash
+    fixChar '\x0098' = '\x02DC'  -- Small tilde
+    fixChar '\x0099' = '\x2122'  -- Trade mark sign
+    fixChar '\x009A' = '\x0161'  -- Latin small s with caron
+    fixChar '\x009B' = '\x203A'  -- Single right-pointing angle quote
+    fixChar '\x009C' = '\x0153'  -- Latin small ligature oe
+    fixChar '\x009E' = '\x017E'  -- Latin small z with caron
+    fixChar '\x009F' = '\x0178'  -- Latin capital Y with diaeresis
+    fixChar c = c
+
+-- ============================================================================
 -- Main Parser
 -- ============================================================================
 
@@ -675,10 +735,11 @@ parseSimaProCSV path = do
     hPutStrLn stderr $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
 
-    -- Read as ByteString and split into lines
-    -- Process ByteStrings directly - only decode to Text when storing values
+    -- Read as ByteString and convert from Windows-1252 to proper UTF-8.
+    -- SimaPro CSV uses Windows-1252 encoding by default.
     rawContent <- BS.readFile path
-    let bsLines = BS8.lines rawContent
+    let !utf8Content = ensureUtf8 rawContent
+    let bsLines = BS8.lines utf8Content
         -- Strip Windows \r from ByteStrings (fast, no allocation)
         lines' = map stripCR bsLines
         initialAcc = ParseAcc

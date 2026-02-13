@@ -38,6 +38,7 @@ type Msg
     | MoreResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | NewFlags Route.ActivitiesFlags
     | ScrollDone
+    | RequestLoadDatabase
 
 
 page : Shared.Model -> Spa.Page.Page Route.ActivitiesFlags Shared.Msg (View Msg) Model Msg
@@ -64,8 +65,11 @@ init shared flags =
         searchQuery =
             Maybe.withDefault "" flags.name
 
+        dbLoaded =
+            Shared.isDatabaseLoaded shared dbName
+
         shouldSearch =
-            not (String.isEmpty searchQuery)
+            not (String.isEmpty searchQuery) && dbLoaded
     in
     ( { searchQuery = searchQuery
       , dbName = dbName
@@ -90,46 +94,50 @@ update shared msg model =
         ActivitiesViewMsg viewMsg ->
             case viewMsg of
                 ActivitiesView.UpdateSearchQuery query ->
-                    let
-                        dbName =
-                            model.dbName
+                    if not (Shared.isDatabaseLoaded shared model.dbName) then
+                        ( { model | searchQuery = query }, Effect.none )
 
-                        queryName =
-                            if String.isEmpty query then
-                                Nothing
+                    else
+                        let
+                            dbName =
+                                model.dbName
 
-                            else
-                                Just query
+                            queryName =
+                                if String.isEmpty query then
+                                    Nothing
 
-                        newRoute =
-                            ActivitiesRoute { db = dbName, name = queryName, limit = Just 20 }
+                                else
+                                    Just query
 
-                        cmds =
-                            if String.isEmpty query then
-                                Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                            newRoute =
+                                ActivitiesRoute { db = dbName, name = queryName, limit = Just 20 }
 
-                            else
-                                Effect.batch
-                                    [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                                    , Effect.fromCmd (searchActivities model.dbName query)
-                                    ]
-                    in
-                    ( { model
-                        | searchQuery = query
-                        , results =
-                            if String.isEmpty query then
-                                NotSearched
+                            cmds =
+                                if String.isEmpty query then
+                                    Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
 
-                            else
-                                case model.results of
-                                    Results _ ->
-                                        model.results
+                                else
+                                    Effect.batch
+                                        [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                                        , Effect.fromCmd (searchActivities model.dbName query)
+                                        ]
+                        in
+                        ( { model
+                            | searchQuery = query
+                            , results =
+                                if String.isEmpty query then
+                                    NotSearched
 
-                                    _ ->
-                                        Searching
-                      }
-                    , cmds
-                    )
+                                else
+                                    case model.results of
+                                        Results _ ->
+                                            model.results
+
+                                        _ ->
+                                            Searching
+                          }
+                        , cmds
+                        )
 
                 ActivitiesView.SelectActivity activityId ->
                     ( model
@@ -180,6 +188,11 @@ update shared msg model =
                             Effect.none
                         ]
                     )
+
+        RequestLoadDatabase ->
+            ( model
+            , Effect.fromShared (Shared.LoadDatabase model.dbName)
+            )
 
         SearchResultsLoaded (Ok results) ->
             ( { model | results = Results results }
@@ -233,20 +246,27 @@ update shared msg model =
 
             else
                 -- External navigation (browser back/forward)
+                let
+                    dbLoaded =
+                        Shared.isDatabaseLoaded shared model.dbName
+
+                    shouldSearch =
+                        not (String.isEmpty newQuery) && dbLoaded
+                in
                 ( { model
                     | searchQuery = newQuery
                     , results =
-                        if String.isEmpty newQuery then
-                            NotSearched
+                        if shouldSearch then
+                            Searching
 
                         else
-                            Searching
+                            NotSearched
                   }
-                , if String.isEmpty newQuery then
-                    Effect.none
+                , if shouldSearch then
+                    Effect.fromCmd (searchActivities model.dbName newQuery)
 
                   else
-                    Effect.fromCmd (searchActivities model.dbName newQuery)
+                    Effect.none
                 )
 
 
@@ -296,19 +316,25 @@ view shared model =
                 _ ->
                     Nothing
     in
-    { title = "Activities"
-    , body =
-        Html.map ActivitiesViewMsg
-            (ActivitiesView.viewActivitiesPage
-                model.dbName
-                model.searchQuery
-                searchResults
-                searchLoading
-                loadingMore
-                error
-                maybeDatabaseList
-            )
-    }
+    if not (Shared.isDatabaseLoaded shared model.dbName) then
+        { title = "Activities"
+        , body = Shared.viewLoadDatabasePrompt shared model.dbName RequestLoadDatabase
+        }
+
+    else
+        { title = "Activities"
+        , body =
+            Html.map ActivitiesViewMsg
+                (ActivitiesView.viewActivitiesPage
+                    model.dbName
+                    model.searchQuery
+                    searchResults
+                    searchLoading
+                    loadingMore
+                    error
+                    maybeDatabaseList
+                )
+        }
 
 
 

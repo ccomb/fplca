@@ -15,7 +15,7 @@ finalizing a database for use. It shows:
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick)
-import Models.Database exposing (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
+import Models.Database exposing (DatabaseSetupInfo, DependencySuggestion, LocationFallback, MissingSupplier)
 
 
 type Msg
@@ -89,6 +89,7 @@ viewSetupContent setupInfo =
             [ div [ class "column is-8" ]
                 [ viewCompletenessCard setupInfo
                 , viewUnknownUnitsCard setupInfo
+                , viewLocationFallbacksCard setupInfo
                 , viewMissingSuppliersCard setupInfo
                 ]
             , div [ class "column is-4" ]
@@ -102,11 +103,28 @@ viewSetupContent setupInfo =
 viewCompletenessCard : DatabaseSetupInfo -> Html Msg
 viewCompletenessCard setupInfo =
     let
-        completenessPercent =
-            round setupInfo.completeness
+        completenessDisplay =
+            let
+                whole =
+                    floor setupInfo.completeness
+
+                decimal =
+                    round ((setupInfo.completeness - toFloat whole) * 10)
+
+                ( adjustedWhole, adjustedDecimal ) =
+                    if decimal >= 10 then
+                        ( whole + 1, 0 )
+
+                    else
+                        ( whole, decimal )
+            in
+            String.fromInt adjustedWhole ++ "," ++ String.fromInt adjustedDecimal ++ "%"
+
+        progressValue =
+            floor setupInfo.completeness
 
         progressColor =
-            if setupInfo.completeness >= 95 then
+            if setupInfo.unresolvedLinks == 0 then
                 "is-success"
 
             else if setupInfo.completeness >= 50 then
@@ -127,7 +145,7 @@ viewCompletenessCard setupInfo =
                 [ div [ class "level", style "margin-bottom" "0.5rem" ]
                     [ div [ class "level-left" ]
                         [ span [ class "is-size-3 has-text-weight-bold" ]
-                            [ text (String.fromInt completenessPercent ++ "%") ]
+                            [ text completenessDisplay ]
                         ]
                     , div [ class "level-right" ]
                         [ span [ class "has-text-grey" ]
@@ -143,7 +161,7 @@ viewCompletenessCard setupInfo =
                 , progress
                     [ class ("progress " ++ progressColor)
                     , attribute "max" "100"
-                    , attribute "value" (String.fromInt completenessPercent)
+                    , attribute "value" (String.fromInt progressValue)
                     ]
                     []
                 , div [ class "tags", style "margin-top" "0.5rem" ]
@@ -261,6 +279,50 @@ viewUnknownUnitsCard setupInfo =
                     ]
                 ]
             ]
+
+
+viewLocationFallbacksCard : DatabaseSetupInfo -> Html Msg
+viewLocationFallbacksCard setupInfo =
+    if List.isEmpty setupInfo.locationFallbacks then
+        text ""
+
+    else
+        div [ class "card", style "margin-bottom" "1rem" ]
+            [ div [ class "card-content" ]
+                [ h3 [ class "title is-5" ]
+                    [ span [ class "icon-text" ]
+                        [ span [ class "icon has-text-info" ] [ i [ class "fas fa-map-marker-alt" ] [] ]
+                        , span [] [ text "Location Fallbacks" ]
+                        ]
+                    ]
+                , div [ class "notification is-info is-light" ]
+                    [ p [] [ text "These products were linked using a wider geography than requested:" ]
+                    , table [ class "table is-striped is-fullwidth is-narrow", style "margin-top" "0.5rem" ]
+                        [ thead []
+                            [ tr []
+                                [ th [] [ text "Product" ]
+                                , th [ style "width" "200px" ] [ text "Location" ]
+                                ]
+                            ]
+                        , tbody []
+                            (List.map viewLocationFallbackRow setupInfo.locationFallbacks)
+                        ]
+                    ]
+                ]
+            ]
+
+
+viewLocationFallbackRow : LocationFallback -> Html Msg
+viewLocationFallbackRow fb =
+    tr []
+        [ td [] [ text fb.product ]
+        , td []
+            [ span [ class "tag is-light" ] [ text fb.requested ]
+            , span [ class "icon is-small has-text-grey", style "margin" "0 0.25rem" ]
+                [ i [ class "fas fa-arrow-right" ] [] ]
+            , span [ class "tag is-info is-light" ] [ text fb.actual ]
+            ]
+        ]
 
 
 viewDependenciesCard : DatabaseSetupInfo -> Html Msg

@@ -85,6 +85,7 @@ import EcoSpold.CrossDatabaseLinking
     , buildIndexedDatabase
     , defaultLinkingThreshold
     , extractProductPrefixes
+    , normalizeUnicode
     )
 import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
@@ -221,9 +222,9 @@ reportUnlinkedSummary summary
     sortOn f = sortBy (\a b -> compare (f a) (f b))
     nub = map head . group . sort
 
--- | Normalize text for matching: lowercase and strip whitespace
+-- | Normalize text for matching: lowercase, strip whitespace, normalize Unicode
 normalizeText :: T.Text -> T.Text
-normalizeText = T.toLower . T.strip
+normalizeText = T.toLower . T.strip . normalizeUnicode
 
 {- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
 For each activity, we index it by its reference product name + activity location
@@ -239,17 +240,26 @@ buildSupplierIndex activities flowDb =
         ]
 
 {- | Build name-only supplier index for SimaPro linking
-Uses only the normalized product name (no location required)
+Uses the normalized product name + extracted prefixes (no location required).
+Exact names take priority via M.union.
 -}
 buildSupplierIndexByName :: ActivityMap -> FlowDB -> NameOnlyIndex
 buildSupplierIndexByName activities flowDb =
-    M.fromList
-        [ (normalizeText (flowName flow), (actUUID, prodUUID))
-        | ((actUUID, prodUUID), act) <- M.toList activities
-        , ex <- exchanges act
-        , exchangeIsReference ex
-        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
-        ]
+    let entries =
+            [ (flowName flow, (actUUID, prodUUID))
+            | ((actUUID, prodUUID), act) <- M.toList activities
+            , ex <- exchanges act
+            , exchangeIsReference ex
+            , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+            ]
+        exactIndex = M.fromList [(normalizeText name, val) | (name, val) <- entries]
+        prefixIndex = M.fromList
+            [ (normalizeText p, val)
+            | (name, val) <- entries
+            , p <- extractProductPrefixes name
+            , normalizeText p /= normalizeText name
+            ]
+    in M.union exactIndex prefixIndex
 
 {- | Build name-only supplier index with location for EcoSpold1 linking
 Used when exchange has no location attribute to find the activity's actual location
@@ -968,11 +978,12 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     { cdlLinks              :: ![CrossDBLink]                        -- ^ Resolved cross-DB links
     , cdlUnresolvedProducts :: !(M.Map T.Text (Int, LinkBlocker))   -- ^ Product name → (count, reason)
     , cdlUnknownUnits       :: !(S.Set T.Text)                      -- ^ Unknown units from sdbUnits
+    , cdlLocationFallbacks  :: ![(T.Text, T.Text, T.Text)]          -- ^ (product, requestedLoc, actualLoc)
     }
 
 -- | Empty stats
 emptyCrossDBLinkingStats :: CrossDBLinkingStats
-emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty
+emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty []
 
 -- | Merge two CrossDBLinkingStats
 mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
@@ -980,6 +991,7 @@ mergeCrossDBStats s1 s2 = CrossDBLinkingStats
     { cdlLinks = cdlLinks s1 ++ cdlLinks s2
     , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
     , cdlUnknownUnits = S.union (cdlUnknownUnits s1) (cdlUnknownUnits s2)
+    , cdlLocationFallbacks = cdlLocationFallbacks s1 ++ cdlLocationFallbacks s2
     }
   where
     mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
@@ -1195,14 +1207,14 @@ findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (Tech
         case M.lookup fid flowDb of
             Nothing ->
                 -- Flow not found in FlowDB - can't name it
-                CrossDBLinkingStats [] M.empty S.empty
+                emptyCrossDBLinkingStats
             Just flow ->
                 -- Get unit name from UnitDB
                 let flowUnitName = case M.lookup (flowUnitId flow) unitDb of
                         Just u  -> unitName u
                         Nothing -> ""  -- Unknown unit
                 in case findSupplierAcrossDatabases ctx (flowName flow) loc flowUnitName of
-                    CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc _warnings ->
+                    CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc warnings ->
                         -- Successfully found cross-DB supplier
                         let !crossLink = CrossDBLink
                                 { cdlConsumerActUUID = consumerActUUID
@@ -1214,10 +1226,11 @@ findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (Tech
                                 , cdlLocation = supplierLoc
                                 , cdlSourceDatabase = dbName
                                 }
-                        in CrossDBLinkingStats [crossLink] M.empty S.empty
+                            fallbacks = [ (prodName, req, act) | UpperLocationUsed req act <- warnings ]
+                        in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks
                     CrossDBNotLinked blocker ->
                         -- Record as unresolved with the blocker reason
-                        CrossDBLinkingStats [] (M.singleton (flowName flow) (1, blocker)) S.empty
+                        CrossDBLinkingStats [] (M.singleton (flowName flow) (1, blocker)) S.empty []
     | otherwise =
         emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ _ = emptyCrossDBLinkingStats
