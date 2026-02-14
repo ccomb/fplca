@@ -512,7 +512,7 @@ processBlockToActivity :: ProcessBlock -> [(Activity, [Flow], [Unit])]
 processBlockToActivity ProcessBlock{..} =
     let -- Extract location from process name if not specified
         (_, locFromName) = extractLocation pbName
-        location = if T.null pbLocation then locFromName else pbLocation
+        location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
 
         -- Convert avoided products (shared across all activities)
         avoidedExchanges = map (productToExchange False) pbAvoidedProducts
