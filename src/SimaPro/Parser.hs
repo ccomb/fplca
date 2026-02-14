@@ -491,18 +491,18 @@ generateUnitUUID unitName =
 -- ============================================================================
 
 -- | Extract location from SimaPro-style names
--- Handles: "Name {FR}", "Name {FR}| market for...", "Name {FR} U"
+-- Handles: "Name {FR}", "Name {Europe without Switzerland}| market for...", etc.
+-- In SimaPro format, curly braces always denote geography.
 extractLocation :: Text -> (Text, Text)
 extractLocation name =
     case T.breakOn "{" name of
         (_, rest) | not (T.null rest) ->
             case T.breakOn "}" (T.drop 1 rest) of
-                (loc, afterBrace) | not (T.null afterBrace) || not (T.null loc) ->
-                    -- Found {LOC} pattern - extract location
+                (loc, afterBrace) | not (T.null afterBrace) ->
                     let cleanLoc = T.strip loc
-                    in if T.length cleanLoc <= 5 && T.length cleanLoc >= 2  -- Valid: FR, GLO, RER, etc.
+                    in if T.length cleanLoc >= 2
                        then (T.strip name, cleanLoc)
-                       else (name, "")  -- Probably not a location code
+                       else (name, "")
                 _ -> (name, "")
         _ -> (name, "")
 
