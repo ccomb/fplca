@@ -547,12 +547,14 @@ processBlockToActivity ProcessBlock{..} =
         makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
         makeActivity prod =
             let productExchange = productToExchange True prod
+                (_, locFromProduct) = extractLocation (prName prod)
+                effectiveLoc = if T.null location then locFromProduct else location
                 activity = Activity
                     { activityName = prName prod
                     , activityDescription = if T.null pbComment then [] else [pbComment]
                     , activitySynonyms = M.empty
                     , activityClassification = M.empty
-                    , activityLocation = location
+                    , activityLocation = effectiveLoc
                     , activityUnit = prUnit prod
                     , exchanges = productExchange : sharedExchanges
                     }

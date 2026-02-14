@@ -52,7 +52,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
-import System.Directory (doesFileExist, doesDirectoryExist, listDirectory)
+import System.Directory (doesFileExist, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeExtension)
 import Data.Char (toLower)
 import Data.List (sortOn)
@@ -867,6 +867,7 @@ removeDatabase manager dbName = do
                                             return $ Left $ "Failed to delete: " <> T.pack (show e)
                                         Right () -> do
                                             reportProgress Info $ "Deleted: " <> uploadDir
+                                            deleteCacheFile dbName
                                             removeFromMemory manager dbName
                                 else do
                                     -- Directory already missing, just remove from memory
@@ -875,11 +876,21 @@ removeDatabase manager dbName = do
   where
     try :: IO a -> IO (Either SomeException a)
     try = Control.Exception.try
+    deleteCacheFile name = do
+        cacheFile <- Loader.generateMatrixCacheFilename name ""
+        let zstdFile = cacheFile ++ ".zst"
+        cacheExists <- doesFileExist zstdFile
+        when cacheExists $ do
+            removeFile zstdFile
+            reportProgress Info $ "Deleted cache: " ++ zstdFile
 
 -- | Helper to remove database from in-memory maps only
 removeFromMemory :: DatabaseManager -> Text -> IO (Either Text ())
 removeFromMemory manager dbName = do
-    atomically $ modifyTVar' (dmAvailableDbs manager) (M.delete dbName)
+    atomically $ do
+        modifyTVar' (dmAvailableDbs manager) (M.delete dbName)
+        modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+        modifyTVar' (dmStagingDbs manager) (S.delete dbName)
     reportProgress Info $ "Removed database: " <> T.unpack dbName
     return $ Right ()
 

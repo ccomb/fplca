@@ -36,6 +36,7 @@ module EcoSpold.Loader
     , loadCachedDatabaseWithMatrices
     , saveCachedDatabaseWithMatrices
     , loadDatabaseFromCacheFile
+    , generateMatrixCacheFilename
       -- * Cross-Database Linking
     , fixActivityLinksWithCrossDB
     , CrossDBLinkingStats(..)

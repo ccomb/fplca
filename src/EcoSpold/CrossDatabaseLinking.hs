@@ -426,7 +426,7 @@ matchLocation :: Text -> Text -> Int
 matchLocation queryLoc candidateLoc
     | queryLoc == candidateLoc                        = 30  -- Exact
     | isSubregionOf queryLoc candidateLoc             = 20  -- Widening (FR→GLO, FR→RER)
-    | candidateLoc `elem` ["GLO", "RoW"]              = 10  -- Global fallback
+    | candidateLoc `elem` ["GLO", "RoW", "Unspecified"] = 10  -- Global fallback
     | isSubregionOf candidateLoc queryLoc             = 0   -- Narrowing (GLO→FR) — blocked
     | otherwise                                       = 5   -- Unrelated
 
