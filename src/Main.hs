@@ -25,26 +25,26 @@ import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 import Text.Printf (printf)
 
 -- fpLCA imports
-import LCA.Auth (authMiddleware)
-import LCA.CLI.Command
-import LCA.CLI.Parser
-import LCA.CLI.Types
-import LCA.CLI.Types (Command(Server), ServerOptions(..))
-import LCA.Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), MethodConfig(..))
-import LCA.DatabaseManager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager)
-import LCA.Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
-import LCA.Matrix.SharedSolver (SharedSolver, createSharedSolver)
-import LCA.Progress
-import LCA.Query (buildDatabaseWithMatrices)
-import LCA.SynonymDB (loadEmbeddedSynonymDB)
-import LCA.Types
+import API.Auth (authMiddleware)
+import CLI.Command
+import CLI.Parser
+import CLI.Types
+import CLI.Types (Command(Server), ServerOptions(..))
+import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), MethodConfig(..))
+import Database.Manager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager)
+import Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
+import SharedSolver (SharedSolver, createSharedSolver)
+import Progress
+import Database (buildDatabaseWithMatrices)
+import SynonymDB (loadEmbeddedSynonymDB)
+import Types
 import Control.Concurrent.STM (readTVarIO)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import qualified EcoSpold.Loader
-import EcoSpold.Loader (loadAllSpoldsWithFlows, loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
+import qualified Database.Loader as Loader
+import Database.Loader (loadCachedDatabaseWithMatrices, saveCachedDatabaseWithMatrices)
 
 -- For server mode
-import LCA.API (LCAAPI, lcaAPI, lcaServer)
+import API.Routes (LCAAPI, lcaAPI, lcaServer)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
@@ -67,7 +67,7 @@ main = do
   validateCLIConfig cliConfig
 
   -- Check for Server command with --config (multi-database mode)
-  case (LCA.CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
+  case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
     (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
     (Nothing, Just cfgFile) -> runConfigLoadOnly cliConfig cfgFile
     _ -> runSingleDatabaseMode cliConfig
@@ -207,7 +207,7 @@ runSingleDatabaseMode cliConfig = do
   validateAndReportDatabase database
 
   -- Execute the command (or just exit if no command given)
-  case LCA.CLI.Types.command cliConfig of
+  case CLI.Types.command cliConfig of
     Nothing -> do
       -- No command: just load database (cache generated as side effect) and exit
       reportProgress Info "No command specified - database loaded and cached"
@@ -295,7 +295,7 @@ isDirectCacheFile path = do
 loadFromDirectCacheFile :: FilePath -> IO Database
 loadFromDirectCacheFile cacheFile = do
   reportProgress Info $ "Loading database directly from cache file: " ++ cacheFile
-  cachedDb <- EcoSpold.Loader.loadDatabaseFromCacheFile cacheFile
+  cachedDb <- Loader.loadDatabaseFromCacheFile cacheFile
   case cachedDb of
     Just db -> do
       reportProgress Info "Successfully loaded database from cache file"
@@ -310,7 +310,7 @@ loadFromDirectory dataDirectory disableCache =
   if disableCache
     then do
       reportProgress Info "Loading activities with flow deduplication (caching disabled)"
-      loadResult <- loadAllSpoldsWithFlows dataDirectory
+      loadResult <- Loader.loadDatabase dataDirectory
       case loadResult of
         Left err -> error $ T.unpack err  -- CLI can still use error for fatal errors
         Right simpleDb -> do
@@ -327,7 +327,7 @@ loadFromDirectory dataDirectory disableCache =
           return db
         Nothing -> do
           reportCacheOperation "No matrix cache found, parsing EcoSpold XML files"
-          loadResult <- loadAllSpoldsWithFlows dataDirectory
+          loadResult <- Loader.loadDatabase dataDirectory
           case loadResult of
             Left err -> error $ T.unpack err  -- CLI can still use error for fatal errors
             Right simpleDb -> do

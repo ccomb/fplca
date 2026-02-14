@@ -5,8 +5,8 @@ module InventorySpec (spec) where
 import Test.Hspec
 import TestHelpers
 import GoldenData
-import LCA.Types
-import LCA.Matrix (computeInventoryMatrix)
+import Types
+import Matrix (computeInventoryMatrix)
 import qualified Data.Map as M
 
 spec :: Spec

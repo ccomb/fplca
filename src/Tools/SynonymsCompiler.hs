@@ -9,7 +9,7 @@
 -- Usage:
 --   cabal run synonyms-compiler -- \
 --       --input scripts/synonyms_db.json \
---       --output src/LCA/SynonymDB/synonyms.bin.zst
+--       --output src/SynonymDB/synonyms.bin.zst
 --
 -- The output file can be embedded at compile time using file-embed.
 module Main where
@@ -31,7 +31,7 @@ import Options.Applicative
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
-import LCA.SynonymDB.Types (SynonymDB(..))
+import SynonymDB.Types (SynonymDB(..))
 
 -- | Command line options
 data Options = Options
@@ -52,7 +52,7 @@ optParser = Options
         (  long "output"
         <> short 'o'
         <> metavar "FILE"
-        <> help "Output binary file (e.g., src/LCA/SynonymDB/synonyms.bin.zst)"
+        <> help "Output binary file (e.g., src/SynonymDB/synonyms.bin.zst)"
         )
     <*> option auto
         (  long "level"

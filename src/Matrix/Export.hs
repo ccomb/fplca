@@ -1,0 +1,331 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+module Matrix.Export
+    ( -- * Universal matrix format
+      exportUniversalMatrixFormat
+      -- * Debug export
+    , exportMatrixDebugCSVs
+    , extractMatrixDebugInfo
+    , MatrixDebugInfo(..)
+    ) where
+
+import Matrix (applySparseMatrix, buildDemandVectorFromIndex, solveSparseLinearSystem, toList)
+import Types
+
+import Data.Int (Int32)
+import qualified Data.List as L
+import qualified Data.Map as M
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import qualified Data.UUID as UUID
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as U
+
+-- | Matrix debug information container
+data MatrixDebugInfo = MatrixDebugInfo
+    { mdActivities :: ActivityDB
+    , mdFlows :: M.Map UUID Flow
+    , mdTechTriples :: U.Vector SparseTriple
+    , mdBioTriples :: U.Vector SparseTriple
+    , mdActivityIndex :: V.Vector Int32
+    , mdBioFlowUUIDs :: V.Vector UUID
+    , mdTargetUUID :: UUID
+    , mdTargetProcessId :: ProcessId
+    , mdDatabase :: Database
+    , mdSupplyVector :: [Double]
+    , mdDemandVector :: [Double]
+    , mdInventoryVector :: [Double]
+    }
+
+-- | Extract matrix debug information from Database
+extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> MatrixDebugInfo
+extractMatrixDebugInfo database targetUUID flowFilter =
+    let activities = dbActivities database
+        flows = dbFlows database
+        techTriples = dbTechnosphereTriples database
+        bioTriples = dbBiosphereTriples database
+        activityIndexVec = dbActivityIndex database
+        bioFlowUUIDs = dbBiosphereFlows database
+        activityCount = dbActivityCount database
+        bioFlowCount = dbBiosphereCount database
+
+        targetProcessId = case findProcessIdByActivityUUID database targetUUID of
+            Just pid -> pid
+            Nothing -> error $ "Activity " <> show targetUUID <> " has no ProcessId in database for debug-matrices"
+        demandVec = buildDemandVectorFromIndex activityIndexVec targetProcessId
+        demandList = toList demandVec
+
+        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+        activityCountInt = fromIntegral activityCount
+        supplyVec = solveSparseLinearSystem techTriplesInt activityCountInt demandVec
+        supplyList = toList supplyVec
+
+        bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
+        bioFlowCountInt = fromIntegral bioFlowCount
+        inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
+        inventoryList = toList inventoryVec
+
+        filteredBioTriples = case flowFilter of
+            Nothing -> bioTriples
+            Just filterText ->
+                let matchingFlowIndices =
+                        [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
+                        ]
+                    matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
+                 in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples
+     in MatrixDebugInfo
+            { mdActivities = activities
+            , mdFlows = flows
+            , mdTechTriples = techTriples
+            , mdBioTriples = filteredBioTriples
+            , mdActivityIndex = activityIndexVec
+            , mdBioFlowUUIDs = bioFlowUUIDs
+            , mdTargetUUID = targetUUID
+            , mdTargetProcessId = targetProcessId
+            , mdDatabase = database
+            , mdSupplyVector = supplyList
+            , mdDemandVector = demandList
+            , mdInventoryVector = inventoryList
+            }
+
+-- | Export matrix debug CSVs
+exportMatrixDebugCSVs :: FilePath -> MatrixDebugInfo -> IO ()
+exportMatrixDebugCSVs basePath debugInfo = do
+    let supplyChainPath = basePath ++ "_supply_chain.csv"
+        biosphereMatrixPath = basePath ++ "_biosphere_matrix.csv"
+
+    putStrLn $ "DEBUG: exportMatrixDebugCSVs called with basePath: " ++ basePath
+    putStrLn $ "DEBUG: Will create files: " ++ supplyChainPath ++ " and " ++ biosphereMatrixPath
+
+    let demandVector = mdDemandVector debugInfo
+        targetProcessId = mdTargetProcessId debugInfo
+        activityIndexVec = mdActivityIndex debugInfo
+        targetIndex = fromIntegral (activityIndexVec V.! fromEnum targetProcessId) :: Int
+        targetDemand =
+            if targetIndex >= 0 && targetIndex < length demandVector
+                then demandVector !! targetIndex
+                else -999.0
+    putStrLn $ "DEBUG: Target activity index: " ++ show targetIndex
+    putStrLn $ "DEBUG: Target demand value: " ++ show targetDemand
+    putStrLn $ "DEBUG: Demand vector length: " ++ show (length demandVector)
+    putStrLn $ "DEBUG: Non-zero demand entries: " ++ show (length $ filter (/= 0.0) demandVector)
+
+    putStrLn "DEBUG: Calling exportSupplyChainData"
+    exportSupplyChainData supplyChainPath debugInfo
+
+    putStrLn "DEBUG: Calling exportBiosphereMatrixData"
+    exportBiosphereMatrixData biosphereMatrixPath debugInfo
+
+    putStrLn "DEBUG: Both CSV exports completed"
+
+-- | Export supply chain data showing which activities contribute to target
+exportSupplyChainData :: FilePath -> MatrixDebugInfo -> IO ()
+exportSupplyChainData filePath debugInfo = do
+    let database = mdDatabase debugInfo
+        activities = mdActivities debugInfo
+        activityIndexVec = mdActivityIndex debugInfo
+        supplyVector = mdSupplyVector debugInfo
+
+        supplyChainRows =
+            [ csvRow processId activity idx supply
+            | processId <- [toEnum 0 .. toEnum (V.length activities - 1)]
+            , let activity = activities V.! fromEnum processId
+            , let idx = fromIntegral (activityIndexVec V.! fromEnum processId) :: Int
+            , let supply = if idx < length supplyVector then supplyVector !! idx else 0.0
+            ]
+
+        csvRow processId activity idx supply =
+            [ T.unpack (processIdToText database processId)
+            , T.unpack (activityName activity)
+            , T.unpack (activityLocation activity)
+            , show supply
+            , show idx
+            ]
+
+        csvHeader = ["activity_id", "activity_name", "location", "supply_amount", "col_idx"]
+        allRows = csvHeader : supplyChainRows
+        csvContent = L.intercalate "\n" (map (L.intercalate ",") allRows)
+
+    putStrLn $ "DEBUG: Writing supply chain data with " ++ show (length supplyChainRows) ++ " activities"
+    putStrLn $ "DEBUG: Supply vector length: " ++ show (length supplyVector)
+    writeFile filePath csvContent
+
+-- | Export biosphere matrix contributions
+exportBiosphereMatrixData :: FilePath -> MatrixDebugInfo -> IO ()
+exportBiosphereMatrixData filePath debugInfo = do
+    let database = mdDatabase debugInfo
+        flows = mdFlows debugInfo
+        activities = mdActivities debugInfo
+        bioTriples = mdBioTriples debugInfo
+        bioFlowUUIDs = mdBioFlowUUIDs debugInfo
+        activityIndex = mdActivityIndex debugInfo
+        supplyVector = mdSupplyVector debugInfo
+
+        matrixRows =
+            [ csvRow bioTriple
+            | bioTriple@(SparseTriple row col value) <- U.toList bioTriples
+            , abs value > 1e-20
+            ]
+
+        csvRow (SparseTriple row col value) =
+            let rowInt = fromIntegral row :: Int
+                colInt = fromIntegral col :: Int
+             in [ maybe "unknown" show (getFlowUUID rowInt)
+                , maybe "unknown" (T.unpack . flowName) (getFlow rowInt)
+                , maybe "unknown" T.unpack (getFlowUnit rowInt)
+                , maybe "unknown" (T.unpack . processIdToText database) (getActivityProcessId colInt)
+                , maybe "unknown" (T.unpack . activityName) (getActivity colInt)
+                , show value
+                , show (realContribution colInt)
+                ]
+          where
+            getFlowUUID :: Int -> Maybe UUID
+            getFlowUUID rowIdx =
+                if rowIdx < V.length bioFlowUUIDs
+                    then Just (bioFlowUUIDs V.! rowIdx)
+                    else Nothing
+            getFlow :: Int -> Maybe Flow
+            getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
+            getFlowUnit :: Int -> Maybe Text
+            getFlowUnit rowIdx = fmap (getUnitNameForFlow (dbUnits database)) (getFlow rowIdx)
+            getActivityProcessId :: Int -> Maybe ProcessId
+            getActivityProcessId colIdx =
+                L.find (\pid -> fromIntegral (activityIndex V.! fromEnum pid) == colIdx)
+                       [toEnum 0 .. toEnum (V.length activities - 1)]
+            getActivity :: Int -> Maybe Activity
+            getActivity colIdx = do
+                processId <- getActivityProcessId colIdx
+                if fromEnum processId < V.length activities
+                    then Just (activities V.! fromEnum processId)
+                    else Nothing
+            realContribution :: Int -> Double
+            realContribution colIdx =
+                if colIdx < length supplyVector
+                    then value * (supplyVector !! colIdx)
+                    else 0.0
+
+        csvHeader = ["flow_id", "flow_name", "unit", "activity_id", "activity_name", "matrix_value", "contribution"]
+        allRows = csvHeader : matrixRows
+        csvContent = L.intercalate "\n" (map (L.intercalate ",") allRows)
+
+    putStrLn $ "DEBUG: Writing biosphere matrix with " ++ show (length matrixRows) ++ " entries"
+    writeFile filePath csvContent
+
+-- | Export matrices in universal matrix format (Ecoinvent-compatible)
+exportUniversalMatrixFormat :: FilePath -> Database -> IO ()
+exportUniversalMatrixFormat outputDir db = do
+    putStrLn $ "Exporting matrices to universal format in: " ++ outputDir
+
+    exportIEIndex (outputDir ++ "/ie_index.csv") db
+    exportEEIndex (outputDir ++ "/ee_index.csv") db
+    exportAMatrix (outputDir ++ "/A_public.csv") db
+    exportBMatrix (outputDir ++ "/B_public.csv") db
+
+    putStrLn "Universal matrix export completed"
+
+-- | Escape text for CSV output (semicolon delimiter)
+escapeCsvField :: Text -> Text
+escapeCsvField text
+    | T.any (\c -> c == ';' || c == '"' || c == '\n' || c == '\r') text =
+        "\"" <> T.replace "\"" "\"\"" text <> "\""
+    | otherwise = text
+
+-- | Export ie_index.csv (Intermediate Exchanges)
+exportIEIndex :: FilePath -> Database -> IO ()
+exportIEIndex filePath db = do
+    let activities = dbActivities db
+        processIdTable = dbProcessIdTable db
+        flows = dbFlows db
+
+        rows = V.toList $ V.imap (\idx (actUuid, prodUuid) ->
+                let activity = activities V.! idx
+                    refProduct = case [ex | ex <- exchanges activity, exchangeIsReference ex] of
+                        (ex:_) -> case M.lookup (exchangeFlowId ex) flows of
+                            Just flow -> flowName flow
+                            Nothing -> T.pack (show prodUuid)
+                        [] -> T.pack (show prodUuid)
+                    unit = activityUnit activity
+                in escapeCsvField (activityName activity) <> ";" <>
+                   escapeCsvField (activityLocation activity) <> ";" <>
+                   escapeCsvField refProduct <> ";" <>
+                   escapeCsvField unit <> ";" <>
+                   T.pack (show idx)
+            ) processIdTable
+
+        header = "activityName;geography;product;unitName;index"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported " ++ show (length rows) ++ " activities to " ++ filePath
+
+-- | Export ee_index.csv (Elementary Exchanges)
+exportEEIndex :: FilePath -> Database -> IO ()
+exportEEIndex filePath db = do
+    let bioFlowUUIDs = dbBiosphereFlows db
+        flows = dbFlows db
+
+        rows = zipWith (\flowUuid idx ->
+                case M.lookup flowUuid flows of
+                    Just flow ->
+                        let category = flowCategory flow
+                            (compartment, subcompartment) = case T.splitOn "/" category of
+                                [] -> ("unspecified", "")
+                                [c] -> (T.strip c, "")
+                                (c:s:_) -> (T.strip c, T.strip s)
+                            unit = UUID.toText $ flowUnitId flow
+                        in escapeCsvField (flowName flow) <> ";" <>
+                           escapeCsvField compartment <> ";" <>
+                           escapeCsvField subcompartment <> ";" <>
+                           escapeCsvField unit <> ";" <>
+                           T.pack (show idx)
+                    Nothing ->
+                        escapeCsvField (T.pack (show flowUuid)) <> ";unknown;;;" <> T.pack (show idx)
+            ) (V.toList bioFlowUUIDs) [0..]
+
+        header = "name;compartment;subcompartment;unitName;index"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported " ++ show (length rows) ++ " biosphere flows to " ++ filePath
+
+-- | Export A_public.csv (Technosphere Matrix)
+exportAMatrix :: FilePath -> Database -> IO ()
+exportAMatrix filePath db = do
+    let techTriples = dbTechnosphereTriples db
+        activityCount = dbActivityCount db
+
+        diagonalEntries = [T.pack $ show i ++ ";" ++ show i ++ ";1.0;;;;;"
+                          | i <- [0..fromIntegral activityCount - 1]]
+
+        offDiagonalRows = U.foldr (\(SparseTriple row col value) acc ->
+                let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
+                            show (-value) ++ ";;;;;"
+                in rowStr : acc
+            ) [] techTriples
+
+        header = "row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue"
+        allRows = diagonalEntries ++ offDiagonalRows
+        content = T.unlines (header : allRows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported technosphere matrix with " ++ show (length diagonalEntries) ++
+               " diagonal + " ++ show (U.length techTriples) ++ " off-diagonal entries to " ++ filePath
+
+-- | Export B_public.csv (Biosphere Matrix)
+exportBMatrix :: FilePath -> Database -> IO ()
+exportBMatrix filePath db = do
+    let bioTriples = dbBiosphereTriples db
+
+        rows = U.foldr (\(SparseTriple row col value) acc ->
+                let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++
+                            show value ++ ";;;;;"
+                in rowStr : acc
+            ) [] bioTriples
+
+        header = "row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue"
+        content = T.unlines (header : rows)
+
+    TIO.writeFile filePath content
+    putStrLn $ "Exported biosphere matrix with " ++ show (U.length bioTriples) ++ " entries to " ++ filePath

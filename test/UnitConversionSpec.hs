@@ -3,7 +3,7 @@
 module UnitConversionSpec (spec) where
 
 import Test.Hspec
-import LCA.UnitConversion
+import UnitConversion
 import qualified Data.Map.Strict as M
 
 -- Helper for testing Left results

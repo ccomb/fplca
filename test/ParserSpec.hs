@@ -5,7 +5,7 @@ module ParserSpec (spec) where
 import Test.Hspec
 import TestHelpers
 import GoldenData
-import LCA.Types
+import Types
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Vector as V

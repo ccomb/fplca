@@ -10,7 +10,7 @@ module EcoSpold.Parser1
     , streamParseAllDatasetsFromFile1  -- Parse multiple datasets from single file
     ) where
 
-import LCA.Types
+import Types
 import EcoSpold.Common (bsToText, bsToDouble, bsToInt, isElement)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M

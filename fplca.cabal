@@ -71,38 +71,38 @@ executable fplca
   if !os(windows)
     build-depends: unix
 
-  other-modules:     LCA.Types
-                     , LCA.Types.API
-                     , LCA.Tree
-                     , LCA.Matrix
-                     , LCA.Matrix.SharedSolver
-                     , LCA.Progress
-                     , LCA.Query
-                     , LCA.API
-                     , LCA.API.DatabaseHandlers
-                     , LCA.Auth
-                     , LCA.Service
-                     , LCA.UnitConversion
-                     , LCA.CLI.Types
-                     , LCA.CLI.Parser
-                     , LCA.CLI.Command
-                     , LCA.Config
-                     , LCA.ConfigWriter
-                     , LCA.DatabaseManager
-                     , LCA.Upload
-                     , LCA.UploadedDatabase
+  other-modules:     Types
+                     , Progress
+                     , UnitConversion
+                     , Config
+                     , ConfigWriter
+                     , Service
+                     , Tree
+                     , Matrix
+                     , Matrix.Export
+                     , SharedSolver
+                     , Database
+                     , Database.Manager
+                     , Database.Loader
+                     , Database.CrossLinking
+                     , Database.Upload
+                     , Database.UploadedDatabase
+                     , SynonymDB
+                     , SynonymDB.Types
+                     , Method.Types
+                     , Method.Parser
+                     , Method.Mapping
+                     , API.Routes
+                     , API.Types
+                     , API.DatabaseHandlers
+                     , API.Auth
+                     , CLI.Types
+                     , CLI.Parser
+                     , CLI.Command
                      , EcoSpold.Common
-                     , EcoSpold.Parser
+                     , EcoSpold.Parser2
                      , EcoSpold.Parser1
-                     , EcoSpold.Loader
-                     , EcoSpold.CrossDatabaseLinking
                      , SimaPro.Parser
-                     , LCA.SynonymDB
-                     , LCA.SynonymDB.Types
-                     , LCA.Method.Types
-                     , LCA.Method.Parser
-                     , LCA.Method.Mapping
-                     , LCA.LCIA
   default-language:    Haskell2010
 
 -- Tool to compile synonym database JSON to embedded binary
@@ -120,7 +120,7 @@ executable synonyms-compiler
                      , aeson
                      , vector
                      , deepseq
-  other-modules:       LCA.SynonymDB.Types
+  other-modules:       SynonymDB.Types
   default-language:    Haskell2010
 
 --executable test-mumps
@@ -146,26 +146,31 @@ test-suite acv-tests
                      , MatrixExportSpec
                      , MethodSpec
                      , SimaProParserSpec
-                     , SimaPro.Parser
-                     , LCA.Types
-                     , LCA.Types.API
-                     , LCA.Query
-                     , LCA.Matrix
-                     , LCA.Matrix.SharedSolver
-                     , LCA.Service
-                     , LCA.Progress
-                     , LCA.UnitConversion
-                     , LCA.CLI.Types
-                     , LCA.Tree
+                     , UnitConversionSpec
+                     , Types
+                     , Progress
+                     , UnitConversion
+                     , Database
+                     , Database.Loader
+                     , Database.CrossLinking
+                     , Database.Upload
+                     , Database.UploadedDatabase
+                     , Matrix
+                     , Matrix.Export
+                     , SharedSolver
+                     , Service
+                     , Tree
+                     , CLI.Types
+                     , Method.Types
+                     , Method.Parser
+                     , Method.Mapping
+                     , API.Types
+                     , SynonymDB
+                     , SynonymDB.Types
                      , EcoSpold.Common
-                     , EcoSpold.Loader
-                     , EcoSpold.Parser
+                     , EcoSpold.Parser2
                      , EcoSpold.Parser1
-                     , EcoSpold.CrossDatabaseLinking
-                     , LCA.Method.Types
-                     , LCA.Method.Parser
-                     , LCA.SynonymDB
-                     , LCA.SynonymDB.Types
+                     , SimaPro.Parser
   build-depends:       base >=4.14 && <5
                      , hspec
                      , text

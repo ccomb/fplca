@@ -16,7 +16,7 @@ module SimaPro.Parser
     , generateUnitUUID
     ) where
 
-import LCA.Types
+import Types
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)

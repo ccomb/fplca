@@ -9,14 +9,14 @@ module TestHelpers (
     findActivityByUUID,
 ) where
 
-import LCA.Types
-import LCA.Query (buildDatabaseWithMatrices)
+import Types
+import Database (buildDatabaseWithMatrices)
 import Control.Monad (zipWithM_)
 import qualified Data.Map as M
 import qualified Data.Vector as V
 import Data.Text (Text)
 import qualified Data.Text as T
-import EcoSpold.Loader (loadAllSpoldsWithFlows)
+import Database.Loader (loadDatabase)
 import Test.Hspec
 import qualified Data.Vector.Unboxed as U
 
@@ -27,7 +27,7 @@ loadSampleDatabase sampleName = loadSampleDatabaseWithPath sampleName
 -- | Load database from a specific path
 loadSampleDatabaseWithPath :: String -> IO Database
 loadSampleDatabaseWithPath path = do
-    loadResult <- loadAllSpoldsWithFlows ("test-data/" ++ path)
+    loadResult <- loadDatabase ("test-data/" ++ path)
     case loadResult of
         Left err -> error $ "Failed to load test database: " ++ show err
         Right simpleDb ->

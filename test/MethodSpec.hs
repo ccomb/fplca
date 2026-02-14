@@ -9,12 +9,11 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
-import LCA.LCIA (computeLCIAScore)
-import LCA.Method.Mapping (MatchStrategy(..))
-import LCA.Method.Parser
-import LCA.Method.Types
-import LCA.SynonymDB
-import LCA.Types (Flow(..), FlowType(..))
+import Method.Mapping (computeLCIAScore, MatchStrategy(..))
+import Method.Parser
+import Method.Types
+import SynonymDB
+import Types (Flow(..), FlowType(..))
 
 spec :: Spec
 spec = do

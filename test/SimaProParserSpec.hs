@@ -4,8 +4,8 @@ module SimaProParserSpec (spec) where
 
 import Test.Hspec
 import SimaPro.Parser (parseSimaProCSV)
-import LCA.Types (Activity(..), Exchange(..), Unit(..), Flow, UUID)
-import LCA.UnitConversion (defaultUnitConfig, isKnownUnit)
+import Types (Activity(..), Exchange(..), Unit(..), Flow, UUID)
+import UnitConversion (defaultUnitConfig, isKnownUnit)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
