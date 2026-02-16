@@ -242,7 +242,7 @@ defaultUnits = M.fromList $ concat
     , mkAliases [0,0,0,0,1,0,0,0] 4046.8564224 ["acre"]
 
       -- Volume (SI: m³)
-    , mkAliases [0,0,0,0,0,1,0,0] 1.0      ["m3", "m³", "cubic meter", "cubic metre"]
+    , mkAliases [0,0,0,0,0,1,0,0] 1.0      ["m3", "m³", "cubic meter", "cubic metre", "nm3", "sm3"]
     , mkAliases [0,0,0,0,0,1,0,0] 0.001    ["l", "liter", "litre", "dm3"]
     , mkAliases [0,0,0,0,0,1,0,0] 1e-6     ["ml", "cm3", "cm³"]
     , mkAliases [0,0,0,0,0,1,0,0] 0.003785411784 ["gallon", "gal"]
