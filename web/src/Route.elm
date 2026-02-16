@@ -253,8 +253,8 @@ routeToDatabase route =
         UploadRoute ->
             Nothing
 
-        DatabaseSetupRoute _ ->
-            Nothing
+        DatabaseSetupRoute dbName ->
+            Just dbName
 
         NotFoundRoute ->
             Nothing

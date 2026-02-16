@@ -172,12 +172,15 @@ viewLeftMenu shared =
         currentActivityId =
             routeToActivityId shared.currentRoute
 
+        lookupDisplayName dbId dbList =
+            List.filter (\db -> db.name == dbId) dbList.databases
+                |> List.head
+                |> Maybe.map .displayName
+
         currentDatabaseName =
-            case ( shared.currentDatabaseId, shared.databases ) of
+            case ( Route.routeToDatabase shared.currentRoute, shared.databases ) of
                 ( Just dbId, Loaded dbList ) ->
-                    List.filter (\db -> db.name == dbId) dbList.databases
-                        |> List.head
-                        |> Maybe.map .displayName
+                    lookupDisplayName dbId dbList
 
                 _ ->
                     Nothing
@@ -226,8 +229,28 @@ navigateToPage shared page =
             routeToActivityId shared.currentRoute
                 |> Maybe.withDefault ""
 
+        firstLoadedDb =
+            case shared.databases of
+                Loaded dbList ->
+                    List.filter .loaded dbList.databases
+                        |> List.head
+                        |> Maybe.map .name
+
+                _ ->
+                    Nothing
+
         dbName =
-            Shared.getCurrentDbName shared
+            case shared.lastActivitiesRoute of
+                Just flags ->
+                    flags.db
+
+                Nothing ->
+                    case Route.routeToDatabase shared.currentRoute of
+                        Just db ->
+                            db
+
+                        Nothing ->
+                            firstLoadedDb |> Maybe.withDefault ""
     in
     case page of
         DatabasesActive ->
@@ -237,7 +260,12 @@ navigateToPage shared page =
             Shared.NavigateTo UploadRoute
 
         ActivitiesActive ->
-            Shared.NavigateTo (ActivitiesRoute { db = dbName, name = Nothing, limit = Just 20 })
+            case shared.lastActivitiesRoute of
+                Just flags ->
+                    Shared.NavigateTo (ActivitiesRoute flags)
+
+                Nothing ->
+                    Shared.NavigateTo (ActivitiesRoute { db = dbName, name = Nothing, limit = Just 20 })
 
         UpstreamActive ->
             Shared.NavigateTo (ActivityUpstreamRoute dbName currentActivityId)
