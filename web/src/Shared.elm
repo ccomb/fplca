@@ -7,7 +7,6 @@ module Shared exposing
     , init
     , update
     , subscriptions
-    , getCurrentDbName
     , isDatabaseLoaded
     , isDatabaseLoading
     , getDatabaseDisplayName
@@ -63,7 +62,7 @@ type ConsoleVisibility
 type alias Model =
     { key : Nav.Key
     , currentRoute : Route
-    , currentDatabaseId : Maybe String
+    , lastActivitiesRoute : Maybe Route.ActivitiesFlags
     , databases : RemoteData DatabaseList
     , version : String
     , console : ConsoleModel
@@ -105,7 +104,7 @@ init : { version : String } -> Nav.Key -> ( Model, Cmd Msg )
 init flags key =
     ( { key = key
       , currentRoute = RootRoute
-      , currentDatabaseId = Nothing
+      , lastActivitiesRoute = Nothing
       , databases = Loading
       , version = flags.version
       , console =
@@ -135,9 +134,6 @@ update msg model =
 
         RouteChanged route ->
             let
-                urlDatabase =
-                    Route.routeToDatabase route
-
                 -- Check if we need to redirect from root
                 needsRedirect =
                     case route of
@@ -173,13 +169,17 @@ update msg model =
             ( { model
                 | currentRoute = route
                 , menuOpen = False
-                , currentDatabaseId =
-                    case urlDatabase of
-                        Just _ ->
-                            urlDatabase
+                , lastActivitiesRoute =
+                    case Route.matchActivities route of
+                        Just flags ->
+                            if String.isEmpty flags.db then
+                                model.lastActivitiesRoute
+
+                            else
+                                Just flags
 
                         Nothing ->
-                            model.currentDatabaseId
+                            model.lastActivitiesRoute
               }
             , cmd
             )
@@ -206,7 +206,7 @@ update msg model =
                             True
 
                         _ ->
-                            model.currentDatabaseId == Nothing && model.currentRoute == ActivitiesRoute { db = "", name = Nothing, limit = Just 20 }
+                            model.lastActivitiesRoute == Nothing && model.currentRoute == ActivitiesRoute { db = "", name = Nothing, limit = Just 20 }
 
                 cmd =
                     if needsRootRedirect then
@@ -226,14 +226,6 @@ update msg model =
             ( { model
                 | databases = Loaded dbList
                 , authState = Authenticated
-                , currentDatabaseId =
-                    if model.currentDatabaseId == Nothing then
-                        List.filter .loaded dbList.databases
-                            |> List.head
-                            |> Maybe.map .name
-
-                    else
-                        model.currentDatabaseId
               }
             , Cmd.batch
                 [ cmd
@@ -266,8 +258,7 @@ update msg model =
             case response of
                 LoadSucceeded _ _ ->
                     ( { model
-                        | currentDatabaseId = Just dbName
-                        , cachedTrees = Dict.empty
+                        | cachedTrees = Dict.empty
                         , cachedActivityInfo = Dict.empty
                         , cachedInventories = Dict.empty
                         , cachedGraphs = Dict.empty
@@ -451,12 +442,6 @@ subscriptions model =
 
         Hidden ->
             Sub.none
-
-
-getCurrentDbName : Model -> String
-getCurrentDbName model =
-    model.currentDatabaseId
-        |> Maybe.withDefault "default"
 
 
 {-| Check if a database is currently loaded

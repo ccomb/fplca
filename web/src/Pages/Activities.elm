@@ -55,24 +55,17 @@ page shared =
 init : Shared.Model -> Route.ActivitiesFlags -> ( Model, Effect Shared.Msg Msg )
 init shared flags =
     let
-        dbName =
-            if String.isEmpty flags.db then
-                Shared.getCurrentDbName shared
-
-            else
-                flags.db
-
         searchQuery =
             Maybe.withDefault "" flags.name
 
         dbLoaded =
-            Shared.isDatabaseLoaded shared dbName
+            Shared.isDatabaseLoaded shared flags.db
 
         shouldSearch =
             not (String.isEmpty searchQuery) && dbLoaded
     in
     ( { searchQuery = searchQuery
-      , dbName = dbName
+      , dbName = flags.db
       , results =
             if shouldSearch then
                 Searching
@@ -81,7 +74,7 @@ init shared flags =
                 NotSearched
       }
     , if shouldSearch then
-        Effect.fromCmd (searchActivities dbName searchQuery)
+        Effect.fromCmd (searchActivities flags.db searchQuery)
 
       else
         Effect.none
