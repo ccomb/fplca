@@ -46,6 +46,7 @@ type Msg
     | LCIAResultLoaded (Result Http.Error LCIAResult)
     | MappingStatusLoaded (Result Http.Error MappingStatus)
     | RequestLoadDatabase
+    | NewFlags ( String, String )
 
 
 page : Shared.Model -> Spa.Page.Page ( String, String ) Shared.Msg (View Msg) Model Msg
@@ -56,6 +57,7 @@ page shared =
         , view = view shared
         , subscriptions = \_ -> Sub.none
         }
+        |> Spa.Page.onNewFlags NewFlags
 
 
 init : Shared.Model -> ( String, String ) -> ( Model, Effect Shared.Msg Msg )
@@ -226,6 +228,13 @@ update shared msg model =
             ( model
             , Effect.fromShared (Shared.LoadDatabase model.dbName)
             )
+
+        NewFlags flags ->
+            if flags == ( model.dbName, model.activityId ) then
+                ( model, Effect.none )
+
+            else
+                init shared flags
 
 
 view : Shared.Model -> Model -> View Msg

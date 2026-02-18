@@ -4,6 +4,8 @@ import Browser.Navigation as Nav
 import Effect exposing (Effect)
 import Html exposing (..)
 import Http
+import Json.Decode
+import Json.Encode
 import Models.Database exposing (ActivateResponse, DatabaseSetupInfo, activateResponseDecoder, databaseSetupInfoDecoder)
 import Route
 import Shared exposing (RemoteData(..))
@@ -19,10 +21,11 @@ type alias Model =
 
 
 type Msg
-    = SetupInfoLoaded (Result Http.Error DatabaseSetupInfo)
+    = SetupInfoLoaded (Result String DatabaseSetupInfo)
     | DatabaseSetupViewMsg DatabaseSetupView.Msg
     | DependencyActionResult (Result Http.Error DatabaseSetupInfo)
     | FinalizeResult (Result Http.Error ActivateResponse)
+    | NewFlags String
 
 
 page : Shared.Model -> Spa.Page.Page String Shared.Msg (View Msg) Model Msg
@@ -33,6 +36,7 @@ page shared =
         , view = view shared
         , subscriptions = \_ -> Sub.none
         }
+        |> Spa.Page.onNewFlags NewFlags
 
 
 init : Shared.Model -> String -> ( Model, Effect Shared.Msg Msg )
@@ -53,7 +57,7 @@ update shared msg model =
             )
 
         SetupInfoLoaded (Err error) ->
-            ( { model | setupInfo = Failed (Shared.httpErrorToString error) }
+            ( { model | setupInfo = Failed error }
             , Effect.none
             )
 
@@ -67,6 +71,11 @@ update shared msg model =
                 DatabaseSetupView.RemoveDependency depName ->
                     ( { model | setupInfo = Loading }
                     , Effect.fromCmd (removeDependency model.dbName depName)
+                    )
+
+                DatabaseSetupView.SetDataPath path ->
+                    ( { model | setupInfo = Loading }
+                    , Effect.fromCmd (setDataPath model.dbName path)
                     )
 
                 DatabaseSetupView.FinalizeDatabase ->
@@ -107,6 +116,13 @@ update shared msg model =
             ( { model | setupInfo = Failed (Shared.httpErrorToString error) }
             , Effect.none
             )
+
+        NewFlags flags ->
+            if flags == model.dbName then
+                ( model, Effect.none )
+
+            else
+                init shared flags
 
 
 view : Shared.Model -> Model -> View Msg
@@ -155,8 +171,29 @@ loadSetupInfo : String -> Cmd Msg
 loadSetupInfo dbName =
     Http.get
         { url = "/api/v1/databases/" ++ dbName ++ "/setup"
-        , expect = Http.expectJson SetupInfoLoaded databaseSetupInfoDecoder
+        , expect = expectJsonWithBody SetupInfoLoaded databaseSetupInfoDecoder
         }
+
+
+expectJsonWithBody : (Result String a -> msg) -> Json.Decode.Decoder a -> Http.Expect msg
+expectJsonWithBody toMsg decoder =
+    Http.expectStringResponse toMsg <|
+        \response ->
+            case response of
+                Http.GoodStatus_ _ body ->
+                    Result.mapError Json.Decode.errorToString (Json.Decode.decodeString decoder body)
+
+                Http.BadStatus_ _ body ->
+                    Err body
+
+                Http.Timeout_ ->
+                    Err "Request timed out"
+
+                Http.NetworkError_ ->
+                    Err "Network error"
+
+                Http.BadUrl_ url ->
+                    Err ("Bad URL: " ++ url)
 
 
 addDependency : String -> String -> Cmd Msg
@@ -173,6 +210,15 @@ removeDependency dbName depName =
     Http.post
         { url = "/api/v1/databases/" ++ dbName ++ "/remove-dependency/" ++ depName
         , body = Http.emptyBody
+        , expect = Http.expectJson DependencyActionResult databaseSetupInfoDecoder
+        }
+
+
+setDataPath : String -> String -> Cmd Msg
+setDataPath dbName path =
+    Http.post
+        { url = "/api/v1/databases/" ++ dbName ++ "/set-data-path"
+        , body = Http.jsonBody (Json.Encode.object [ ( "path", Json.Encode.string path ) ])
         , expect = Http.expectJson DependencyActionResult databaseSetupInfoDecoder
         }
 

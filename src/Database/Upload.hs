@@ -13,6 +13,10 @@ module Database.Upload
       -- * Upload handling
     , handleUpload
     , detectDatabaseFormat
+    , findDataDirectory
+    , findAllDataDirectories
+    , countDataFilesIn
+    , anyDataFilesIn
     , slugify
     , getUploadsDir
     ) where
@@ -20,7 +24,7 @@ module Database.Upload
 import Control.Exception (try, catch, SomeException)
 import Control.Monad (forM, filterM)
 import Data.Char (isAlphaNum, toLower)
-import Data.List (isSuffixOf, isPrefixOf)
+import Data.List (isSuffixOf, isPrefixOf, sortOn)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -30,7 +34,8 @@ import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryExist, doesFileExist, removeDirectoryRecursive, removeFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>), takeExtension, takeDirectory)
+import Data.Ord (Down(..))
+import System.FilePath ((</>), takeExtension, takeDirectory, makeRelative)
 import System.Info (os)
 import System.Process (readProcessWithExitCode)
 
@@ -355,46 +360,42 @@ extractArchive format archiveData targetDir = do
         ArchiveXz   -> "tar.xz"
         _           -> "archive"
 
--- | Find the actual data directory
+-- | Find the actual data directory (picks the candidate with the most data files)
 -- Archives often contain multiple folders (e.g., "datasets", "MasterData")
--- Prioritizes .spold files (EcoSpold2) over .csv files
 findDataDirectory :: FilePath -> IO FilePath
 findDataDirectory dir = do
-    files <- listDirectory dir
-    let fullPaths = map (dir </>) files
+    candidates <- findAllDataDirectories dir
+    case candidates of
+        []    -> return dir
+        [one] -> return one
+        many  -> pickByFileCount many
+  where
+    pickByFileCount dirs = do
+        counts <- mapM (\d -> (,) d <$> countDataFilesIn d) dirs
+        let sorted = sortOn (Down . snd) counts
+        return $ fst (head sorted)
 
-    -- First, check for a "datasets" directory (common in ecoinvent)
-    let datasetsDir = dir </> "datasets"
-    hasDatasetsDir <- doesDirectoryExist datasetsDir
-    if hasDatasetsDir
-        then do
-            hasSpold <- hasSpoldFilesIn datasetsDir
-            if hasSpold
-                then return datasetsDir
-                else findDataDirectory datasetsDir
-        else do
-            -- Check if there are .spold files directly in this directory
-            hasSpold <- hasSpoldFilesIn dir
-            if hasSpold
-                then return dir
-                else do
-                    -- Check for other data files (XML, CSV)
-                    hasDataFiles <- anyDataFilesIn dir
-                    if hasDataFiles
-                        then return dir
-                        else do
-                            -- Get all subdirectories and check them
-                            subdirs <- filterM doesDirectoryExist fullPaths
-                            dirsWithSpold <- filterM hasSpoldFilesIn subdirs
-                            case dirsWithSpold of
-                                (firstWithSpold:_) -> return firstWithSpold
-                                [] -> do
-                                    dirsWithData <- filterM anyDataFilesIn subdirs
-                                    case dirsWithData of
-                                        (firstWithData:_) -> return firstWithData
-                                        [] -> case subdirs of
-                                            [singleSubdir] -> findDataDirectory singleSubdir
-                                            _ -> return dir
+-- | Find all directories containing recognized data files under a root.
+findAllDataDirectories :: FilePath -> IO [FilePath]
+findAllDataDirectories root = go root
+  where
+    go dir = do
+        hasData <- anyDataFilesIn dir
+        entries <- listDirectory dir
+        subdirs <- filterM doesDirectoryExist (map (dir </>) entries)
+        childResults <- concat <$> mapM go subdirs
+        if hasData
+            then return (dir : childResults)
+            else return childResults
+
+-- | Count files with data extensions (.spold, .xml, .csv) in a single directory (non-recursive).
+countDataFilesIn :: FilePath -> IO Int
+countDataFilesIn dir = do
+    fs <- listDirectory dir
+    let exts = map (map toLower . takeExtension) fs
+    return $ length $ filter isDataExt exts
+  where
+    isDataExt e = e == ".spold" || e == ".xml" || e == ".csv"
 
 -- | Check if a directory contains .spold files (EcoSpold2)
 hasSpoldFilesIn :: FilePath -> IO Bool
@@ -403,14 +404,23 @@ hasSpoldFilesIn d = do
     let extensions = map (map toLower . takeExtension) fs
     return $ any (== ".spold") extensions
 
--- | Check if a directory contains any data files directly
+-- | Check if a directory contains any recognized data files directly.
+-- Uses content-aware checks for XML and CSV to avoid false positives
+-- (e.g. ILCD XML or non-SimaPro CSV files in sibling directories).
 anyDataFilesIn :: FilePath -> IO Bool
 anyDataFilesIn d = do
     fs <- listDirectory d
-    let extensions = map (map toLower . takeExtension) fs
-    return $ any isDataExtension extensions
-  where
-    isDataExtension ext = ext `elem` [".spold", ".xml", ".csv"]
+    let fullPaths = map (d </>) fs
+        extensions = map (map toLower . takeExtension) fs
+    if any (== ".spold") extensions
+        then return True
+        else do
+            let xmlFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".xml"]
+            isEcoSpold <- if null xmlFiles then return False else checkForEcoSpold1 xmlFiles
+            if isEcoSpold then return True
+            else do
+                let csvFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".csv"]
+                if null csvFiles then return False else checkForSimaProCSV csvFiles
 
 -- | Count data files based on format
 countDataFiles :: FilePath -> DatabaseFormat -> IO Int

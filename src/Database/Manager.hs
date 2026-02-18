@@ -11,6 +11,7 @@ module Database.Manager
     , DatabaseStatus(..)
     , StagedDatabase(..)
     , DatabaseSetupInfo(..)
+    , SetupError(..)
     , MissingSupplier(..)
     , DependencySuggestion(..)
       -- * Re-exports
@@ -31,6 +32,7 @@ module Database.Manager
     , getDatabaseSetupInfo
     , addDependencyToStaged
     , removeDependencyFromStaged
+    , setDataPath
     , finalizeDatabase
       -- * Internal (for Main.hs to load database)
     , loadDatabaseFromConfig
@@ -42,6 +44,7 @@ import qualified Control.Exception
 import Control.Monad (forM, forM_, when)
 import Data.Maybe (catMaybes)
 import System.Mem (performGC)
+import Data.Bifunctor (first)
 import Data.Aeson (ToJSON(..), FromJSON(..), (.=), (.:), (.:?))
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson as A
@@ -55,7 +58,7 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeExtension)
 import Data.Char (toLower)
-import Data.List (sortOn)
+import Data.List (isPrefixOf, sortOn)
 import Data.Ord (Down(..))
 
 import Config
@@ -71,6 +74,7 @@ import Database.Loader (CrossDBLinkingStats(..))
 import Database.CrossLinking (IndexedDatabase(..), LinkBlocker(..), buildIndexedDatabaseFromDB)
 import qualified Database.CrossLinking
 import qualified Database.Upload as Upload
+import Database.Upload (anyDataFilesIn)
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified SimaPro.Parser as SimaPro
 import System.FilePath (takeExtension, dropExtension, (</>))
@@ -144,6 +148,8 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     , dsiIsReady            :: !Bool         -- ^ True if can be finalized
     , dsiUnknownUnits       :: ![Text]       -- ^ Unknown units from sdbUnits
     , dsiLocationFallbacks  :: ![(Text, Text, Text)]  -- ^ (product, requestedLoc, actualLoc)
+    , dsiDataPath           :: !Text                   -- ^ Current selected data path (relative)
+    , dsiAvailablePaths     :: ![(Text, Text, Int)]    -- ^ (relativePath, formatLabel, fileCount)
     } deriving (Show, Eq, Generic)
 
 instance ToJSON DatabaseSetupInfo where
@@ -162,10 +168,22 @@ instance ToJSON DatabaseSetupInfo where
         , "isReady" .= dsiIsReady
         , "unknownUnits" .= dsiUnknownUnits
         , "locationFallbacks" .= map encodeFallback dsiLocationFallbacks
+        , "dataPath" .= dsiDataPath
+        , "availablePaths" .= map encodeCandidate dsiAvailablePaths
         ]
       where
         encodeFallback (prod, req, act) = A.object
             [ "product" .= prod, "requested" .= req, "actual" .= act ]
+        encodeCandidate (path, fmt, cnt) = A.object
+            [ "path" .= path, "format" .= fmt, "fileCount" .= cnt ]
+
+-- | Errors from getDatabaseSetupInfo
+data SetupError = SetupNotFound Text | SetupFailed Text
+    deriving (Show, Eq)
+
+setupErrorMessage :: SetupError -> Text
+setupErrorMessage (SetupNotFound msg) = msg
+setupErrorMessage (SetupFailed msg)   = msg
 
 -- | Status of a database for API responses
 data DatabaseStatus = DatabaseStatus
@@ -757,9 +775,11 @@ loadDatabase manager dbName = do
 -- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
 stageUploadedDatabase manager dbConfig = do
-    let path = dcPath dbConfig
-        locationAliases = dcLocationAliases dbConfig
+    let locationAliases = dcLocationAliases dbConfig
         dbName = dcName dbConfig
+
+    -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
+    path <- Upload.findDataDirectory (dcPath dbConfig)
 
     -- Get currently loaded IndexedDatabases for cross-DB linking
     currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
@@ -910,7 +930,7 @@ data StageAction = AlreadyDone | NeedToStage
 -- Works for both staged and loaded databases
 -- Auto-stages uploaded databases if they're not yet staged
 -- Uses STM to prevent concurrent staging of the same database
-getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either Text DatabaseSetupInfo)
+getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
 getDatabaseSetupInfo manager dbName = do
     -- Atomic decision: already staged? already staging? need to stage?
     action <- atomically $ do
@@ -926,13 +946,13 @@ getDatabaseSetupInfo manager dbName = do
                     else do
                         availableDbs <- readTVar (dmAvailableDbs manager)
                         case M.lookup dbName availableDbs of
-                            Nothing -> return $ Left $ "Database not found: " <> dbName
+                            Nothing -> return $ Left $ SetupNotFound $ "Database not found: " <> dbName
                             Just dbConfig
                                 | dcIsUploaded dbConfig -> do
                                     modifyTVar' (dmStagingDbs manager) (S.insert dbName)
                                     return $ Right NeedToStage
                                 | otherwise ->
-                                    return $ Left $ "Database is not loaded. Use the Load button to load it first: " <> dbName
+                                    return $ Left $ SetupFailed $ "Database is not loaded. Use the Load button to load it first: " <> dbName
 
     case action of
         Left err -> return $ Left err
@@ -945,23 +965,33 @@ getDatabaseSetupInfo manager dbName = do
                 (stageUploadedDatabase manager dbConfig)
                 (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
             case stageResult of
-                Left err -> return $ Left err
+                Left err -> do
+                    reportProgress Error $ "Setup staging failed for " <> T.unpack dbName <> ": " <> T.unpack err
+                    return $ Left $ SetupFailed err
                 Right () -> buildSetupResult manager dbName
 
 -- | Read current state and build setup info for a database
-buildSetupResult :: DatabaseManager -> Text -> IO (Either Text DatabaseSetupInfo)
+buildSetupResult :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
 buildSetupResult manager dbName = do
     stagedDbs    <- readTVarIO (dmStagedDbs manager)
     loadedDbs    <- readTVarIO (dmLoadedDbs manager)
     availableDbs <- readTVarIO (dmAvailableDbs manager)
     indexedDbs   <- readTVarIO (dmIndexedDbs manager)
     case M.lookup dbName stagedDbs of
-        Just staged -> return $ Right $ buildStagedSetupInfo staged availableDbs indexedDbs
+        Just staged -> do
+            let info = buildStagedSetupInfo staged availableDbs indexedDbs
+            -- Populate available paths for uploaded databases
+            if dcIsUploaded (sdConfig staged)
+                then do
+                    candidates <- discoverCandidatePaths (sdConfig staged)
+                    return $ Right info { dsiAvailablePaths = candidates }
+                else return $ Right info
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded -> return $ Right $ buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded)
-            Nothing -> return $ Left $ "Failed to stage database: " <> dbName
+            Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
 -- | Build setup info from a staged database
+-- dataPath and availablePaths are filled in by buildSetupResult (requires IO)
 buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildStagedSetupInfo staged configs indexedDbs =
     let stats = sdLinkingStats staged
@@ -1003,6 +1033,8 @@ buildStagedSetupInfo staged configs indexedDbs =
         , dsiIsReady = isReady
         , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
         , dsiLocationFallbacks = cdlLocationFallbacks stats
+        , dsiDataPath = T.pack (dcPath (sdConfig staged))
+        , dsiAvailablePaths = []  -- Filled in by buildSetupResult (requires IO)
         }
 
 -- | Build setup info from a loaded database (already finalized)
@@ -1023,7 +1055,82 @@ buildLoadedSetupInfo config db =
         , dsiIsReady = True
         , dsiUnknownUnits = []  -- Not tracked for loaded databases
         , dsiLocationFallbacks = []  -- Not tracked for loaded databases
+        , dsiDataPath = T.pack (dcPath config)
+        , dsiAvailablePaths = []  -- No picker for loaded/configured databases
         }
+
+-- | Discover candidate data paths within an uploaded database's root directory.
+-- Returns (relativePath, formatLabel, fileCount) for each candidate.
+discoverCandidatePaths :: DatabaseConfig -> IO [(Text, Text, Int)]
+discoverCandidatePaths dbConfig = do
+    uploadsDir <- UploadedDB.getUploadsDir
+    let uploadRoot = uploadsDir </> T.unpack (dcName dbConfig)
+    candidates <- Upload.findAllDataDirectories uploadRoot
+    forM candidates $ \dir -> do
+        format <- Upload.detectDatabaseFormat dir
+        count  <- Upload.countDataFilesIn dir
+        let rel = makeRelativePath uploadRoot dir
+            label = case format of
+                Upload.EcoSpold2     -> "EcoSpold 2"
+                Upload.EcoSpold1     -> "EcoSpold 1"
+                Upload.SimaProCSV    -> "SimaPro CSV"
+                Upload.UnknownFormat -> "Unknown"
+        return (T.pack rel, label, count)
+  where
+    -- Simple relative path: strip upload root prefix
+    makeRelativePath base path
+        | base `isPrefixOf` path = let r = drop (length base + 1) path
+                                   in if null r then "." else r
+        | otherwise = path
+
+-- | Change the data path for an uploaded (staged) database.
+-- Validates path, updates config + meta.toml, clears staged DB to force re-stage.
+setDataPath :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
+setDataPath manager dbName newRelPath = do
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    case M.lookup dbName availableDbs of
+        Nothing -> return $ Left $ "Database not found: " <> dbName
+        Just dbConfig
+            | not (dcIsUploaded dbConfig) ->
+                return $ Left "Cannot change data path for configured databases"
+            | otherwise -> do
+                -- Resolve full path
+                uploadsDir <- UploadedDB.getUploadsDir
+                let uploadRoot = uploadsDir </> T.unpack dbName
+                    newFullPath = uploadRoot </> T.unpack newRelPath
+
+                -- Validate that path exists and has data
+                hasData <- Upload.anyDataFilesIn newFullPath
+                if not hasData
+                    then return $ Left $ "No data files found in: " <> newRelPath
+                    else do
+                        -- Detect format for the new path
+                        newFormat <- Upload.detectDatabaseFormat newFullPath
+
+                        -- Update config
+                        let updatedConfig = dbConfig
+                                { dcPath = newFullPath
+                                , dcFormat = Just newFormat
+                                }
+                        atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert dbName updatedConfig)
+
+                        -- Update meta.toml
+                        mMeta <- UploadedDB.readUploadMeta uploadRoot
+                        case mMeta of
+                            Just meta -> UploadedDB.writeUploadMeta uploadRoot meta
+                                { UploadedDB.umDataPath = T.unpack newRelPath
+                                , UploadedDB.umFormat = newFormat
+                                }
+                            Nothing -> return ()
+
+                        -- Clear staged DB to force re-staging with new path
+                        atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+
+                        -- Re-stage and return fresh setup info
+                        result <- getDatabaseSetupInfo manager dbName
+                        case result of
+                            Left err -> return $ Left $ setupErrorMessage err
+                            Right info -> return $ Right info
 
 -- | Build dependency suggestions for a staged database
 buildDependencySuggestions :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> [DependencySuggestion]
@@ -1075,7 +1182,7 @@ addDependencyToStaged manager dbName depName = do
                 atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
 
                 -- Return updated setup info
-                getDatabaseSetupInfo manager dbName
+                first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
 
 -- | Remove a dependency from a staged database
 removeDependencyFromStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
@@ -1105,7 +1212,7 @@ removeDependencyFromStaged manager dbName depName = do
                     }
 
             atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
-            getDatabaseSetupInfo manager dbName
+            first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
 
 -- | Finalize a staged database (build matrices and make it ready for queries)
 finalizeDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)

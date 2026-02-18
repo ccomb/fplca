@@ -74,6 +74,7 @@ type LCAAPI =
                 :<|> "databases" :> Capture "dbName" Text :> "setup" :> Get '[JSON] DatabaseSetupInfo
                 :<|> "databases" :> Capture "dbName" Text :> "add-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
                 :<|> "databases" :> Capture "dbName" Text :> "remove-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
+                :<|> "databases" :> Capture "dbName" Text :> "set-data-path" :> ReqBody '[JSON] Value :> Post '[JSON] DatabaseSetupInfo
                 :<|> "databases" :> Capture "dbName" Text :> "finalize" :> Post '[JSON] ActivateResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
@@ -172,6 +173,7 @@ lcaServer dbManager maxTreeDepth methodsDir password =
         :<|> DBHandlers.getDatabaseSetupHandler dbManager
         :<|> DBHandlers.addDependencyHandler dbManager
         :<|> DBHandlers.removeDependencyHandler dbManager
+        :<|> DBHandlers.setDataPathHandler dbManager
         :<|> DBHandlers.finalizeDatabaseHandler dbManager
         :<|> getLogsHandler
         :<|> postAuth

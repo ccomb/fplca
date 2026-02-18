@@ -19,6 +19,7 @@ module API.DatabaseHandlers
     , getDatabaseSetupHandler
     , addDependencyHandler
     , removeDependencyHandler
+    , setDataPathHandler
     , finalizeDatabaseHandler
       -- * Helpers
     , convertDbStatus
@@ -35,15 +36,19 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import Servant (Handler, throwError, errBody, err400, err404)
+import Servant (Handler, throwError, errBody, err400, err404, err500)
 import System.FilePath ((</>))
 
 import qualified Config
 import Config (DatabaseConfig(..))
+import Data.Aeson (Value)
+import qualified Data.Aeson as A
+import qualified Data.Aeson.KeyMap as KM
 import Database.Manager
     ( DatabaseManager
     , DatabaseStatus(..)
     , DatabaseSetupInfo(..)
+    , SetupError(..)
     , DepLoadResult(..)
     , LoadedDatabase(..)
     , addDatabase
@@ -54,6 +59,7 @@ import Database.Manager
     , loadDatabase
     , removeDatabase
     , removeDependencyFromStaged
+    , setDataPath
     , unloadDatabase
     )
 import API.Types
@@ -232,7 +238,8 @@ getDatabaseSetupHandler :: DatabaseManager -> Text -> Handler DatabaseSetupInfo
 getDatabaseSetupHandler dbManager dbName = do
     result <- liftIO $ getDatabaseSetupInfo dbManager dbName
     case result of
-        Left err -> throwError $ err404 { errBody = BSL.fromStrict $ T.encodeUtf8 err }
+        Left (SetupNotFound msg) -> throwError $ err404 { errBody = BSL.fromStrict $ T.encodeUtf8 msg }
+        Left (SetupFailed msg)   -> throwError $ err500 { errBody = BSL.fromStrict $ T.encodeUtf8 msg }
         Right setupInfo -> return setupInfo
 
 -- | Add a dependency to a staged database
@@ -252,6 +259,23 @@ removeDependencyHandler dbManager dbName depName = do
     case result of
         Left err -> throwError $ err400 { errBody = BSL.fromStrict $ T.encodeUtf8 err }
         Right setupInfo -> return setupInfo
+
+-- | Change the data path for an uploaded (staged) database
+setDataPathHandler :: DatabaseManager -> Text -> Value -> Handler DatabaseSetupInfo
+setDataPathHandler dbManager dbName body = do
+    -- Extract "path" from JSON body
+    let mPath = case body of
+            A.Object obj -> case KM.lookup "path" obj of
+                Just (A.String p) -> Just p
+                _ -> Nothing
+            _ -> Nothing
+    case mPath of
+        Nothing -> throwError $ err400 { errBody = "Missing \"path\" field in request body" }
+        Just newPath -> do
+            result <- liftIO $ setDataPath dbManager dbName newPath
+            case result of
+                Left err -> throwError $ err400 { errBody = BSL.fromStrict $ T.encodeUtf8 err }
+                Right setupInfo -> return setupInfo
 
 -- | Finalize a staged database
 -- Builds matrices and makes it ready for queries

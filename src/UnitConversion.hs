@@ -264,7 +264,7 @@ defaultUnits = M.fromList $ concat
     , mkAliases [1,1,0,0,0,0,0,0] 1609.344e3 ["t*mile", "ton*mile", "ton-mile"]
 
       -- Person×Length (passenger transport)
-    , mkAliases [0,1,0,0,0,0,1,0] 1000.0   ["pkm", "person*km", "passenger*km", "passenger-km", "passenger-kilometer"]
+    , mkAliases [0,1,0,0,0,0,1,0] 1000.0   ["pkm", "person*km", "personkm", "passenger*km", "passenger-km", "passenger-kilometer"]
     , mkAliases [0,1,0,0,0,0,1,0] 1609.344 ["person*mile", "passenger*mile", "passenger-mile"]
 
       -- Velocity (length/time)
@@ -290,8 +290,8 @@ defaultUnits = M.fromList $ concat
     , mkAliases [1,0,1,0,0,0,0,0] 86400.0  ["kg*day", "kg.day", "kg*d"]
 
       -- Length×Time
-    , mkAliases [0,1,1,0,0,0,0,0] 31536000.0 ["m*year", "m.year", "m*a"]
-    , mkAliases [0,1,1,0,0,0,0,0] 31536000000.0 ["km*year", "km.year", "km*a"]
+    , mkAliases [0,1,1,0,0,0,0,0] 31536000.0 ["m*year", "m.year", "m*a", "my"]
+    , mkAliases [0,1,1,0,0,0,0,0] 31536000000.0 ["km*year", "km.year", "km*a", "kmy"]
     , mkAliases [0,1,1,0,0,0,0,0] 50805446860.8 ["mile*year", "mile.year"]
 
       -- Special LCA units that appear in databases

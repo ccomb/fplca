@@ -7,7 +7,6 @@ module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile) where
 import Types
 import EcoSpold.Common (bsToText, bsToDouble, bsToInt, isElement)
 import qualified Data.ByteString as BS
-import qualified Data.List
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -132,7 +131,7 @@ parseWithXeno :: BS.ByteString -> ProcessId -> Either String (Activity, [Flow], 
 parseWithXeno xmlContent processId =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
-        Right finalState -> Right (buildResult finalState processId)
+        Right finalState -> buildResult finalState processId
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -387,7 +386,7 @@ parseWithXeno xmlContent processId =
     cdata state content = text state content
 
     -- Build final result from parse state
-    buildResult :: ParseState -> ProcessId -> (Activity, [Flow], [Unit])
+    buildResult :: ParseState -> ProcessId -> Either String (Activity, [Flow], [Unit])
     buildResult st pid =
         let name = case psActivityName st of
                 Just n -> n
@@ -398,31 +397,23 @@ parseWithXeno xmlContent processId =
             description = reverse (psDescription st)  -- Reverse to get correct order
             refUnit = case psRefUnit st of
                 Just u -> u
-                Nothing ->
-                    let !_ = unsafePerformIO $ hPutStrLn stderr $
-                            "[WARNING] Missing reference unit for activity: " ++ T.unpack name
-                            ++ " - using 'UNKNOWN_UNIT' placeholder"
-                    in "UNKNOWN_UNIT"
+                Nothing -> "UNKNOWN_UNIT"
             -- Apply cutoff strategy to exchanges
             activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
-            activityWithCutoff = applyCutoffStrategy activity
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
-        in (activityWithCutoff, flows, units)
+        in case applyCutoffStrategy activity of
+            Right act -> Right (act, flows, units)
+            Left err  -> Left err
 
 -- | Parse EcoSpold file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile :: FilePath -> IO (Activity, [Flow], [Unit])
+streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [Flow], [Unit]))
 streamParseActivityAndFlowsFromFile path = do
     !xmlContent <- BS.readFile path
-
     let filenameBase = T.pack $ takeBaseName path
-    let !processId = case EcoSpold.Parser2.parseProcessId filenameBase of
-            Just pid -> pid
-            Nothing -> error $ "Invalid filename format for ProcessId: " ++ path
-
-    case parseWithXeno xmlContent processId of
-        Right result -> return result
-        Left err -> error $ "Failed to parse " ++ path ++ ": " ++ err
+    return $ case EcoSpold.Parser2.parseProcessId filenameBase of
+        Nothing -> Left $ "Invalid filename format for ProcessId: " ++ path
+        Just pid -> parseWithXeno xmlContent pid
 
 {- | Apply cut-off strategy
 1. Remove zero-amount production exchanges (co-products)
@@ -430,25 +421,17 @@ streamParseActivityAndFlowsFromFile path = do
 3. Ensure single-output process structure
 4. VALIDATION: Fail if no reference product can be established
 -}
-applyCutoffStrategy :: Activity -> Activity
+applyCutoffStrategy :: Activity -> Either String Activity
 applyCutoffStrategy activity =
-    let originalExchanges = exchanges activity
-        originalRefs = filter exchangeIsReference originalExchanges
-        filteredExchanges = removeZeroAmountCoproducts originalExchanges
+    let filteredExchanges = removeZeroAmountCoproducts (exchanges activity)
         updatedActivity = activity{exchanges = filteredExchanges}
-        refsAfterFilter = filter exchangeIsReference filteredExchanges
         finalActivity =
             if hasReferenceProduct updatedActivity
                 then updatedActivity
                 else assignSingleProductAsReference updatedActivity
      in if hasReferenceProduct finalActivity
-           then finalActivity
-           else error $ "Activity has no reference product after cutoff strategy: "
-                     ++ T.unpack (activityName activity) ++ "\n"
-                     ++ "  Original exchanges: " ++ show (length originalExchanges) ++ "\n"
-                     ++ "  Original reference products: " ++ show (length originalRefs) ++ "\n"
-                     ++ "  After filtering: " ++ show (length filteredExchanges) ++ "\n"
-                     ++ "  Reference products after filter: " ++ show (length refsAfterFilter)
+           then Right finalActivity
+           else Left $ "Activity has no reference product: " ++ T.unpack (activityName activity)
 
 -- | Check if activity has any reference product
 hasReferenceProduct :: Activity -> Bool

@@ -1,5 +1,6 @@
 module Models.Database exposing
     ( ActivateResponse
+    , DataPathCandidate
     , DatabaseList
     , DatabaseSetupInfo
     , DatabaseStatus
@@ -193,6 +194,15 @@ type alias LocationFallback =
     }
 
 
+{-| Candidate data path within an uploaded database
+-}
+type alias DataPathCandidate =
+    { path : String
+    , format : String
+    , fileCount : Int
+    }
+
+
 type alias DatabaseSetupInfo =
     { name : String
     , displayName : String
@@ -208,6 +218,8 @@ type alias DatabaseSetupInfo =
     , isReady : Bool
     , unknownUnits : List String
     , locationFallbacks : List LocationFallback
+    , dataPath : String
+    , availablePaths : List DataPathCandidate
     }
 
 
@@ -252,6 +264,18 @@ databaseSetupInfoDecoder =
         |> required "isReady" Decode.bool
         |> optional "unknownUnits" (Decode.list Decode.string) []
         |> optional "locationFallbacks" (Decode.list locationFallbackDecoder) []
+        |> optional "dataPath" Decode.string ""
+        |> optional "availablePaths" (Decode.list dataPathCandidateDecoder) []
+
+
+{-| JSON decoder for DataPathCandidate
+-}
+dataPathCandidateDecoder : Decoder DataPathCandidate
+dataPathCandidateDecoder =
+    Decode.succeed DataPathCandidate
+        |> required "path" Decode.string
+        |> required "format" Decode.string
+        |> required "fileCount" Decode.int
 
 
 {-| JSON decoder for LocationFallback

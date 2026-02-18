@@ -15,12 +15,13 @@ finalizing a database for use. It shows:
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick)
-import Models.Database exposing (DatabaseSetupInfo, DependencySuggestion, LocationFallback, MissingSupplier)
+import Models.Database exposing (DataPathCandidate, DatabaseSetupInfo, DependencySuggestion, LocationFallback, MissingSupplier)
 
 
 type Msg
     = AddDependency String
     | RemoveDependency String
+    | SetDataPath String
     | FinalizeDatabase
     | GoBack
 
@@ -36,14 +37,17 @@ viewDatabaseSetupPage maybeSetupInfo loading error =
 
             Nothing ->
                 text ""
-        , case ( loading, maybeSetupInfo ) of
-            ( True, _ ) ->
+        , case ( loading, maybeSetupInfo, error ) of
+            ( True, _, _ ) ->
                 viewLoading
 
-            ( False, Just setupInfo ) ->
+            ( False, Just setupInfo, _ ) ->
                 viewSetupContent setupInfo
 
-            ( False, Nothing ) ->
+            ( False, Nothing, Just _ ) ->
+                text ""
+
+            ( False, Nothing, Nothing ) ->
                 div [ class "notification is-warning", style "margin" "1rem" ]
                     [ text "No setup information available" ]
         ]
@@ -87,7 +91,8 @@ viewSetupContent setupInfo =
     div [ style "flex" "1", style "overflow-y" "auto", style "padding" "1rem" ]
         [ div [ class "columns" ]
             [ div [ class "column is-8" ]
-                [ viewCompletenessCard setupInfo
+                [ viewDataSourceCard setupInfo
+                , viewCompletenessCard setupInfo
                 , viewUnknownUnitsCard setupInfo
                 , viewLocationFallbacksCard setupInfo
                 , viewMissingSuppliersCard setupInfo
@@ -95,6 +100,83 @@ viewSetupContent setupInfo =
             , div [ class "column is-4" ]
                 [ viewDependenciesCard setupInfo
                 , viewFinalizeCard setupInfo
+                ]
+            ]
+        ]
+
+
+viewDataSourceCard : DatabaseSetupInfo -> Html Msg
+viewDataSourceCard setupInfo =
+    if List.length setupInfo.availablePaths <= 1 then
+        text ""
+
+    else
+        div [ class "card", style "margin-bottom" "1rem" ]
+            [ div [ class "card-content" ]
+                [ h3 [ class "title is-5" ]
+                    [ span [ class "icon-text" ]
+                        [ span [ class "icon" ] [ i [ class "fas fa-folder-open" ] [] ]
+                        , span [] [ text "Data Source" ]
+                        ]
+                    ]
+                , div [ class "content" ]
+                    [ p [ class "has-text-grey is-size-7", style "margin-bottom" "0.5rem" ]
+                        [ text "Multiple data sources found in this upload:" ]
+                    , div [] (List.map (viewDataPathOption setupInfo.dataPath) setupInfo.availablePaths)
+                    ]
+                ]
+            ]
+
+
+viewDataPathOption : String -> DataPathCandidate -> Html Msg
+viewDataPathOption currentPath candidate =
+    let
+        isSelected =
+            String.endsWith candidate.path currentPath
+                || String.endsWith candidate.path (String.replace "\\" "/" currentPath)
+    in
+    div
+        [ class
+            (if isSelected then
+                "box has-background-primary-light"
+
+             else
+                "box is-clickable"
+            )
+        , style "padding" "0.75rem"
+        , style "margin-bottom" "0.5rem"
+        , style "cursor"
+            (if isSelected then
+                "default"
+
+             else
+                "pointer"
+            )
+        , if isSelected then
+            class ""
+
+          else
+            onClick (SetDataPath candidate.path)
+        ]
+        [ div [ class "level", style "margin-bottom" "0" ]
+            [ div [ class "level-left" ]
+                [ div [ class "level-item" ]
+                    [ if isSelected then
+                        span [ class "icon has-text-primary" ] [ i [ class "fas fa-check-circle" ] [] ]
+
+                      else
+                        span [ class "icon has-text-grey-light" ] [ i [ class "far fa-circle" ] [] ]
+                    , span [ class "has-text-weight-semibold", style "margin-left" "0.25rem" ]
+                        [ text candidate.path ]
+                    ]
+                ]
+            , div [ class "level-right" ]
+                [ div [ class "level-item" ]
+                    [ span [ class "tag is-info is-light", style "margin-right" "0.5rem" ]
+                        [ text candidate.format ]
+                    , span [ class "tag is-light" ]
+                        [ text (String.fromInt candidate.fileCount ++ " files") ]
+                    ]
                 ]
             ]
         ]
