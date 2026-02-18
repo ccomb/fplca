@@ -12,17 +12,15 @@ module EcoSpold.Parser1
 
 import Types
 import EcoSpold.Common (bsToText, bsToDouble, bsToInt, isElement)
+import Control.Monad (forM_)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
-import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import System.FilePath (takeBaseName)
 import System.IO (hPutStrLn, stderr)
-import System.IO.Unsafe (unsafePerformIO)
 import qualified Xeno.SAX as X
 
 -- | Namespace UUID for generating deterministic UUIDs from EcoSpold1 numeric IDs
@@ -100,7 +98,8 @@ data ParseState = ParseState
     , psPath :: ![BS.ByteString]
     , psContext :: !ElementContext
     , psTextAccum :: ![BS.ByteString]
-    , psCompletedActivities :: ![(Activity, [Flow], [Unit])]  -- Accumulated results for multi-dataset files
+    , psSupplierLinks :: !(M.Map UUID Int)  -- flowId → supplier dataset number (technosphere inputs)
+    , psCompletedActivities :: ![Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)]
     }
 
 -- | Initial parsing state
@@ -119,15 +118,19 @@ initialParseState = ParseState
     , psPath = []
     , psContext = Other
     , psTextAccum = []
+    , psSupplierLinks = M.empty
     , psCompletedActivities = []
     }
 
 -- | Xeno SAX parser for EcoSpold1
-parseWithXeno :: BS.ByteString -> Either String (Activity, [Flow], [Unit])
+parseWithXeno :: BS.ByteString -> Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)
 parseWithXeno xmlContent =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
-        Right finalState -> Right (buildResult finalState)
+        Right finalState ->
+            case psCompletedActivities finalState of
+                (result : _) -> result
+                [] -> buildResult finalState
   where
     -- Open tag handler
     openTag state tagName =
@@ -234,10 +237,16 @@ parseWithXeno xmlContent =
             case psContext state of
                 InExchange edata ->
                     let (exchange, flow, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
+                        !supplierLinks = case exchange of
+                            TechnosphereExchange _ _ _ True _ _ _ _
+                                | exNumber edata /= 0 ->
+                                    M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
+                            _ -> psSupplierLinks state
                     in state
                         { psExchanges = exchange : psExchanges state
                         , psFlows = flow : psFlows state
                         , psUnits = unit : psUnits state
+                        , psSupplierLinks = supplierLinks
                         , psContext = Other
                         , psPath = tail (psPath state)
                         , psTextAccum = []
@@ -252,7 +261,7 @@ parseWithXeno xmlContent =
 
         -- Handle dataset close tag: accumulate completed activity for multi-dataset files
         | isElement tagName "dataset" =
-            let result = buildResult state
+            let !result = buildResult state
                 -- Reset dataset-specific fields for next dataset
                 -- Preserve: psPath (after popping current element), psCompletedActivities
                 resetState = state
@@ -269,6 +278,7 @@ parseWithXeno xmlContent =
                     , psUnits = []
                     , psContext = Other
                     , psTextAccum = []
+                    , psSupplierLinks = M.empty
                     }
             in resetState{psPath = tail (psPath state)}
 
@@ -335,7 +345,7 @@ parseWithXeno xmlContent =
         in (exchange, flow, unit)
 
     -- Build final result
-    buildResult :: ParseState -> (Activity, [Flow], [Unit])
+    buildResult :: ParseState -> Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)
     buildResult st =
         let name = case psActivityName st of
                 Just n -> n
@@ -345,39 +355,33 @@ parseWithXeno xmlContent =
                 Nothing -> "GLO"
             refUnit = case psRefUnit st of
                 Just u -> u
-                Nothing ->
-                    let !_ = unsafePerformIO $ hPutStrLn stderr $
-                            "[WARNING] Missing reference unit for activity: " ++ T.unpack name
-                    in "UNKNOWN_UNIT"
+                Nothing -> "UNKNOWN_UNIT"
             description = reverse (psDescription st)
             activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
-            activityWithCutoff = applyCutoffStrategy activity
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
-        in (activityWithCutoff, flows, units)
+        in case applyCutoffStrategy activity of
+            Right act -> Right (act, flows, units, psDatasetNumber st, psSupplierLinks st)
+            Left err  -> Left err
 
 -- | Parse EcoSpold1 file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Activity, [Flow], [Unit])
+streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int))
 streamParseActivityAndFlowsFromFile1 path = do
     !xmlContent <- BS.readFile path
-    case parseWithXeno xmlContent of
-        Right result -> return result
-        Left err -> error $ "Failed to parse EcoSpold1 file " ++ path ++ ": " ++ err
+    return (parseWithXeno xmlContent)
 
 -- | Apply cut-off strategy (same logic as EcoSpold2)
-applyCutoffStrategy :: Activity -> Activity
+applyCutoffStrategy :: Activity -> Either String Activity
 applyCutoffStrategy activity =
-    let originalExchanges = exchanges activity
-        filteredExchanges = removeZeroAmountCoproducts originalExchanges
+    let filteredExchanges = removeZeroAmountCoproducts (exchanges activity)
         updatedActivity = activity{exchanges = filteredExchanges}
         finalActivity =
             if hasReferenceProduct updatedActivity
                 then updatedActivity
                 else assignSingleProductAsReference updatedActivity
      in if hasReferenceProduct finalActivity
-           then finalActivity
-           else error $ "Activity has no reference product after cutoff strategy: "
-                     ++ T.unpack (activityName activity)
+           then Right finalActivity
+           else Left $ "Activity has no reference product: " ++ T.unpack (activityName activity)
 
 -- | Check if activity has any reference product
 hasReferenceProduct :: Activity -> Bool
@@ -432,7 +436,8 @@ unmarkAsReference ex = ex
 
 -- | Parse ALL datasets from an EcoSpold1 file (multi-dataset support)
 -- Returns the accumulated completed activities from psCompletedActivities
-parseAllWithXeno :: BS.ByteString -> Either String [(Activity, [Flow], [Unit])]
+-- Outer Either = XML parse failure; inner Either = per-activity failure
+parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)]
 parseAllWithXeno xmlContent =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
@@ -541,10 +546,16 @@ parseAllWithXeno xmlContent =
             case psContext state of
                 InExchange edata ->
                     let (exchange, flow, unit) = buildExchangeForAll (psDatasetNumber state) (psLocation state) edata
+                        !supplierLinks = case exchange of
+                            TechnosphereExchange _ _ _ True _ _ _ _
+                                | exNumber edata /= 0 ->
+                                    M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
+                            _ -> psSupplierLinks state
                     in state
                         { psExchanges = exchange : psExchanges state
                         , psFlows = flow : psFlows state
                         , psUnits = unit : psUnits state
+                        , psSupplierLinks = supplierLinks
                         , psContext = Other
                         , psPath = tail (psPath state)
                         , psTextAccum = []
@@ -559,7 +570,7 @@ parseAllWithXeno xmlContent =
 
         -- Handle dataset close tag: accumulate completed activity
         | isElement tagName "dataset" =
-            let result = buildResultForAll state
+            let !result = buildResultForAll state
                 resetState = state
                     { psCompletedActivities = result : psCompletedActivities state
                     , psDatasetNumber = 0
@@ -574,6 +585,7 @@ parseAllWithXeno xmlContent =
                     , psUnits = []
                     , psContext = Other
                     , psTextAccum = []
+                    , psSupplierLinks = M.empty
                     }
             in resetState{psPath = tail (psPath state)}
 
@@ -620,7 +632,7 @@ parseAllWithXeno xmlContent =
         in (exchange, flow, unit)
 
     -- Build final result for a single dataset
-    buildResultForAll :: ParseState -> (Activity, [Flow], [Unit])
+    buildResultForAll :: ParseState -> Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)
     buildResultForAll st =
         let name = case psActivityName st of
                 Just n -> n
@@ -630,22 +642,26 @@ parseAllWithXeno xmlContent =
                 Nothing -> "GLO"
             refUnit = case psRefUnit st of
                 Just u -> u
-                Nothing ->
-                    let !_ = unsafePerformIO $ hPutStrLn stderr $
-                            "[WARNING] Missing reference unit for activity: " ++ T.unpack name
-                    in "UNKNOWN_UNIT"
+                Nothing -> "UNKNOWN_UNIT"
             description = reverse (psDescription st)
             activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
-            activityWithCutoff = applyCutoffStrategy activity
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
-        in (activityWithCutoff, flows, units)
+        in case applyCutoffStrategy activity of
+            Right act -> Right (act, flows, units, psDatasetNumber st, psSupplierLinks st)
+            Left err  -> Left err
 
 -- | Parse ALL datasets from a single EcoSpold1 file
 -- Used for multi-dataset files where <ecoSpold> contains multiple <dataset> elements
-streamParseAllDatasetsFromFile1 :: FilePath -> IO [(Activity, [Flow], [Unit])]
+-- Skips activities that fail (e.g. no reference product) and logs warnings
+streamParseAllDatasetsFromFile1 :: FilePath -> IO [(Activity, [Flow], [Unit], Int, M.Map UUID Int)]
 streamParseAllDatasetsFromFile1 path = do
     !xmlContent <- BS.readFile path
     case parseAllWithXeno xmlContent of
-        Right results -> return results
-        Left err -> error $ "Failed to parse EcoSpold1 multi-dataset file " ++ path ++ ": " ++ err
+        Right results -> do
+            forM_ [e | Left e <- results] $ \e ->
+                hPutStrLn stderr $ "[WARNING] Skipping dataset in " ++ path ++ ": " ++ e
+            return [r | Right r <- results]
+        Left err -> do
+            hPutStrLn stderr $ "[WARNING] Failed to parse " ++ path ++ ": " ++ err
+            return []
