@@ -1,14 +1,12 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Database where
 
 import Progress
 import Types
-import Control.Parallel.Strategies
 import Data.Int (Int32)
-import Data.List (elemIndex, find, partition, sort, sortOn)
+import Data.List (sort)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Set as S
@@ -17,9 +15,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import GHC.Generics (Generic)
 import System.IO (hPutStrLn, stderr)
-import System.IO.Unsafe (unsafePerformIO)
 
 {- | Build complete database with pre-computed sparse matrices
 
@@ -81,91 +77,93 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
 
     -- Build technosphere sparse triplets
     reportMatrixOperation "Building technosphere matrix triplets"
-    let !techTriples =
-            let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
-                    | not (isTechnosphereExchange ex) = []
-                    | not (exchangeIsInput ex) = []
-                    | exchangeIsReference ex && not (exchangeIsInput ex) = []
-                    | otherwise =
-                        let producerPid = case exchangeProcessLinkId ex of
-                                Just pid -> Just pid
-                                Nothing -> case exchangeActivityLinkId ex of
-                                    Just actUUID ->
-                                        case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
-                                            Just pid -> Just pid
-                                            Nothing ->
-                                                -- Only warn if exchange has non-zero amount (zero-amount are placeholders)
-                                                let !_ = if abs (exchangeAmount ex) > 1e-15
-                                                         then unsafePerformIO $ hPutStrLn stderr $
-                                                            "[WARNING] Missing activity-product pair referenced by exchange:\n"
+    let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
+            | not (isTechnosphereExchange ex) = ([], [])
+            | not (exchangeIsInput ex) = ([], [])
+            | exchangeIsReference ex && not (exchangeIsInput ex) = ([], [])
+            | otherwise =
+                let producerResult = case exchangeProcessLinkId ex of
+                        Just pid -> (Just pid, [])
+                        Nothing -> case exchangeActivityLinkId ex of
+                            Just actUUID ->
+                                case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
+                                    Just pid -> (Just pid, [])
+                                    Nothing ->
+                                        -- Only warn if exchange has non-zero amount (zero-amount are placeholders)
+                                        let warning = if abs (exchangeAmount ex) > 1e-15
+                                                     then [ "[WARNING] Missing activity-product pair referenced by exchange:\n"
                                                             ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
                                                             ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
                                                             ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
                                                             ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
-                                                            ++ "  This exchange will be skipped."
-                                                         else ()
-                                                in Nothing
-                                    Nothing -> Nothing
-                            -- ProcessId is already the matrix index (no identity mapping needed)
-                            producerIdx =
-                                producerPid >>= \pid ->
-                                    if pid >= 0 && fromIntegral pid < activityCount
-                                        then Just $ fromIntegral pid
-                                        else Nothing
-                         in case producerIdx of
-                                Just idx ->
-                                    let rawValue = exchangeAmount ex
-                                        denom = if normalizationFactor > 1e-15
-                                                then normalizationFactor
-                                                else error $ "Zero normalization factor for activity at index "
-                                                          ++ show j ++ " (activity: "
-                                                          ++ T.unpack (activityName consumerActivity) ++ ")"
-                                        value = rawValue / denom
-                                        -- Exclude self-loops (internal consumption): idx == j
-                                        -- Self-loops are accounted for in normalization factor but not exported as matrix entries
-                                        -- This matches Ecoinvent's convention where internal losses affect normalization only
-                                     in [SparseTriple idx j value | abs value > 1e-15, idx /= j]
-                                Nothing -> []
+                                                            ++ "  This exchange will be skipped." ]
+                                                     else []
+                                        in (Nothing, warning)
+                            Nothing -> (Nothing, [])
+                    (producerPid, warnings) = producerResult
+                    -- ProcessId is already the matrix index (no identity mapping needed)
+                    producerIdx =
+                        producerPid >>= \pid ->
+                            if pid >= 0 && fromIntegral pid < activityCount
+                                then Just $ fromIntegral pid
+                                else Nothing
+                 in case producerIdx of
+                        Just idx ->
+                            let rawValue = exchangeAmount ex
+                                denom = if normalizationFactor > 1e-15
+                                        then normalizationFactor
+                                        else 1.0  -- Unreachable: normalizationFactor already falls back to 1.0
+                                value = rawValue / denom
+                                -- Exclude self-loops (internal consumption): idx == j
+                                -- Self-loops are accounted for in normalization factor but not exported as matrix entries
+                                -- This matches Ecoinvent's convention where internal losses affect normalization only
+                             in ([SparseTriple idx j value | abs value > 1e-15, idx /= j], warnings)
+                        Nothing -> ([], warnings)
 
-                buildActivityTriplets (j, consumerPid) =
-                    let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                        -- Get activity UUID from ProcessId table
-                        (activityUUID, _) = dbProcessIdTable V.! fromIntegral consumerPid
+        buildActivityTriplets (j, consumerPid) =
+            let consumerActivity = dbActivities V.! fromIntegral consumerPid
+                -- Get activity UUID from ProcessId table
+                (activityUUID, _) = dbProcessIdTable V.! fromIntegral consumerPid
 
-                        -- For normalization, only use reference OUTPUTS (not treatment inputs)
-                        -- Treatment inputs have negative amounts and would incorrectly inflate the normalization factor
-                        refOutputs = [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex, not (exchangeIsInput ex) ]
-                        -- If no outputs (pure treatment), use abs of reference input
-                        refInputs = [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex, exchangeIsInput ex ]
+                -- For normalization, only use reference OUTPUTS (not treatment inputs)
+                -- Treatment inputs have negative amounts and would incorrectly inflate the normalization factor
+                refOutputs = [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex, not (exchangeIsInput ex) ]
+                -- If no outputs (pure treatment), use abs of reference input
+                refInputs = [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex, exchangeIsInput ex ]
 
-                        -- Calculate internal consumption (self-loops): technosphere inputs that link back to same activity
-                        -- These represent internal losses (e.g., electricity market losses, heat for process)
-                        internalConsumption = sum [ exchangeAmount ex
-                                                  | ex <- exchanges consumerActivity
-                                                  , isTechnosphereExchange ex
-                                                  , exchangeIsInput ex
-                                                  , not (exchangeIsReference ex)  -- Don't count reference products
-                                                  , case exchangeActivityLinkId ex of
-                                                        Just linkUUID -> linkUUID == activityUUID
-                                                        Nothing -> False
-                                                  ]
+                -- Calculate internal consumption (self-loops): technosphere inputs that link back to same activity
+                -- These represent internal losses (e.g., electricity market losses, heat for process)
+                internalConsumption = sum [ exchangeAmount ex
+                                          | ex <- exchanges consumerActivity
+                                          , isTechnosphereExchange ex
+                                          , exchangeIsInput ex
+                                          , not (exchangeIsReference ex)  -- Don't count reference products
+                                          , case exchangeActivityLinkId ex of
+                                                Just linkUUID -> linkUUID == activityUUID
+                                                Nothing -> False
+                                          ]
 
-                        normalizationFactor =
-                            let grossOutput = sum refOutputs
-                                grossInput = sum refInputs
-                                -- Net output = gross output - internal consumption
-                                -- This matches Ecoinvent's normalization convention for market activities
-                                netOutput = if grossOutput > 1e-15
-                                           then grossOutput - internalConsumption
-                                           else 0.0
-                            in if netOutput > 1e-15 then netOutput
-                               else if grossInput > 1e-15 then grossInput
-                               else 1.0  -- Fallback for activities with no reference products (shouldn't happen)
-                        buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
-                     in concatMap buildNormalizedTechTriple (exchanges consumerActivity)
+                normalizationFactor =
+                    let grossOutput = sum refOutputs
+                        grossInput = sum refInputs
+                        -- Net output = gross output - internal consumption
+                        -- This matches Ecoinvent's normalization convention for market activities
+                        netOutput = if grossOutput > 1e-15
+                                   then grossOutput - internalConsumption
+                                   else 0.0
+                    in if netOutput > 1e-15 then netOutput
+                       else if grossInput > 1e-15 then grossInput
+                       else 1.0  -- Fallback for activities with no reference products (shouldn't happen)
+                buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
+                results = map buildNormalizedTechTriple (exchanges consumerActivity)
+             in (concatMap fst results, concatMap snd results)
 
-                !result = VU.fromList $ concatMap buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
-             in result
+        allResults = map buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
+        !techTriples = VU.fromList $ concatMap fst allResults
+        techWarnings = concatMap snd allResults
+
+    -- Emit warnings in IO context
+    mapM_ (hPutStrLn stderr) techWarnings
 
     reportMatrixOperation ("Technosphere matrix: " ++ show (VU.length techTriples) ++ " non-zero entries")
 
@@ -189,9 +187,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                                 let rawValue = exchangeAmount ex
                                     denom = if normalizationFactor > 1e-15
                                             then normalizationFactor
-                                            else error $ "Zero normalization factor for biosphere at activity index "
-                                                      ++ show j ++ " (activity: "
-                                                      ++ T.unpack (activityName activity) ++ ")"
+                                            else 1.0  -- Unreachable: normalizationFactor already falls back to 1.0
                                     -- Ecoinvent convention: ALL biosphere flows are positive (both emissions AND resource extractions)
                                     -- Resource extractions represent "outputs" from nature into the technosphere
                                     -- NO sign inversion needed - store as positive regardless of input/output status
