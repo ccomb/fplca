@@ -58,7 +58,7 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeExtension)
 import Data.Char (toLower)
-import Data.List (isPrefixOf, sortOn)
+import Data.List (isPrefixOf, nub, sortOn)
 import Data.Ord (Down(..))
 
 import Config
@@ -746,6 +746,24 @@ loadDatabaseSingle manager dbName = do
                                     reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
                                     return $ Right loaded
 
+-- | Auto-load unloaded dependencies via loadDatabaseSingle
+autoLoadDeps :: DatabaseManager -> [Text] -> IO [DepLoadResult]
+autoLoadDeps manager deps =
+    fmap catMaybes $ forM deps $ \depName -> do
+        isLoaded <- M.member depName <$> readTVarIO (dmLoadedDbs manager)
+        if isLoaded
+            then return Nothing
+            else do
+                reportProgress Info $ "Auto-loading dependency: " <> T.unpack depName
+                depResult <- loadDatabaseSingle manager depName
+                case depResult of
+                    Right _ -> do
+                        reportProgress Info $ "  [OK] Auto-loaded: " <> T.unpack depName
+                        return (Just (DepLoaded depName))
+                    Left err -> do
+                        reportProgress Error $ "  [FAIL] " <> T.unpack depName <> ": " <> T.unpack err
+                        return (Just (DepLoadFailed depName err))
+
 -- | Load a database on demand with automatic dependency loading
 -- Uses cross-database linking to resolve supplier references from other loaded databases
 loadDatabase :: DatabaseManager -> Text -> IO (Either Text (LoadedDatabase, [DepLoadResult]))
@@ -754,22 +772,7 @@ loadDatabase manager dbName = do
     case result of
         Left err -> return (Left err)
         Right loaded -> do
-            -- Auto-load dependencies (from cache metadata)
-            let deps = dbDependsOn (ldDatabase loaded)
-            depResults <- fmap catMaybes $ forM deps $ \depName -> do
-                isLoaded <- M.member depName <$> readTVarIO (dmLoadedDbs manager)
-                if isLoaded
-                    then return Nothing
-                    else do
-                        reportProgress Info $ "Auto-loading dependency: " <> T.unpack depName
-                        depResult <- loadDatabaseSingle manager depName
-                        case depResult of
-                            Right _ -> do
-                                reportProgress Info $ "  [OK] Auto-loaded: " <> T.unpack depName
-                                return (Just (DepLoaded depName))
-                            Left err -> do
-                                reportProgress Error $ "  [FAIL] " <> T.unpack depName <> ": " <> T.unpack err
-                                return (Just (DepLoadFailed depName err))
+            depResults <- autoLoadDeps manager (dbDependsOn (ldDatabase loaded))
             return (Right (loaded, depResults))
 
 -- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
@@ -781,8 +784,17 @@ stageUploadedDatabase manager dbConfig = do
     -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
     path <- Upload.findDataDirectory (dcPath dbConfig)
 
-    -- Start with no cross-DB links; user adds dependencies explicitly via setup UI
-    let otherIndexes = []
+    -- Restore previously-known dependencies from binary cache (if any)
+    cachedDeps <- do
+        mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig)
+        return $ maybe [] dbDependsOn mCachedDb
+
+    -- Auto-load unloaded deps so cross-DB linking can resolve
+    _ <- autoLoadDeps manager cachedDeps
+
+    -- Look up indexes (now includes freshly auto-loaded deps)
+    indexedDbs <- readTVarIO (dmIndexedDbs manager)
+    let otherIndexes = [idx | dep <- cachedDeps, Just idx <- [M.lookup dep indexedDbs]]
 
     -- Detect format to find the correct file path (CSV needs file, not directory)
     format <- detectDirectoryFormat path
@@ -819,7 +831,7 @@ stageUploadedDatabase manager dbConfig = do
                     , sdConfig = dbConfig
                     , sdUnlinkedCount = Loader.unresolvedCount stats
                     , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) fromScan
-                    , sdSelectedDeps = M.keys (Loader.crossDBBySource stats)
+                    , sdSelectedDeps = nub $ M.keys (Loader.crossDBBySource stats) ++ cachedDeps
                     , sdCrossDBLinks = Loader.cdlLinks stats
                     , sdLinkingStats = stats
                     }
