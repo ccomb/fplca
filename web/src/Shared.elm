@@ -185,9 +185,12 @@ update msg model =
             )
 
         LoadDatabases ->
-            ( { model | databases = Loading }
-            , loadDatabases
-            )
+            case model.databases of
+                Loaded _ ->
+                    ( model, loadDatabases )
+
+                _ ->
+                    ( { model | databases = Loading }, loadDatabases )
 
         DatabasesLoaded (Ok dbList) ->
             let

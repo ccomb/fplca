@@ -45,15 +45,7 @@ init shared _ =
     ( { pendingAction = Nothing
       , actionError = Nothing
       }
-    , case shared.databases of
-        NotAsked ->
-            Effect.fromShared Shared.LoadDatabases
-
-        Failed _ ->
-            Effect.fromShared Shared.LoadDatabases
-
-        _ ->
-            Effect.none
+    , Effect.fromShared Shared.LoadDatabases
     )
 
 
