@@ -51,7 +51,7 @@ import Types
 import UnitConversion (convertExchangeAmount)
 import Control.Exception (catch, SomeException)
 import Control.Monad (forM_, when, unless)
-import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar, readMVar, modifyMVar_)
 import Control.Monad.ST
 import Data.Int (Int32)
 import Data.List (elemIndex, sortOn)
@@ -66,13 +66,10 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
-import System.IO.Unsafe (unsafePerformIO)
-
 -- PETSc imports
 import Numerical.PETSc.Internal
 import Data.IORef
-import Control.Concurrent.MVar
-import System.IO.Unsafe (unsafePerformIO)
+import System.IO.Unsafe (unsafePerformIO)  -- Used only for NOINLINE global singletons
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
@@ -151,8 +148,8 @@ Achieves sub-second inventory calculations after server startup.
 The solver is looked up by database ID from the per-database cache, enabling
 instant switching between databases without re-factorization.
 -}
-solveSparseLinearSystemWithFactorization :: MatrixFactorization -> Vector -> Vector
-solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerformIO $ do
+solveSparseLinearSystemWithFactorization :: MatrixFactorization -> Vector -> IO Vector
+solveSparseLinearSystemWithFactorization factorization demandVec = do
     -- Look up pre-factorized solver for this specific database
     let dbId = mfDatabaseId factorization
     cachedSolvers <- readMVar cachedKspSolver
@@ -164,7 +161,7 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
                 n = mfActivityCount factorization
                 -- Convert system matrix back to technosphere triplets (remove identity entries)
                 techTriples = U.toList $ U.filter (\(SparseTriple i j _) -> i /= j) $ U.map (\(SparseTriple i j val) -> SparseTriple i j (-val)) systemMatrix
-            return $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
+            solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
 
         Just (ksp, petscMat, n) -> do
             reportMatrixOperation $ "Using cached solver for database '" ++ T.unpack dbId ++ "' (" ++ show n ++ " activities) - ultra-fast solve"
@@ -200,7 +197,8 @@ solveSparseLinearSystemWithFactorization factorization demandVec = unsafePerform
                         -- Fallback to standard solver if cached solver fails
                         let systemMatrix = mfSystemMatrix factorization
                             techTriples = U.toList $ U.filter (\(SparseTriple i j _) -> i /= j) $ U.map (\(SparseTriple i j val) -> SparseTriple i j (-val)) systemMatrix
-                        return $ toList $ solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
+                        fallbackVec <- solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
+                        return $ toList fallbackVec
 
             return $ fromList result
 
@@ -217,8 +215,8 @@ allowing fine-tuning of MUMPS parameters for optimal performance.
 
 Performance: ~3s for 14,457 activities with 116K technosphere entries
 -}
-solveSparseLinearSystemPETSc :: [(Int, Int, Double)] -> Int -> Vector -> Vector
-solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
+solveSparseLinearSystemPETSc :: [(Int, Int, Double)] -> Int -> Vector -> IO Vector
+solveSparseLinearSystemPETSc techTriples n demandVec = do
     -- Serialize ALL PETSc operations to prevent concurrent matrix assembly/solving
     withMVar petscGlobalMutex $ \_ -> do
         -- Ensure PETSc is initialized globally (once and persistent)
@@ -286,7 +284,7 @@ solveSparseLinearSystemPETSc techTriples n demandVec = unsafePerformIO $ do
         return $ fromList result
 
 -- | Solve linear system (I - A) * x = b using PETSc direct solver (wrapper)
-solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector -> Vector
+solveSparseLinearSystem :: [(Int, Int, Double)] -> Int -> Vector -> IO Vector
 solveSparseLinearSystem = solveSparseLinearSystemPETSc
 
 -- | Efficient sparse matrix multiplication: result = A * vector
@@ -333,8 +331,8 @@ Output:
 Performance: ~7s total for full Ecoinvent database (25K products)
 - 3.5s cache loading + 3s solver + 0.5s biosphere calculation
 -}
-computeInventoryMatrix :: Database -> ProcessId -> Inventory
-computeInventoryMatrix db rootProcessId =
+computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
+computeInventoryMatrix db rootProcessId = do
     let activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
 
@@ -350,20 +348,20 @@ computeInventoryMatrix db rootProcessId =
         -- Build demand vector (will error if ProcessId not in index - validation happens at service layer)
         demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
 
-        -- Solve sparse LCA equation: (I - A) * supply = demand using PETSc
-        -- Try to use cached factorization for faster solving
-        supplyVec = case dbCachedFactorization db of
-            Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
-            Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) demandVec
+    -- Solve sparse LCA equation: (I - A) * supply = demand using PETSc
+    -- Try to use cached factorization for faster solving
+    supplyVec <- case dbCachedFactorization db of
+        Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
+        Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) demandVec
 
-        -- Calculate inventory using sparse biosphere matrix: g = B * supply
+    let -- Calculate inventory using sparse biosphere matrix: g = B * supply
         inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
 
         -- Build result map using the stored bioFlowIndex (ensures consistency with bioTriples)
         result = M.fromList [(uuid, inventoryVec U.! idx)
                            | (uuid, idx) <- M.toList bioFlowIndex
                            , idx < U.length inventoryVec]
-     in result
+    return result
 
 {- |
 Compute inventory with cross-database dependencies.
@@ -390,8 +388,8 @@ computeInventoryWithDependencies
     :: (UUID -> UUID -> Maybe Database)  -- ^ Lookup dependency DB by supplier (actUUID, prodUUID)
     -> Database                          -- ^ Current database
     -> ProcessId                         -- ^ Root activity
-    -> Inventory
-computeInventoryWithDependencies lookupDb db rootProcessId =
+    -> IO Inventory
+computeInventoryWithDependencies lookupDb db rootProcessId = do
     let -- Step 1: Compute local inventory (same as computeInventoryMatrix)
         activityCount = dbActivityCount db
         bioFlowCount = dbBiosphereCount db
@@ -402,15 +400,15 @@ computeInventoryWithDependencies lookupDb db rootProcessId =
 
         demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
 
-        -- Solve local system
-        localSupplyVec = case dbCachedFactorization db of
-            Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
-            Nothing -> solveSparseLinearSystem
-                [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                (fromIntegral activityCount)
-                demandVec
+    -- Solve local system
+    localSupplyVec <- case dbCachedFactorization db of
+        Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
+        Nothing -> solveSparseLinearSystem
+            [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+            (fromIntegral activityCount)
+            demandVec
 
-        -- Calculate local inventory
+    let -- Calculate local inventory
         localInventoryVec = applySparseMatrix
             [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
             (fromIntegral bioFlowCount)
@@ -443,29 +441,25 @@ computeInventoryWithDependencies lookupDb db rootProcessId =
                             demand = cdlCoefficient link * consumerScale
                         in M.insertWith (+) supplierKey demand acc
 
-        -- Step 3: For each supplier, find its database and compute its inventory
-        -- Then sum all inventories
-        crossDBInventory :: Inventory
-        crossDBInventory = M.foldrWithKey processSupplier M.empty crossDBDemands
-          where
-            processSupplier :: (UUID, UUID) -> Double -> Inventory -> Inventory
-            processSupplier (supplierActUUID, supplierProdUUID) demand acc =
-                case lookupDb supplierActUUID supplierProdUUID of
-                    Nothing -> acc  -- Supplier database not loaded (warning could be issued)
-                    Just depDb ->
-                        case M.lookup (supplierActUUID, supplierProdUUID) (dbProcessIdLookup depDb) of
-                            Nothing -> acc  -- Supplier not found in its database
-                            Just supplierPid ->
-                                -- Recursively compute inventory (could recurse further if depDb has dependencies)
-                                let depInventory = computeInventoryWithDependencies lookupDb depDb supplierPid
-                                    -- Scale by demand
-                                    scaledInventory = M.map (* demand) depInventory
-                                in M.unionWith (+) acc scaledInventory
+    -- Step 3: For each supplier, find its database and compute its inventory
+    -- Then sum all inventories
+    let processSupplier (supplierActUUID, supplierProdUUID) demand accIO = do
+            acc <- accIO
+            case lookupDb supplierActUUID supplierProdUUID of
+                Nothing -> return acc  -- Supplier database not loaded (warning could be issued)
+                Just depDb ->
+                    case M.lookup (supplierActUUID, supplierProdUUID) (dbProcessIdLookup depDb) of
+                        Nothing -> return acc  -- Supplier not found in its database
+                        Just supplierPid -> do
+                            -- Recursively compute inventory (could recurse further if depDb has dependencies)
+                            depInventory <- computeInventoryWithDependencies lookupDb depDb supplierPid
+                            -- Scale by demand
+                            let scaledInventory = M.map (* demand) depInventory
+                            return $ M.unionWith (+) acc scaledInventory
+    crossDBInventory <- M.foldrWithKey processSupplier (return M.empty) crossDBDemands
 
-        -- Step 4: Sum local and cross-DB inventories
-        totalInventory = M.unionWith (+) localInventory crossDBInventory
-
-     in totalInventory
+    -- Step 4: Sum local and cross-DB inventories
+    return $ M.unionWith (+) localInventory crossDBInventory
 
 {- |
 Compute inventory matrix using worker pool for thread-safe concurrent processing.

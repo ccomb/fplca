@@ -298,7 +298,7 @@ lcaServer dbManager maxTreeDepth methodsDir password =
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, _activity) -> do
                 -- Compute inventory using matrix solver
-                let inventory = Matrix.computeInventoryMatrix db actProcessId
+                inventory <- liftIO $ Matrix.computeInventoryMatrix db actProcessId
 
                 -- Get synonym DB and flow indexes
                 let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)

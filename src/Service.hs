@@ -181,15 +181,15 @@ isResourceExtraction flow _ =
     ("natural resource" `T.isPrefixOf` T.toLower (flowCategory flow))
 
 -- | Get activity inventory as rich InventoryExport (same as API)
-getActivityInventory :: Database -> Text -> Either ServiceError Value
-getActivityInventory db processIdText = do
-    (processId, activity) <- resolveActivityAndProcessId db processIdText
-    -- Validate ProcessId exists in matrix index before expensive computation
-    validateProcessIdInMatrixIndex db processId
-    -- Matrix computation (will not fail if validation passed)
-    let inventory = computeInventoryMatrix db processId
-        !inventoryExport = convertToInventoryExport db processId activity inventory
-    Right $ toJSON inventoryExport
+getActivityInventory :: Database -> Text -> IO (Either ServiceError Value)
+getActivityInventory db processIdText =
+    case resolveActivityAndProcessId db processIdText >>= \(pid, act) -> validateProcessIdInMatrixIndex db pid >> Right (pid, act) of
+        Left err -> return $ Left err
+        Right (processId, activity) -> do
+            -- Matrix computation (will not fail if validation passed)
+            inventory <- computeInventoryMatrix db processId
+            let !inventoryExport = convertToInventoryExport db processId activity inventory
+            return $ Right $ toJSON inventoryExport
 
 -- | Shared solver-aware activity inventory export for concurrent processing
 getActivityInventoryWithSharedSolver :: SharedSolver -> Database -> Text -> IO (Either ServiceError InventoryExport)
@@ -222,7 +222,7 @@ getActivityInventoryWithSharedSolver sharedSolver db processIdText = do
                             -- Convert Int32 to Int for solveSparseLinearSystem
                             let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
                                 activityCountInt = fromIntegral activityCount
-                            return $ solveSparseLinearSystem techTriplesInt activityCountInt demandVec
+                            solveSparseLinearSystem techTriplesInt activityCountInt demandVec
 
                     -- Calculate inventory using sparse biosphere matrix: g = B * supply
                     -- Convert Int32 to Int for applySparseMatrix
@@ -992,8 +992,8 @@ exportMatrixDebugData database processIdText opts = do
             case UUID.fromText activityUuidText of
                 Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
                 Just activityUuid -> do
-                    let matrixData = MatrixExport.extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
-                        inventoryList = MatrixExport.mdInventoryVector matrixData
+                    matrixData <- MatrixExport.extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
+                    let inventoryList = MatrixExport.mdInventoryVector matrixData
                         bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
                         inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
 

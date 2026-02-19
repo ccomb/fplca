@@ -19,7 +19,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
 
             -- Compute inventory
-            let inventory = computeInventoryMatrix db rootProcessId
+            inventory <- computeInventoryMatrix db rootProcessId
 
             -- Find CO2 and Zinc flows
             let co2Flow = findFlowByName db "carbon dioxide"
@@ -43,7 +43,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
 
             let rootProcessId = 0 :: ProcessId
-            let inventory = computeInventoryMatrix db rootProcessId
+            inventory <- computeInventoryMatrix db rootProcessId
 
             -- All inventory values should be finite
             let allFinite = all (\(_, v) -> not (isInfinite v) && not (isNaN v)) (M.toList inventory)
@@ -57,7 +57,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
 
             -- Compute inventory
-            let inventory = computeInventoryMatrix db rootProcessId
+            inventory <- computeInventoryMatrix db rootProcessId
 
             -- All values should be finite
             let allFinite = all (\(_, v) -> not (isInfinite v) && not (isNaN v)) (M.toList inventory)
@@ -67,7 +67,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min"
 
             let rootProcessId = 0 :: ProcessId
-            let inventory = computeInventoryMatrix db rootProcessId
+            inventory <- computeInventoryMatrix db rootProcessId
 
             -- Most biosphere values should be positive (emissions)
             let positiveCount = length $ filter (\(_, v) -> v > 0) (M.toList inventory)
@@ -78,7 +78,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
 
             let rootProcessId = 0 :: ProcessId
-            let inventory = computeInventoryMatrix db rootProcessId
+            inventory <- computeInventoryMatrix db rootProcessId
 
             -- Inventory should not be empty
             M.size inventory `shouldSatisfy` (> 0)
@@ -87,7 +87,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
 
             -- Activity 0 (Product X) should have inventory from downstream
-            let inventory0 = computeInventoryMatrix db 0
+            inventory0 <- computeInventoryMatrix db 0
             M.size inventory0 `shouldSatisfy` (> 0)
 
             -- All inventory values should be reasonable (not astronomically large)

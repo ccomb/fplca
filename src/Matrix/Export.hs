@@ -40,8 +40,8 @@ data MatrixDebugInfo = MatrixDebugInfo
     }
 
 -- | Extract matrix debug information from Database
-extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> MatrixDebugInfo
-extractMatrixDebugInfo database targetUUID flowFilter =
+extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> IO MatrixDebugInfo
+extractMatrixDebugInfo database targetUUID flowFilter = do
     let activities = dbActivities database
         flows = dbFlows database
         techTriples = dbTechnosphereTriples database
@@ -59,8 +59,9 @@ extractMatrixDebugInfo database targetUUID flowFilter =
 
         techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
         activityCountInt = fromIntegral activityCount
-        supplyVec = solveSparseLinearSystem techTriplesInt activityCountInt demandVec
-        supplyList = toList supplyVec
+
+    supplyVec <- solveSparseLinearSystem techTriplesInt activityCountInt demandVec
+    let supplyList = toList supplyVec
 
         bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
         bioFlowCountInt = fromIntegral bioFlowCount
@@ -75,7 +76,7 @@ extractMatrixDebugInfo database targetUUID flowFilter =
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
                  in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples
-     in MatrixDebugInfo
+    return MatrixDebugInfo
             { mdActivities = activities
             , mdFlows = flows
             , mdTechTriples = techTriples

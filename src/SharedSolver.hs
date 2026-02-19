@@ -58,8 +58,8 @@ solveWithSharedSolver solver demandVector = do
         case solverCachedFactorization solver of
             Just factorization -> do
                 reportProgress Solver "Using cached factorization for sub-second solve"
-                return $ solveSparseLinearSystemWithFactorization factorization demandVector
+                solveSparseLinearSystemWithFactorization factorization demandVector
             Nothing -> do
                 reportProgress Solver "Using fallback standard sparse solver (no cached factorization)"
-                return $ solveSparseLinearSystem (solverTechTriples solver) (solverActivityCount solver) demandVector
+                solveSparseLinearSystem (solverTechTriples solver) (solverActivityCount solver) demandVector
 

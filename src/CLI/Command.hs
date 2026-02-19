@@ -128,11 +128,12 @@ executeActivityTreeCommand fmt jsonPathOpt database uuid depth = do
 executeActivityInventoryCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
 executeActivityInventoryCommand fmt jsonPathOpt database uuid = do
   reportProgress Info $ "Computing inventory for activity: " ++ T.unpack uuid
-  case Service.getActivityInventory database uuid of
+  result <- Service.getActivityInventory database uuid
+  case result of
     Left err -> reportServiceError err
-    Right result -> do
+    Right value -> do
       reportProgress Info "Inventory computation completed"
-      outputResult fmt jsonPathOpt result
+      outputResult fmt jsonPathOpt value
 
 -- | Execute flow info command
 executeFlowCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()

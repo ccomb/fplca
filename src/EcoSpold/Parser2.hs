@@ -16,7 +16,6 @@ import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import System.FilePath (takeBaseName)
 import System.IO (hPutStrLn, stderr)
-import System.IO.Unsafe (unsafePerformIO)
 import qualified Xeno.SAX as X
 
 -- | Namespace UUID for generating deterministic UUIDs from invalid text
@@ -26,19 +25,19 @@ testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encod
 
 -- | Helper to safely parse UUID from Text, generating deterministic UUID for invalid formats
 -- This ensures test data with invalid UUIDs like "productX-uuid" get unique UUIDs
-parseUUID :: Text -> UUID
+-- Returns (UUID, Maybe warning) to avoid unsafePerformIO in pure context
+parseUUID :: Text -> (UUID, Maybe String)
 parseUUID txt = case UUID.fromText txt of
-    Just uuid -> uuid
+    Just uuid -> (uuid, Nothing)
     Nothing ->
         -- Generate deterministic UUID from the text using UUID v5
         -- This prevents deduplication issues where all invalid UUIDs would map to nil
         let generatedUUID = UUID5.generateNamed testDataNamespace (BS.unpack $ TE.encodeUtf8 txt)
             -- Only warn for non-empty invalid UUIDs (empty is expected for optional fields)
-            !_ = if T.null txt
-                 then ()
-                 else unsafePerformIO $ hPutStrLn stderr $
-                      "[WARNING] Invalid UUID format: " ++ T.unpack txt ++ " - generated UUID: " ++ show generatedUUID
-        in generatedUUID
+            warning = if T.null txt
+                      then Nothing
+                      else Just $ "[WARNING] Invalid UUID format: " ++ T.unpack txt ++ " - generated UUID: " ++ show generatedUUID
+        in (generatedUUID, warning)
 
 -- | Parse ProcessId from filename (no Database needed here)
 -- Expects format: activity_uuid_product_uuid.spold
@@ -107,6 +106,7 @@ data ParseState = ParseState
     , psTextAccum :: ![BS.ByteString]  -- Accumulated text content
     , psPendingInputGroup :: !Text  -- Pending inputGroup value from child element
     , psPendingOutputGroup :: !Text  -- Pending outputGroup value from child element
+    , psWarnings :: ![String]  -- Accumulated warnings (emitted in IO after fold)
     }
 
 -- | Initial parsing state
@@ -124,14 +124,17 @@ initialParseState = ParseState
     , psTextAccum = []
     , psPendingInputGroup = ""
     , psPendingOutputGroup = ""
+    , psWarnings = []
     }
 
 -- | Xeno SAX parser implementation
-parseWithXeno :: BS.ByteString -> ProcessId -> Either String (Activity, [Flow], [Unit])
+parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [Flow], [Unit]), [String])
 parseWithXeno xmlContent processId =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
-        Right finalState -> buildResult finalState processId
+        Right finalState -> case buildResult finalState processId of
+            Left err -> Left err
+            Right result -> Right (result, reverse $ psWarnings finalState)
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -214,33 +217,39 @@ parseWithXeno xmlContent processId =
                         -- Negative inputs (like wastewater discharge) should NOT be considered reference products
                         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
+                        -- Parse UUIDs and collect warnings
+                        (flowUUID, flowWarn) = parseUUID (idFlowId idata)
+                        (unitUUID, unitWarn) = parseUUID (idUnitId idata)
+                        (linkUUID, linkWarn) = if T.null (idActivityLinkId idata)
+                                               then (UUID.nil, Nothing)
+                                               else parseUUID (idActivityLinkId idata)
+                        uuidWarnings = [w | Just w <- [flowWarn, unitWarn, linkWarn]]
                         exchange = TechnosphereExchange
-                            (parseUUID $ idFlowId idata)
+                            flowUUID
                             (idAmount idata)
-                            (parseUUID $ idUnitId idata)
+                            unitUUID
                             isInput
                             isReferenceProduct
-                            (if T.null (idActivityLinkId idata) then UUID.nil else parseUUID (idActivityLinkId idata))
+                            linkUUID
                             Nothing
                             ""  -- EcoSpold2: no per-exchange location
                         flow = Flow
-                            (parseUUID $ idFlowId idata)
+                            flowUUID
                             (if T.null (idFlowName idata) then idFlowId idata else idFlowName idata)
                             "technosphere"
                             Nothing  -- subcompartment
-                            (parseUUID $ idUnitId idata)
+                            unitUUID
                             Technosphere
                             (idSynonyms idata)
                             Nothing  -- CAS
                             Nothing  -- substanceId
+                        unitNameWarning = if T.null (idUnitName idata)
+                                          then ["[WARNING] Missing unit name for intermediate exchange with flow ID: "
+                                                ++ T.unpack (idFlowId idata) ++ " - using 'UNKNOWN_UNIT' placeholder"]
+                                          else []
                         unit = Unit
-                            (parseUUID $ idUnitId idata)
-                            (if T.null (idUnitName idata)
-                             then let !_ = unsafePerformIO $ hPutStrLn stderr $
-                                          "[WARNING] Missing unit name for intermediate exchange with flow ID: "
-                                          ++ T.unpack (idFlowId idata) ++ " - using 'UNKNOWN_UNIT' placeholder"
-                                  in "UNKNOWN_UNIT"
-                             else idUnitName idata)
+                            unitUUID
+                            (if T.null (idUnitName idata) then "UNKNOWN_UNIT" else idUnitName idata)
                             (if T.null (idUnitName idata) then "?" else idUnitName idata)
                             ""
                         -- Set reference unit if this is the reference product
@@ -257,6 +266,7 @@ parseWithXeno xmlContent processId =
                         , psPendingInputGroup = ""
                         , psPendingOutputGroup = ""
                         , psRefUnit = newRefUnit
+                        , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
                         }
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "elementaryExchange" =
@@ -281,10 +291,14 @@ parseWithXeno xmlContent processId =
                                       case edCompartments edata of
                                           (comp : _) | T.toLower comp == "natural resource" -> True
                                           _ -> False  -- Default to output (emissions)
+                        -- Parse UUIDs and collect warnings
+                        (flowUUID, flowWarn) = parseUUID (edFlowId edata)
+                        (unitUUID, unitWarn) = parseUUID (edUnitId edata)
+                        uuidWarnings = [w | Just w <- [flowWarn, unitWarn]]
                         exchange = BiosphereExchange
-                            (parseUUID $ edFlowId edata)
+                            flowUUID
                             (edAmount edata)
-                            (parseUUID $ edUnitId edata)
+                            unitUUID
                             isInput
                             ""  -- EcoSpold2: no per-exchange location
                         -- Get subcompartment from the list (first entry if any)
@@ -292,23 +306,22 @@ parseWithXeno xmlContent processId =
                             (s:_) | not (T.null s) -> Just s
                             _ -> Nothing
                         flow = Flow
-                            (parseUUID $ edFlowId edata)
+                            flowUUID
                             (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
                             category
                             subcompartment
-                            (parseUUID $ edUnitId edata)
+                            unitUUID
                             Biosphere
                             (edSynonyms edata)
                             Nothing  -- CAS - not in EcoSpold2 data
                             Nothing  -- substanceId - to be filled later
+                        unitNameWarning = if T.null (edUnitName edata)
+                                          then ["[WARNING] Missing unit name for elementary exchange with flow ID: "
+                                                ++ T.unpack (edFlowId edata) ++ " - using 'UNKNOWN_UNIT' placeholder"]
+                                          else []
                         unit = Unit
-                            (parseUUID $ edUnitId edata)
-                            (if T.null (edUnitName edata)
-                             then let !_ = unsafePerformIO $ hPutStrLn stderr $
-                                          "[WARNING] Missing unit name for elementary exchange with flow ID: "
-                                          ++ T.unpack (edFlowId edata) ++ " - using 'UNKNOWN_UNIT' placeholder"
-                                  in "UNKNOWN_UNIT"
-                             else edUnitName edata)
+                            unitUUID
+                            (if T.null (edUnitName edata) then "UNKNOWN_UNIT" else edUnitName edata)
                             (if T.null (edUnitName edata) then "?" else edUnitName edata)
                             ""
                     in state
@@ -320,6 +333,7 @@ parseWithXeno xmlContent processId =
                         , psTextAccum = []
                         , psPendingInputGroup = ""
                         , psPendingOutputGroup = ""
+                        , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
                         }
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "text" =
@@ -411,9 +425,13 @@ streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, 
 streamParseActivityAndFlowsFromFile path = do
     !xmlContent <- BS.readFile path
     let filenameBase = T.pack $ takeBaseName path
-    return $ case EcoSpold.Parser2.parseProcessId filenameBase of
-        Nothing -> Left $ "Invalid filename format for ProcessId: " ++ path
-        Just pid -> parseWithXeno xmlContent pid
+    case EcoSpold.Parser2.parseProcessId filenameBase of
+        Nothing -> return $ Left $ "Invalid filename format for ProcessId: " ++ path
+        Just pid -> case parseWithXeno xmlContent pid of
+            Left err -> return $ Left err
+            Right (result, warnings) -> do
+                mapM_ (hPutStrLn stderr) warnings
+                return $ Right result
 
 {- | Apply cut-off strategy
 1. Remove zero-amount production exchanges (co-products)
