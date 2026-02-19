@@ -428,7 +428,11 @@ viewDependenciesCard setupInfo =
                         , div [ class "tags" ]
                             (List.map viewSelectedDependency setupInfo.selectedDependencies)
                         ]
-                , if List.isEmpty setupInfo.suggestions then
+                , if List.isEmpty setupInfo.suggestions && List.isEmpty setupInfo.selectedDependencies then
+                    p [ class "has-text-grey is-size-7", style "margin-top" "0.5rem" ]
+                        [ text "Load a database first, then add it here as a dependency." ]
+
+                  else if List.isEmpty setupInfo.suggestions then
                     text ""
 
                   else

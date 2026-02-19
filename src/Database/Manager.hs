@@ -781,9 +781,8 @@ stageUploadedDatabase manager dbConfig = do
     -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
     path <- Upload.findDataDirectory (dcPath dbConfig)
 
-    -- Get currently loaded IndexedDatabases for cross-DB linking
-    currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
-    let otherIndexes = M.elems currentIndexedDbs
+    -- Start with no cross-DB links; user adds dependencies explicitly via setup UI
+    let otherIndexes = []
 
     -- Detect format to find the correct file path (CSV needs file, not directory)
     format <- detectDirectoryFormat path
@@ -1159,19 +1158,19 @@ addDependencyToStaged manager dbName depName = do
         Just staged -> case M.lookup depName indexedDbs of
             Nothing -> return $ Left $ "Dependency database not loaded: " <> depName
             Just _depIdx -> do
-                -- Run cross-DB linking with the new dependency
-                let allIndexes = M.elems indexedDbs
+                -- Compute new dependency list, then link only against selected deps
+                let newDeps = if depName `elem` sdSelectedDeps staged
+                        then sdSelectedDeps staged
+                        else depName : sdSelectedDeps staged
+                    selectedIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
                 (_, newStats) <- Loader.fixActivityLinksWithCrossDB
-                    allIndexes
+                    selectedIndexes
                     (dmSynonymDB manager)
                     (dmUnitConfig manager)
                     (sdSimpleDB staged)
 
                 -- Update staged database with new stats and dependency
-                let newDeps = if depName `elem` sdSelectedDeps staged
-                        then sdSelectedDeps staged
-                        else depName : sdSelectedDeps staged
-                    updatedStaged = staged
+                let updatedStaged = staged
                         { sdSelectedDeps = newDeps
                         , sdCrossDBLinks = Loader.cdlLinks newStats
                         , sdLinkingStats = newStats
