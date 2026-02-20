@@ -44,6 +44,7 @@ module Database.CrossLinking
     , extractProductPrefixes
     , extractBracketedLocation
     , stripTrailingDBTag
+    , stripTrailingLocationSuffix
       -- * Text Normalization
     , normalizeText
     , normalizeUnicode
@@ -171,9 +172,27 @@ stripTrailingDBTag name
                     then Just stripped
                     else Nothing
 
+-- | Strip a trailing @\/LOCATION MARKER@ suffix from a product name.
+-- WFLDB names use the pattern @ProductName (WFLDB)\/CA U@ where the suffix
+-- encodes location (2-3 uppercase letters) and unit type (1 uppercase letter).
+stripTrailingLocationSuffix :: Text -> Maybe Text
+stripTrailingLocationSuffix name =
+    case T.breakOnEnd "/" name of
+        ("", _) -> Nothing
+        (beforeSlash, afterSlash) ->
+            case T.words afterSlash of
+                [loc, marker]
+                    | T.length loc >= 2, T.length loc <= 3
+                    , T.all isUpper loc
+                    , T.length marker == 1
+                    , T.all isUpper marker
+                    -> Just (T.stripEnd (T.init beforeSlash))
+                _ -> Nothing
+
 -- | Extract product name prefixes from a compound name.
 -- Tries splitting at each separator and returns candidate prefixes (stripped).
--- As a last resort, tries stripping a trailing database tag like "(WFLDB)".
+-- Also tries stripping a trailing database tag like "(WFLDB)" and a trailing
+-- location suffix like "/CA U" (WFLDB convention).
 -- Returns empty list if no separator is found and no tag detected.
 extractProductPrefixes :: Text -> [Text]
 extractProductPrefixes name =
@@ -187,7 +206,12 @@ extractProductPrefixes name =
         tagStripped = case stripTrailingDBTag name of
             Just stripped -> [stripped]
             Nothing       -> []
-    in separatorPrefixes ++ tagStripped
+        locationSuffixStripped = case stripTrailingLocationSuffix name of
+            Just stripped -> stripped : case stripTrailingDBTag stripped of
+                Just alsoTagStripped -> [alsoTagStripped]
+                Nothing              -> []
+            Nothing -> []
+    in separatorPrefixes ++ tagStripped ++ locationSuffixStripped
 
 -- | Extract a location code from any bracket pattern in a name.
 -- Looks for [XX] first, then {XX}. Returns the content of the first match,
