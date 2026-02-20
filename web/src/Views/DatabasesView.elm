@@ -80,7 +80,6 @@ viewDatabasesList dbList =
                         , th [ style "background-color" "white" ] [ text "Description" ]
                         , th [ style "background-color" "white", style "width" "100px" ] [ text "Source" ]
                         , th [ style "background-color" "white", style "width" "120px" ] [ text "Format" ]
-                        , th [ style "background-color" "white", style "width" "120px" ] [ text "Status" ]
                         , th [ style "background-color" "white", style "width" "200px" ] [ text "Actions" ]
                         ]
                     ]
@@ -108,22 +107,12 @@ viewDatabaseRow db =
         canDelete =
             db.isUploaded && not isLoaded
 
-        statusText =
-            if isLoaded then
-                span [ class "has-text-success has-text-weight-semibold" ] [ text "Open" ]
-
-            else if db.cached then
-                span [ class "has-text-info" ] [ text "Cached" ]
-
-            else
-                span [ class "has-text-grey" ] [ text "Closed" ]
-
         statusIndicator =
             if isLoaded then
-                span [ class "has-text-success", style "font-size" "1.2rem" ] [ text "●" ]
+                span [ class "has-text-success", style "font-size" "1.5rem" ] [ text "●" ]
 
             else
-                span [ class "has-text-grey-lighter", style "font-size" "1.2rem" ] [ text "○" ]
+                span [ class "has-text-grey-lighter", style "font-size" "1.5rem" ] [ text "○" ]
 
         rowAttrs =
             if isLoaded then
@@ -152,25 +141,26 @@ viewDatabaseRow db =
         , td [ class "has-text-grey" ]
             [ text (db.format |> Maybe.withDefault "") ]
         , td []
-            [ statusText ]
-        , td []
             [ viewActionButtons db canLoad canUnload canDelete ]
         ]
 
 
 viewActionButtons : DatabaseStatus -> Bool -> Bool -> Bool -> Html Msg
 viewActionButtons db canLoad canUnload canDelete =
-    let
-        -- Setup is available for uploaded databases that are NOT loaded
-        -- (Setup auto-stages the database and shows configuration page)
-        canSetup =
-            db.isUploaded && not db.loaded
-    in
     div [ class "buttons are-small" ]
         [ if canLoad then
             button
                 [ class "button is-primary is-small"
-                , stopPropagationOn "click" (Decode.succeed ( LoadDatabase db.name, True ))
+                , stopPropagationOn "click"
+                    (Decode.succeed
+                        ( if db.isUploaded then
+                            SetupDatabase db.name
+
+                          else
+                            LoadDatabase db.name
+                        , True
+                        )
+                    )
                 ]
                 [ span [ class "icon is-small" ] [ i [ class "fas fa-folder-open" ] [] ]
                 , span [] [ text "Open" ]
@@ -183,17 +173,6 @@ viewActionButtons db canLoad canUnload canDelete =
                 ]
                 [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
                 , span [] [ text "Close" ]
-                ]
-
-          else
-            text ""
-        , if canSetup then
-            button
-                [ class "button is-info is-small is-outlined"
-                , stopPropagationOn "click" (Decode.succeed ( SetupDatabase db.name, True ))
-                ]
-                [ span [ class "icon is-small" ] [ i [ class "fas fa-cog" ] [] ]
-                , span [] [ text "Setup" ]
                 ]
 
           else

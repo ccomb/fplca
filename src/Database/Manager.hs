@@ -331,7 +331,10 @@ discoverUploadedDatabases = do
     uploads <- UploadedDB.discoverUploadedDatabases
     forM uploads $ \(slug, dirPath, meta) -> do
         reportProgress Info $ "Discovered uploaded database: " <> T.unpack slug
-        return $ uploadMetaToConfig slug dirPath meta
+        -- Always detect format from actual files (old uploads may have "unknown")
+        let dataDir = dirPath </> UploadedDB.umDataPath meta
+        format <- Upload.detectDatabaseFormat dataDir
+        return $ uploadMetaToConfig slug dirPath meta { UploadedDB.umFormat = format }
 
 -- | Convert UploadMeta to DatabaseConfig
 uploadMetaToConfig :: Text -> FilePath -> UploadedDB.UploadMeta -> DatabaseConfig
