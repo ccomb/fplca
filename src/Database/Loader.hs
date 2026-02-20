@@ -55,10 +55,9 @@ import Control.DeepSeq (force)
 import Control.Exception (SomeException, catch, evaluate)
 import Control.Monad
 import Data.Either (partitionEithers)
-import Data.Binary (decode, encode)
+import Data.Store (decodeEx, encode)
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BSL
 import Data.Char (toLower)
 import Data.Hashable (hash)
 import Data.List (sortBy, group, sort)
@@ -816,7 +815,7 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
                                     return Nothing
                                 else do
                                     -- Check schema signature
-                                    let storedSig = decode (BSL.fromStrict sigBytes) :: Word64
+                                    let storedSig = decodeEx sigBytes :: Word64
                                     if storedSig /= schemaSignature
                                         then do
                                             reportCacheOperation $ "Schema signature mismatch (stored: " ++ show storedSig ++ ", current: " ++ show schemaSignature ++ "), rebuilding"
@@ -832,7 +831,7 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
                                                     reportError $ "Zstd decompression failed: " ++ show err
                                                     return Nothing
                                                 Zstd.Decompress decompressed -> do
-                                                    let !db = decode (BSL.fromStrict decompressed)
+                                                    let !db = decodeEx decompressed
                                                     -- Force full evaluation to prevent lazy thunk buildup
                                                     db' <- evaluate (force db)
                                                     reportCacheOperation $
@@ -903,7 +902,7 @@ loadCompressedCacheFile zstdFile = do
                             return Nothing
                         else do
                             -- Check schema signature
-                            let storedSig = decode (BSL.fromStrict sigBytes) :: Word64
+                            let storedSig = decodeEx sigBytes :: Word64
                             if storedSig /= schemaSignature
                                 then do
                                     reportCacheOperation $ "Schema mismatch: cache=" ++ show storedSig ++ " current=" ++ show schemaSignature
@@ -919,7 +918,7 @@ loadCompressedCacheFile zstdFile = do
                                             reportError $ "Zstd decompression failed: " ++ show err
                                             return Nothing
                                         Zstd.Decompress decompressed -> do
-                                            let !db = decode (BSL.fromStrict decompressed)
+                                            let !db = decodeEx decompressed
                                             -- Force full evaluation to prevent lazy thunk buildup
                                             db' <- evaluate (force db)
                                             reportCacheOperation $
@@ -951,7 +950,7 @@ loadUncompressedCacheFile cacheFile = do
             reportCacheInfo cacheFile
             catch
                 ( withProgressTiming Cache "Matrix cache load" $ do
-                    !db <- BSL.readFile cacheFile >>= \bs -> evaluate (force (decode bs))
+                    !db <- BS.readFile cacheFile >>= \bs -> evaluate (force (decodeEx bs))
                     reportCacheOperation $
                         "Matrix cache loaded: "
                             ++ show (dbActivityCount db)
@@ -985,12 +984,12 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
     let zstdFile = cacheFile ++ ".zst"
     reportCacheOperation $ "Saving Database with matrices to compressed cache: " ++ zstdFile
     withProgressTiming Cache "Matrix cache save with zstd compression" $ do
-        -- Serialize to ByteString
+        -- Serialize to ByteString (store returns strict ByteString)
         let serialized = encode db
         -- Compress with zstd (level 1 = fast compression, ~5% larger than level 3)
-        let compressed = Zstd.compress 1 (BSL.toStrict serialized)
+        let compressed = Zstd.compress 1 serialized
         -- Build header: magic (8 bytes) + schema signature (8 bytes)
-        let signatureBytes = BSL.toStrict $ encode schemaSignature
+        let signatureBytes = encode schemaSignature
         let header = cacheMagic <> signatureBytes
         -- Write header + compressed data
         BS.writeFile zstdFile (header <> compressed)

@@ -508,8 +508,7 @@ checkForSimaProCSV fs = do
             case result of
                 Left (_ :: SomeException) -> return False
                 Right c ->
-                    let header = BS.take 100 c
-                    in return $ "{SimaPro" `BS.isInfixOf` header
+                    return $ BS.isPrefixOf "{" c
 
 -- | Convert name to URL-safe slug
 slugify :: Text -> Text

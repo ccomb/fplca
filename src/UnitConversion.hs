@@ -40,8 +40,7 @@ module UnitConversion
 
 import Control.DeepSeq (NFData)
 import Control.Monad (unless)
-import Data.Binary (Binary)
-import qualified Data.Binary as Binary
+import Data.Store (Store)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (elemIndex, foldl')
 import qualified Data.Map.Strict as M
@@ -64,7 +63,7 @@ data UnitDef = UnitDef
     } deriving (Eq, Show, Generic)
 
 instance NFData UnitDef
-instance Binary UnitDef
+instance Store UnitDef
 
 -- | Unit configuration loaded from fplca.toml.
 data UnitConfig = UnitConfig
@@ -74,7 +73,7 @@ data UnitConfig = UnitConfig
     } deriving (Show, Generic)
 
 instance NFData UnitConfig
-instance Binary UnitConfig
+instance Store UnitConfig
 
 -- | Default dimension order (must match the order in fplca.toml).
 defaultDimensionOrder :: [Text]

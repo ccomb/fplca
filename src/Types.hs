@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -12,9 +13,8 @@ module Types (
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.Aeson as Aeson
-import Data.Binary (Binary)
-import qualified Data.Binary as Binary
-import Data.Vector.Binary () -- Orphan instances for Vector Binary
+import Data.Store (Store(..), Size(..), decodeEx, encode)
+import Data.Word (Word32)
 import Data.Hashable (Hashable)
 import Data.Int (Int16, Int32)
 import qualified Data.Map as M
@@ -33,9 +33,16 @@ import GHC.Generics (Generic, Generic1)
 
 import SynonymDB.Types (SynonymDB)
 
+-- | Orphan Store instance for UUID (16 bytes, host-native word order)
+instance Store UUID where
+    size = ConstSize 16
+    poke uuid = let (a, b, c, d) = UUID.toWords uuid
+                in poke a >> poke b >> poke c >> poke d
+    peek = UUID.fromWords <$> peek <*> peek <*> peek <*> peek
+
 -- Note: UUID is now Data.UUID.UUID (16 bytes) instead of Text (~80+ bytes)
 -- This saves ~2-3GB of RAM by reducing memory footprint from ~100,000+ UUID instances
--- Binary and NFData instances are provided by the uuid package
+-- NFData instance is provided by the uuid package; Store instance defined above
 
 -- | Process identifier - compact Int16 index for efficient matrix operations
 -- Maps to (activityUUID, productUUID) via Database.dbProcessIdTable
@@ -44,7 +51,7 @@ type ProcessId = Int16
 
 -- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
-    deriving (Eq, Ord, Generic, NFData, Binary)
+    deriving (Eq, Ord, Generic, NFData, Store)
 
 -- | Représentation d'une unité (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -53,7 +60,7 @@ data Unit = Unit
     , unitSymbol :: !Text -- Symbole (e.g. "kg", "MJ")
     , unitComment :: !Text -- Description/commentaire
     }
-    deriving (Generic, NFData, Binary)
+    deriving (Generic, NFData, Store)
 
 -- | Substance - groups flows with the same chemical identity across databases
 -- Used for flow matching between different LCA databases (ecoinvent, ILCD, SimaPro)
@@ -64,7 +71,7 @@ data Substance = Substance
     , substanceCAS :: !(Maybe Text) -- CAS number (e.g. "7439-97-6" for Mercury)
     , substanceSynonyms :: !(S.Set Text) -- All normalized synonyms (lowercase)
     }
-    deriving (Eq, Show, Generic, NFData, Binary)
+    deriving (Eq, Show, Generic, NFData, Store)
 
 -- | Représentation d'un flux (matière, énergie, émission, etc.)
 data Flow = Flow
@@ -78,7 +85,7 @@ data Flow = Flow
     , flowCAS :: !(Maybe Text) -- CAS number for substance identification
     , flowSubstanceId :: !(Maybe Int) -- Link to Substance in FlowMappingData
     }
-    deriving (Generic, NFData, Binary)
+    deriving (Generic, NFData, Store)
 
 -- | Échange dans un activité - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
 data Exchange
@@ -99,7 +106,7 @@ data Exchange
         , bioIsInput :: !Bool -- True for resource extraction, False for emissions
         , bioLocation :: !Text -- Exchange location (EcoSpold1) or "" (EcoSpold2)
         }
-    deriving (Generic, NFData, Binary)
+    deriving (Generic, NFData, Store)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
@@ -180,7 +187,7 @@ data Activity = Activity
     , activityUnit :: !Text -- Unité de référence
     , exchanges :: ![Exchange] -- Liste des échanges
     }
-    deriving (Generic, NFData, Binary)
+    deriving (Generic, NFData, Store)
 
 -- | Arbre de calcul ACV (représentation récursive)
 data ActivityTree
@@ -256,7 +263,7 @@ data Indexes = Indexes
     , idxFlowByType :: !FlowTypeIndex -- Recherche flux par type
     -- Note: Exchange-level indexes removed - exchanges can be accessed directly from Activity.exchanges
     }
-    deriving (Generic, NFData, Binary)
+    deriving (Generic, NFData, Store)
 
 -- | Sparse matrix coordinate triplet (row, col, value)
 -- Using Int32 for matrix indices to support large databases (up to 2 billion activities)
@@ -304,20 +311,37 @@ instance VG.Vector VU.Vector SparseTriple where
 
 instance VU.Unbox SparseTriple
 
--- Binary instance for cache serialization (VU.Vector has Binary instance via vector-binary-instances)
-instance Binary SparseTriple where
-    put (SparseTriple r c v) = Binary.put r >> Binary.put c >> Binary.put v
-    get = SparseTriple <$> Binary.get <*> Binary.get <*> Binary.get
+-- Store instance for cache serialization
+instance Store SparseTriple where
+    size = ConstSize 16 -- Int32 (4) + Int32 (4) + Double (8)
+    poke (SparseTriple r c v) = poke r >> poke c >> poke v
+    peek = SparseTriple <$> peek <*> peek <*> peek
 
 -- NFData derived via Generic
 instance NFData SparseTriple
+
+-- | Store instance for VU.Vector SparseTriple (store has no built-in instance for custom Unbox types)
+instance Store (VU.Vector SparseTriple) where
+    size = VarSize $ \v -> 8 + VU.length v * 16
+    poke v = do
+        poke (VU.length v)
+        VU.mapM_ poke v
+    peek = do
+        n <- peek
+        VU.replicateM n peek
+
+-- | Compute serialized size for a Store value
+getSize :: Store a => a -> Int
+getSize x = case size of
+    ConstSize n -> n
+    VarSize f -> f x
 
 -- | Pre-computed matrix factorization for fast inventory calculations
 data MatrixFactorization = MatrixFactorization
     { mfSystemMatrix :: !(VU.Vector SparseTriple) -- Cached (I - A) system matrix (unboxed)
     , mfActivityCount :: !Int32 -- Matrix dimension
     , mfDatabaseId :: !Text -- Database identifier for per-database cache lookup
-    } deriving (Generic, NFData, Binary)
+    } deriving (Generic, NFData, Store)
 
 -- | Index for looking up activities by their reference product attributes
 -- Used for: (1) upstream link resolution for SimaPro data, (2) future product search
@@ -325,14 +349,7 @@ data ProductIndex = ProductIndex
     { piByUUID     :: !(M.Map UUID ProcessId)      -- Product flow UUID → ProcessId (for upstream links)
     , piByName     :: !(M.Map Text [ProcessId])    -- Normalized product name → [ProcessId] (for search)
     , piByLocation :: !(M.Map Text [ProcessId])    -- Location → [ProcessId] (for search)
-    } deriving (Generic, NFData)
-
-instance Binary ProductIndex where
-    put pi = do
-        Binary.put (piByUUID pi)
-        Binary.put (piByName pi)
-        Binary.put (piByLocation pi)
-    get = ProductIndex <$> Binary.get <*> Binary.get <*> Binary.get
+    } deriving (Generic, NFData, Store)
 
 -- | Empty product index (used as default when loading old cache files)
 emptyProductIndex :: ProductIndex
@@ -367,49 +384,67 @@ data Database = Database
     }
     deriving (Generic, NFData)
 
--- | Custom Binary instance for Database
+-- | Custom Store instance for Database
 -- Only serializes persistent fields (not runtime-only: factorization, synonymDB, flowsByName)
--- This ensures backward compatibility with existing cache files
-instance Binary Database where
-    put db = do
-        Binary.put (dbProcessIdTable db)
-        Binary.put (dbProcessIdLookup db)
-        Binary.put (dbActivityUUIDIndex db)
-        Binary.put (dbActivityProductsIndex db)
-        Binary.put (dbProductIndex db)
-        Binary.put (dbActivities db)
-        Binary.put (dbFlows db)
-        Binary.put (dbUnits db)
-        Binary.put (dbIndexes db)
-        Binary.put (dbTechnosphereTriples db)
-        Binary.put (dbBiosphereTriples db)
-        Binary.put (dbActivityIndex db)
-        Binary.put (dbBiosphereFlows db)
-        Binary.put (dbActivityCount db)
-        Binary.put (dbBiosphereCount db)
+instance Store Database where
+    size = VarSize $ \db ->
+        getSize (dbProcessIdTable db)
+        + getSize (dbProcessIdLookup db)
+        + getSize (dbActivityUUIDIndex db)
+        + getSize (dbActivityProductsIndex db)
+        + getSize (dbProductIndex db)
+        + getSize (dbActivities db)
+        + getSize (dbFlows db)
+        + getSize (dbUnits db)
+        + getSize (dbIndexes db)
+        + getSize (dbTechnosphereTriples db)
+        + getSize (dbBiosphereTriples db)
+        + getSize (dbActivityIndex db)
+        + getSize (dbBiosphereFlows db)
+        + getSize (dbActivityCount db)
+        + getSize (dbBiosphereCount db)
+        + getSize (dbCrossDBLinks db)
+        + getSize (dbDependsOn db)
+
+    poke db = do
+        poke (dbProcessIdTable db)
+        poke (dbProcessIdLookup db)
+        poke (dbActivityUUIDIndex db)
+        poke (dbActivityProductsIndex db)
+        poke (dbProductIndex db)
+        poke (dbActivities db)
+        poke (dbFlows db)
+        poke (dbUnits db)
+        poke (dbIndexes db)
+        poke (dbTechnosphereTriples db)
+        poke (dbBiosphereTriples db)
+        poke (dbActivityIndex db)
+        poke (dbBiosphereFlows db)
+        poke (dbActivityCount db)
+        poke (dbBiosphereCount db)
         -- Cross-database linking fields
-        Binary.put (dbCrossDBLinks db)
-        Binary.put (dbDependsOn db)
+        poke (dbCrossDBLinks db)
+        poke (dbDependsOn db)
         -- Runtime-only fields are NOT serialized
 
-    get = do
-        processIdTable <- Binary.get
-        processIdLookup <- Binary.get
-        activityUUIDIndex <- Binary.get
-        activityProductsIndex <- Binary.get
-        productIndex <- Binary.get
-        activities <- Binary.get
-        flows <- Binary.get
-        units <- Binary.get
-        indexes <- Binary.get
-        techTriples <- Binary.get
-        bioTriples <- Binary.get
-        activityIndex <- Binary.get
-        biosphereFlows <- Binary.get
-        activityCount <- Binary.get
-        biosphereCount <- Binary.get
-        crossDBLinks <- Binary.get
-        dependsOn <- Binary.get
+    peek = do
+        processIdTable <- peek
+        processIdLookup <- peek
+        activityUUIDIndex <- peek
+        activityProductsIndex <- peek
+        productIndex <- peek
+        activities <- peek
+        flows <- peek
+        units <- peek
+        indexes <- peek
+        techTriples <- peek
+        bioTriples <- peek
+        activityIndex <- peek
+        biosphereFlows <- peek
+        activityCount <- peek
+        biosphereCount <- peek
+        crossDBLinks <- peek
+        dependsOn <- peek
         return Database
             { dbProcessIdTable = processIdTable
             , dbProcessIdLookup = processIdLookup
@@ -537,7 +572,7 @@ data SimpleDatabase = SimpleDatabase
     , sdbFlows :: !FlowDB
     , sdbUnits :: !UnitDB
     }
-    deriving (Generic, Binary)
+    deriving (Generic, Store)
 
 -- | Catégorie d'impact (e.g. Changement climatique)
 data ImpactCategory = ImpactCategory
@@ -565,7 +600,7 @@ data CrossDBLink = CrossDBLink
     , cdlLocation       :: !Text            -- ^ Supplier location (for display)
     , cdlSourceDatabase :: !Text            -- ^ Source database name
     }
-    deriving (Generic, NFData, Binary, Show, Eq)
+    deriving (Generic, NFData, Store, Show, Eq)
 
 -- | Facteur de caractérisation (lié à une méthode LCIA)
 data CF = CF

@@ -11,7 +11,7 @@ module SynonymDB.Types
     , emptySynonymDB
     ) where
 
-import Data.Binary (Binary)
+import Data.Store (Store)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -27,7 +27,7 @@ import Control.DeepSeq (NFData)
 data SynonymDB = SynonymDB
     { synNameToId  :: !(Map Text Int)      -- ^ Name → Group ID (for lookup)
     , synIdToNames :: !(Map Int [Text])    -- ^ Group ID → All names (for display)
-    } deriving (Eq, Show, Generic, NFData, Binary)
+    } deriving (Eq, Show, Generic, NFData, Store)
 
 -- | Empty synonym database (for testing or when not available)
 emptySynonymDB :: SynonymDB

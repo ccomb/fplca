@@ -25,9 +25,8 @@ module SynonymDB
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import qualified Codec.Compression.Zstd as Zstd
-import qualified Data.Binary as Binary
+import qualified Data.Store as Store
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BSL
 import Data.FileEmbed (embedFile)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -51,7 +50,7 @@ synonymsCompressed = $(embedFile "src/SynonymDB/synonyms.bin.zst")
 --
 -- This function:
 -- 1. Decompresses the embedded Zstd data
--- 2. Deserializes the Binary format into SynonymDB
+-- 2. Deserializes the Store format into SynonymDB
 -- 3. Forces full evaluation to prevent lazy thunk buildup
 --
 -- Should be called once at startup and stored in the Database record.
@@ -71,7 +70,7 @@ loadEmbeddedSynonymDB = do
                     return emptySynonymDB
                 Zstd.Decompress decompressed -> do
                     -- Deserialize
-                    let !db = Binary.decode (BSL.fromStrict decompressed)
+                    let !db = Store.decodeEx decompressed
                     -- Force full evaluation
                     !db' <- evaluate (force db)
                     let nameCount = M.size (synNameToId db')

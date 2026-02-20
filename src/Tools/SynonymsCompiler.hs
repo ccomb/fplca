@@ -20,7 +20,7 @@ import qualified Codec.Compression.Zstd as Zstd
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AK
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Binary as Binary
+import qualified Data.Store as Store
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as M
@@ -143,14 +143,14 @@ main = do
         groupCount = M.size (synIdToNames db')
     hPutStrLn stderr $ printf "Loaded: %d names, %d synonym groups" nameCount groupCount
 
-    -- Serialize to Binary
-    let binary = Binary.encode db'
-        binarySize = BSL.length binary
+    -- Serialize to Store (strict ByteString)
+    let binary = Store.encode db'
+        binarySize = BS.length binary
     hPutStrLn stderr $ printf "Binary size: %d bytes (%.2f MB)"
         binarySize (fromIntegral binarySize / (1024 * 1024) :: Double)
 
     -- Compress with Zstd
-    let compressed = Zstd.compress (optLevel opts) (BSL.toStrict binary)
+    let compressed = Zstd.compress (optLevel opts) binary
         compressedSize = BS.length compressed
         ratio = (fromIntegral compressedSize / fromIntegral binarySize) * 100 :: Double
     hPutStrLn stderr $ printf "Compressed size: %d bytes (%.2f MB, %.1f%% of original)"

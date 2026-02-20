@@ -46,7 +46,7 @@ executable fplca
                      , wai
                      , wai-cors
                      , wai-app-static
-                     , binary
+                     , store
                      , zstd
                      , time
                      , hashable
@@ -55,7 +55,6 @@ executable fplca
                      , network-uri
                      , streaming-commons
                      , vector
-                     , vector-binary-instances
                      , containers
                      , random
                      , petsc-hs
@@ -115,7 +114,7 @@ executable synonyms-compiler
                      , text
                      , containers
                      , bytestring
-                     , binary
+                     , store
                      , zstd
                      , aeson
                      , vector
@@ -176,7 +175,6 @@ test-suite acv-tests
                      , text
                      , containers
                      , vector
-                     , vector-binary-instances
                      , bytestring
                      , xeno
                      , directory
@@ -185,7 +183,7 @@ test-suite acv-tests
                      , petsc-hs
                      , deepseq
                      , parallel
-                     , binary
+                     , store
                      , zstd
                      , time
                      , hashable
