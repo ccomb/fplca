@@ -280,7 +280,7 @@ defaultUnits = M.fromList $ concat
     , mkAliases [0,0,1,0,1,0,0,0] 315360000000.0 ["ha*year", "hectare*year", "ha.year", "ha*a", "ha a"]
 
       -- Volume×Time
-    , mkAliases [0,0,1,0,0,1,0,0] 31536000.0 ["m3*year", "m³*year", "m3.year", "m3*a", "m3y"]
+    , mkAliases [0,0,1,0,0,1,0,0] 31536000.0 ["m3*year", "m³*year", "m3.year", "m3*a", "m3a", "m3y"]
     , mkAliases [0,0,1,0,0,1,0,0] 86.4       ["l*day", "l.day", "l*d", "liter*day", "litre*day"]
     , mkAliases [0,0,1,0,0,1,0,0] 31536.0    ["l*year", "l.year", "l*a", "liter*year", "litre*year"]
 
