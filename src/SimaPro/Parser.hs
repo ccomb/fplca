@@ -218,12 +218,12 @@ updateConfigFromHeader cfg key value = case BS8.map toLower key of
     "short date format" -> cfg { spDateFormat = decodeBS value }
     _ -> cfg
   where
-    parseDelimiter v = case BS8.map toLower v of
-        "semicolon" -> ';'
-        "comma" -> ','
-        "tab" -> '\t'
-        _ -> ';'
     decodeBS = TE.decodeUtf8With TEE.lenientDecode
+    parseDelimiter v
+        | v == "Semicolon" = ';'
+        | v == "Comma"     = ','
+        | v == "Tab"       = '\t'
+        | otherwise        = ';'
 
 -- ============================================================================
 -- Section Detection
@@ -785,3 +785,4 @@ parseSimaProCSV path = do
         | BS.null bs = bs
         | BS8.last bs == '\r' = BS8.init bs
         | otherwise = bs
+

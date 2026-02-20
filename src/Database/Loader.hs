@@ -415,20 +415,22 @@ loadSimaProCSV :: FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV csvPath = do
     (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvPath
 
-    -- Build ActivityMap with generated ProcessIds
-    -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-    let activityList = zip [0 ..] activities
-        procMap =
-            M.fromList
-                [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
-                | (_, act) <- activityList
-                ]
+    if null activities
+        then return $ Left "No activities found in SimaPro CSV file."
+        else do
+            -- Build ActivityMap with generated ProcessIds
+            -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
+            let procMap =
+                    M.fromList
+                        [ ((SimaPro.generateActivityUUID (activityName act), getReferenceProductUUID act), act)
+                        | act <- activities
+                        ]
 
-    -- Build initial database
-    let simpleDb = SimpleDatabase procMap flowDB unitDB
+            -- Build initial database
+            let simpleDb = SimpleDatabase procMap flowDB unitDB
 
-    -- Fix activity links using supplier lookup (same as EcoSpold1)
-    Right <$> fixSimaProActivityLinks simpleDb
+            -- Fix activity links using supplier lookup (same as EcoSpold1)
+            Right <$> fixSimaProActivityLinks simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references
 Uses name-only matching (no location required) for SimaPro technosphere inputs
