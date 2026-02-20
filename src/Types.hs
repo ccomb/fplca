@@ -574,6 +574,15 @@ data SimpleDatabase = SimpleDatabase
     }
     deriving (Generic, Store)
 
+-- | Reconstruct SimpleDatabase from a fully-built Database
+-- Used to skip re-parsing when a valid cache exists during staging
+toSimpleDatabase :: Database -> SimpleDatabase
+toSimpleDatabase db = SimpleDatabase
+    { sdbActivities = M.fromList $ V.toList $ V.zipWith (,) (dbProcessIdTable db) (dbActivities db)
+    , sdbFlows = dbFlows db
+    , sdbUnits = dbUnits db
+    }
+
 -- | Catégorie d'impact (e.g. Changement climatique)
 data ImpactCategory = ImpactCategory
     { categoryId :: !Text

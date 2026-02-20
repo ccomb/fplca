@@ -40,6 +40,7 @@ module Database.Loader
       -- * Cross-Database Linking
     , fixActivityLinksWithCrossDB
     , CrossDBLinkingStats(..)
+    , emptyCrossDBLinkingStats
     , crossDBLinksCount
     , unresolvedCount
     , crossDBBySource
