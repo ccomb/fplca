@@ -15,6 +15,7 @@ import Views.DatabasesView as DatabasesView
 type alias Model =
     { pendingAction : Maybe PendingAction
     , actionError : Maybe String
+    , confirmingDelete : Maybe String
     }
 
 
@@ -44,6 +45,7 @@ init : Shared.Model -> () -> ( Model, Effect Shared.Msg Msg )
 init shared _ =
     ( { pendingAction = Nothing
       , actionError = Nothing
+      , confirmingDelete = Nothing
       }
     , Effect.fromShared Shared.LoadDatabases
     )
@@ -69,8 +71,18 @@ update shared msg model =
                     , Effect.fromCmd (unloadDatabaseCmd dbName)
                     )
 
+                DatabasesView.ConfirmDeleteDatabase dbName ->
+                    ( { model | confirmingDelete = Just dbName }
+                    , Effect.none
+                    )
+
+                DatabasesView.CancelDeleteDatabase ->
+                    ( { model | confirmingDelete = Nothing }
+                    , Effect.none
+                    )
+
                 DatabasesView.DeleteDatabase dbName ->
-                    ( { model | pendingAction = Just (DeletingDb dbName), actionError = Nothing }
+                    ( { model | pendingAction = Just (DeletingDb dbName), actionError = Nothing, confirmingDelete = Nothing }
                     , Effect.fromCmd (deleteDatabaseCmd dbName)
                     )
 
@@ -155,6 +167,7 @@ view shared model =
                 maybeDatabases
                 (loadingDatabases || isLoading)
                 error
+                model.confirmingDelete
             )
     }
 

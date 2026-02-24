@@ -12,11 +12,13 @@ type Msg
     | LoadDatabase String
     | UnloadDatabase String
     | DeleteDatabase String
+    | ConfirmDeleteDatabase String
+    | CancelDeleteDatabase
     | SetupDatabase String
 
 
-viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Html Msg
-viewDatabasesPage maybeDatabases loading error =
+viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Maybe String -> Html Msg
+viewDatabasesPage maybeDatabases loading error confirmingDelete =
     div [ class "databases-page", style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ div [ class "box", style "margin-bottom" "0", style "flex-shrink" "0" ]
             [ div [ class "level" ]
@@ -51,7 +53,7 @@ viewDatabasesPage maybeDatabases loading error =
                     ]
 
             ( False, Just dbList ) ->
-                viewDatabasesList dbList
+                viewDatabasesList dbList confirmingDelete
 
             ( False, Nothing ) ->
                 div [ class "notification is-warning", style "margin" "1rem" ]
@@ -59,8 +61,8 @@ viewDatabasesPage maybeDatabases loading error =
         ]
 
 
-viewDatabasesList : DatabaseList -> Html Msg
-viewDatabasesList dbList =
+viewDatabasesList : DatabaseList -> Maybe String -> Html Msg
+viewDatabasesList dbList confirmingDelete =
     let
         dbCount =
             List.length dbList.databases
@@ -76,23 +78,23 @@ viewDatabasesList dbList =
                 [ thead [ style "position" "sticky", style "top" "0", style "background-color" "white", style "z-index" "10" ]
                     [ tr []
                         [ th [ style "background-color" "white", style "width" "50px" ] [ text "" ]
+                        , th [ style "background-color" "white", style "width" "200px" ] [ text "Actions" ]
                         , th [ style "background-color" "white" ] [ text "Name" ]
                         , th [ style "background-color" "white" ] [ text "Description" ]
                         , th [ style "background-color" "white", style "width" "100px" ] [ text "Source" ]
                         , th [ style "background-color" "white", style "width" "120px" ] [ text "Format" ]
-                        , th [ style "background-color" "white", style "width" "200px" ] [ text "Actions" ]
                         ]
                     ]
                 , tbody []
-                    (List.map viewDatabaseRow dbList.databases)
+                    (List.map (viewDatabaseRow confirmingDelete) dbList.databases)
                 ]
               ]
             ]
         ]
 
 
-viewDatabaseRow : DatabaseStatus -> Html Msg
-viewDatabaseRow db =
+viewDatabaseRow : Maybe String -> DatabaseStatus -> Html Msg
+viewDatabaseRow confirmingDelete db =
     let
         isLoaded =
             db.loaded
@@ -128,6 +130,8 @@ viewDatabaseRow db =
         [ td [ style "text-align" "center", style "vertical-align" "middle" ]
             [ statusIndicator ]
         , td []
+            [ viewActionButtons db canLoad canUnload canDelete (confirmingDelete == Just db.name) ]
+        , td []
             [ text db.displayName ]
         , td [ class "has-text-grey" ]
             [ text (db.description |> Maybe.withDefault "") ]
@@ -140,13 +144,11 @@ viewDatabaseRow db =
             ]
         , td [ class "has-text-grey" ]
             [ text (db.format |> Maybe.withDefault "") ]
-        , td []
-            [ viewActionButtons db canLoad canUnload canDelete ]
         ]
 
 
-viewActionButtons : DatabaseStatus -> Bool -> Bool -> Bool -> Html Msg
-viewActionButtons db canLoad canUnload canDelete =
+viewActionButtons : DatabaseStatus -> Bool -> Bool -> Bool -> Bool -> Html Msg
+viewActionButtons db canLoad canUnload canDelete isConfirming =
     div [ class "buttons are-small" ]
         [ if canLoad then
             button
@@ -178,12 +180,28 @@ viewActionButtons db canLoad canUnload canDelete =
           else
             text ""
         , if canDelete then
-            button
-                [ class "button is-danger is-small is-outlined"
-                , stopPropagationOn "click" (Decode.succeed ( DeleteDatabase db.name, True ))
-                ]
-                [ span [ class "icon is-small" ] [ i [ class "fas fa-trash" ] [] ]
-                ]
+            if isConfirming then
+                span [ class "buttons are-small", style "display" "inline-flex" ]
+                    [ span [ class "has-text-danger", style "font-weight" "bold", style "margin-right" "0.25rem", style "line-height" "2em" ] [ text "Delete?" ]
+                    , button
+                        [ class "button is-danger is-small"
+                        , stopPropagationOn "click" (Decode.succeed ( DeleteDatabase db.name, True ))
+                        ]
+                        [ text "Yes" ]
+                    , button
+                        [ class "button is-light is-small"
+                        , stopPropagationOn "click" (Decode.succeed ( CancelDeleteDatabase, True ))
+                        ]
+                        [ text "No" ]
+                    ]
+
+            else
+                button
+                    [ class "button is-danger is-small is-outlined"
+                    , stopPropagationOn "click" (Decode.succeed ( ConfirmDeleteDatabase db.name, True ))
+                    ]
+                    [ span [ class "icon is-small" ] [ i [ class "fas fa-trash" ] [] ]
+                    ]
 
           else
             text ""
