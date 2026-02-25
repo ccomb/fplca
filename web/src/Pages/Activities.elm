@@ -232,35 +232,20 @@ update shared msg model =
             let
                 newQuery =
                     Maybe.withDefault "" flags.name
+
+                dbNowLoaded =
+                    Shared.isDatabaseLoaded shared flags.db
+
+                -- Re-init if DB just became available with a pending query
+                needsRetry =
+                    model.results == NotSearched && not (String.isEmpty newQuery) && dbNowLoaded
             in
-            if newQuery == model.searchQuery then
+            if newQuery == model.searchQuery && not needsRetry then
                 -- Flags from our own replaceUrl — ignore to preserve focus
                 ( model, Effect.none )
 
             else
-                -- External navigation (browser back/forward)
-                let
-                    dbLoaded =
-                        Shared.isDatabaseLoaded shared model.dbName
-
-                    shouldSearch =
-                        not (String.isEmpty newQuery) && dbLoaded
-                in
-                ( { model
-                    | searchQuery = newQuery
-                    , results =
-                        if shouldSearch then
-                            Searching
-
-                        else
-                            NotSearched
-                  }
-                , if shouldSearch then
-                    Effect.fromCmd (searchActivities model.dbName newQuery)
-
-                  else
-                    Effect.none
-                )
+                init shared flags
 
 
 view : Shared.Model -> Model -> View Msg

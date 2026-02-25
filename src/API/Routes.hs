@@ -44,15 +44,15 @@ import Network.HTTP.Types.Header (hSetCookie)
 type LCAAPI =
     "api"
         :> "v1"
-        :> ( "activity" :> Capture "processId" Text :> Get '[JSON] ActivityInfo
-                :<|> "activity" :> Capture "processId" Text :> "flows" :> Get '[JSON] [FlowSummary]
-                :<|> "activity" :> Capture "processId" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
-                :<|> "activity" :> Capture "processId" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
-                :<|> "activity" :> Capture "processId" Text :> "reference-product" :> Get '[JSON] FlowDetail
-                :<|> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
-                :<|> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
-                :<|> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
-                :<|> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
+        :> ( "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> Get '[JSON] ActivityInfo
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "flows" :> Get '[JSON] [FlowSummary]
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inputs" :> Get '[JSON] [ExchangeDetail]
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "outputs" :> Get '[JSON] [ExchangeDetail]
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "reference-product" :> Get '[JSON] FlowDetail
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
                 :<|> "flow" :> Capture "flowId" Text :> QueryParam "db" Text :> Get '[JSON] FlowDetail
                 :<|> "flow" :> Capture "flowId" Text :> "activities" :> QueryParam "db" Text :> Get '[JSON] [ActivitySummary]
                 :<|> "methods" :> Get '[JSON] [MethodSummary]
@@ -61,7 +61,7 @@ type LCAAPI =
                 :<|> "method" :> Capture "methodId" Text :> "mapping" :> QueryParam "db" Text :> Get '[JSON] MappingStatus
                 :<|> "search" :> "flows" :> QueryParam "db" Text :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "search" :> "activities" :> QueryParam "db" Text :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
-                :<|> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
+                :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
                 :<|> "databases" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
@@ -89,18 +89,6 @@ requireDatabaseByName dbManager dbName = do
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
         Nothing -> throwError err404{errBody = "Database not loaded: " <> BSL.fromStrict (T.encodeUtf8 dbName)}
-
--- | Get database for a processId, searching all loaded databases
-requireDatabaseForProcessId :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
-requireDatabaseForProcessId dbManager processIdText = do
-    allDbs <- liftIO $ readTVarIO (dmLoadedDbs dbManager)
-    case [ld | ld <- M.elems allDbs, isValidProcessId (ldDatabase ld)] of
-        (ld:_) -> return (ldDatabase ld, ldSharedSolver ld)
-        [] -> throwError err404{errBody = "No loaded database contains process: " <> BSL.fromStrict (T.encodeUtf8 processIdText)}
-  where
-    isValidProcessId db = case parseProcessId db processIdText of
-        Just _  -> True
-        Nothing -> False
 
 -- | Get database from explicit db query param, falling back to first loaded database
 requireDatabaseByParam :: DatabaseManager -> Maybe Text -> Handler (Database, SharedSolver)
@@ -202,9 +190,9 @@ lcaServer dbManager maxTreeDepth methodsDir password =
                     throwError err401{errBody = "{\"error\":\"invalid code\"}"}
 
     -- Core activity endpoint - streamlined data
-    getActivityInfo :: Text -> Handler ActivityInfo
-    getActivityInfo processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityInfo :: Text -> Text -> Handler ActivityInfo
+    getActivityInfo dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         let unitCfg = dmUnitConfig dbManager
         case Service.getActivityInfo unitCfg db processId of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -214,39 +202,39 @@ lcaServer dbManager maxTreeDepth methodsDir password =
                 Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
 
     -- Activity flows sub-resource
-    getActivityFlows :: Text -> Handler [FlowSummary]
-    getActivityFlows processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityFlows :: Text -> Text -> Handler [FlowSummary]
+    getActivityFlows dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
-    getActivityInputs :: Text -> Handler [ExchangeDetail]
-    getActivityInputs processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityInputs :: Text -> Text -> Handler [ExchangeDetail]
+    getActivityInputs dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
-    getActivityOutputs :: Text -> Handler [ExchangeDetail]
-    getActivityOutputs processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityOutputs :: Text -> Text -> Handler [ExchangeDetail]
+    getActivityOutputs dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
-    getActivityReferenceProduct :: Text -> Handler FlowDetail
-    getActivityReferenceProduct processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityReferenceProduct :: Text -> Text -> Handler FlowDetail
+    getActivityReferenceProduct dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \activity -> do
             case Service.getActivityReferenceProductDetail db activity of
                 Nothing -> throwError err404{errBody = "No reference product found"}
                 Just refProduct -> return refProduct
 
     -- Activity tree export for visualization (configurable depth)
-    getActivityTree :: Text -> Handler TreeExport
-    getActivityTree processId = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    getActivityTree :: Text -> Text -> Handler TreeExport
+    getActivityTree dbName processId = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \activity -> do
             -- Use CLI --tree-depth option for configurable depth
             -- Default depth limit prevents DOS attacks via deep tree requests
@@ -261,9 +249,9 @@ lcaServer dbManager maxTreeDepth methodsDir password =
                     return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
-    getActivityInventory :: Text -> Handler InventoryExport
-    getActivityInventory processId = do
-        (db, sharedSolver) <- requireDatabaseForProcessId dbManager processId
+    getActivityInventory :: Text -> Text -> Handler InventoryExport
+    getActivityInventory dbName processId = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         result <- liftIO $ Service.getActivityInventoryWithSharedSolver sharedSolver db processId
         case result of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -272,9 +260,9 @@ lcaServer dbManager maxTreeDepth methodsDir password =
             Right inventoryExport -> return inventoryExport
 
     -- Activity graph endpoint for network visualization
-    getActivityGraph :: Text -> Maybe Double -> Handler GraphExport
-    getActivityGraph processId maybeCutoff = do
-        (db, sharedSolver) <- requireDatabaseForProcessId dbManager processId
+    getActivityGraph :: Text -> Text -> Maybe Double -> Handler GraphExport
+    getActivityGraph dbName processId maybeCutoff = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         let cutoffPercent = fromMaybe 1.0 maybeCutoff  -- Default to 1% cutoff
         result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
         case result of
@@ -285,9 +273,9 @@ lcaServer dbManager maxTreeDepth methodsDir password =
             Right graphExport -> return graphExport
 
     -- Activity LCIA endpoint
-    getActivityLCIA :: Text -> Text -> Handler LCIAResult
-    getActivityLCIA processIdText methodIdText = do
-        (db, _) <- requireDatabaseForProcessId dbManager processIdText
+    getActivityLCIA :: Text -> Text -> Text -> Handler LCIAResult
+    getActivityLCIA dbName processIdText methodIdText = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         -- Load the method
         method <- loadMethodByUUID methodIdText
 
@@ -467,9 +455,9 @@ lcaServer dbManager maxTreeDepth methodsDir password =
                 Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
 
     -- LCIA computation
-    postLCIA :: Text -> LCIARequest -> Handler Value
-    postLCIA processId lciaReq = do
-        (db, _) <- requireDatabaseForProcessId dbManager processId
+    postLCIA :: Text -> Text -> LCIARequest -> Handler Value
+    postLCIA dbName processId lciaReq = do
+        (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedActivity db processId $ \_ -> do
             -- This would implement LCIA computation with the provided method
             -- For now, return a placeholder

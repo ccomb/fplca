@@ -7,7 +7,8 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityInfo, activityInfoDecoder)
+import Api
+import Models.Activity exposing (ActivityInfo)
 import Route
 import Shared exposing (RemoteData(..))
 import Spa.Page
@@ -72,7 +73,7 @@ init shared ( db, activityId ) =
                 Effect.none
 
             Nothing ->
-                Effect.fromCmd (loadActivityInfo activityId)
+                Effect.fromCmd (Api.loadActivityInfo ActivityInfoLoaded db activityId)
         )
 
 
@@ -114,11 +115,7 @@ update shared msg model =
             )
 
         NewFlags flags ->
-            if flags == ( model.dbName, model.activityId ) then
-                ( model, Effect.none )
-
-            else
-                init shared flags
+            init shared flags
 
 
 view : Shared.Model -> Model -> View Msg
@@ -157,11 +154,3 @@ viewBody shared model =
                 NotAsked ->
                     text ""
             ]
-
-
-loadActivityInfo : String -> Cmd Msg
-loadActivityInfo activityId =
-    Http.get
-        { url = "/api/v1/activity/" ++ activityId
-        , expect = Http.expectJson ActivityInfoLoaded activityInfoDecoder
-        }

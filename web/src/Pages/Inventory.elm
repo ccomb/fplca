@@ -7,7 +7,8 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityInfo, activityInfoDecoder)
+import Api
+import Models.Activity exposing (ActivityInfo)
 import Models.Inventory exposing (InventoryExport, inventoryExportDecoder)
 import Route
 import Shared exposing (RemoteData(..))
@@ -93,13 +94,13 @@ init shared ( db, activityId ) =
                     Effect.none
 
                 Nothing ->
-                    Effect.fromCmd (loadActivityInfo activityId)
+                    Effect.fromCmd (Api.loadActivityInfo ActivityInfoLoaded db activityId)
             , case cachedInventory of
                 Just _ ->
                     Effect.none
 
                 Nothing ->
-                    Effect.fromCmd (loadInventory activityId)
+                    Effect.fromCmd (loadInventory db activityId)
             ]
         )
 
@@ -146,11 +147,7 @@ update shared msg model =
             )
 
         NewFlags flags ->
-            if flags == ( model.dbName, model.activityId ) then
-                ( model, Effect.none )
-
-            else
-                init shared flags
+            init shared flags
 
 
 view : Shared.Model -> Model -> View Msg
@@ -222,17 +219,9 @@ viewBody shared model =
 -- HTTP
 
 
-loadActivityInfo : String -> Cmd Msg
-loadActivityInfo activityId =
+loadInventory : String -> String -> Cmd Msg
+loadInventory dbName activityId =
     Http.get
-        { url = "/api/v1/activity/" ++ activityId
-        , expect = Http.expectJson ActivityInfoLoaded activityInfoDecoder
-        }
-
-
-loadInventory : String -> Cmd Msg
-loadInventory activityId =
-    Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/inventory"
+        { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/inventory"
         , expect = Http.expectJson InventoryLoaded inventoryExportDecoder
         }

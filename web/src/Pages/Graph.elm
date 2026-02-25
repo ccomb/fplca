@@ -7,7 +7,8 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityTree, activityTreeDecoder)
+import Api
+import Models.Activity exposing (ActivityTree)
 import Models.Graph exposing (GraphData, graphDataDecoder)
 import Route
 import Shared exposing (RemoteData(..))
@@ -85,12 +86,12 @@ init shared ( db, activityId ) =
             Nothing ->
                 let
                     graphCmd =
-                        Effect.fromCmd (loadGraphData activityId 1.0)
+                        Effect.fromCmd (loadGraphData db activityId 1.0)
 
                     treeCmd =
                         case Dict.get activityId shared.cachedTrees of
                             Nothing ->
-                                Effect.fromCmd (loadActivityTree activityId)
+                                Effect.fromCmd (Api.loadActivityTree TreeLoaded db activityId)
 
                             Just _ ->
                                 Effect.none
@@ -139,7 +140,7 @@ update shared msg model =
                     String.toFloat model.cutoffInput |> Maybe.withDefault 1.0
             in
             ( { model | graphState = GraphLoading }
-            , Effect.fromCmd (loadGraphData model.activityId cutoff)
+            , Effect.fromCmd (loadGraphData model.dbName model.activityId cutoff)
             )
 
         RequestLoadDatabase ->
@@ -148,11 +149,7 @@ update shared msg model =
             )
 
         NewFlags flags ->
-            if flags == ( model.dbName, model.activityId ) then
-                ( model, Effect.none )
-
-            else
-                init shared flags
+            init shared flags
 
 
 subscriptions : Model -> Sub Msg
@@ -282,17 +279,9 @@ viewPageNavbar title maybeActivity =
         ]
 
 
-loadGraphData : String -> Float -> Cmd Msg
-loadGraphData activityId cutoff =
+loadGraphData : String -> String -> Float -> Cmd Msg
+loadGraphData dbName activityId cutoff =
     Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/graph?cutoff=" ++ String.fromFloat cutoff
+        { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/graph?cutoff=" ++ String.fromFloat cutoff
         , expect = Http.expectJson GraphLoaded graphDataDecoder
-        }
-
-
-loadActivityTree : String -> Cmd Msg
-loadActivityTree activityId =
-    Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/tree"
-        , expect = Http.expectJson TreeLoaded activityTreeDecoder
         }

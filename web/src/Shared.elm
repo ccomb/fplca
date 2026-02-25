@@ -225,14 +225,25 @@ update msg model =
 
                     else
                         Cmd.none
+
+                -- Databases that are now confirmed loaded — remove from loading set
+                stillLoading =
+                    Set.filter
+                        (\name -> not (List.any (\db -> db.name == name && db.loaded) dbList.databases))
+                        model.loadingDatabases
+
+                -- Trigger page re-init on initial load or when a database just finished loading
+                shouldReloadPage =
+                    isInitialLoad || Set.size stillLoading < Set.size model.loadingDatabases
             in
             ( { model
                 | databases = Loaded dbList
                 , authState = Authenticated
+                , loadingDatabases = stillLoading
               }
             , Cmd.batch
                 [ cmd
-                , if isInitialLoad then
+                , if shouldReloadPage then
                     Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
 
                   else
@@ -243,12 +254,12 @@ update msg model =
         DatabasesLoaded (Err error) ->
             case error of
                 Http.BadStatus 401 ->
-                    ( { model | authState = NeedsAuth { code = "", error = Nothing } }
+                    ( { model | authState = NeedsAuth { code = "", error = Nothing }, loadingDatabases = Set.empty }
                     , Cmd.none
                     )
 
                 _ ->
-                    ( { model | databases = Failed (httpErrorToString error) }
+                    ( { model | databases = Failed (httpErrorToString error), loadingDatabases = Set.empty }
                     , Cmd.none
                     )
 
@@ -260,17 +271,15 @@ update msg model =
         LoadDatabaseResult dbName (Ok response) ->
             case response of
                 LoadSucceeded _ _ ->
+                    -- Keep dbName in loadingDatabases — DatabasesLoaded will clear it
+                    -- once the refreshed list confirms it's loaded
                     ( { model
                         | cachedTrees = Dict.empty
                         , cachedActivityInfo = Dict.empty
                         , cachedInventories = Dict.empty
                         , cachedGraphs = Dict.empty
-                        , loadingDatabases = Set.remove dbName model.loadingDatabases
                       }
-                    , Cmd.batch
-                        [ loadDatabases
-                        , Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
-                        ]
+                    , loadDatabases
                     )
 
                 LoadFailed _ ->

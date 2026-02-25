@@ -6,7 +6,8 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityInfo, activityInfoDecoder)
+import Api
+import Models.Activity exposing (ActivityInfo)
 import Models.LCIA exposing (LCIAResult, MappingStatus, MethodSummary, lciaResultDecoder, mappingStatusDecoder, methodsListDecoder)
 import Shared exposing (RemoteData(..))
 import Spa.Page
@@ -84,7 +85,7 @@ init shared ( db, activityId ) =
                     Effect.none
 
                 Nothing ->
-                    Effect.fromCmd (loadActivityInfo activityId)
+                    Effect.fromCmd (Api.loadActivityInfo ActivityInfoLoaded db activityId)
             ]
         )
 
@@ -165,8 +166,8 @@ update shared msg model =
                                         , mappingStatus = Loading
                                       }
                                     , Effect.batch
-                                        [ Effect.fromCmd (computeLCIA model.activityId methodId)
-                                        , Effect.fromCmd (loadMappingStatus model.activityId methodId)
+                                        [ Effect.fromCmd (computeLCIA model.dbName model.activityId methodId)
+                                        , Effect.fromCmd (loadMappingStatus model.dbName methodId)
                                         ]
                                     )
 
@@ -230,11 +231,7 @@ update shared msg model =
             )
 
         NewFlags flags ->
-            if flags == ( model.dbName, model.activityId ) then
-                ( model, Effect.none )
-
-            else
-                init shared flags
+            init shared flags
 
 
 view : Shared.Model -> Model -> View Msg
@@ -371,25 +368,17 @@ loadMethods =
         }
 
 
-loadActivityInfo : String -> Cmd Msg
-loadActivityInfo activityId =
+computeLCIA : String -> String -> String -> Cmd Msg
+computeLCIA dbName activityId methodId =
     Http.get
-        { url = "/api/v1/activity/" ++ activityId
-        , expect = Http.expectJson ActivityInfoLoaded activityInfoDecoder
-        }
-
-
-computeLCIA : String -> String -> Cmd Msg
-computeLCIA activityId methodId =
-    Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/lcia/" ++ methodId
+        { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/lcia/" ++ methodId
         , expect = Http.expectJson LCIAResultLoaded lciaResultDecoder
         }
 
 
 loadMappingStatus : String -> String -> Cmd Msg
-loadMappingStatus activityId methodId =
+loadMappingStatus dbName methodId =
     Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/lcia/" ++ methodId ++ "/mapping"
+        { url = "/api/v1/method/" ++ methodId ++ "/mapping?db=" ++ dbName
         , expect = Http.expectJson MappingStatusLoaded mappingStatusDecoder
         }

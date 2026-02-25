@@ -7,7 +7,8 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
-import Models.Activity exposing (ActivityTree, activityTreeDecoder)
+import Api
+import Models.Activity exposing (ActivityTree)
 import Route
 import Shared exposing (RemoteData(..))
 import Spa.Page
@@ -83,7 +84,7 @@ init shared ( db, activityId ) =
                 Effect.none
 
             Nothing ->
-                Effect.fromCmd (loadActivityTree activityId)
+                Effect.fromCmd (Api.loadActivityTree TreeLoaded db activityId)
         )
 
 
@@ -168,11 +169,7 @@ update shared msg model =
             )
 
         NewFlags flags ->
-            if flags == ( model.dbName, model.activityId ) then
-                ( model, Effect.none )
-
-            else
-                init shared flags
+            init shared flags
 
 
 subscriptions : Model -> Sub Msg
@@ -286,11 +283,3 @@ viewPageNavbar title maybeActivity =
                 )
             ]
         ]
-
-
-loadActivityTree : String -> Cmd Msg
-loadActivityTree activityId =
-    Http.get
-        { url = "/api/v1/activity/" ++ activityId ++ "/tree"
-        , expect = Http.expectJson TreeLoaded activityTreeDecoder
-        }
