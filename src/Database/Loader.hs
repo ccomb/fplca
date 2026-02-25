@@ -61,7 +61,7 @@ import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
 import Data.Hashable (hash)
-import Data.List (sortBy, group, sort, unzip5)
+import Data.List (sortBy, group, sort, unzip7)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
@@ -119,7 +119,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 1
+     in hi `xor` lo `xor` 2
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -161,6 +161,9 @@ Maps normalizedProductName → (activityUUID, productUUID, location)
 Used when exchange has no location attribute to find the activity's actual location
 -}
 type SupplierByNameWithLocation = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
+
+-- | Dataset number → (activityUUID, productUUID) for EcoSpold1 Tier 1 linking
+type DatasetNumberIndex = M.Map Int (UUID.UUID, UUID.UUID)
 
 -- | Information about an unlinked technosphere exchange
 data UnlinkedExchange = UnlinkedExchange
@@ -282,21 +285,22 @@ Matches input exchanges to suppliers by (flowName, location).
 Unlinked exchanges stay unlinked so that cross-DB linking can resolve them.
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 -}
-fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> SimpleDatabase -> IO SimpleDatabase
-fixEcoSpold1ActivityLinks locationAliases db = do
+fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> IO SimpleDatabase
+fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
     -- Build supplier index
     let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)
     -- Build name-only index with location for exchanges missing location attribute
     let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbFlows db)
     reportProgress Info $
         printf
-            "Built supplier index with %d entries for activity linking (%d location aliases, %d name-only entries)"
+            "Built supplier index with %d entries for activity linking (%d location aliases, %d name-only entries, %d dataset-number entries)"
             (M.size supplierIndex)
             (M.size locationAliases)
             (M.size nameIndex)
+            (M.size dsIndex)
 
     -- Count and report statistics
-    let (fixedActivities, summary) = fixAllActivities locationAliases supplierIndex nameIndex (sdbFlows db) (sdbActivities db)
+    let (fixedActivities, summary) = fixAllActivities locationAliases supplierIndex nameIndex dsIndex supplierLinks (sdbFlows db) (sdbActivities db)
 
     reportProgress Info $
         printf
@@ -312,18 +316,18 @@ fixEcoSpold1ActivityLinks locationAliases db = do
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities and return statistics with unlinked summary
-fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
-fixAllActivities locationAliases idx nameIdx flowDb activities =
-    let results = M.map (fixActivityExchanges locationAliases idx nameIdx flowDb) activities
+fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
+fixAllActivities locationAliases idx nameIdx dsIndex supplierLinks flowDb activities =
+    let results = M.map (fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb) activities
         summaries = map snd $ M.elems results
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
 -- | Fix activity exchanges and return (fixed activity, UnlinkedSummary)
-fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
-fixActivityExchanges locationAliases idx nameIdx flowDb act =
-    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink locationAliases idx nameIdx flowDb (activityName act)) (exchanges act)
+fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
+fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb act =
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb (activityName act)) (exchanges act)
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
@@ -332,8 +336,8 @@ fixActivityExchanges locationAliases idx nameIdx flowDb act =
 Unlinked exchanges stay unlinked for cross-DB resolution.
 Returns (fixed exchange, UnlinkedSummary)
 -}
-fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLink locationAliases idx nameIdx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
+fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
     | isInp =
         let linked actUUID prodUUID = (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
             unlinked flow lookupLoc =
@@ -341,21 +345,29 @@ fixExchangeLink locationAliases idx nameIdx flowDb consumerName ex@(Technosphere
                 in (ex, UnlinkedSummary (M.singleton consumerName [ue]) 1 0 1)
         in case M.lookup fid flowDb of
             Just flow ->
-                let normalizedLoc = fromMaybe loc (M.lookup loc locationAliases)
-                    lookupLoc
-                        | T.null normalizedLoc =
-                            case M.lookup (normalizeText (flowName flow)) nameIdx of
-                                Just (_, _, actLoc) -> actLoc
-                                Nothing -> normalizedLoc
-                        | otherwise = normalizedLoc
-                    key = (normalizeText (flowName flow), lookupLoc)
-                in case M.lookup key idx of
-                    Just (actUUID, prodUUID) -> linked actUUID prodUUID
-                    Nothing -> unlinked flow lookupLoc
+                -- Tier 1: dataset-number lookup with name validation
+                case M.lookup fid supplierLinks >>= \dsNum -> M.lookup dsNum dsIndex of
+                    Just (actUUID, prodUUID)
+                        | Just supplierFlow <- M.lookup prodUUID flowDb
+                        , normalizeText (flowName supplierFlow) == normalizeText (flowName flow)
+                        -> linked actUUID prodUUID
+                    _ ->
+                        -- Tier 2: name + location lookup
+                        let normalizedLoc = fromMaybe loc (M.lookup loc locationAliases)
+                            lookupLoc
+                                | T.null normalizedLoc =
+                                    case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                        Just (_, _, actLoc) -> actLoc
+                                        Nothing -> normalizedLoc
+                                | otherwise = normalizedLoc
+                            key = (normalizeText (flowName flow), lookupLoc)
+                        in case M.lookup key idx of
+                            Just (actUUID, prodUUID) -> linked actUUID prodUUID
+                            Nothing -> unlinked flow lookupLoc
             Nothing ->
                 (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, emptyUnlinkedSummary)
-fixExchangeLink _ _ _ _ _ ex = (ex, emptyUnlinkedSummary)
+fixExchangeLink _ _ _ _ _ _ _ ex = (ex, emptyUnlinkedSummary)
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -539,10 +551,12 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr:_) -> return $ Left firstErr
             [] -> do
                 let successResults = [r | Right r <- results]
-                let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts) = unzip5 successResults
+                let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip7 successResults
                 let !finalProcMap = M.unions procMaps
                 let !finalFlowMap = M.unions flowMaps
                 let !finalUnitMap = M.unions unitMaps
+                let !finalDsIndex = M.unions dsIndexes
+                let !finalSupplierLinks = M.unions supplierLinksLists
 
                 endTime <- getCurrentTime
                 let totalDuration = realToFrac $ diffUTCTime endTime startTime
@@ -572,7 +586,7 @@ loadEcoSpoldDirectory locationAliases dir = do
                 -- For EcoSpold1: fix activity links using supplier lookup table
                 let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
                 if isEcoSpold1
-                    then Right <$> fixEcoSpold1ActivityLinks locationAliases simpleDb
+                    then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex finalSupplierLinks simpleDb
                     else return $ Right simpleDb
 
     -- Distribute files evenly among N workers
@@ -590,7 +604,7 @@ loadEcoSpoldDirectory locationAliases dir = do
         distribute (s : ss) items = take s items : distribute ss (drop s items)
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, FlowDB, UnitDB, Int, Int))
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, FlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
     processWorker startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
@@ -612,6 +626,8 @@ loadEcoSpoldDirectory locationAliases dir = do
         let procs     = [a  | (a,_,_,_,_) <- okResults]
             flowLists = [fs | (_,fs,_,_,_) <- okResults]
             unitLists = [us | (_,_,us,_,_) <- okResults]
+            dsNums    = [n  | (_,_,_,n,_) <- okResults]
+            supplierLinksList = [sl | (_,_,_,_,sl) <- okResults]
         let !allFlows = concat flowLists
         let !allUnits = concat unitLists
 
@@ -627,6 +643,10 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let !procMap = M.fromList [e | Right e <- procEntries]
                 let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
+                -- Build dataset number index: dsNum → (actUUID, prodUUID)
+                let !dsIndex = M.fromList
+                        [ (n, key) | (n, Right (key, _)) <- zip dsNums procEntries, n /= 0 ]
+                let !allSupplierLinks = M.unions supplierLinksList
 
                 workerEndTime <- getCurrentTime
                 let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
@@ -642,7 +662,7 @@ loadEcoSpoldDirectory locationAliases dir = do
                         (formatDuration workerDuration)
                         filesPerSec
 
-                return $ Right (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount)
+                return $ Right (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
@@ -674,6 +694,11 @@ loadSingleEcoSpold1File locationAliases filepath = do
         !procMap = M.fromList [(key, act) | (key, act) <- expanded]
         !flowMap = M.fromList [(flowId f, f) | (_, flows, _, _, _) <- results, f <- flows]
         !unitMap = M.fromList [(unitId u, u) | (_, _, units, _, _) <- results, u <- units]
+        -- Build dataset number index: dsNum → (actUUID, prodUUID)
+        !dsIndex = M.fromList
+            [ (dsNum, key) | ((_, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0 ]
+        -- Merge supplier links from all datasets
+        !supplierLinks = M.unions [sl | (_, _, _, _, sl) <- results]
         simpleDb = SimpleDatabase procMap flowMap unitMap
 
     -- Report statistics
@@ -684,7 +709,7 @@ loadSingleEcoSpold1File locationAliases filepath = do
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
     -- Fix activity links using supplier lookup
-    Right <$> fixEcoSpold1ActivityLinks locationAliases simpleDb
+    Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
     buildProcEntryFromResult :: (Activity, [Flow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
     buildProcEntryFromResult (activity, _, _, _, _) =
