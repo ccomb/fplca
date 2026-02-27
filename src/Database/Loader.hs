@@ -1241,18 +1241,19 @@ reportCrossDBLinkingStats nActivities stats = do
         !nUnresolved = unresolvedCount stats
         !nInternal = max 0 (nInputs - nCrossDB - nUnresolved)
         !nResolved = nInternal + nCrossDB
-        !completeness = if nInputs > 0
-            then 100.0 * fromIntegral nResolved / fromIntegral nInputs
-            else 100.0 :: Double
 
-    -- Summary line
-    reportProgress Info $
-        printf "Supply chain: %.1f%% complete (%d/%d inputs resolved), %d activities"
-            completeness nResolved nInputs nActivities
-
-    -- Link breakdown
-    reportProgress Info $
-        printf "  Internal: %d, Cross-DB: %d, Unresolved: %d" nInternal nCrossDB nUnresolved
+    -- Summary line (skip "0/0" for databases without technosphere input tracking)
+    if nInputs > 0
+        then do
+            let !completeness = 100.0 * fromIntegral nResolved / fromIntegral nInputs :: Double
+            reportProgress Info $
+                printf "Supply chain: %.1f%% complete (%d/%d inputs resolved), %d activities"
+                    completeness nResolved nInputs nActivities
+            reportProgress Info $
+                printf "  Internal: %d, Cross-DB: %d, Unresolved: %d" nInternal nCrossDB nUnresolved
+        else
+            reportProgress Info $
+                printf "Supply chain: %d activities (no technosphere inputs)" nActivities
 
     -- Per-database breakdown
     forM_ (M.toList (crossDBBySource stats)) $ \(srcDb, count) ->
@@ -1277,14 +1278,19 @@ reportCrossDBLinkingStats nActivities stats = do
         reportProgress Warning $
             printf "Unknown units: %s" (T.unpack $ T.intercalate ", " unknowns)
 
-    -- Location fallbacks
-    let !fallbacks = cdlLocationFallbacks stats
-    when (not (null fallbacks)) $ do
+    -- Location fallbacks (deduplicated, capped)
+    let !uniqueFallbacks = M.toList $ M.fromListWith (\_ b -> b) -- dedup by (product, requested)
+            [((product, requested), actual) | (product, requested, actual) <- cdlLocationFallbacks stats]
+        !nFallbacks = length uniqueFallbacks
+    when (nFallbacks > 0) $ do
         reportProgress Info $
-            printf "Location fallbacks: %d products matched with different location" (length fallbacks)
-        forM_ fallbacks $ \(product, requested, actual) ->
+            printf "Location fallbacks: %d unique products matched with different location" nFallbacks
+        forM_ (take 20 uniqueFallbacks) $ \((product, requested), actual) ->
             reportProgress Info $
                 printf "  - %s: %s → %s" (T.unpack product) (T.unpack requested) (T.unpack actual)
+        when (nFallbacks > 20) $
+            reportProgress Info $
+                printf "  ... and %d more" (nFallbacks - 20)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"
