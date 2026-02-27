@@ -50,7 +50,7 @@ module Database.CrossLinking
     , normalizeUnicode
     ) where
 
-import Data.Char (isUpper, isAlpha)
+import Data.Char (isUpper, isAlpha, isDigit)
 import Data.List (maximumBy)
 import Data.Maybe (mapMaybe, fromMaybe)
 import qualified Data.Map.Strict as M
@@ -209,16 +209,20 @@ extractProductPrefixes name =
     in separatorPrefixes ++ tagStripped ++ locationSuffixStripped
 
 -- | Extract a location code from any bracket pattern in a name.
--- Looks for [XX] first, then {XX}. Returns the content of the first match,
--- or empty text if no brackets found.
+-- Tries {XX} first (standard LCA geography notation), then [XX] with
+-- validation to avoid chemical notation like [thio] or metadata like [Dummy].
 extractBracketedLocation :: Text -> Text
 extractBracketedLocation name =
-    case extractFromBrackets '[' ']' name of
+    case extractFromBrackets '{' '}' name of
         Just loc | not (T.null loc) -> loc
-        _ -> case extractFromBrackets '{' '}' name of
-            Just loc -> loc
-            Nothing  -> ""
+        _ -> case extractFromBrackets '[' ']' name of
+            Just loc | looksLikeGeo loc -> loc
+            _ -> ""
   where
+    -- Accept only short uppercase codes (e.g. "GLO", "FR", "RER", "RoW")
+    looksLikeGeo t =
+        T.length t >= 2 && T.length t <= 5
+        && T.all (\c -> isUpper c || isDigit c) t
     extractFromBrackets :: Char -> Char -> Text -> Maybe Text
     extractFromBrackets open close txt =
         let (_, afterOpen) = T.breakOn (T.singleton open) txt
@@ -358,8 +362,8 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                         !best = maximumBy (comparing cdbScore) scoredCandidates
                     in if cdbScore best >= lcThreshold
                         then
-                            -- Build warnings
-                            let warnings = buildWarnings effectiveLocation (cdbLocation best)
+                            -- Build warnings (only when original location was explicit)
+                            let warnings = if T.null location then [] else buildWarnings effectiveLocation (cdbLocation best)
                             in CrossDBLinked (cdbActivityUUID best) (cdbProductUUID best)
                                             (cdbDatabaseName best) (cdbScore best)
                                             (cdbProductName best) (cdbLocation best) warnings

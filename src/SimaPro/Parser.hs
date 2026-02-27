@@ -24,7 +24,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Csv as Csv
-import Data.Char (toLower)
+import Data.Char (isUpper, toLower)
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -492,6 +492,7 @@ generateUnitUUID unitName =
 
 -- | Extract location from SimaPro-style names
 -- Handles: "Name {FR}", "Name {Europe without Switzerland}| market for...", etc.
+-- Also handles WFLDB-style "/XX" suffix (e.g. "Ammonium nitrate .../CN").
 -- In SimaPro format, curly braces always denote geography.
 extractLocation :: Text -> (Text, Text)
 extractLocation name =
@@ -504,7 +505,20 @@ extractLocation name =
                        then (T.strip name, cleanLoc)
                        else (name, "")
                 _ -> (name, "")
-        _ -> (name, "")
+        _ -> -- No {XX} found — try WFLDB-style /XX suffix
+            case extractSlashLocation name of
+                Just loc -> (T.strip name, loc)
+                Nothing  -> (name, "")
+  where
+    -- Extract a trailing /XX location code from WFLDB-style names like
+    -- "Product (WFLDB)/CN U" or "Product (WFLDB)/RNA S"
+    -- Takes the first word after the last slash (ignoring trailing unit marker)
+    extractSlashLocation n =
+        case T.breakOnEnd "/" n of
+            ("", _) -> Nothing  -- no slash
+            (_, suffix) -> case T.words (T.strip suffix) of
+                (loc:_) | T.length loc >= 2, T.length loc <= 3, T.all isUpper loc -> Just loc
+                _ -> Nothing
 
 -- | Convert ProcessBlock to list of Activities (one per product)
 -- This matches EcoSpold behavior where multi-product processes create multiple activities
