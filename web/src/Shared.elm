@@ -73,6 +73,7 @@ type alias Model =
     , cachedGraphs : Dict String GraphData
     , loadingDatabases : Set String
     , authState : AuthState
+    , activityStack : List ( String, String )
     }
 
 
@@ -94,6 +95,8 @@ type Msg
     | CacheGraph String GraphData
     | ToggleMenu
     | CloseMenu
+    | PushActivity String String
+    | NavigateBackToParent
     | UpdateAuthCode String
     | SubmitAuthCode
     | AuthResult (Result Http.Error ())
@@ -119,6 +122,7 @@ init flags key =
       , cachedGraphs = Dict.empty
       , loadingDatabases = Set.empty
       , authState = AuthChecking
+      , activityStack = []
       }
     , loadDatabases
     )
@@ -332,6 +336,35 @@ update msg model =
 
         CloseMenu ->
             ( { model | menuOpen = False }, Cmd.none )
+
+        PushActivity dbName activityId ->
+            ( { model | activityStack = ( dbName, activityId ) :: model.activityStack }
+            , Cmd.none
+            )
+
+        NavigateBackToParent ->
+            case model.activityStack of
+                ( dbName, activityId ) :: rest ->
+                    ( { model | activityStack = rest }
+                    , Nav.pushUrl model.key (Route.routeToUrl (Route.withActivity dbName activityId model.currentRoute))
+                    )
+
+                [] ->
+                    let
+                        activitiesRoute =
+                            case model.lastActivitiesRoute of
+                                Just flags ->
+                                    ActivitiesRoute flags
+
+                                Nothing ->
+                                    case Route.routeToDatabase model.currentRoute of
+                                        Just db ->
+                                            ActivitiesRoute { db = db, name = Nothing, limit = Just 20 }
+
+                                        Nothing ->
+                                            DatabasesRoute
+                    in
+                    ( model, Nav.pushUrl model.key (Route.routeToUrl activitiesRoute) )
 
         UpdateAuthCode code ->
             case model.authState of
