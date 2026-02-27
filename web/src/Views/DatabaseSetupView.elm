@@ -212,16 +212,9 @@ viewCompletenessCard setupInfo =
                     floor setupInfo.completeness
 
                 decimal =
-                    round ((setupInfo.completeness - toFloat whole) * 10)
-
-                ( adjustedWhole, adjustedDecimal ) =
-                    if decimal >= 10 then
-                        ( whole + 1, 0 )
-
-                    else
-                        ( whole, decimal )
+                    floor ((setupInfo.completeness - toFloat whole) * 10)
             in
-            String.fromInt adjustedWhole ++ "," ++ String.fromInt adjustedDecimal ++ "%"
+            String.fromInt whole ++ "," ++ String.fromInt decimal ++ "%"
 
         progressValue =
             floor setupInfo.completeness
