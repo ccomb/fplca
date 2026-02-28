@@ -70,7 +70,7 @@ import SharedSolver (SharedSolver, createSharedSolver)
 import Progress (reportProgress, reportProgressWithTiming, reportError, ProgressLevel(..))
 import Database (buildDatabaseWithMatrices)
 import SynonymDB (SynonymDB)
-import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), emptyCrossDBLinkingStats, crossDBLinksCount, crossDBBySource, unresolvedCount, LinkBlocker(..))
+import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), emptyCrossDBLinkingStats, crossDBLinksCount, crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
 import qualified UnitConversion as UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -1157,7 +1157,7 @@ buildStagedSetupInfo staged configs indexedDbs =
         , dsiSuggestions = suggestions
         , dsiIsReady = isReady
         , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
-        , dsiLocationFallbacks = cdlLocationFallbacks stats
+        , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
         , dsiDataPath = T.pack (dcPath (sdConfig staged))
         , dsiAvailablePaths = []  -- Filled in by buildSetupResult (requires IO)
         , dsiIsLoaded = False
@@ -1197,7 +1197,7 @@ buildLoadedSetupInfo config db =
         , dsiSuggestions = []  -- No suggestions for loaded databases
         , dsiIsReady = True
         , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
-        , dsiLocationFallbacks = cdlLocationFallbacks stats
+        , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
         , dsiDataPath = T.pack (dcPath config)
         , dsiAvailablePaths = []  -- No picker for loaded/configured databases
         , dsiIsLoaded = True

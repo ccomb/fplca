@@ -629,6 +629,12 @@ mergeCrossDBStats s1 s2 = CrossDBLinkingStats
   where
     mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
+-- | Deduplicate location fallbacks by (product, requestedLoc)
+deduplicateFallbacks :: [(Text, Text, Text)] -> [(Text, Text, Text)]
+deduplicateFallbacks = map (\((p, r), a) -> (p, r, a))
+    . M.toList . M.fromListWith (\_ b -> b)
+    . map (\(p, r, a) -> ((p, r), a))
+
 -- | Number of resolved cross-DB links
 crossDBLinksCount :: CrossDBLinkingStats -> Int
 crossDBLinksCount = length . cdlLinks

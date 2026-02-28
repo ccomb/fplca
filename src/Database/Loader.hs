@@ -1279,13 +1279,12 @@ reportCrossDBLinkingStats nActivities stats = do
             printf "Unknown units: %s" (T.unpack $ T.intercalate ", " unknowns)
 
     -- Location fallbacks (deduplicated)
-    let !uniqueFallbacks = M.toList $ M.fromListWith (\_ b -> b) -- dedup by (product, requested)
-            [((product, requested), actual) | (product, requested, actual) <- cdlLocationFallbacks stats]
+    let !uniqueFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
         !nFallbacks = length uniqueFallbacks
     when (nFallbacks > 0) $ do
         reportProgress Info $
             printf "Location fallbacks: %d unique products matched with different location" nFallbacks
-        forM_ uniqueFallbacks $ \((product, requested), actual) ->
+        forM_ uniqueFallbacks $ \(product, requested, actual) ->
             reportProgress Info $
                 printf "  - %s: %s → %s" (T.unpack product) (T.unpack requested) (T.unpack actual)
 
