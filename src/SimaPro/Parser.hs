@@ -510,16 +510,18 @@ extractLocation name =
                 Just (cleanName, loc) -> (cleanName, loc)
                 Nothing               -> (name, "")
   where
-    -- Extract a trailing /XX location code from WFLDB-style names like
-    -- "Product (WFLDB)/CN U" or "Product (WFLDB)/RNA S"
-    -- Returns (cleaned name without /XX suffix, location code)
-    extractSlashLocation n =
-        case T.breakOnEnd "/" n of
-            ("", _) -> Nothing  -- no slash
+    -- Extract location from WFLDB-style slash suffixes like:
+    --   "Product (WFLDB)/CN U"       → ("Product (WFLDB)", "CN")
+    --   "Product/ha/GLO/I U"         → ("Product/ha", "GLO")
+    -- Scans rightward through slash-separated segments for the first geo code.
+    extractSlashLocation n = go n
+      where
+        go t = case T.breakOnEnd "/" t of
+            ("", _) -> Nothing
             (before, suffix) -> case T.words (T.strip suffix) of
                 (loc:_) | isGeoCode loc ->
                     Just (T.strip (T.dropWhileEnd (== '/') before), loc)
-                _ -> Nothing
+                _ -> go (T.dropWhileEnd (== '/') before)
     isGeoCode t = T.length t >= 2 && isUpper (T.head t)
 
 -- | Convert ProcessBlock to list of Activities (one per product)
