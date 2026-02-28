@@ -5,6 +5,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, stopPropagationOn)
 import Json.Decode as Decode
 import Models.Database exposing (DatabaseList, DatabaseLoadStatus(..), DatabaseStatus)
+import Set exposing (Set)
 
 
 type Msg
@@ -17,8 +18,8 @@ type Msg
     | SetupDatabase String
 
 
-viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Maybe String -> Html Msg
-viewDatabasesPage maybeDatabases loading error confirmingDelete =
+viewDatabasesPage : Maybe DatabaseList -> Bool -> Maybe String -> Maybe String -> Set String -> List String -> Html Msg
+viewDatabasesPage maybeDatabases loading error confirmingDelete loadingDbs progressLines =
     div [ class "databases-page" ]
         [ div [ class "box" ]
             [ div [ class "level" ]
@@ -53,7 +54,7 @@ viewDatabasesPage maybeDatabases loading error confirmingDelete =
                     ]
 
             ( False, Just dbList ) ->
-                viewDatabasesList dbList confirmingDelete
+                viewDatabasesList dbList confirmingDelete loadingDbs progressLines
 
             ( False, Nothing ) ->
                 div [ class "notification is-warning", style "margin" "1rem" ]
@@ -61,8 +62,8 @@ viewDatabasesPage maybeDatabases loading error confirmingDelete =
         ]
 
 
-viewDatabasesList : DatabaseList -> Maybe String -> Html Msg
-viewDatabasesList dbList confirmingDelete =
+viewDatabasesList : DatabaseList -> Maybe String -> Set String -> List String -> Html Msg
+viewDatabasesList dbList confirmingDelete loadingDbs progressLines =
     let
         dbCount =
             List.length dbList.databases
@@ -84,14 +85,17 @@ viewDatabasesList dbList confirmingDelete =
                     ]
                 ]
             , tbody []
-                (List.map (viewDatabaseRow confirmingDelete) dbList.databases)
+                (List.map (viewDatabaseRow confirmingDelete loadingDbs progressLines) dbList.databases)
             ]
         ]
 
 
-viewDatabaseRow : Maybe String -> DatabaseStatus -> Html Msg
-viewDatabaseRow confirmingDelete db =
+viewDatabaseRow : Maybe String -> Set String -> List String -> DatabaseStatus -> Html Msg
+viewDatabaseRow confirmingDelete loadingDbs progressLines db =
     let
+        isLoading =
+            Set.member db.name loadingDbs
+
         isInMemory =
             db.status /= Unloaded
 
@@ -102,15 +106,20 @@ viewDatabaseRow confirmingDelete db =
             db.isUploaded && not isInMemory
 
         statusIndicator =
-            case db.status of
-                DbLoaded ->
-                    span [ class "has-text-success", style "font-size" "1.5rem" ] [ text "●" ]
+            if isLoading then
+                span [ class "has-text-primary", style "font-size" "1.5rem" ]
+                    [ i [ class "fas fa-spinner fa-spin" ] [] ]
 
-                PartiallyLinked ->
-                    span [ class "has-text-warning", style "font-size" "1.5rem" ] [ text "●" ]
+            else
+                case db.status of
+                    DbLoaded ->
+                        span [ class "has-text-success", style "font-size" "1.5rem" ] [ text "●" ]
 
-                Unloaded ->
-                    span [ class "has-text-grey-lighter", style "font-size" "1.5rem" ] [ text "○" ]
+                    PartiallyLinked ->
+                        span [ class "has-text-warning", style "font-size" "1.5rem" ] [ text "●" ]
+
+                    Unloaded ->
+                        span [ class "has-text-grey-lighter", style "font-size" "1.5rem" ] [ text "○" ]
 
         rowAttrs =
             case db.status of
@@ -122,12 +131,31 @@ viewDatabaseRow confirmingDelete db =
 
                 _ ->
                     []
+
+        latestProgress =
+            progressLines
+                |> List.reverse
+                |> List.head
+                |> Maybe.withDefault "Loading..."
     in
     tr rowAttrs
         [ td [ style "text-align" "center", style "vertical-align" "middle" ]
             [ statusIndicator ]
-        , td []
-            [ viewActionButtons db canUnload canDelete (confirmingDelete == Just db.name) ]
+        , td [ if isLoading then style "min-width" "300px" else style "" "" ]
+            [ if isLoading then
+                span
+                    [ class "has-text-grey is-size-7"
+                    , style "max-width" "400px"
+                    , style "overflow" "hidden"
+                    , style "text-overflow" "ellipsis"
+                    , style "white-space" "nowrap"
+                    , style "display" "block"
+                    ]
+                    [ text latestProgress ]
+
+              else
+                viewActionButtons db canUnload canDelete (confirmingDelete == Just db.name)
+            ]
         , td []
             [ text db.displayName ]
         , td [ class "has-text-grey" ]

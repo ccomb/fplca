@@ -72,6 +72,9 @@ type alias Model =
     , cachedInventories : Dict String InventoryExport
     , cachedGraphs : Dict String GraphData
     , loadingDatabases : Set String
+    , loadProgressLines : List String
+    , loadProgressSince : Int
+    , loadError : Maybe String
     , authState : AuthState
     , activityStack : List ( String, String )
     }
@@ -97,6 +100,8 @@ type Msg
     | CloseMenu
     | PushActivity String String
     | NavigateBackToParent
+    | PollLoadProgress Time.Posix
+    | LoadProgressResult (Result Http.Error { lines : List String, nextIndex : Int })
     | UpdateAuthCode String
     | SubmitAuthCode
     | AuthResult (Result Http.Error ())
@@ -121,6 +126,9 @@ init flags key =
       , cachedInventories = Dict.empty
       , cachedGraphs = Dict.empty
       , loadingDatabases = Set.empty
+      , loadProgressLines = []
+      , loadProgressSince = 0
+      , loadError = Nothing
       , authState = AuthChecking
       , activityStack = []
       }
@@ -183,6 +191,18 @@ update msg model =
                 | databases = Loaded dbList
                 , authState = Authenticated
                 , loadingDatabases = stillLoading
+                , loadProgressLines =
+                    if Set.isEmpty stillLoading then
+                        []
+
+                    else
+                        model.loadProgressLines
+                , loadProgressSince =
+                    if Set.isEmpty stillLoading then
+                        0
+
+                    else
+                        model.loadProgressSince
               }
             , if shouldReloadPage then
                 Nav.replaceUrl model.key (Route.routeToUrl model.currentRoute)
@@ -194,17 +214,22 @@ update msg model =
         DatabasesLoaded (Err error) ->
             case error of
                 Http.BadStatus 401 ->
-                    ( { model | authState = NeedsAuth { code = "", error = Nothing }, loadingDatabases = Set.empty }
+                    ( { model | authState = NeedsAuth { code = "", error = Nothing }, loadingDatabases = Set.empty, loadProgressLines = [], loadProgressSince = 0 }
                     , Cmd.none
                     )
 
                 _ ->
-                    ( { model | databases = Failed (httpErrorToString error), loadingDatabases = Set.empty }
+                    ( { model | databases = Failed (httpErrorToString error), loadingDatabases = Set.empty, loadProgressLines = [], loadProgressSince = 0 }
                     , Cmd.none
                     )
 
         LoadDatabase dbName ->
-            ( { model | loadingDatabases = Set.insert dbName model.loadingDatabases }
+            ( { model
+                | loadingDatabases = Set.insert dbName model.loadingDatabases
+                , loadProgressLines = []
+                , loadProgressSince = model.console.nextIndex
+                , loadError = Nothing
+              }
             , loadDatabaseCmd dbName
             )
 
@@ -222,13 +247,23 @@ update msg model =
                     , loadDatabases
                     )
 
-                LoadFailed _ ->
-                    ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
+                LoadFailed err ->
+                    ( { model
+                        | loadingDatabases = Set.remove dbName model.loadingDatabases
+                        , loadProgressLines = []
+                        , loadProgressSince = 0
+                        , loadError = Just err
+                      }
                     , Cmd.none
                     )
 
-        LoadDatabaseResult dbName (Err _) ->
-            ( { model | loadingDatabases = Set.remove dbName model.loadingDatabases }
+        LoadDatabaseResult dbName (Err err) ->
+            ( { model
+                | loadingDatabases = Set.remove dbName model.loadingDatabases
+                , loadProgressLines = []
+                , loadProgressSince = 0
+                , loadError = Just (httpErrorToString err)
+              }
             , Cmd.none
             )
 
@@ -310,6 +345,20 @@ update msg model =
               }
             , Cmd.none
             )
+
+        PollLoadProgress _ ->
+            ( model, loadProgressLogs model.loadProgressSince )
+
+        LoadProgressResult (Ok result) ->
+            ( { model
+                | loadProgressLines = model.loadProgressLines ++ result.lines
+                , loadProgressSince = result.nextIndex
+              }
+            , Cmd.none
+            )
+
+        LoadProgressResult (Err _) ->
+            ( model, Cmd.none )
 
         CacheTree activityId tree ->
             ( { model | cachedTrees = Dict.insert activityId tree model.cachedTrees }
@@ -404,25 +453,32 @@ update msg model =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    case model.console.visibility of
-        Visible _ ->
-            Sub.batch
-                [ Time.every 2000 PollConsoleLogs
-                , Browser.Events.onKeyDown
-                    (Json.Decode.field "key" Json.Decode.string
-                        |> Json.Decode.andThen
-                            (\key ->
-                                if key == "Escape" then
-                                    Json.Decode.succeed CloseConsole
+    Sub.batch
+        [ case model.console.visibility of
+            Visible _ ->
+                Sub.batch
+                    [ Time.every 2000 PollConsoleLogs
+                    , Browser.Events.onKeyDown
+                        (Json.Decode.field "key" Json.Decode.string
+                            |> Json.Decode.andThen
+                                (\key ->
+                                    if key == "Escape" then
+                                        Json.Decode.succeed CloseConsole
 
-                                else
-                                    Json.Decode.fail "not Escape"
-                            )
-                    )
-                ]
+                                    else
+                                        Json.Decode.fail "not Escape"
+                                )
+                        )
+                    ]
 
-        Hidden ->
+            Hidden ->
+                Sub.none
+        , if not (Set.isEmpty model.loadingDatabases) then
+            Time.every 500 PollLoadProgress
+
+          else
             Sub.none
+        ]
 
 
 {-| Check if a database is fully loaded (resolved all links)
@@ -541,6 +597,19 @@ loadConsoleLogs since =
         { url = "/api/v1/logs?since=" ++ String.fromInt since
         , expect =
             Http.expectJson ConsoleLogsLoaded
+                (Json.Decode.map2 (\lines nextIndex -> { lines = lines, nextIndex = nextIndex })
+                    (Json.Decode.field "lines" (Json.Decode.list Json.Decode.string))
+                    (Json.Decode.field "nextIndex" Json.Decode.int)
+                )
+        }
+
+
+loadProgressLogs : Int -> Cmd Msg
+loadProgressLogs since =
+    Http.get
+        { url = "/api/v1/logs?since=" ++ String.fromInt since
+        , expect =
+            Http.expectJson LoadProgressResult
                 (Json.Decode.map2 (\lines nextIndex -> { lines = lines, nextIndex = nextIndex })
                     (Json.Decode.field "lines" (Json.Decode.list Json.Decode.string))
                     (Json.Decode.field "nextIndex" Json.Decode.int)
