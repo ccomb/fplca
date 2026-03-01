@@ -4,7 +4,8 @@ import File exposing (File)
 import File.Select as Select
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick, onInput)
+import Html.Events exposing (onClick, onInput, preventDefaultOn)
+import Json.Decode as Decode
 import Task
 
 
@@ -135,6 +136,7 @@ viewForm model =
                     , value model.name
                     , onInput SetName
                     , disabled model.uploading
+                    , Html.Attributes.autofocus True
                     ]
                     []
                 , span [ class "icon is-small is-left" ]
@@ -166,6 +168,19 @@ viewForm model =
                     [ span
                         [ class "file-cta"
                         , onClick SelectFile
+                        , tabindex 0
+                        , attribute "role" "button"
+                        , preventDefaultOn "keydown"
+                            (Decode.field "key" Decode.string
+                                |> Decode.andThen
+                                    (\key ->
+                                        if key == "Enter" || key == " " then
+                                            Decode.succeed ( SelectFile, True )
+
+                                        else
+                                            Decode.fail ""
+                                    )
+                            )
                         ]
                         [ span [ class "file-icon" ]
                             [ i [ class "fas fa-upload" ] [] ]

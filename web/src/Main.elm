@@ -293,46 +293,60 @@ viewConsole shared =
                 , style "bottom" "0"
                 , style "z-index" "100"
                 , style "display" "flex"
-                , style "flex-direction" "column"
-                , style "background" "rgba(26, 26, 46, 0.95)"
-                , style "backdrop-filter" "blur(8px)"
+                , style "align-items" "center"
+                , style "justify-content" "center"
+                , style "background" "rgba(0,0,0,0.5)"
+                , onClick (Spa.mapSharedMsg Shared.CloseConsole)
                 ]
                 [ div
-                    [ style "display" "flex"
-                    , style "justify-content" "space-between"
-                    , style "align-items" "center"
-                    , style "padding" "0.75rem 1rem"
-                    , style "background" "rgba(22, 33, 62, 0.8)"
-                    , style "flex-shrink" "0"
+                    [ style "width" "calc(100% - 4rem)"
+                    , style "height" "calc(100% - 4rem)"
+                    , style "max-width" "100%"
+                    , style "display" "flex"
+                    , style "flex-direction" "column"
+                    , style "background" "rgba(26, 26, 46, 0.98)"
+                    , style "border-radius" "8px"
+                    , style "box-shadow" "0 8px 32px rgba(0,0,0,0.4)"
+                    , style "overflow" "hidden"
+                    , Html.Events.stopPropagationOn "click" (Json.Decode.succeed ( Spa.mapSharedMsg Shared.NoOp, True ))
                     ]
-                    [ span [ style "color" "#e0e0e0", style "font-weight" "bold", style "font-size" "0.9rem" ] [ text "Console" ]
-                    , button
-                        [ onClick (Spa.mapSharedMsg Shared.CloseConsole)
-                        , style "background" "none"
-                        , style "border" "none"
-                        , style "color" "#e0e0e0"
-                        , style "cursor" "pointer"
-                        , style "font-size" "1.2rem"
-                        , style "padding" "0.25rem 0.5rem"
+                    [ div
+                        [ style "display" "flex"
+                        , style "justify-content" "space-between"
+                        , style "align-items" "center"
+                        , style "padding" "0.75rem 1rem"
+                        , style "background" "rgba(22, 33, 62, 0.8)"
+                        , style "flex-shrink" "0"
                         ]
-                        [ text "\u{00D7}" ]
-                    ]
-                , div
-                    [ style "flex" "1"
-                    , style "overflow-y" "auto"
-                    , style "color" "#c8c8c8"
-                    , style "font-family" "'Consolas', 'Monaco', monospace"
-                    , style "font-size" "0.85rem"
-                    , style "line-height" "1.5"
-                    , style "padding" "0.75rem 1rem"
-                    , id "console-log-container"
-                    ]
-                    (if List.isEmpty shared.loadProgressLines then
-                        [ div [ style "color" "#666" ] [ text "No output yet." ] ]
+                        [ span [ style "color" "#e0e0e0", style "font-weight" "bold", style "font-size" "0.9rem" ] [ text "Console" ]
+                        , button
+                            [ onClick (Spa.mapSharedMsg Shared.CloseConsole)
+                            , style "background" "none"
+                            , style "border" "none"
+                            , style "color" "#e0e0e0"
+                            , style "cursor" "pointer"
+                            , style "font-size" "1.2rem"
+                            , style "padding" "0.25rem 0.5rem"
+                            ]
+                            [ text "\u{00D7}" ]
+                        ]
+                    , div
+                        [ style "flex" "1"
+                        , style "overflow-y" "auto"
+                        , style "color" "#c8c8c8"
+                        , style "font-family" "'Consolas', 'Monaco', monospace"
+                        , style "font-size" "0.85rem"
+                        , style "line-height" "1.5"
+                        , style "padding" "0.75rem 1rem"
+                        , id "console-log-container"
+                        ]
+                        (if List.isEmpty shared.loadProgressLines then
+                            [ div [ style "color" "#666" ] [ text "No output yet." ] ]
 
-                     else
-                        List.map (\line -> div [] [ text line ]) shared.loadProgressLines
-                    )
+                         else
+                            List.map (\line -> div [] [ text line ]) shared.loadProgressLines
+                        )
+                    ]
                 ]
 
 

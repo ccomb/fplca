@@ -229,6 +229,27 @@
                 window.__fplcaProgress(e.data);
             };
         }
+        // Auto-scroll console to bottom unless user scrolled up
+        (function() {
+            var userScrolledUp = false;
+            var contentObs = null;
+            new MutationObserver(function() {
+                var el = document.getElementById('console-log-container');
+                if (el && !el._consoleTracked) {
+                    el._consoleTracked = true;
+                    userScrolledUp = false;
+                    el.addEventListener('scroll', function() {
+                        userScrolledUp = el.scrollTop + el.clientHeight < el.scrollHeight - 20;
+                    });
+                    if (contentObs) contentObs.disconnect();
+                    contentObs = new MutationObserver(function() {
+                        if (!userScrolledUp) el.scrollTop = el.scrollHeight;
+                    });
+                    contentObs.observe(el, { childList: true });
+                    el.scrollTop = el.scrollHeight;
+                }
+            }).observe(document.body, { childList: true, subtree: true });
+        })();
     </script>
 </body>
 </html>

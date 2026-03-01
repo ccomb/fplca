@@ -27,10 +27,8 @@ import Models.Activity exposing (ActivityInfo, ActivityTree)
 import Models.Database exposing (DatabaseList, DatabaseLoadStatus(..), LoadDatabaseResponse(..), databaseListDecoder, loadDatabaseResponseDecoder)
 import Models.Graph exposing (GraphData)
 import Models.Inventory exposing (InventoryExport)
-import Process
 import Route exposing (Route(..))
 import Set exposing (Set)
-import Task
 
 
 type RemoteData a
@@ -136,7 +134,6 @@ update msg model =
             ( { model
                 | currentRoute = route
                 , menuOpen = False
-                , loadProgressLines = []
                 , lastActivitiesRoute =
                     case Route.matchActivities route of
                         Just flags ->
@@ -281,21 +278,11 @@ update msg model =
                     | loadProgressLines = model.loadProgressLines ++ lines
                     , activeOperations = newOps
                   }
-                , if okCount > 0 && newOps == 0 then
-                    Process.sleep 2000 |> Task.perform (\_ -> ClearProgress)
-
-                  else
-                    Cmd.none
+                , Cmd.none
                 )
 
         ClearProgress ->
-            if model.activeOperations > 0 then
-                ( model, Cmd.none )
-
-            else
-                ( { model | loadProgressLines = [] }
-                , Cmd.none
-                )
+            ( model, Cmd.none )
 
         CacheTree activityId tree ->
             ( { model | cachedTrees = Dict.insert activityId tree model.cachedTrees }
