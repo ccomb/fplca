@@ -16,6 +16,7 @@ module Database.Manager
     , SetupError(..)
     , MissingSupplier(..)
     , DependencySuggestion(..)
+    , MethodCollectionStatus(..)
       -- * Re-exports
     , DepLoadResult(..)
       -- * Initialization
@@ -29,6 +30,13 @@ module Database.Manager
     , unloadDatabase
     , addDatabase
     , removeDatabase
+      -- * Method Operations
+    , listMethodCollections
+    , loadMethodCollection
+    , unloadMethodCollection
+    , getLoadedMethods
+    , addMethodCollection
+    , removeMethodCollection
       -- * Staged Database Operations
     , getStagedDatabase
     , getDatabaseSetupInfo
@@ -55,6 +63,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesFileExist, doesDirectoryExist, listDirectory, removeFile)
@@ -77,12 +86,14 @@ import qualified Database.Loader as Loader
 import Database.CrossLinking (IndexedDatabase(..), buildIndexedDatabaseFromDB)
 import qualified Database.CrossLinking
 import qualified Database.Upload as Upload
-import Database.Upload (anyDataFilesIn)
+import Database.Upload (anyDataFilesIn, findMethodDirectory)
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified SimaPro.Parser as SimaPro
 import System.FilePath (takeExtension, dropExtension, (</>))
 import System.Directory (removeDirectoryRecursive)
 import API.Types (DepLoadResult(..))
+import Method.Types (Method(..))
+import Method.Parser (parseMethodFile)
 
 -- | A fully loaded database with solver ready for queries
 data LoadedDatabase = LoadedDatabase
@@ -216,6 +227,7 @@ data DatabaseStatus = DatabaseStatus
     , dsIsUploaded  :: !Bool           -- True if path starts with "uploads/"
     , dsPath        :: !Text           -- Data path
     , dsFormat      :: !(Maybe Upload.DatabaseFormat)  -- Detected format
+    , dsActivityCount :: !Int          -- Number of activities (0 if unloaded)
     } deriving (Show, Eq, Generic)
 
 instance ToJSON DatabaseStatus where
@@ -228,6 +240,7 @@ instance ToJSON DatabaseStatus where
         , "dsIsUploaded" .= dsIsUploaded
         , "dsPath" .= dsPath
         , "dsFormat" .= fmap formatToDisplayText dsFormat
+        , "dsActivityCount" .= dsActivityCount
         ]
       where
         formatToDisplayText Upload.EcoSpold2 = "EcoSpold 2" :: T.Text
@@ -245,6 +258,7 @@ instance FromJSON DatabaseStatus where
         <*> v .: "dsIsUploaded"
         <*> v .: "dsPath"
         <*> (parseFormat <$> v .:? "dsFormat")
+        <*> v .: "dsActivityCount"
       where
         parseFormat :: Maybe T.Text -> Maybe Upload.DatabaseFormat
         parseFormat Nothing = Nothing
@@ -253,17 +267,51 @@ instance FromJSON DatabaseStatus where
         parseFormat (Just "SimaPro CSV") = Just Upload.SimaProCSV
         parseFormat (Just _) = Just Upload.UnknownFormat
 
+-- | Status of a method collection (e.g., EF-3.1) for API responses
+data MethodCollectionStatus = MethodCollectionStatus
+    { mcsName        :: !Text            -- Internal identifier
+    , mcsDisplayName :: !Text            -- Human-readable name
+    , mcsDescription :: !(Maybe Text)    -- Optional description
+    , mcsStatus      :: !DatabaseLoadStatus  -- Loaded/Unloaded (reuse existing type)
+    , mcsIsUploaded  :: !Bool            -- True if uploaded (vs. configured in TOML)
+    , mcsPath        :: !Text            -- Path to method directory
+    , mcsMethodCount :: !Int             -- Number of impact categories (0 if unloaded)
+    } deriving (Show, Eq, Generic)
+
+instance ToJSON MethodCollectionStatus where
+    toJSON MethodCollectionStatus{..} = A.object
+        [ "mcsName" .= mcsName
+        , "mcsDisplayName" .= mcsDisplayName
+        , "mcsDescription" .= mcsDescription
+        , "mcsStatus" .= mcsStatus
+        , "mcsIsUploaded" .= mcsIsUploaded
+        , "mcsPath" .= mcsPath
+        , "mcsMethodCount" .= mcsMethodCount
+        ]
+
+instance FromJSON MethodCollectionStatus where
+    parseJSON = A.withObject "MethodCollectionStatus" $ \v -> MethodCollectionStatus
+        <$> v .: "mcsName"
+        <*> v .: "mcsDisplayName"
+        <*> v .:? "mcsDescription"
+        <*> v .: "mcsStatus"
+        <*> v .: "mcsIsUploaded"
+        <*> v .: "mcsPath"
+        <*> v .: "mcsMethodCount"
+
 -- | The database manager maintains state for multiple databases
 -- Databases with load=true are pre-loaded at startup for instant switching
 data DatabaseManager = DatabaseManager
-    { dmLoadedDbs     :: !(TVar (Map Text LoadedDatabase))  -- All loaded databases
-    , dmStagedDbs     :: !(TVar (Map Text StagedDatabase))  -- Staged databases (parsed but not finalized)
-    , dmStagingDbs    :: !(TVar (S.Set Text))               -- Databases currently being staged
-    , dmIndexedDbs    :: !(TVar (Map Text IndexedDatabase)) -- Pre-built indexes for cross-DB linking
-    , dmAvailableDbs  :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
-    , dmSynonymDB     :: !SynonymDB                         -- Shared synonym database
-    , dmNoCache       :: !Bool                              -- Caching disabled flag
-    , dmUnitConfig    :: !UnitConversion.UnitConfig         -- Unit configuration
+    { dmLoadedDbs        :: !(TVar (Map Text LoadedDatabase))  -- All loaded databases
+    , dmStagedDbs        :: !(TVar (Map Text StagedDatabase))  -- Staged databases (parsed but not finalized)
+    , dmStagingDbs       :: !(TVar (S.Set Text))               -- Databases currently being staged
+    , dmIndexedDbs       :: !(TVar (Map Text IndexedDatabase)) -- Pre-built indexes for cross-DB linking
+    , dmAvailableDbs     :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
+    , dmAvailableMethods :: !(TVar (Map Text MethodConfig))    -- All configured method collections
+    , dmLoadedMethods    :: !(TVar (Map Text [Method]))        -- name → parsed impact categories
+    , dmSynonymDB        :: !SynonymDB                         -- Shared synonym database
+    , dmNoCache          :: !Bool                              -- Caching disabled flag
+    , dmUnitConfig       :: !UnitConversion.UnitConfig         -- Unit configuration
     }
 
 -- | Initialize database manager from config
@@ -304,6 +352,11 @@ initDatabaseManager config synonymDB noCache _configPath = do
     stagingDbsVar <- newTVarIO S.empty -- Databases currently being staged (race guard)
     indexedDbsVar <- newTVarIO M.empty  -- Pre-built indexes for cross-DB linking
     availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- allDbs]
+    -- Discover uploaded methods from uploads/methods/ directory
+    uploadedMethodConfigs <- discoverUploadedMethodConfigs
+    let allMethods = cfgMethods config ++ uploadedMethodConfigs
+    availableMethodsVar <- newTVarIO $ M.fromList [(mcName mc, mc) | mc <- allMethods]
+    loadedMethodsVar <- newTVarIO M.empty
 
     let manager = DatabaseManager
             { dmLoadedDbs = loadedDbsVar
@@ -311,6 +364,8 @@ initDatabaseManager config synonymDB noCache _configPath = do
             , dmStagingDbs = stagingDbsVar
             , dmIndexedDbs = indexedDbsVar
             , dmAvailableDbs = availableDbsVar
+            , dmAvailableMethods = availableMethodsVar
+            , dmLoadedMethods = loadedMethodsVar
             , dmSynonymDB = synonymDB
             , dmNoCache = noCache
             , dmUnitConfig = unitConfig
@@ -327,7 +382,7 @@ initDatabaseManager config synonymDB noCache _configPath = do
                 ++ T.unpack (T.intercalate " → " loadOrder)
             totalStart <- getCurrentTime
             forM_ dbsToLoad $ \dbConfig -> do
-                reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
+                reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
                 -- Get currently loaded IndexedDatabases for cross-DB linking
                 currentIndexedDbs <- readTVarIO indexedDbsVar
                 let otherIndexes = M.elems currentIndexedDbs
@@ -349,6 +404,18 @@ initDatabaseManager config synonymDB noCache _configPath = do
     -- Report final status
     loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
     reportProgress Info $ "Multi-database mode: " ++ show loadedCount ++ " database(s) loaded"
+
+    -- Auto-load active method collections
+    let activeMethods = filter mcActive (cfgMethods config)
+    forM_ activeMethods $ \mc -> do
+        result <- loadMethodCollectionFromConfig mc
+        case result of
+            Right methods -> do
+                atomically $ modifyTVar' loadedMethodsVar (M.insert (mcName mc) methods)
+                reportProgress Info $ "  [OK] Loaded method: " <> T.unpack (mcName mc)
+                    <> " (" <> show (length methods) <> " impact categories)"
+            Left err ->
+                reportError $ "  [FAIL] Failed to load method " <> T.unpack (mcName mc) <> ": " <> T.unpack err
 
     return manager
 
@@ -378,6 +445,23 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
     , dcFormat = Just (UploadedDB.umFormat meta)
     , dcIsUploaded = True  -- Discovered from uploads/ directory
     }
+
+-- | Discover uploaded methods from uploads/methods/ directory
+-- Reads meta.toml from each subdirectory and converts to MethodConfig
+discoverUploadedMethodConfigs :: IO [MethodConfig]
+discoverUploadedMethodConfigs = do
+    uploads <- UploadedDB.discoverUploadedMethods
+    forM uploads $ \(slug, dirPath, meta) -> do
+        reportProgress Info $ "Discovered uploaded method: " <> T.unpack slug
+        -- Find the actual method XML directory (e.g., ILCD/lciamethods/)
+        methodDir <- findMethodDirectory dirPath
+        return MethodConfig
+            { mcName = UploadedDB.umDisplayName meta
+            , mcPath = methodDir
+            , mcActive = False  -- Never auto-load uploaded methods
+            , mcIsUploaded = True
+            , mcDescription = UploadedDB.umDescription meta
+            }
 
 -- | Initialize a single-database manager (for --data mode)
 -- Creates a config with one database and initializes it
@@ -422,10 +506,12 @@ listDatabases manager = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
 
     forM (M.toList availableDbs) $ \(name, config) -> do
-        let !status = case M.lookup name loadedDbs of
+        let mLoaded = M.lookup name loadedDbs
+            !status = case mLoaded of
                 Nothing -> Unloaded
                 Just ld | unresolvedCount (dbLinkingStats (ldDatabase ld)) > 0 -> PartiallyLinked
                         | otherwise -> Loaded
+            !actCount = maybe 0 (V.length . dbActivities . ldDatabase) mLoaded
         return DatabaseStatus
             { dsName = name
             , dsDisplayName = dcDisplayName config
@@ -435,6 +521,7 @@ listDatabases manager = do
             , dsIsUploaded = dcIsUploaded config
             , dsPath = T.pack (dcPath config)
             , dsFormat = dcFormat config
+            , dsActivityCount = actCount
             }
 
 -- | Check if a file path is a cache file
@@ -804,7 +891,7 @@ loadDatabaseSingleFromConfig manager dbName = do
             case M.lookup dbName availableDbs of
                 Nothing -> return $ Left $ "Database not found: " <> dbName
                 Just dbConfig -> do
-                    reportProgress Info $ "Loading database: " <> T.unpack (dcDisplayName dbConfig)
+                    reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
                     -- Get currently loaded IndexedDatabases for cross-DB linking
                     currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
                     let otherIndexes = M.elems currentIndexedDbs
@@ -868,6 +955,7 @@ loadDatabase manager dbName = do
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
 stageUploadedDatabase manager dbConfig = do
     let dbName = dcName dbConfig
+    reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
 
     -- Try cache first: if valid, reconstruct StagedDatabase without re-parsing
     mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig)
@@ -992,7 +1080,7 @@ removeDatabase manager dbName = do
                     then return $ Left $ "Cannot delete loaded database. Close it first."
                     else do
                             -- Get the upload directory (uploads/<slug>/)
-                            uploadsDir <- UploadedDB.getUploadsDir
+                            uploadsDir <- UploadedDB.getDatabaseUploadsDir
                             let uploadDir = uploadsDir </> T.unpack dbName
                             pathExists <- doesDirectoryExist uploadDir
                             if pathExists
@@ -1207,7 +1295,7 @@ buildLoadedSetupInfo config db =
 -- Returns (relativePath, formatLabel, fileCount) for each candidate.
 discoverCandidatePaths :: DatabaseConfig -> IO [(Text, Text, Int)]
 discoverCandidatePaths dbConfig = do
-    uploadsDir <- UploadedDB.getUploadsDir
+    uploadsDir <- UploadedDB.getDatabaseUploadsDir
     let uploadRoot = uploadsDir </> T.unpack (dcName dbConfig)
     candidates <- Upload.findAllDataDirectories uploadRoot
     forM candidates $ \dir -> do
@@ -1239,7 +1327,7 @@ setDataPath manager dbName newRelPath = do
                 return $ Left "Cannot change data path for configured databases"
             | otherwise -> do
                 -- Resolve full path
-                uploadsDir <- UploadedDB.getUploadsDir
+                uploadsDir <- UploadedDB.getDatabaseUploadsDir
                 let uploadRoot = uploadsDir </> T.unpack dbName
                     newFullPath = uploadRoot </> T.unpack newRelPath
 
@@ -1419,7 +1507,7 @@ finalizeDatabase manager dbName = do
                 "Cannot finalize: " <> T.pack (show unresolvedLinks)
                 <> " unresolved inputs. Add dependencies to resolve them first."
               else do
-                reportProgress Info $ "Finalizing database: " <> T.unpack dbName
+                reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
 
                 -- Build the database with matrices
                 !db <- buildDatabaseWithMatrices
@@ -1464,3 +1552,129 @@ finalizeDatabase manager dbName = do
 
                 reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
                 return $ Right loaded
+
+--------------------------------------------------------------------------------
+-- Method Collection Management
+--------------------------------------------------------------------------------
+
+-- | Load methods from a MethodConfig directory (parse all .xml files)
+loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text [Method])
+loadMethodCollectionFromConfig mc = do
+    let dir = mcPath mc
+    isDir <- doesDirectoryExist dir
+    if not isDir
+        then return $ Left $ "Method directory not found: " <> T.pack dir
+        else do
+            files <- listDirectory dir
+            let xmlFiles = filter (\f -> map toLower (takeExtension f) == ".xml") files
+            if null xmlFiles
+                then return $ Left $ "No XML files found in: " <> T.pack dir
+                else do
+                    results <- forM xmlFiles $ \f -> parseMethodFile (dir </> f)
+                    let (errs, methods) = partitionEithers results
+                    if null methods && not (null errs)
+                        then return $ Left $ "All method files failed to parse: " <> T.pack (head errs)
+                        else do
+                            when (not (null errs)) $
+                                reportProgress Warning $ "  " <> show (length errs) <> " method file(s) failed to parse"
+                            return $ Right methods
+  where
+    partitionEithers = foldr f ([], [])
+      where f (Left  a) (ls, rs) = (a:ls, rs)
+            f (Right b) (ls, rs) = (ls, b:rs)
+
+-- | List all method collections with their status
+listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]
+listMethodCollections manager = do
+    available <- readTVarIO (dmAvailableMethods manager)
+    loaded <- readTVarIO (dmLoadedMethods manager)
+    return [ MethodCollectionStatus
+                { mcsName = name
+                , mcsDisplayName = mcName mc
+                , mcsDescription = mcDescription mc
+                , mcsStatus = if M.member name loaded then Loaded else Unloaded
+                , mcsIsUploaded = mcIsUploaded mc
+                , mcsPath = T.pack (mcPath mc)
+                , mcsMethodCount = maybe 0 length (M.lookup name loaded)
+                }
+           | (name, mc) <- M.toList available
+           ]
+
+-- | Load a method collection on demand
+loadMethodCollection :: DatabaseManager -> Text -> IO (Either Text ())
+loadMethodCollection manager name = do
+    available <- readTVarIO (dmAvailableMethods manager)
+    case M.lookup name available of
+        Nothing -> return $ Left $ "Method collection not found: " <> name
+        Just mc -> do
+            already <- M.member name <$> readTVarIO (dmLoadedMethods manager)
+            if already
+                then return $ Right ()
+                else do
+                    reportProgress Info $ "[STARTING] Loading method: " <> T.unpack name
+                    result <- loadMethodCollectionFromConfig mc
+                    case result of
+                        Left err -> do
+                            reportProgress Error $ "  [FAIL] " <> T.unpack name <> ": " <> T.unpack err
+                            return $ Left err
+                        Right methods -> do
+                            atomically $ modifyTVar' (dmLoadedMethods manager) (M.insert name methods)
+                            reportProgress Info $ "  [OK] Loaded: " <> T.unpack name
+                                <> " (" <> show (length methods) <> " impact categories)"
+                            return $ Right ()
+
+-- | Unload a method collection from memory
+unloadMethodCollection :: DatabaseManager -> Text -> IO (Either Text ())
+unloadMethodCollection manager name = do
+    loaded <- readTVarIO (dmLoadedMethods manager)
+    if M.member name loaded
+        then do
+            atomically $ modifyTVar' (dmLoadedMethods manager) (M.delete name)
+            reportProgress Info $ "Unloaded method: " <> T.unpack name
+            return $ Right ()
+        else return $ Left $ "Method collection not loaded: " <> name
+
+-- | Get all loaded methods (flattened across all collections)
+getLoadedMethods :: DatabaseManager -> IO [(Text, Method)]
+getLoadedMethods manager = do
+    loaded <- readTVarIO (dmLoadedMethods manager)
+    return [(collName, m) | (collName, methods) <- M.toList loaded, m <- methods]
+
+-- | Add a new method collection to the available list
+addMethodCollection :: DatabaseManager -> MethodConfig -> IO ()
+addMethodCollection manager mc =
+    atomically $ modifyTVar' (dmAvailableMethods manager) (M.insert (mcName mc) mc)
+
+-- | Remove an uploaded method collection (delete files + remove from memory)
+removeMethodCollection :: DatabaseManager -> Text -> IO (Either Text ())
+removeMethodCollection manager name = do
+    available <- readTVarIO (dmAvailableMethods manager)
+    loaded <- readTVarIO (dmLoadedMethods manager)
+    case M.lookup name available of
+        Nothing -> return $ Left $ "Method collection not found: " <> name
+        Just mc
+            | not (mcIsUploaded mc) ->
+                return $ Left "Cannot delete configured method. Edit fplca.toml to remove it."
+            | M.member name loaded ->
+                return $ Left "Cannot delete loaded method. Close it first."
+            | otherwise -> do
+                -- Find and delete the upload directory
+                methodUploadsDir <- UploadedDB.getMethodUploadsDir
+                -- The slug is derived from the directory name; search for it
+                let slug = Upload.slugify name
+                    uploadDir = methodUploadsDir </> T.unpack slug
+                pathExists <- doesDirectoryExist uploadDir
+                if pathExists
+                    then do
+                        result <- Control.Exception.try $ removeDirectoryRecursive uploadDir
+                        case result of
+                            Left (e :: SomeException) ->
+                                return $ Left $ "Failed to delete: " <> T.pack (show e)
+                            Right () -> do
+                                reportProgress Info $ "Deleted method: " <> uploadDir
+                                atomically $ modifyTVar' (dmAvailableMethods manager) (M.delete name)
+                                return $ Right ()
+                    else do
+                        -- Directory already missing, just remove from memory
+                        atomically $ modifyTVar' (dmAvailableMethods manager) (M.delete name)
+                        return $ Right ()

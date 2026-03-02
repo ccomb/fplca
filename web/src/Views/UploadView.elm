@@ -1,4 +1,4 @@
-module Views.UploadView exposing (Model, Msg(..), init, update, view)
+module Views.UploadView exposing (Config, Model, Msg(..), databaseConfig, init, methodConfig, update, view)
 
 import File exposing (File)
 import File.Select as Select
@@ -17,6 +17,44 @@ type alias Model =
     , uploading : Bool
     , error : Maybe String
     , success : Maybe String
+    }
+
+
+type alias Config =
+    { title : String
+    , subtitle : String
+    , nameLabel : String
+    , namePlaceholder : String
+    , nameIcon : String
+    , fileLabel : String
+    , fileHelp : String
+    , buttonLabel : String
+    }
+
+
+databaseConfig : Config
+databaseConfig =
+    { title = "Upload Database"
+    , subtitle = "Upload a ZIP, 7z, XML, or CSV file containing your LCA database (EcoSpold v1/v2 or SimaPro CSV)"
+    , nameLabel = "Database Name"
+    , namePlaceholder = "e.g., My Custom Database"
+    , nameIcon = "fas fa-database"
+    , fileLabel = "Database File (ZIP, 7z, XML, or CSV)"
+    , fileHelp = "Supported formats: EcoSpold v1 (.xml, single or multi-dataset), EcoSpold v2 (.spold), SimaPro CSV (.csv)"
+    , buttonLabel = "Upload Database"
+    }
+
+
+methodConfig : Config
+methodConfig =
+    { title = "Upload Method"
+    , subtitle = "Upload a ZIP archive containing ILCD method XML files (e.g., EF 3.1)"
+    , nameLabel = "Method Name"
+    , namePlaceholder = "e.g., EF 3.1"
+    , nameIcon = "fas fa-flask"
+    , fileLabel = "Method File (ZIP, 7z)"
+    , fileHelp = "Supported formats: ILCD method packages (.zip, .7z)"
+    , buttonLabel = "Upload Method"
     }
 
 
@@ -80,21 +118,21 @@ update msg model =
             ( init, Cmd.none )
 
 
-view : Model -> Html Msg
-view model =
+view : Config -> Model -> Html Msg
+view cfg model =
     div [ class "upload-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ]
                 [ span [ class "icon-text" ]
                     [ span [ class "icon" ] [ i [ class "fas fa-cloud-upload-alt" ] [] ]
-                    , span [] [ text " Upload Database" ]
+                    , span [] [ text (" " ++ cfg.title) ]
                     ]
                 ]
             , p [ class "subtitle" ]
-                [ text "Upload a ZIP, 7z, XML, or CSV file containing your LCA database (EcoSpold v1/v2 or SimaPro CSV)" ]
+                [ text cfg.subtitle ]
             , viewError model.error
             , viewSuccess model.success
-            , viewForm model
+            , viewForm cfg model
             ]
         ]
 
@@ -123,16 +161,16 @@ viewSuccess maybeSuccess =
             text ""
 
 
-viewForm : Model -> Html Msg
-viewForm model =
+viewForm : Config -> Model -> Html Msg
+viewForm cfg model =
     div []
         [ div [ class "field" ]
-            [ label [ class "label" ] [ text "Database Name" ]
+            [ label [ class "label" ] [ text cfg.nameLabel ]
             , div [ class "control has-icons-left" ]
                 [ input
                     [ class "input"
                     , type_ "text"
-                    , placeholder "e.g., My Custom Database"
+                    , placeholder cfg.namePlaceholder
                     , value model.name
                     , onInput SetName
                     , disabled model.uploading
@@ -140,7 +178,7 @@ viewForm model =
                     ]
                     []
                 , span [ class "icon is-small is-left" ]
-                    [ i [ class "fas fa-database" ] [] ]
+                    [ i [ class cfg.nameIcon ] [] ]
                 ]
             , p [ class "help" ]
                 [ text "A URL-safe slug will be generated: "
@@ -152,7 +190,7 @@ viewForm model =
             , div [ class "control" ]
                 [ textarea
                     [ class "textarea"
-                    , placeholder "Describe this database..."
+                    , placeholder "Describe this..."
                     , value model.description
                     , onInput SetDescription
                     , disabled model.uploading
@@ -162,7 +200,7 @@ viewForm model =
                 ]
             ]
         , div [ class "field" ]
-            [ label [ class "label" ] [ text "Database File (ZIP, 7z, XML, or CSV)" ]
+            [ label [ class "label" ] [ text cfg.fileLabel ]
             , div [ class "file has-name is-fullwidth" ]
                 [ div [ class "file-label" ]
                     [ span
@@ -192,7 +230,7 @@ viewForm model =
                     ]
                 ]
             , p [ class "help" ]
-                [ text "Supported formats: EcoSpold v1 (.xml, single or multi-dataset), EcoSpold v2 (.spold), SimaPro CSV (.csv)" ]
+                [ text cfg.fileHelp ]
             ]
         , div [ class "field is-grouped", style "margin-top" "2rem" ]
             [ div [ class "control" ]
@@ -208,7 +246,7 @@ viewForm model =
                     , disabled (not (canUpload model))
                     ]
                     [ span [ class "icon" ] [ i [ class "fas fa-cloud-upload-alt" ] [] ]
-                    , span [] [ text "Upload Database" ]
+                    , span [] [ text cfg.buttonLabel ]
                     ]
                 ]
             , div [ class "control" ]

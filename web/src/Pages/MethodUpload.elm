@@ -1,4 +1,4 @@
-module Pages.Upload exposing (Model, Msg, page)
+module Pages.MethodUpload exposing (Model, Msg, page)
 
 import Browser.Navigation as Nav
 import Effect exposing (Effect)
@@ -71,8 +71,7 @@ update shared msg model =
                                           )
                                         , ( "urFileData", Json.Encode.string content )
                                         ]
-                            in
-                            let
+
                                 updatedView =
                                     model.uploadView
                             in
@@ -80,7 +79,7 @@ update shared msg model =
                                 | uploadState = Uploading
                                 , uploadView = { updatedView | uploading = True }
                               }
-                            , Effect.fromCmd (uploadDatabase body)
+                            , Effect.fromCmd (uploadMethod body)
                             )
 
                         Nothing ->
@@ -88,7 +87,7 @@ update shared msg model =
 
                 UploadView.CancelUpload ->
                     ( { model | uploadView = UploadView.init, uploadState = Idle }
-                    , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl Route.DatabasesRoute))
+                    , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl Route.MethodsRoute))
                     )
 
                 _ ->
@@ -114,15 +113,7 @@ update shared msg model =
                         }
                 in
                 ( { model | uploadView = updatedView, uploadState = Succeeded response.message }
-                , Effect.batch
-                    [ Effect.fromShared Shared.LoadDatabases
-                    , case response.slug of
-                        Just slug ->
-                            Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (Route.DatabaseSetupRoute slug)))
-
-                        Nothing ->
-                            Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl Route.DatabasesRoute))
-                    ]
+                , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl Route.MethodsRoute))
                 )
 
             else
@@ -155,9 +146,9 @@ update shared msg model =
 
 view : Shared.Model -> Model -> View Msg
 view _ model =
-    { title = "Upload Database"
+    { title = "Upload Method"
     , body =
-        Html.map UploadViewMsg (UploadView.view UploadView.databaseConfig model.uploadView)
+        Html.map UploadViewMsg (UploadView.view UploadView.methodConfig model.uploadView)
     }
 
 
@@ -165,10 +156,10 @@ view _ model =
 -- HTTP
 
 
-uploadDatabase : Json.Encode.Value -> Cmd Msg
-uploadDatabase body =
+uploadMethod : Json.Encode.Value -> Cmd Msg
+uploadMethod body =
     Http.post
-        { url = "/api/v1/databases/upload"
+        { url = "/api/v1/method-collections/upload"
         , body = Http.jsonBody body
         , expect = Http.expectJson UploadResult uploadResponseDecoder
         }

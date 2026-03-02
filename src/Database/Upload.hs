@@ -18,8 +18,12 @@ module Database.Upload
     , findAllDataDirectories
     , countDataFilesIn
     , anyDataFilesIn
+      -- * Method directory detection
+    , findMethodDirectory
+    , findAllMethodDirectories
+    , countMethodFilesIn
+    , anyMethodFilesIn
     , slugify
-    , getUploadsDir
     ) where
 
 import Control.Exception (try, catch, SomeException)
@@ -70,30 +74,16 @@ data UploadResult = UploadResult
     , urFileCount :: !Int        -- Number of data files
     } deriving (Show, Eq, Generic)
 
--- | Get the uploads directory under the data directory
--- Uses FPLCA_DATA_DIR env var, falls back to current directory
-getUploadsDir :: IO FilePath
-getUploadsDir = do
-    mdir <- lookupEnv "FPLCA_DATA_DIR"
-    let base = case mdir of
-            Just d  -> d
-            Nothing -> "."
-    let dir = base </> "uploads"
-    createDirectoryIfMissing True dir
-    return dir
-
 -- | Handle a database upload
--- Extracts ZIP archive to uploads/{slug}/ and detects format
-handleUpload :: UploadData -> (ProgressEvent -> IO ()) -> IO (Either Text UploadResult)
-handleUpload UploadData{..} reportProgress = do
+-- Extracts ZIP archive to uploadsDir/{slug}/ and detects format
+handleUpload :: FilePath -> UploadData -> (ProgressEvent -> IO ()) -> IO (Either Text UploadResult)
+handleUpload uploadsDir UploadData{..} reportProgress = do
     let slug = slugify udName
 
     -- Check for valid slug
     if T.null slug
         then return $ Left "Invalid database name - cannot generate slug"
         else do
-            -- Get uploads directory
-            uploadsDir <- getUploadsDir
             let targetDir = uploadsDir </> T.unpack slug
 
             -- Check if directory already exists
@@ -429,6 +419,59 @@ anyDataFilesIn d = do
             else do
                 let csvFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".csv"]
                 if null csvFiles then return False else checkForSimaProCSV csvFiles
+
+-- | Find the best directory containing ILCD method XML files.
+-- Picks the candidate with the most method files (same pattern as findDataDirectory).
+findMethodDirectory :: FilePath -> IO FilePath
+findMethodDirectory dir = do
+    candidates <- findAllMethodDirectories dir
+    case candidates of
+        []    -> return dir
+        [one] -> return one
+        many  -> do
+            counts <- mapM (\d -> (,) d <$> countMethodFilesIn d) many
+            return $ fst $ head $ sortOn (Down . snd) counts
+
+-- | Find all directories containing ILCD method XML files under a root.
+findAllMethodDirectories :: FilePath -> IO [FilePath]
+findAllMethodDirectories root = go root
+  where
+    go dir = do
+        hasMethod <- anyMethodFilesIn dir
+        entries <- listDirectory dir
+        subdirs <- filterM doesDirectoryExist (map (dir </>) entries)
+        childResults <- concat <$> mapM go subdirs
+        if hasMethod then return (dir : childResults) else return childResults
+
+-- | Count ILCD method XML files in a single directory (non-recursive).
+countMethodFilesIn :: FilePath -> IO Int
+countMethodFilesIn dir = do
+    fs <- listDirectory dir
+    let xmlFiles = [dir </> f | f <- fs, map toLower (takeExtension f) == ".xml"]
+    counts <- mapM (\f -> do b <- isMethodXml f; return $ if b then 1 else 0) xmlFiles
+    return $ sum counts
+
+-- | Check if a directory contains ILCD method XML files directly.
+-- Content-aware: reads the first few bytes of an XML file to check for
+-- LCIAMethodDataSet marker, avoiding false positives on contacts/, flows/, etc.
+anyMethodFilesIn :: FilePath -> IO Bool
+anyMethodFilesIn d = do
+    fs <- listDirectory d
+    let xmlFiles = [d </> f | f <- fs, map toLower (takeExtension f) == ".xml"]
+    case xmlFiles of
+        []    -> return False
+        (f:_) -> isMethodXml f
+
+-- | Check if an XML file is an ILCD LCIA method dataset
+isMethodXml :: FilePath -> IO Bool
+isMethodXml f = do
+    result <- try $ BS.readFile f
+    case result of
+        Left (_ :: SomeException) -> return False
+        Right content ->
+            let header = BS.take 2048 content
+            in return $ BS.isInfixOf "LCIAMethodDataSet" header
+                     || BS.isInfixOf "lciamethods" header
 
 -- | Count data files based on format
 countDataFiles :: FilePath -> DatabaseFormat -> IO Int

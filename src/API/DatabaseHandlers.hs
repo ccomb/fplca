@@ -15,6 +15,8 @@ module API.DatabaseHandlers
     , unloadDatabaseHandler
     , deleteDatabaseHandler
     , uploadDatabaseHandler
+    , uploadMethodHandler
+    , deleteMethodHandler
       -- * Setup Page Handlers
     , getDatabaseSetupHandler
     , addDependencyHandler
@@ -40,6 +42,7 @@ import System.FilePath ((</>))
 
 import qualified Config
 import Config (DatabaseConfig(..))
+import qualified Data.Vector as V
 import Types (Database(..), unresolvedCount)
 import Data.Aeson (Value)
 import qualified Data.Aeson as A
@@ -54,15 +57,18 @@ import Database.Manager
     , LoadedDatabase(..)
     , addDatabase
     , addDependencyToStaged
+    , addMethodCollection
     , finalizeDatabase
     , getDatabaseSetupInfo
     , listDatabases
     , loadDatabase
     , removeDatabase
+    , removeMethodCollection
     , removeDependencyFromStaged
     , setDataPath
     , unloadDatabase
     )
+import Config (MethodConfig(..))
 import API.Types
     ( ActivateResponse(..)
     , LoadDatabaseResponse(..)
@@ -76,6 +82,7 @@ import Database.Upload
     , UploadData(..)
     , UploadResult(..)
     , handleUpload
+    , findMethodDirectory
     )
 import qualified Database.UploadedDatabase as UploadedDB
 
@@ -128,14 +135,13 @@ uploadDatabaseHandler dbManager req = do
                     , udZipData = BSL.fromStrict zipBytes
                     }
             -- Handle the upload (extract, detect format)
-            result <- liftIO $ handleUpload uploadData (\_ -> return ())
+            uploadsDir <- liftIO UploadedDB.getDatabaseUploadsDir
+            result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
 
             case result of
                 Left err ->
                     return $ UploadResponse False err Nothing Nothing
                 Right uploadResult -> do
-                    -- Get upload directory path
-                    uploadsDir <- liftIO $ UploadedDB.getUploadsDir
                     let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
 
                     -- Create meta.toml for self-describing upload
@@ -181,6 +187,7 @@ convertDbStatus ds = DatabaseStatusAPI
     , dsaIsUploaded = dsIsUploaded ds
     , dsaPath = dsPath ds
     , dsaFormat = formatToDisplayText <$> dsFormat ds
+    , dsaActivityCount = dsActivityCount ds
     }
   where
     statusToText Unloaded        = "unloaded"
@@ -212,6 +219,7 @@ makeStatusFromLoadedDb loaded =
         , dsaIsUploaded = Config.dcIsUploaded config
         , dsaPath = T.pack (Config.dcPath config)
         , dsaFormat = formatToDisplayText <$> Config.dcFormat config
+        , dsaActivityCount = V.length (dbActivities db)
         }
   where
     formatToDisplayText EcoSpold2 = "EcoSpold 2"
@@ -295,3 +303,60 @@ finalizeDatabaseHandler dbManager dbName = do
         Right (Right loaded) -> do
             let status = makeStatusFromLoadedDb loaded
             return $ ActivateResponse True ("Finalized database: " <> Config.dcDisplayName (ldConfig loaded)) (Just status)
+
+-- | Upload a new method collection
+-- Same flow as database upload but creates MethodConfig entry
+uploadMethodHandler :: DatabaseManager -> UploadRequest -> Handler UploadResponse
+uploadMethodHandler dbManager req = do
+    let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
+    case zipDataResult of
+        Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
+        Right zipBytes -> do
+            let uploadData = UploadData
+                    { udName = urName req
+                    , udDescription = urDescription req
+                    , udZipData = BSL.fromStrict zipBytes
+                    }
+            uploadsDir <- liftIO UploadedDB.getMethodUploadsDir
+            result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
+            case result of
+                Left err ->
+                    return $ UploadResponse False err Nothing Nothing
+                Right uploadResult -> do
+                    let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
+
+                    -- Find the actual method XML directory (e.g. ILCD/lciamethods/)
+                    methodDir <- liftIO $ findMethodDirectory uploadDir
+
+                    -- Create meta.toml (store path relative to upload dir)
+                    let meta = UploadedDB.UploadMeta
+                            { UploadedDB.umVersion = 1
+                            , UploadedDB.umDisplayName = urName req
+                            , UploadedDB.umDescription = urDescription req
+                            , UploadedDB.umFormat = urFormat uploadResult
+                            , UploadedDB.umDataPath = makeRelative uploadDir methodDir
+                            }
+                    liftIO $ UploadedDB.writeUploadMeta uploadDir meta
+
+                    -- Create MethodConfig and add to manager
+                    let mc = Config.MethodConfig
+                            { Config.mcName = urName req
+                            , Config.mcPath = methodDir
+                            , Config.mcActive = False
+                            , Config.mcIsUploaded = True
+                            , Config.mcDescription = urDescription req
+                            }
+                    liftIO $ addMethodCollection dbManager mc
+
+                    return $ UploadResponse True
+                        "Method uploaded successfully"
+                        (Just $ urSlug uploadResult)
+                        (Just "ILCD")
+
+-- | Delete an uploaded method collection
+deleteMethodHandler :: DatabaseManager -> Text -> Handler ActivateResponse
+deleteMethodHandler dbManager name = do
+    result <- liftIO $ removeMethodCollection dbManager name
+    case result of
+        Left err -> return $ ActivateResponse False err Nothing
+        Right () -> return $ ActivateResponse True ("Deleted method: " <> name) Nothing

@@ -342,8 +342,9 @@ fn main() {
                                     // Forward progress to loading screen and Elm app
                                     let escaped = line.replace('\\', "\\\\").replace('\'', "\\'");
                                     let _ = window_for_stderr.eval(&format!(
-                                        "if(typeof updateStatus==='function')updateStatus('{}');else if(typeof console!=='undefined')console.log('[backend] {}');",
-                                        escaped, escaped
+                                        "if(typeof updateStatus==='function')updateStatus('{0}');\
+                                         else if(typeof window.__fplcaProgress==='function')window.__fplcaProgress('{0}');",
+                                        escaped
                                     ));
                                 }
                             });

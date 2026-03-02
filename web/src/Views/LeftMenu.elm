@@ -55,8 +55,9 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 ]
             , -- DATABASES section
               div [ class "menu-items" ]
-                [ menuLabel "Databases"
+                [ menuLabel "Activities"
                 , menuItem currentPage DatabasesActive "fas fa-database" "Databases" False
+                , menuItem currentPage MethodsActive "fas fa-flask" "Methods" False
                 ]
             , -- SEARCH section
               div [ class "menu-items" ]

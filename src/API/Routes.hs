@@ -9,10 +9,10 @@ import qualified Matrix
 import Matrix (Inventory)
 import SharedSolver (SharedSolver)
 import Method.Mapping (computeLCIAScore, mapMethodFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
-import Method.Parser (parseMethodFile)
 import Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import SynonymDB (SynonymDB, emptySynonymDB)
-import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase)
+import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..))
+import qualified Database.Manager as DM
 import Database.Upload (DatabaseFormat(..))
 import qualified API.DatabaseHandlers as DBHandlers
 import Progress (getLogLines)
@@ -20,9 +20,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import System.Directory (listDirectory)
-import System.FilePath ((</>), takeExtension)
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -76,6 +74,12 @@ type LCAAPI =
                 :<|> "databases" :> Capture "dbName" Text :> "remove-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
                 :<|> "databases" :> Capture "dbName" Text :> "set-data-path" :> ReqBody '[JSON] Value :> Post '[JSON] DatabaseSetupInfo
                 :<|> "databases" :> Capture "dbName" Text :> "finalize" :> Post '[JSON] ActivateResponse
+                -- Method collection endpoints
+                :<|> "method-collections" :> Get '[JSON] MethodCollectionListResponse
+                :<|> "method-collections" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
+                :<|> "method-collections" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
+                :<|> "method-collections" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
+                :<|> "method-collections" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
                 -- Auth endpoint (login)
@@ -133,8 +137,8 @@ instance FromJSON LoginRequest where
 
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
-lcaServer :: DatabaseManager -> Int -> Maybe FilePath -> Maybe String -> Server LCAAPI
-lcaServer dbManager maxTreeDepth methodsDir password =
+lcaServer :: DatabaseManager -> Int -> Maybe String -> Server LCAAPI
+lcaServer dbManager maxTreeDepth password =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -163,6 +167,11 @@ lcaServer dbManager maxTreeDepth methodsDir password =
         :<|> DBHandlers.removeDependencyHandler dbManager
         :<|> DBHandlers.setDataPathHandler dbManager
         :<|> DBHandlers.finalizeDatabaseHandler dbManager
+        :<|> getMethodCollections
+        :<|> loadMethodCollectionHandler
+        :<|> unloadMethodCollectionHandler
+        :<|> DBHandlers.deleteMethodHandler dbManager
+        :<|> DBHandlers.uploadMethodHandler dbManager
         :<|> getLogsHandler
         :<|> postAuth
   where
@@ -326,15 +335,20 @@ lcaServer dbManager maxTreeDepth methodsDir password =
         withValidatedFlow db flowIdText $ \flow ->
             return $ Service.getActivitiesUsingFlow db (flowId flow)
 
-    -- List all available methods
+    -- List all available methods (from loaded collections)
     getMethods :: Handler [MethodSummary]
-    getMethods = case methodsDir of
-        Nothing -> return []
-        Just dir -> do
-            files <- liftIO $ listDirectory dir
-            let xmlFiles = filter (\f -> takeExtension f == ".xml") files
-            methods <- liftIO $ mapM (parseAndSummarize dir) xmlFiles
-            return $ [m | Just m <- methods]
+    getMethods = do
+        loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
+        return [ MethodSummary
+                    { msmId = methodId m
+                    , msmName = methodName m
+                    , msmCategory = methodCategory m
+                    , msmUnit = methodUnit m
+                    , msmFactorCount = length (methodFactors m)
+                    , msmCollection = collName
+                    }
+               | (collName, m) <- loadedMethods
+               ]
 
     -- Get method details
     getMethodDetail :: Text -> Handler MethodDetail
@@ -394,35 +408,51 @@ lcaServer dbManager maxTreeDepth methodsDir password =
             , mstUnmappedFlows = unmappedFlows
             }
 
-    -- Helper to parse a method file and create a summary
-    parseAndSummarize :: FilePath -> FilePath -> IO (Maybe MethodSummary)
-    parseAndSummarize dir fileName = do
-        result <- parseMethodFile (dir </> fileName)
-        case result of
-            Left _ -> return Nothing
-            Right m -> return $ Just $ MethodSummary
-                { msmId = methodId m
-                , msmName = methodName m
-                , msmCategory = methodCategory m
-                , msmUnit = methodUnit m
-                , msmFactorCount = length (methodFactors m)
-                }
-
-    -- Helper to load a method by UUID
+    -- Helper to load a method by UUID from the loaded collections
     loadMethodByUUID :: Text -> Handler Method
-    loadMethodByUUID uuidText = case methodsDir of
-        Nothing -> throwError err404{errBody = "No methods directory configured"}
-        Just dir -> do
-            -- Try to find the file matching the UUID
-            files <- liftIO $ listDirectory dir
-            let targetFile = T.unpack uuidText ++ ".xml"
-            if targetFile `elem` files
-                then do
-                    result <- liftIO $ parseMethodFile (dir </> targetFile)
-                    case result of
-                        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
-                        Right m -> return m
-                else throwError err404{errBody = "Method not found"}
+    loadMethodByUUID uuidText = do
+        loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
+        let allMethods = map snd loadedMethods
+        case UUID.fromText uuidText of
+            Nothing -> throwError err400{errBody = "Invalid method UUID format"}
+            Just uuid ->
+                case filter (\m -> methodId m == uuid) allMethods of
+                    (m:_) -> return m
+                    []    -> throwError err404{errBody = "Method not found"}
+
+    -- Method collection handlers
+    getMethodCollections :: Handler MethodCollectionListResponse
+    getMethodCollections = do
+        statuses <- liftIO $ DM.listMethodCollections dbManager
+        return $ MethodCollectionListResponse
+            [ MethodCollectionStatusAPI
+                { mcaName = mcsName s
+                , mcaDisplayName = mcsDisplayName s
+                , mcaDescription = mcsDescription s
+                , mcaStatus = case mcsStatus s of
+                    DM.Loaded -> "loaded"
+                    _         -> "unloaded"
+                , mcaIsUploaded = mcsIsUploaded s
+                , mcaPath = mcsPath s
+                , mcaMethodCount = mcsMethodCount s
+                , mcaFormat = Just "ILCD"
+                }
+            | s <- statuses
+            ]
+
+    loadMethodCollectionHandler :: Text -> Handler ActivateResponse
+    loadMethodCollectionHandler name = do
+        result <- liftIO $ DM.loadMethodCollection dbManager name
+        case result of
+            Left err -> return $ ActivateResponse False err Nothing
+            Right () -> return $ ActivateResponse True ("Loaded method: " <> name) Nothing
+
+    unloadMethodCollectionHandler :: Text -> Handler ActivateResponse
+    unloadMethodCollectionHandler name = do
+        result <- liftIO $ DM.unloadMethodCollection dbManager name
+        case result of
+            Left err -> return $ ActivateResponse False err Nothing
+            Right () -> return $ ActivateResponse True ("Unloaded method: " <> name) Nothing
 
     -- Helper to convert MethodCF to API type
     cfToAPI :: MethodCF -> MethodFactorAPI

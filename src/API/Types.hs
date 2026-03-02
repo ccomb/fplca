@@ -187,6 +187,26 @@ data MethodSummary = MethodSummary
     , msmCategory :: Text     -- Impact category
     , msmUnit :: Text         -- Reference unit (e.g., "kg CO2 eq")
     , msmFactorCount :: Int   -- Number of characterization factors
+    , msmCollection :: Text   -- Parent collection name (e.g., "ef-31")
+    }
+    deriving (Generic)
+
+-- | Method collection list response
+data MethodCollectionListResponse = MethodCollectionListResponse
+    { mclMethods :: [MethodCollectionStatusAPI]
+    }
+    deriving (Generic)
+
+-- | Method collection status for API responses
+data MethodCollectionStatusAPI = MethodCollectionStatusAPI
+    { mcaName :: Text              -- Internal identifier
+    , mcaDisplayName :: Text       -- Human-readable name
+    , mcaDescription :: Maybe Text -- Optional description
+    , mcaStatus :: Text            -- "loaded" | "unloaded"
+    , mcaIsUploaded :: Bool        -- True if uploaded
+    , mcaPath :: Text              -- Data path
+    , mcaMethodCount :: Int        -- Number of impact categories (0 if unloaded)
+    , mcaFormat :: Maybe Text      -- Format (e.g. "ILCD")
     }
     deriving (Generic)
 
@@ -261,6 +281,7 @@ data DatabaseStatusAPI = DatabaseStatusAPI
     , dsaIsUploaded    :: Bool           -- True if path starts with "uploads/"
     , dsaPath          :: Text           -- Data path
     , dsaFormat        :: Maybe Text     -- Database format (EcoSpold 2, EcoSpold 1, SimaPro CSV)
+    , dsaActivityCount :: Int            -- Number of activities (0 if unloaded)
     }
     deriving (Generic)
 
@@ -417,6 +438,8 @@ instance ToJSON GraphExport
 instance ToJSON GraphNode
 instance ToJSON GraphEdge
 instance ToJSON MethodSummary
+instance ToJSON MethodCollectionListResponse
+instance ToJSON MethodCollectionStatusAPI
 instance ToJSON MethodDetail
 instance ToJSON MethodFactorAPI
 instance ToJSON LCIAResult
@@ -447,3 +470,5 @@ instance FromJSON DepLoadResult
 instance FromJSON LoadDatabaseResponse
 instance FromJSON UploadRequest
 instance FromJSON UploadResponse
+instance FromJSON MethodCollectionListResponse
+instance FromJSON MethodCollectionStatusAPI

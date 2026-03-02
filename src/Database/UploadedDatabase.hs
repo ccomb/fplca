@@ -12,7 +12,9 @@ module Database.UploadedDatabase
     , writeUploadMeta
       -- * Discovery
     , discoverUploadedDatabases
-    , getUploadsDir
+    , discoverUploadedMethods
+    , getDatabaseUploadsDir
+    , getMethodUploadsDir
       -- * Data directory
     , getDataDir
     , isUploadedPath
@@ -54,11 +56,19 @@ getDataDir = do
         Just d  -> return d
         Nothing -> return "."
 
--- | Get the uploads directory
-getUploadsDir :: IO FilePath
-getUploadsDir = do
+-- | Get the database uploads directory
+getDatabaseUploadsDir :: IO FilePath
+getDatabaseUploadsDir = do
     base <- getDataDir
-    let dir = base </> "uploads"
+    let dir = base </> "uploads" </> "databases"
+    createDirectoryIfMissing True dir
+    return dir
+
+-- | Get the method uploads directory
+getMethodUploadsDir :: IO FilePath
+getMethodUploadsDir = do
+    base <- getDataDir
+    let dir = base </> "uploads" </> "methods"
     createDirectoryIfMissing True dir
     return dir
 
@@ -148,26 +158,39 @@ formatMetaToml UploadMeta{..} = T.unlines $
     formatToText SimaProCSV = "simapro"
     formatToText UnknownFormat = "unknown"
 
--- | Discover all uploaded databases by scanning the uploads directory
--- Returns list of (slug, uploadDir, meta) for each valid upload
-discoverUploadedDatabases :: IO [(Text, FilePath, UploadMeta)]
-discoverUploadedDatabases = do
-    uploadsDir <- getUploadsDir
-    exists <- doesDirectoryExist uploadsDir
+-- | Scan a directory for subdirectories with meta.toml
+scanUploadsIn :: FilePath -> IO [(Text, FilePath, UploadMeta)]
+scanUploadsIn dir = do
+    exists <- doesDirectoryExist dir
     if not exists
         then return []
         else do
-            entries <- listDirectory uploadsDir
-            let fullPaths = [(T.pack entry, uploadsDir </> entry) | entry <- entries]
-
-            -- Filter to directories only
+            entries <- listDirectory dir
+            let fullPaths = [(T.pack entry, dir </> entry) | entry <- entries]
             dirsOnly <- filterM (doesDirectoryExist . snd) fullPaths
-
-            -- Try to read meta.toml from each
             results <- forM dirsOnly $ \(slug, dirPath) -> do
                 maybeMeta <- readUploadMeta dirPath
                 return $ case maybeMeta of
                     Just meta -> Just (slug, dirPath, meta)
                     Nothing -> Nothing
-
             return [r | Just r <- results]
+
+-- | Discover all uploaded databases by scanning the uploads directory
+-- Scans ./uploads/databases/ first, then legacy ./uploads/ for backward compat
+discoverUploadedDatabases :: IO [(Text, FilePath, UploadMeta)]
+discoverUploadedDatabases = do
+    dbDir <- getDatabaseUploadsDir
+    newResults <- scanUploadsIn dbDir
+    if not (null newResults)
+        then return newResults
+        else do
+            -- Legacy fallback: scan ./uploads/ directly
+            base <- getDataDir
+            let legacyDir = base </> "uploads"
+            scanUploadsIn legacyDir
+
+-- | Discover all uploaded methods by scanning the methods upload directory
+discoverUploadedMethods :: IO [(Text, FilePath, UploadMeta)]
+discoverUploadedMethods = do
+    methodDir <- getMethodUploadsDir
+    scanUploadsIn methodDir

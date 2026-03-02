@@ -15,6 +15,9 @@ import Pages.Emissions
 import Pages.Graph
 import Pages.Inventory
 import Pages.LCIA
+import Pages.MethodDetail
+import Pages.Methods
+import Pages.MethodUpload
 import Pages.Products
 import Pages.Resources
 import Pages.Tree
@@ -267,6 +270,15 @@ navigateToPage shared page =
         DatabaseSetupActive ->
             Shared.NavigateTo DatabasesRoute
 
+        MethodsActive ->
+            Shared.NavigateTo MethodsRoute
+
+        MethodUploadActive ->
+            Shared.NavigateTo MethodUploadRoute
+
+        MethodDetailActive ->
+            Shared.NavigateTo MethodsRoute
+
 
 routeToActivityId : Route -> Maybe String
 routeToActivityId route =
@@ -368,6 +380,9 @@ main =
         |> Spa.addPublicPage mappers Route.matchDatabases Pages.Databases.page
         |> Spa.addPublicPage mappers Route.matchUpload Pages.Upload.page
         |> Spa.addPublicPage mappers Route.matchDatabaseSetup Pages.DatabaseSetup.page
+        |> Spa.addPublicPage mappers Route.matchMethods Pages.Methods.page
+        |> Spa.addPublicPage mappers Route.matchMethodUpload Pages.MethodUpload.page
+        |> Spa.addPublicPage mappers Route.matchMethodDetail Pages.MethodDetail.page
         |> Spa.beforeRouteChange Shared.RouteChanged
         |> Spa.application View.map
             { toRoute = Route.toRoute

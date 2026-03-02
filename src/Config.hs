@@ -68,9 +68,11 @@ data DatabaseConfig = DatabaseConfig
 
 -- | Method configuration
 data MethodConfig = MethodConfig
-    { mcName   :: !Text
-    , mcPath   :: !FilePath
-    , mcActive :: !Bool
+    { mcName        :: !Text
+    , mcPath        :: !FilePath
+    , mcActive      :: !Bool
+    , mcIsUploaded  :: !Bool           -- True for uploaded methods (vs. configured in TOML)
+    , mcDescription :: !(Maybe Text)   -- Optional description
     } deriving (Show, Eq, Generic)
 
 -- | Unit configuration for dimensional analysis
@@ -161,6 +163,8 @@ instance DecodeTOML MethodConfig where
         mcActive <- getFieldOpt "active" >>= \case
             Just a  -> pure a
             Nothing -> pure True  -- Default to active
+        let mcIsUploaded = False  -- Methods from TOML are not uploaded
+        mcDescription <- getFieldOpt "description"
         pure MethodConfig{..}
 
 instance DecodeTOML UnitsConfig where

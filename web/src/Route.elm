@@ -16,6 +16,9 @@ module Route exposing
     , matchDatabases
     , matchUpload
     , matchDatabaseSetup
+    , matchMethods
+    , matchMethodUpload
+    , matchMethodDetail
     , matchHome
     , routeToDatabase
     , ActivePage(..)
@@ -47,6 +50,9 @@ type Route
     | DatabasesRoute
     | UploadRoute
     | DatabaseSetupRoute String
+    | MethodsRoute
+    | MethodUploadRoute
+    | MethodDetailRoute String
     | NotFoundRoute
 
 
@@ -59,6 +65,9 @@ type ActivePage
     | DatabasesActive
     | UploadActive
     | DatabaseSetupActive
+    | MethodsActive
+    | MethodUploadActive
+    | MethodDetailActive
 
 
 routeToActivePage : Route -> ActivePage
@@ -81,6 +90,15 @@ routeToActivePage route =
 
         DatabaseSetupRoute _ ->
             DatabaseSetupActive
+
+        MethodsRoute ->
+            MethodsActive
+
+        MethodUploadRoute ->
+            MethodUploadActive
+
+        MethodDetailRoute _ ->
+            MethodDetailActive
 
         NotFoundRoute ->
             ActivitiesActive
@@ -117,6 +135,9 @@ routeParser =
         , Parser.map UploadRoute (Parser.s "databases" </> Parser.s "upload")
         , Parser.map DatabaseSetupRoute (Parser.s "databases" </> string </> Parser.s "setup")
         , Parser.map DatabasesRoute (Parser.s "databases")
+        , Parser.map MethodUploadRoute (Parser.s "methods" </> Parser.s "upload")
+        , Parser.map MethodDetailRoute (Parser.s "methods" </> string)
+        , Parser.map MethodsRoute (Parser.s "methods")
         , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit })
             (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "upstream")
@@ -198,6 +219,15 @@ routeToUrl route =
 
         DatabaseSetupRoute dbName ->
             "/databases/" ++ dbName ++ "/setup"
+
+        MethodsRoute ->
+            "/methods"
+
+        MethodUploadRoute ->
+            "/methods/upload"
+
+        MethodDetailRoute name ->
+            "/methods/" ++ name
 
         NotFoundRoute ->
             "/"
@@ -330,6 +360,36 @@ matchDatabaseSetup : Route -> Maybe String
 matchDatabaseSetup route =
     case route of
         DatabaseSetupRoute name ->
+            Just name
+
+        _ ->
+            Nothing
+
+
+matchMethods : Route -> Maybe ()
+matchMethods route =
+    case route of
+        MethodsRoute ->
+            Just ()
+
+        _ ->
+            Nothing
+
+
+matchMethodUpload : Route -> Maybe ()
+matchMethodUpload route =
+    case route of
+        MethodUploadRoute ->
+            Just ()
+
+        _ ->
+            Nothing
+
+
+matchMethodDetail : Route -> Maybe String
+matchMethodDetail route =
+    case route of
+        MethodDetailRoute name ->
             Just name
 
         _ ->

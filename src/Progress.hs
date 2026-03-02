@@ -36,15 +36,16 @@ module Progress (
 
     -- * Log buffer
     getLogLines,
+    waitForNewLines,
 
     -- * Types
     ProgressLevel(..)
 ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, atomically, modifyTVar', retry)
 import Control.Exception (try, SomeException)
 import Control.Monad (when)
-import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
@@ -77,10 +78,10 @@ data LogBuffer = LogBuffer
 progressOutputMutex :: MVar ()
 progressOutputMutex = unsafePerformIO $ newMVar ()
 
--- | Global in-memory log buffer
+-- | Global in-memory log buffer (TVar for STM-based blocking reads)
 {-# NOINLINE logBufferRef #-}
-logBufferRef :: IORef LogBuffer
-logBufferRef = unsafePerformIO $ newIORef LogBuffer
+logBufferRef :: TVar LogBuffer
+logBufferRef = unsafePerformIO $ newTVarIO LogBuffer
     { lbLines = Seq.empty
     , lbOffset = 0
     , lbMaxSize = 1000
@@ -88,30 +89,37 @@ logBufferRef = unsafePerformIO $ newIORef LogBuffer
 
 -- | Append a line to the global log buffer
 appendLogLine :: String -> IO ()
-appendLogLine line = atomicModifyIORef' logBufferRef $ \buf ->
+appendLogLine line = atomically $ modifyTVar' logBufferRef $ \buf ->
     let newLines = lbLines buf Seq.|> line
         len = Seq.length newLines
         maxSz = lbMaxSize buf
     in if len > maxSz
         then let drop' = len - maxSz
-             in ( buf { lbLines = Seq.drop drop' newLines
-                      , lbOffset = lbOffset buf + drop'
-                      }
-                , ()
-                )
-        else ( buf { lbLines = newLines }, () )
+             in buf { lbLines = Seq.drop drop' newLines
+                    , lbOffset = lbOffset buf + drop'
+                    }
+        else buf { lbLines = newLines }
 
 -- | Get log lines since a given absolute index.
 -- Returns (nextIndex, newLines).
 getLogLines :: Int -> IO (Int, [String])
 getLogLines since = do
-    buf <- readIORef logBufferRef
-    let offset = lbOffset buf
-        len = Seq.length (lbLines buf)
-        nextIndex = offset + len
-        startInSeq = max 0 (since - offset)
-        slice = Seq.drop startInSeq (lbLines buf)
-    return (nextIndex, foldr (:) [] slice)
+    buf <- readTVarIO logBufferRef
+    let nextIndex = lbOffset buf + Seq.length (lbLines buf)
+        startInSeq = max 0 (since - lbOffset buf)
+    return (nextIndex, foldr (:) [] (Seq.drop startInSeq (lbLines buf)))
+
+-- | Block until new lines appear after the given index.
+-- Returns (nextIndex, newLines). Uses STM retry for efficient blocking.
+waitForNewLines :: Int -> IO (Int, [String])
+waitForNewLines since = atomically $ do
+    buf <- readTVar logBufferRef
+    let nextIndex = lbOffset buf + Seq.length (lbLines buf)
+    if nextIndex <= since
+        then retry
+        else do
+            let startInSeq = max 0 (since - lbOffset buf)
+            return (nextIndex, foldr (:) [] (Seq.drop startInSeq (lbLines buf)))
 
 -- | Report progress with consistent formatting and thread-safe output
 reportProgress :: ProgressLevel -> String -> IO ()

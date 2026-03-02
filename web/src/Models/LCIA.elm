@@ -21,6 +21,7 @@ type alias MethodSummary =
     , msmCategory : String
     , msmUnit : String
     , msmFactorCount : Int
+    , msmCollection : String
     }
 
 
@@ -73,6 +74,7 @@ methodSummaryDecoder =
         |> required "msmCategory" D.string
         |> required "msmUnit" D.string
         |> required "msmFactorCount" D.int
+        |> required "msmCollection" D.string
 
 
 methodsListDecoder : Decoder (List MethodSummary)

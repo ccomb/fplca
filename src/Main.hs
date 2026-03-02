@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
@@ -23,6 +24,7 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
 #endif
 import Text.Printf (printf)
+import Text.Read (readMaybe)
 
 -- fpLCA imports
 import API.Auth (authMiddleware)
@@ -30,11 +32,12 @@ import CLI.Command
 import CLI.Parser
 import CLI.Types
 import CLI.Types (Command(Server), ServerOptions(..))
-import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), MethodConfig(..))
+import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..))
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), initDatabaseManager, initSingleDatabaseManager)
 import Matrix (initializePetscForServer, precomputeMatrixFactorization, addFactorizationToDatabase)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Progress
+import Progress (waitForNewLines)
 import Database (buildDatabaseWithMatrices)
 import SynonymDB (loadEmbeddedSynonymDB)
 import Types
@@ -50,8 +53,9 @@ import qualified Data.ByteString.Char8 as C8
 import Data.String (fromString)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Network.HTTP.Types.Header (hCacheControl, hPragma)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, pathInfo, mapResponseHeaders)
+import Network.HTTP.Types (status200)
+import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
+import Network.Wai (Application, Request (..), Response, ResponseReceived (..), defaultRequest, rawPathInfo, responseStatus, requestMethod, requestHeaders, pathInfo, mapResponseHeaders, responseStream)
 import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
 import Network.Wai.Handler.Warp (run, runSettings, setPort, setTimeout, defaultSettings)
 import Servant
@@ -120,13 +124,6 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
           Just pwd -> return (Just $ T.unpack pwd)
           Nothing -> lookupEnv "FPLCA_PASSWORD"
 
-      -- Get methods directory from config or CLI
-      let resolvedMethodsDir = case methodsDir (globalOptions cliConfig) of
-            Just dir -> Just dir
-            Nothing -> case cfgMethods config of
-              (m:_) -> Just (mcPath m)  -- Use first active method
-              [] -> Nothing
-
       -- Determine static directory (--static-dir or default "web/dist")
       let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
           desktopMode = serverDesktopMode serverOpts
@@ -140,16 +137,13 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
         else do
           reportProgress Info $ "Starting API server on port " ++ show port
           reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
-          case resolvedMethodsDir of
-            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
-            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods or add to config)"
           case password of
             Just _ -> reportProgress Info "Authentication: ENABLED"
             Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
           reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
       -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) resolvedMethodsDir staticDir desktopMode password
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) staticDir desktopMode password
           finalApp = case password of
             Just pwd -> authMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -248,15 +242,12 @@ runSingleDatabaseMode cliConfig = do
         else do
           reportProgress Info $ "Starting API server on port " ++ show port
           reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
-          case methodsDir (globalOptions cliConfig) of
-            Just dir -> reportProgress Info $ "Methods directory: " ++ dir
-            Nothing -> reportProgress Info "Methods directory: NOT CONFIGURED (use --methods to enable LCIA)"
           case password of
             Just _ -> reportProgress Info "Authentication: ENABLED"
             Nothing -> reportProgress Info "Authentication: DISABLED (use --password or FPLCA_PASSWORD to enable)"
           reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
 
-      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) (methodsDir (globalOptions cliConfig)) staticDir desktopMode password
+      let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) staticDir desktopMode password
           finalApp = case password of
             Just pwd -> authMiddleware (C8.pack pwd) baseApp
             Nothing -> baseApp
@@ -490,8 +481,8 @@ validateDatabase db = do
 -- API handlers dynamically fetch current database from DatabaseManager on each request
 -- staticDir: directory to serve static files from (default: "web/dist")
 -- desktopMode: if True, suppress request logging for cleaner output
-createServerApp :: DatabaseManager -> Int -> Maybe FilePath -> FilePath -> Bool -> Maybe String -> Application
-createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode password req respond = do
+createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Application
+createServerApp dbManager maxTreeDepth staticDir desktopMode password req respond = do
   let path = rawPathInfo req
       queryString = rawQueryString req
       fullUrl = path <> queryString
@@ -503,10 +494,12 @@ createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode password
     hFlush stdout
 
   -- Route requests based on path prefix
-  if C8.pack "/api/" `BS.isPrefixOf` path
+  if path == "/api/v1/logs/stream"
+    then handleLogStream req respond
+    else if C8.pack "/api/" `BS.isPrefixOf` path
     then
       -- API requests go to Servant with DatabaseManager
-      serve lcaAPI (lcaServer dbManager maxTreeDepth methodsDir password) req respond
+      serve lcaAPI (lcaServer dbManager maxTreeDepth password) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         -- Static files: strip /static prefix and serve from staticDir
@@ -534,6 +527,25 @@ createServerApp dbManager maxTreeDepth methodsDir staticDir desktopMode password
                     : (hPragma, C8.pack "no-cache")
                     : hs) res
          in staticApp staticSettings indexReq noCacheRespond
+
+-- | SSE endpoint for real-time log streaming
+handleLogStream :: Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+handleLogStream req respond = do
+    -- Support reconnection via Last-Event-ID header
+    let lastEventId = lookup "Last-Event-ID" (requestHeaders req)
+        since = maybe 0 (\v -> fromMaybe 0 (readMaybe (C8.unpack v))) lastEventId
+    respond $ responseStream status200
+        [ (hContentType, "text/event-stream")
+        , (hCacheControl, "no-cache")
+        , ("X-Accel-Buffering", "no")
+        ] $ \write flush -> do
+            let loop !cursor = do
+                    (!nextIdx, newLines) <- waitForNewLines cursor
+                    forM_ newLines $ \line ->
+                        write (fromString $ "id:" ++ show nextIdx ++ "\ndata:" ++ line ++ "\n\n")
+                    flush
+                    loop nextIdx
+            loop since
 
 -- | Validate CLI configuration for consistency
 validateCLIConfig :: CLIConfig -> IO ()

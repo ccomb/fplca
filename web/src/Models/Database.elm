@@ -13,6 +13,7 @@ module Models.Database exposing
     , UploadResponse
     , activateResponseDecoder
     , databaseListDecoder
+    , databaseLoadStatusDecoder
     , databaseSetupInfoDecoder
     , databaseStatusDecoder
     , depLoadResultDecoder
@@ -43,6 +44,7 @@ type alias DatabaseStatus =
     , isUploaded : Bool
     , path : String
     , format : Maybe String
+    , activityCount : Int
     }
 
 
@@ -97,6 +99,7 @@ databaseStatusDecoder =
         |> required "dsaIsUploaded" Decode.bool
         |> required "dsaPath" Decode.string
         |> optional "dsaFormat" (Decode.nullable Decode.string) Nothing
+        |> optional "dsaActivityCount" Decode.int 0
 
 
 {-| JSON decoder for DatabaseList
