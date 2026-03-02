@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -26,6 +27,8 @@ module Database.Upload
     , slugify
     ) where
 
+import Data.Aeson (ToJSON(..), FromJSON(..), withText)
+import qualified Data.Aeson as A
 import Control.Exception (try, catch, SomeException)
 import Control.Monad (forM, filterM)
 import Data.Char (isAlphaNum, toLower)
@@ -51,6 +54,19 @@ data DatabaseFormat
     | EcoSpold2      -- EcoSpold v2 XML format
     | UnknownFormat  -- Could not detect format
     deriving (Show, Eq, Generic)
+
+instance ToJSON DatabaseFormat where
+    toJSON EcoSpold2     = A.String "EcoSpold 2"
+    toJSON EcoSpold1     = A.String "EcoSpold 1"
+    toJSON SimaProCSV    = A.String "SimaPro CSV"
+    toJSON UnknownFormat = A.String ""
+
+instance FromJSON DatabaseFormat where
+    parseJSON = withText "DatabaseFormat" $ \case
+        "EcoSpold 2"  -> pure EcoSpold2
+        "EcoSpold 1"  -> pure EcoSpold1
+        "SimaPro CSV" -> pure SimaProCSV
+        _             -> pure UnknownFormat
 
 -- | Progress event for upload/loading operations
 data ProgressEvent = ProgressEvent

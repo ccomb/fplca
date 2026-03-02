@@ -1,4 +1,4 @@
-module Views.ListActions exposing (ListRow, viewDeleteConfirmation, viewOpenButton, viewRow, viewTableHeader)
+module Views.ListActions exposing (ListRow, viewCloseButton, viewDeleteConfirmation, viewLoadingSpinner, viewOpenButton, viewPageHeader, viewRow, viewTableHeader)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
@@ -140,3 +140,62 @@ viewDeleteConfirmation config =
             ]
             [ span [ class "icon is-small" ] [ i [ class "fas fa-trash" ] [] ]
             ]
+
+
+viewPageHeader :
+    { title : String, subtitle : String, addHref : String, addLabel : String }
+    -> Maybe String
+    -> Html msg
+viewPageHeader config error =
+    div [ class "box" ]
+        [ div [ class "level" ]
+            [ div [ class "level-left" ]
+                [ div [ class "level-item" ]
+                    [ h2 [ class "title is-3", style "margin-bottom" "0" ] [ text config.title ]
+                    ]
+                ]
+            , div [ class "level-right" ]
+                [ div [ class "level-item" ]
+                    [ a [ href config.addHref, class "button is-primary" ]
+                        [ span [ class "icon" ] [ i [ class "fas fa-plus" ] [] ]
+                        , span [] [ text config.addLabel ]
+                        ]
+                    ]
+                ]
+            ]
+        , p [ class "subtitle" ] [ text config.subtitle ]
+        , case error of
+            Just err ->
+                div [ class "notification is-danger" ] [ text err ]
+
+            Nothing ->
+                text ""
+        ]
+
+
+viewCloseButton : { onClose : msg, isClosing : Bool } -> Html msg
+viewCloseButton config =
+    button
+        [ class
+            ("button is-warning is-small"
+                ++ (if config.isClosing then
+                        " is-loading"
+
+                    else
+                        ""
+                   )
+            )
+        , Html.Attributes.disabled config.isClosing
+        , stopPropagationOn "click" (Decode.succeed ( config.onClose, True ))
+        ]
+        [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
+        , span [] [ text "Close" ]
+        ]
+
+
+viewLoadingSpinner : Html msg
+viewLoadingSpinner =
+    div [ class "has-text-centered", style "padding" "2rem" ]
+        [ span [ class "icon is-large has-text-primary" ]
+            [ i [ class "fas fa-spinner fa-spin fa-2x" ] [] ]
+        ]

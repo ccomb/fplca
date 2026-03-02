@@ -14,6 +14,7 @@ import SynonymDB (SynonymDB, emptySynonymDB)
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..))
 import qualified Database.Manager as DM
 import Database.Upload (DatabaseFormat(..))
+import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import Progress (getLogLines)
 import Database
@@ -441,18 +442,12 @@ lcaServer dbManager maxTreeDepth password =
             ]
 
     loadMethodCollectionHandler :: Text -> Handler ActivateResponse
-    loadMethodCollectionHandler name = do
-        result <- liftIO $ DM.loadMethodCollection dbManager name
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right () -> return $ ActivateResponse True ("Loaded method: " <> name) Nothing
+    loadMethodCollectionHandler name =
+        simpleAction (DM.loadMethodCollection dbManager name) ("Loaded method: " <> name)
 
     unloadMethodCollectionHandler :: Text -> Handler ActivateResponse
-    unloadMethodCollectionHandler name = do
-        result <- liftIO $ DM.unloadMethodCollection dbManager name
-        case result of
-            Left err -> return $ ActivateResponse False err Nothing
-            Right () -> return $ ActivateResponse True ("Unloaded method: " <> name) Nothing
+    unloadMethodCollectionHandler name =
+        simpleAction (DM.unloadMethodCollection dbManager name) ("Unloaded method: " <> name)
 
     -- Helper to convert MethodCF to API type
     cfToAPI :: MethodCF -> MethodFactorAPI

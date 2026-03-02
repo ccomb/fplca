@@ -25,7 +25,7 @@ module API.DatabaseHandlers
     , finalizeDatabaseHandler
       -- * Helpers
     , convertDbStatus
-    , convertLoadedDbToStatus
+    , simpleAction
     ) where
 
 import Control.Exception (SomeException, try)
@@ -44,7 +44,7 @@ import qualified Config
 import Config (DatabaseConfig(..))
 import qualified Data.Vector as V
 import Types (Database(..), unresolvedCount)
-import Data.Aeson (Value)
+import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Database.Manager
@@ -107,19 +107,13 @@ loadDatabaseHandler dbManager dbName = do
 
 -- | Unload a database from memory
 unloadDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse
-unloadDatabaseHandler dbManager dbName = do
-    result <- liftIO $ unloadDatabase dbManager dbName
-    case result of
-        Left err -> return $ ActivateResponse False err Nothing
-        Right () -> return $ ActivateResponse True ("Unloaded database: " <> dbName) Nothing
+unloadDatabaseHandler dbManager dbName =
+    simpleAction (unloadDatabase dbManager dbName) ("Unloaded database: " <> dbName)
 
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse
-deleteDatabaseHandler dbManager dbName = do
-    result <- liftIO $ removeDatabase dbManager dbName
-    case result of
-        Left err -> return $ ActivateResponse False err Nothing
-        Right () -> return $ ActivateResponse True ("Deleted database: " <> dbName) Nothing
+deleteDatabaseHandler dbManager dbName =
+    simpleAction (removeDatabase dbManager dbName) ("Deleted database: " <> dbName)
 
 -- | Upload a new database
 uploadDatabaseHandler :: DatabaseManager -> UploadRequest -> Handler UploadResponse
@@ -186,21 +180,13 @@ convertDbStatus ds = DatabaseStatusAPI
     , dsaStatus = statusToText (dsStatus ds)
     , dsaIsUploaded = dsIsUploaded ds
     , dsaPath = dsPath ds
-    , dsaFormat = formatToDisplayText <$> dsFormat ds
+    , dsaFormat = formatDisplayText <$> dsFormat ds
     , dsaActivityCount = dsActivityCount ds
     }
   where
     statusToText Unloaded        = "unloaded"
     statusToText PartiallyLinked = "partially_linked"
     statusToText Loaded          = "loaded"
-    formatToDisplayText EcoSpold2 = "EcoSpold 2"
-    formatToDisplayText EcoSpold1 = "EcoSpold 1"
-    formatToDisplayText SimaProCSV = "SimaPro CSV"
-    formatToDisplayText UnknownFormat = ""
-
--- | Convert LoadedDatabase to DatabaseStatusAPI
-convertLoadedDbToStatus :: LoadedDatabase -> DatabaseStatusAPI
-convertLoadedDbToStatus = makeStatusFromLoadedDb
 
 -- | Create DatabaseStatusAPI from a loaded database (derives status from linking stats)
 makeStatusFromLoadedDb :: LoadedDatabase -> DatabaseStatusAPI
@@ -218,14 +204,9 @@ makeStatusFromLoadedDb loaded =
         , dsaStatus = status
         , dsaIsUploaded = Config.dcIsUploaded config
         , dsaPath = T.pack (Config.dcPath config)
-        , dsaFormat = formatToDisplayText <$> Config.dcFormat config
+        , dsaFormat = formatDisplayText <$> Config.dcFormat config
         , dsaActivityCount = V.length (dbActivities db)
         }
-  where
-    formatToDisplayText EcoSpold2 = "EcoSpold 2"
-    formatToDisplayText EcoSpold1 = "EcoSpold 1"
-    formatToDisplayText SimaProCSV = "SimaPro CSV"
-    formatToDisplayText UnknownFormat = ""
 
 -- uploadFormatToMeta removed - types are now unified (UploadedDB re-exports from Upload)
 
@@ -235,7 +216,13 @@ makeRelative base path
     | base `isPrefixOf` path = drop (length base + 1) path  -- +1 for separator
     | otherwise = path
 
--- | Convert DatabaseFormat to Text
+-- | Convert DatabaseFormat to display text (uses ToJSON instance: "EcoSpold 2", etc.)
+formatDisplayText :: DatabaseFormat -> Text
+formatDisplayText fmt = case toJSON fmt of
+    A.String t -> t
+    _          -> ""
+
+-- | Convert DatabaseFormat to API slug text
 formatToText :: DatabaseFormat -> Text
 formatToText SimaProCSV = "simapro-csv"
 formatToText EcoSpold1 = "ecospold1"
@@ -355,8 +342,13 @@ uploadMethodHandler dbManager req = do
 
 -- | Delete an uploaded method collection
 deleteMethodHandler :: DatabaseManager -> Text -> Handler ActivateResponse
-deleteMethodHandler dbManager name = do
-    result <- liftIO $ removeMethodCollection dbManager name
-    case result of
-        Left err -> return $ ActivateResponse False err Nothing
-        Right () -> return $ ActivateResponse True ("Deleted method: " <> name) Nothing
+deleteMethodHandler dbManager name =
+    simpleAction (removeMethodCollection dbManager name) ("Deleted method: " <> name)
+
+-- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse
+simpleAction :: IO (Either Text ()) -> Text -> Handler ActivateResponse
+simpleAction action successMsg = do
+    result <- liftIO action
+    return $ case result of
+        Left err -> ActivateResponse False err Nothing
+        Right () -> ActivateResponse True successMsg Nothing

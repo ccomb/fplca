@@ -2,8 +2,6 @@ module Views.MethodsView exposing (Msg(..), viewMethodsPage)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (stopPropagationOn)
-import Json.Decode as Decode
 import Models.Database exposing (DatabaseLoadStatus(..))
 import Models.Method exposing (MethodCollectionList, MethodCollectionStatus)
 import Set exposing (Set)
@@ -22,40 +20,15 @@ type Msg
 viewMethodsPage : Maybe MethodCollectionList -> Maybe String -> Maybe String -> Set String -> Maybe String -> Maybe String -> Html Msg
 viewMethodsPage maybeMethods error confirmingDelete loadingMethods unloadingMethod deletingMethod =
     div [ class "databases-page" ]
-        [ div [ class "box" ]
-            [ div [ class "level" ]
-                [ div [ class "level-left" ]
-                    [ div [ class "level-item" ]
-                        [ h2 [ class "title is-3", style "margin-bottom" "0" ] [ text "Methods" ]
-                        ]
-                    ]
-                , div [ class "level-right" ]
-                    [ div [ class "level-item" ]
-                        [ a [ href "/methods/upload", class "button is-primary" ]
-                            [ span [ class "icon" ] [ i [ class "fas fa-plus" ] [] ]
-                            , span [] [ text "Add method" ]
-                            ]
-                        ]
-                    ]
-                ]
-            , p [ class "subtitle" ] [ text "Manage your LCIA characterization methods" ]
-            , case error of
-                Just err ->
-                    div [ class "notification is-danger" ]
-                        [ text err ]
-
-                Nothing ->
-                    text ""
-            ]
+        [ ListActions.viewPageHeader
+            { title = "Methods", subtitle = "Manage your LCIA characterization methods", addHref = "/methods/upload", addLabel = "Add method" }
+            error
         , case maybeMethods of
             Just methodList ->
                 viewMethodsList methodList confirmingDelete loadingMethods unloadingMethod deletingMethod
 
             Nothing ->
-                div [ class "has-text-centered", style "padding" "2rem" ]
-                    [ span [ class "icon is-large has-text-primary" ]
-                        [ i [ class "fas fa-spinner fa-spin fa-2x" ] [] ]
-                    ]
+                ListActions.viewLoadingSpinner
         ]
 
 
@@ -122,22 +95,8 @@ viewMethodRow confirmingDelete loadingMethods unloadingMethod deletingMethod mc 
                                )
 
                     _ ->
-                        [ button
-                            [ class
-                                ("button is-warning is-small"
-                                    ++ (if isUnloading then
-                                            " is-loading"
-
-                                        else
-                                            ""
-                                       )
-                                )
-                            , Html.Attributes.disabled isUnloading
-                            , stopPropagationOn "click" (Decode.succeed ( UnloadMethod mc.name, True ))
-                            ]
-                            [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
-                            , span [] [ text "Close" ]
-                            ]
+                        [ ListActions.viewCloseButton
+                            { onClose = UnloadMethod mc.name, isClosing = isUnloading }
                         ]
                 )
     in

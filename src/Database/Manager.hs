@@ -56,7 +56,6 @@ import Data.Maybe (catMaybes, isJust)
 import System.Mem (performGC)
 import Data.Bifunctor (first)
 import Data.Aeson (ToJSON(..), FromJSON(..), (.=), (.:), (.:?))
-import Data.Aeson.Types (Parser)
 import qualified Data.Aeson as A
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -239,14 +238,9 @@ instance ToJSON DatabaseStatus where
         , "dsStatus" .= dsStatus
         , "dsIsUploaded" .= dsIsUploaded
         , "dsPath" .= dsPath
-        , "dsFormat" .= fmap formatToDisplayText dsFormat
+        , "dsFormat" .= dsFormat
         , "dsActivityCount" .= dsActivityCount
         ]
-      where
-        formatToDisplayText Upload.EcoSpold2 = "EcoSpold 2" :: T.Text
-        formatToDisplayText Upload.EcoSpold1 = "EcoSpold 1"
-        formatToDisplayText Upload.SimaProCSV = "SimaPro CSV"
-        formatToDisplayText Upload.UnknownFormat = ""
 
 instance FromJSON DatabaseStatus where
     parseJSON = A.withObject "DatabaseStatus" $ \v -> DatabaseStatus
@@ -257,15 +251,8 @@ instance FromJSON DatabaseStatus where
         <*> v .: "dsStatus"
         <*> v .: "dsIsUploaded"
         <*> v .: "dsPath"
-        <*> (parseFormat <$> v .:? "dsFormat")
+        <*> v .:? "dsFormat"
         <*> v .: "dsActivityCount"
-      where
-        parseFormat :: Maybe T.Text -> Maybe Upload.DatabaseFormat
-        parseFormat Nothing = Nothing
-        parseFormat (Just "EcoSpold 2") = Just Upload.EcoSpold2
-        parseFormat (Just "EcoSpold 1") = Just Upload.EcoSpold1
-        parseFormat (Just "SimaPro CSV") = Just Upload.SimaProCSV
-        parseFormat (Just _) = Just Upload.UnknownFormat
 
 -- | Status of a method collection (e.g., EF-3.1) for API responses
 data MethodCollectionStatus = MethodCollectionStatus

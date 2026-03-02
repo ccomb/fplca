@@ -130,8 +130,7 @@ view shared model =
 
                 _ ->
                     Nothing
-    in
-    let
+
         unloadingDb =
             case model.pendingAction of
                 Just (UnloadingDb name) ->

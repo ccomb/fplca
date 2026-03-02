@@ -22,40 +22,15 @@ type Msg
 viewDatabasesPage : Maybe DatabaseList -> Maybe String -> Maybe String -> Set String -> Maybe String -> Maybe String -> List String -> Html Msg
 viewDatabasesPage maybeDatabases error confirmingDelete loadingDbs unloadingDb deletingDb progressLines =
     div [ class "databases-page" ]
-        [ div [ class "box" ]
-            [ div [ class "level" ]
-                [ div [ class "level-left" ]
-                    [ div [ class "level-item" ]
-                        [ h2 [ class "title is-3", style "margin-bottom" "0" ] [ text "Databases" ]
-                        ]
-                    ]
-                , div [ class "level-right" ]
-                    [ div [ class "level-item" ]
-                        [ a [ href "/databases/upload", class "button is-primary" ]
-                            [ span [ class "icon" ] [ i [ class "fas fa-plus" ] [] ]
-                            , span [] [ text "Add database" ]
-                            ]
-                        ]
-                    ]
-                ]
-            , p [ class "subtitle" ] [ text "Manage your LCA databases" ]
-            , case error of
-                Just err ->
-                    div [ class "notification is-danger" ]
-                        [ text err ]
-
-                Nothing ->
-                    text ""
-            ]
+        [ ListActions.viewPageHeader
+            { title = "Databases", subtitle = "Manage your LCA databases", addHref = "/databases/upload", addLabel = "Add database" }
+            error
         , case maybeDatabases of
             Just dbList ->
                 viewDatabasesList dbList confirmingDelete loadingDbs unloadingDb deletingDb progressLines
 
             Nothing ->
-                div [ class "has-text-centered", style "padding" "2rem" ]
-                    [ span [ class "icon is-large has-text-primary" ]
-                        [ i [ class "fas fa-spinner fa-spin fa-2x" ] [] ]
-                    ]
+                ListActions.viewLoadingSpinner
         ]
 
 
@@ -123,22 +98,8 @@ viewDatabaseRow confirmingDelete loadingDbs unloadingDb deletingDb db =
             db.isUploaded && db.status == Unloaded
 
         closeButton =
-            button
-                [ class
-                    ("button is-warning is-small"
-                        ++ (if isUnloading then
-                                " is-loading"
-
-                            else
-                                ""
-                           )
-                    )
-                , Html.Attributes.disabled isUnloading
-                , stopPropagationOn "click" (Decode.succeed ( UnloadDatabase db.name, True ))
-                ]
-                [ span [ class "icon is-small" ] [ i [ class "fas fa-times" ] [] ]
-                , span [] [ text "Close" ]
-                ]
+            ListActions.viewCloseButton
+                { onClose = UnloadDatabase db.name, isClosing = isUnloading }
 
         actions =
             div [ class "buttons are-small" ]
