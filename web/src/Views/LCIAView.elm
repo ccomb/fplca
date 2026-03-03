@@ -8,12 +8,16 @@ import Utils.Format as Format
 
 
 type Msg
-    = SelectMethod String
+    = SelectCollection String
+    | SelectCategory String
+    | SelectMethod String
     | ComputeLCIA String
 
 
 viewLCIAPage :
     Maybe (List MethodSummary)
+    -> Maybe String
+    -> Maybe String
     -> Maybe MethodSummary
     -> Maybe LCIAResult
     -> Maybe MappingStatus
@@ -22,7 +26,7 @@ viewLCIAPage :
     -> Maybe String
     -> Maybe ( String, String )
     -> Html Msg
-viewLCIAPage maybeMethods selectedMethod maybeLCIAResult maybeMappingStatus loadingMethods loadingLCIA error maybeActivityInfo =
+viewLCIAPage maybeMethods selectedCollection selectedCategory selectedMethod maybeLCIAResult maybeMappingStatus loadingMethods loadingLCIA error maybeActivityInfo =
     div [ class "lcia-page" ]
         [ viewPageNavbar "Impact Assessment (LCIA)" maybeActivityInfo
         , div []
@@ -41,7 +45,7 @@ viewLCIAPage maybeMethods selectedMethod maybeLCIAResult maybeMappingStatus load
 
                 ( _, _, Just methods ) ->
                     div []
-                        [ viewMethodSelector methods selectedMethod
+                        [ viewMethodSelector methods selectedCollection selectedCategory selectedMethod
                         , case selectedMethod of
                             Just method ->
                                 div []
@@ -51,9 +55,7 @@ viewLCIAPage maybeMethods selectedMethod maybeLCIAResult maybeMappingStatus load
                                     ]
 
                             Nothing ->
-                                div [ class "box" ]
-                                    [ p [ class "has-text-grey" ] [ text "Select a method to compute impact assessment" ]
-                                    ]
+                                text ""
                         ]
 
                 ( _, _, Nothing ) ->
@@ -63,41 +65,136 @@ viewLCIAPage maybeMethods selectedMethod maybeLCIAResult maybeMappingStatus load
         ]
 
 
-viewMethodSelector : List MethodSummary -> Maybe MethodSummary -> Html Msg
-viewMethodSelector methods selectedMethod =
+viewMethodSelector : List MethodSummary -> Maybe String -> Maybe String -> Maybe MethodSummary -> Html Msg
+viewMethodSelector methods selectedCollection selectedCategory selectedMethod =
+    let
+        collections =
+            unique (List.map .msmCollection methods)
+
+        categoriesForCollection col =
+            methods
+                |> List.filter (\m -> m.msmCollection == col)
+                |> List.map .msmCategory
+                |> unique
+
+        methodsForCategoryInCollection col cat =
+            methods
+                |> List.filter (\m -> m.msmCollection == col && m.msmCategory == cat)
+
+        -- Skip impact-level dropdown when all methods in the category have name == category
+        skipImpactLevel col cat =
+            methodsForCategoryInCollection col cat
+                |> List.all (\m -> m.msmName == m.msmCategory)
+    in
     div [ class "box" ]
         [ h2 [ class "title is-5" ] [ text "Select Impact Category" ]
-        , div [ class "field" ]
-            [ div [ class "control" ]
-                [ div [ class "select is-fullwidth" ]
-                    [ select
-                        [ onInput SelectMethod ]
-                        (option [ value "" ] [ text "-- Select a method --" ]
-                            :: List.map (viewMethodOption selectedMethod) methods
-                        )
+        , div [ class "columns" ]
+            [ -- Level 1: Collection
+              div [ class "column" ]
+                [ div [ class "field" ]
+                    [ label [ class "label is-small" ] [ text "Collection" ]
+                    , div [ class "control" ]
+                        [ div [ class "select is-fullwidth" ]
+                            [ select [ onInput SelectCollection ]
+                                (option [ value "" ] [ text "-- Collection --" ]
+                                    :: List.map
+                                        (\col ->
+                                            option
+                                                [ value col
+                                                , selected (selectedCollection == Just col)
+                                                ]
+                                                [ text col ]
+                                        )
+                                        collections
+                                )
+                            ]
+                        ]
                     ]
                 ]
+
+            , -- Level 2: Category (visible when collection selected)
+              case selectedCollection of
+                Just col ->
+                    let
+                        cats =
+                            categoriesForCollection col
+                    in
+                    div [ class "column" ]
+                        [ div [ class "field" ]
+                            [ label [ class "label is-small" ] [ text "Category" ]
+                            , div [ class "control" ]
+                                [ div [ class "select is-fullwidth" ]
+                                    [ select [ onInput SelectCategory ]
+                                        (option [ value "" ] [ text "-- Category --" ]
+                                            :: List.map
+                                                (\cat ->
+                                                    option
+                                                        [ value cat
+                                                        , selected (selectedCategory == Just cat)
+                                                        ]
+                                                        [ text cat ]
+                                                )
+                                                cats
+                                        )
+                                    ]
+                                ]
+                            ]
+                        ]
+
+                Nothing ->
+                    text ""
+
+            , -- Level 3: Impact (visible when category selected, skipped if redundant)
+              case ( selectedCollection, selectedCategory ) of
+                ( Just col, Just cat ) ->
+                    if skipImpactLevel col cat then
+                        text ""
+
+                    else
+                        let
+                            impacts =
+                                methodsForCategoryInCollection col cat
+                        in
+                        div [ class "column" ]
+                            [ div [ class "field" ]
+                                [ label [ class "label is-small" ] [ text "Impact" ]
+                                , div [ class "control" ]
+                                    [ div [ class "select is-fullwidth" ]
+                                        [ select [ onInput SelectMethod ]
+                                            (option [ value "" ] [ text "-- Impact --" ]
+                                                :: List.map
+                                                    (\m ->
+                                                        option
+                                                            [ value m.msmId
+                                                            , selected (Maybe.map .msmId selectedMethod == Just m.msmId)
+                                                            ]
+                                                            [ text (m.msmName ++ " (" ++ m.msmUnit ++ ")") ]
+                                                    )
+                                                    impacts
+                                            )
+                                        ]
+                                    ]
+                                ]
+                            ]
+
+                _ ->
+                    text ""
             ]
         , p [ class "help" ] [ text (String.fromInt (List.length methods) ++ " methods available") ]
         ]
 
 
-viewMethodOption : Maybe MethodSummary -> MethodSummary -> Html Msg
-viewMethodOption selectedMethod method =
-    let
-        isSelected =
-            case selectedMethod of
-                Just sel ->
-                    sel.msmId == method.msmId
+unique : List comparable -> List comparable
+unique =
+    List.foldl
+        (\x acc ->
+            if List.member x acc then
+                acc
 
-                Nothing ->
-                    False
-    in
-    option
-        [ value method.msmId
-        , selected isSelected
-        ]
-        [ text (method.msmCategory ++ " - " ++ method.msmName ++ " (" ++ method.msmUnit ++ ")") ]
+            else
+                acc ++ [ x ]
+        )
+        []
 
 
 viewSelectedMethod : MethodSummary -> Bool -> Html Msg

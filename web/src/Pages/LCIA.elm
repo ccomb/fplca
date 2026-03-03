@@ -28,6 +28,8 @@ type LCIAState
     | MethodsFailed String
     | MethodsReady
         { methods : List MethodSummary
+        , selectedCollection : Maybe String
+        , selectedCategory : Maybe String
         , computation : LCIAComputation
         }
 
@@ -94,11 +96,69 @@ update : Shared.Model -> Msg -> Model -> ( Model, Effect Shared.Msg Msg )
 update shared msg model =
     case msg of
         MethodsLoaded (Ok methods) ->
+            let
+                collections =
+                    List.map .msmCollection methods
+                        |> unique
+
+                autoCollection =
+                    case collections of
+                        [ single ] ->
+                            Just single
+
+                        _ ->
+                            Nothing
+
+                autoCategory =
+                    case autoCollection of
+                        Just col ->
+                            let
+                                cats =
+                                    List.filter (\m -> m.msmCollection == col) methods
+                                        |> List.map .msmCategory
+                                        |> unique
+                            in
+                            case cats of
+                                [ single ] ->
+                                    Just single
+
+                                _ ->
+                                    Nothing
+
+                        Nothing ->
+                            Nothing
+
+                autoMethod =
+                    case ( autoCollection, autoCategory ) of
+                        ( Just col, Just cat ) ->
+                            let
+                                matching =
+                                    List.filter (\m -> m.msmCollection == col && m.msmCategory == cat) methods
+                            in
+                            if List.all (\m -> m.msmName == m.msmCategory) matching then
+                                List.head matching
+
+                            else
+                                Nothing
+
+                        _ ->
+                            Nothing
+
+                computation =
+                    case autoMethod of
+                        Just m ->
+                            MethodSelected m
+
+                        Nothing ->
+                            NoMethodSelected
+            in
             ( { model
                 | state =
                     MethodsReady
                         { methods = methods
-                        , computation = NoMethodSelected
+                        , selectedCollection = autoCollection
+                        , selectedCategory = autoCategory
+                        , computation = computation
                         }
               }
             , Effect.none
@@ -119,6 +179,104 @@ update shared msg model =
 
         LCIAViewMsg viewMsg ->
             case viewMsg of
+                LCIAView.SelectCollection col ->
+                    case model.state of
+                        MethodsReady ready ->
+                            let
+                                colMethods =
+                                    List.filter (\m -> m.msmCollection == col) ready.methods
+
+                                cats =
+                                    colMethods |> List.map .msmCategory |> unique
+
+                                autoCat =
+                                    case cats of
+                                        [ single ] ->
+                                            Just single
+
+                                        _ ->
+                                            Nothing
+
+                                autoMethod =
+                                    case autoCat of
+                                        Just cat ->
+                                            let
+                                                matching =
+                                                    List.filter (\m -> m.msmCategory == cat) colMethods
+                                            in
+                                            if List.all (\m -> m.msmName == m.msmCategory) matching then
+                                                List.head matching
+
+                                            else
+                                                Nothing
+
+                                        Nothing ->
+                                            Nothing
+
+                                computation =
+                                    case autoMethod of
+                                        Just m ->
+                                            MethodSelected m
+
+                                        Nothing ->
+                                            NoMethodSelected
+                            in
+                            ( { model
+                                | state =
+                                    MethodsReady
+                                        { ready
+                                            | selectedCollection = Just col
+                                            , selectedCategory = autoCat
+                                            , computation = computation
+                                        }
+                              }
+                            , Effect.none
+                            )
+
+                        _ ->
+                            ( model, Effect.none )
+
+                LCIAView.SelectCategory cat ->
+                    case model.state of
+                        MethodsReady ready ->
+                            let
+                                matching =
+                                    ready.methods
+                                        |> List.filter
+                                            (\m ->
+                                                Just m.msmCollection == ready.selectedCollection
+                                                    && m.msmCategory == cat
+                                            )
+
+                                autoMethod =
+                                    if List.all (\m -> m.msmName == m.msmCategory) matching then
+                                        List.head matching
+
+                                    else
+                                        Nothing
+
+                                computation =
+                                    case autoMethod of
+                                        Just m ->
+                                            MethodSelected m
+
+                                        Nothing ->
+                                            NoMethodSelected
+                            in
+                            ( { model
+                                | state =
+                                    MethodsReady
+                                        { ready
+                                            | selectedCategory = Just cat
+                                            , computation = computation
+                                        }
+                              }
+                            , Effect.none
+                            )
+
+                        _ ->
+                            ( model, Effect.none )
+
                 LCIAView.SelectMethod methodId ->
                     case model.state of
                         MethodsReady ready ->
@@ -260,6 +418,22 @@ viewLoaded shared model =
                 _ ->
                     Nothing
 
+        selectedCollection =
+            case model.state of
+                MethodsReady ready ->
+                    ready.selectedCollection
+
+                _ ->
+                    Nothing
+
+        selectedCategory =
+            case model.state of
+                MethodsReady ready ->
+                    ready.selectedCategory
+
+                _ ->
+                    Nothing
+
         selectedMethod =
             case model.state of
                 MethodsReady ready ->
@@ -345,6 +519,8 @@ viewLoaded shared model =
         Html.map LCIAViewMsg
             (LCIAView.viewLCIAPage
                 maybeMethods
+                selectedCollection
+                selectedCategory
                 selectedMethod
                 maybeLCIAResult
                 maybeMappingStatus
@@ -382,3 +558,16 @@ loadMappingStatus dbName methodId =
         { url = "/api/v1/method/" ++ methodId ++ "/mapping?db=" ++ dbName
         , expect = Http.expectJson MappingStatusLoaded mappingStatusDecoder
         }
+
+
+unique : List comparable -> List comparable
+unique =
+    List.foldl
+        (\x acc ->
+            if List.member x acc then
+                acc
+
+            else
+                acc ++ [ x ]
+        )
+        []

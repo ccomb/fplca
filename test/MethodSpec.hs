@@ -9,8 +9,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
+import qualified Data.ByteString as BS
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
 import Method.Parser
+import Method.ParserCSV (parseMethodCSVBytes)
 import Method.Types
 import SynonymDB
 import Types (Flow(..), FlowType(..))
@@ -197,6 +199,29 @@ spec = do
                         , "</LCIAMethodDataSet>"
                         ]
                 parseMethodBytes xml `shouldSatisfy` isLeft
+
+    describe "CSV Method Parser" $ do
+        it "parses 2-row header: category defaults to name" $ do
+            csv <- BS.readFile "test/data/method.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    length methods `shouldBe` 3
+                    let gwp = head methods
+                    methodName gwp `shouldBe` "global warming (GWP100)"
+                    methodCategory gwp `shouldBe` "global warming (GWP100)"
+
+        it "parses 3-row header: distinct category and name" $ do
+            csv <- BS.readFile "test/data/method_with_categories.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    length methods `shouldBe` 3
+                    let gwp = head methods
+                    methodName gwp `shouldBe` "global warming (GWP100)"
+                    methodCategory gwp `shouldBe` "Climate change"
+                    methodUnit gwp `shouldBe` "kg CO2 eq."
+                    methodMethodology gwp `shouldBe` Just "Test Method"
 
     describe "LCIA Score Computation" $ do
         describe "computeLCIAScore" $ do

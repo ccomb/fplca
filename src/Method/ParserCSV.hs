@@ -3,21 +3,31 @@
 
 -- | Parser for CSV-based LCIA method files.
 --
--- A single CSV file encodes multiple impact categories as columns:
+-- A single CSV file encodes multiple impact categories as columns.
+-- Supports two header layouts (both after optional @# methodology:@ comment):
 --
--- > # methodology: CML-IA aug 2016
--- > ;;global warming (GWP100);acidification;...
--- > ;;kg CO2 eq.;kg SO2 eq.;...
--- > substance;compartment;;;...
--- > Carbon dioxide;air;1.0;;...
+-- __2-row__ (category defaults to name):
+--
+-- > ;;global warming (GWP100);acidification;...      ← names
+-- > ;;kg CO2 eq.;kg SO2 eq.;...                      ← units
+-- > substance;compartment;;;...                       ← label row
+--
+-- __3-row__ (explicit categories):
+--
+-- > ;;Climate change;Acidification;...                ← categories
+-- > ;;global warming (GWP100);acidification;...       ← names
+-- > ;;kg CO2 eq.;kg SO2 eq.;...                       ← units
+-- > substance;compartment;;;...                        ← label row
 --
 -- One CSV file → multiple 'Method' values (one per column).
 module Method.ParserCSV
     ( parseMethodCSV
+    , parseMethodCSVBytes
     ) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
+import Data.List (zip4)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -33,33 +43,56 @@ import Method.Types
 parseMethodCSV :: FilePath -> IO (Either String [Method])
 parseMethodCSV path = do
     bytes <- BS.readFile path
-    return $ parseMethodBytes bytes
+    return $ parseMethodCSVBytes bytes
 
-parseMethodBytes :: BS.ByteString -> Either String [Method]
-parseMethodBytes bytes =
+-- | Pure parser, exported for testing.
+parseMethodCSVBytes :: BS.ByteString -> Either String [Method]
+parseMethodCSVBytes bytes =
     let allLines  = BC.lines bytes
-        -- Extract metadata from # comment lines
         (comments, dataLines) = span (\l -> BC.isPrefixOf "#" l || BS.null l) allLines
         methodology = extractMethodology comments
-        -- Need at least 3 rows: categories, units, column-labels
-        -- (data rows may be empty for a valid but useless file)
-    in case dataLines of
-        (catRow : unitRow : _labelRow : rows) ->
-            let !delim = detectDelimiter catRow
-                cats  = drop 2 $ splitRow delim catRow
-                units = drop 2 $ splitRow delim unitRow
-                -- Build one Method per non-empty category column
-            in Right [ mkMethod methodology catName unit colIdx rows delim
-                     | (colIdx, catName, unit) <- zip3 [0..] cats units
-                     , not (T.null catName)
-                     ]
-        _ -> Left "CSV method file needs at least 3 header rows (categories, units, column labels)"
+    in case splitHeaderFromData dataLines of
+        Nothing -> Left "CSV method file needs at least 3 header rows (names, units, column labels)"
+        Just (cats, names, units, rows, delim) ->
+            Right [ mkMethod methodology catName impactName unit colIdx rows delim
+                  | (colIdx, catName, impactName, unit) <- zip4 [0..] cats names units
+                  , not (T.null impactName)
+                  ]
+
+-- | Find the label row (first column starts with "substance") and split header
+-- rows from data rows.  Returns (categories, names, units, dataRows, delimiter).
+-- 2-row layout → categories = names.  3-row layout → distinct.
+splitHeaderFromData :: [BS.ByteString] -> Maybe ([Text], [Text], [Text], [BS.ByteString], Word8)
+splitHeaderFromData dataLines =
+    case break isLabelRow dataLines of
+        (headerRows, _labelRow : rows)
+            | [nameRow, unitRow] <- headerRows ->
+                let !delim = detectDelimiter nameRow
+                    names = drop 2 $ splitRow delim nameRow
+                    units = drop 2 $ splitRow delim unitRow
+                in Just (names, names, units, rows, delim)  -- categories = names
+            | [catRow, nameRow, unitRow] <- headerRows ->
+                let !delim = detectDelimiter catRow
+                    cats  = drop 2 $ splitRow delim catRow
+                    names = drop 2 $ splitRow delim nameRow
+                    units = drop 2 $ splitRow delim unitRow
+                in Just (cats, names, units, rows, delim)
+        _ -> Nothing
+
+-- | Detect the label row: first cell is a variation of "substance".
+isLabelRow :: BS.ByteString -> Bool
+isLabelRow line =
+    let first = T.toCaseFold . T.strip . head' . splitRow (detectDelimiter line) $ line
+    in first == "substance"
+  where
+    head' (x:_) = x
+    head' []    = ""
 
 -- | Build a single Method from one column of the CSV.
-mkMethod :: Maybe Text -> Text -> Text -> Int -> [BS.ByteString] -> Word8 -> Method
-mkMethod methodology catName unit colIdx rows delim =
+mkMethod :: Maybe Text -> Text -> Text -> Text -> Int -> [BS.ByteString] -> Word8 -> Method
+mkMethod methodology catName impactName unit colIdx rows delim =
     let !ns       = csvMethodNamespace
-        !methodId = UUID5.generateNamed ns (bsKey $ "method:" <> catName)
+        !methodId = UUID5.generateNamed ns (bsKey $ "method:" <> impactName)
         !factors  = [ MethodCF
                         { mcfFlowRef   = UUID5.generateNamed ns (bsKey $ sub <> "::" <> comp)
                         , mcfFlowName  = sub
@@ -78,7 +111,7 @@ mkMethod methodology catName unit colIdx rows delim =
                     ]
     in Method
         { methodId          = methodId
-        , methodName        = catName
+        , methodName        = impactName
         , methodDescription = Nothing
         , methodUnit        = if T.null unit then "unknown" else unit
         , methodCategory    = catName
