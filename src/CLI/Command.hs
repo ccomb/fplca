@@ -1,28 +1,24 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module CLI.Command where
 
-import CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), ServerOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
+import CLI.Types (Command(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..))
+import qualified Database.Manager as DM
+import Database.Manager (DatabaseManager(..), LoadedDatabase(..))
 import Progress
 import qualified Service
 import Types (Database)
 import UnitConversion (defaultUnitConfig)
-import Control.Monad (when)
-import Data.Aeson (Value, toJSON, encode)
+import SharedSolver (SharedSolver)
+import Data.Aeson (Value, encode, toJSON, (.=), object)
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
-import Network.Wai.Handler.Warp (run)
-import Network.Wai (Application)
-import Servant (serve)
-import System.Environment (lookupEnv)
+import qualified Data.Map as M
+import Control.Concurrent.STM (readTVarIO)
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
-
--- API.Routes imports
-import API.Routes (LCAAPI, lcaAPI, lcaServer)
 
 -- | Default output format for different command types
 defaultFormat :: Command -> OutputFormat
@@ -36,90 +32,119 @@ formatOutputWithPath CSV _ value = encode value  -- Simple JSON for CSV (CLI use
 formatOutputWithPath Table _ value = encodePretty value
 formatOutputWithPath Pretty _ value = encodePretty value
 
--- | Resolve data directory using priority: --data > $DATADIR > current directory
-resolveDataDirectory :: GlobalOptions -> IO FilePath
-resolveDataDirectory globalOpts = case dataDir globalOpts of
-  Just path -> do
-    reportProgress Info $ "Using data directory from --data: " ++ path
-    return path
-  Nothing -> do
-    envDir <- lookupEnv "DATADIR"
-    case envDir of
-      Just path -> do
-        reportProgress Info $ "Using data directory from $DATADIR: " ++ path
-        return path
-      Nothing -> do
-        reportProgress Info "Using current directory as data directory"
-        return "./"
-
 -- | Resolve output format using command-specific defaults
 resolveOutputFormat :: GlobalOptions -> Command -> OutputFormat
 resolveOutputFormat globalOpts cmd = case format globalOpts of
   Just fmt -> fmt                    -- Explicit --format overrides everything
   Nothing -> defaultFormat cmd       -- Use command-specific default
 
+-- | Look up a database from the manager by name, or use the single loaded one
+requireDatabase :: DatabaseManager -> Maybe Text -> IO (Database, SharedSolver)
+requireDatabase manager mName = do
+  loadedDbs <- readTVarIO (dmLoadedDbs manager)
+  case mName of
+    Just name ->
+      case M.lookup name loadedDbs of
+        Just ld -> return (ldDatabase ld, ldSharedSolver ld)
+        Nothing -> do
+          let available = map T.unpack (M.keys loadedDbs)
+          reportError $ "Database '" ++ T.unpack name ++ "' not found. Available: " ++ unwords available
+          exitFailure
+    Nothing ->
+      case M.elems loadedDbs of
+        [ld] -> return (ldDatabase ld, ldSharedSolver ld)
+        []   -> do
+          reportError "No databases loaded"
+          exitFailure
+        _    -> do
+          let available = map T.unpack (M.keys loadedDbs)
+          reportError $ "Multiple databases loaded, use --db to select one: " ++ unwords available
+          exitFailure
+
 -- | Execute a CLI command with global options
-executeCommand :: CLIConfig -> Command -> Database -> IO ()
-executeCommand (CLIConfig globalOpts _) cmd database = do
+executeCommand :: CLIConfig -> Command -> DatabaseManager -> IO ()
+executeCommand (CLIConfig globalOpts _) cmd manager = do
   let outputFormat = resolveOutputFormat globalOpts cmd
       jsonPathOpt = jsonPath globalOpts
 
   case cmd of
-    -- Server mode - start web server
-    Server serverOpts -> do
-      Progress.reportError "Server mode should be handled in Main.hs to avoid circular imports"
+    -- Manager-level commands (no database required)
+    Server _ -> do
+      reportError "Server mode should be handled in Main.hs"
       exitFailure
 
-    -- Core resource queries
-    Activity uuid ->
-      executeActivityCommand outputFormat jsonPathOpt database uuid
+    Databases ->
+      DM.listDatabases manager >>= outputResult outputFormat jsonPathOpt . toJSON
 
-    -- Tree and inventory (now top-level)
+    MethodCollections ->
+      DM.listMethodCollections manager >>= outputResult outputFormat jsonPathOpt . toJSON
+
+    Methods -> do
+      pairs <- DM.getLoadedMethods manager
+      let val = toJSON [ object ["collection" .= col, "method" .= m] | (col, m) <- pairs ]
+      outputResult outputFormat jsonPathOpt val
+
+    Synonyms ->
+      DM.listFlowSynonyms manager >>= outputResult outputFormat jsonPathOpt . toJSON
+
+    CompartmentMappings ->
+      DM.listCompartmentMappings manager >>= outputResult outputFormat jsonPathOpt . toJSON
+
+    Units ->
+      DM.listUnitDefs manager >>= outputResult outputFormat jsonPathOpt . toJSON
+
+    -- Database-level commands
+    _ -> do
+      (database, _solver) <- requireDatabase manager (dbName globalOpts)
+      executeDbCommand outputFormat jsonPathOpt globalOpts database cmd
+
+-- | Execute commands that require a loaded database
+executeDbCommand :: OutputFormat -> Maybe Text -> GlobalOptions -> Database -> Command -> IO ()
+executeDbCommand fmt jp globalOpts database = \case
+    Activity uuid ->
+      executeActivityCommand fmt jp database uuid
+
     Tree uuid treeOpts -> do
       let depth = maybe (treeDepth globalOpts) id (treeDepthOverride treeOpts)
-      executeActivityTreeCommand outputFormat jsonPathOpt database uuid depth
+      executeActivityTreeCommand fmt jp database uuid depth
 
     Inventory uuid ->
-      executeActivityInventoryCommand outputFormat jsonPathOpt database uuid
+      executeActivityInventoryCommand fmt jp database uuid
 
-    -- Flow commands
     Flow flowId Nothing ->
-      executeFlowCommand outputFormat jsonPathOpt database flowId
+      executeFlowCommand fmt jp database flowId
 
     Flow flowId (Just FlowActivities) ->
-      executeFlowActivitiesCommand outputFormat jsonPathOpt database flowId
+      executeFlowActivitiesCommand fmt jp database flowId
 
-    -- Search commands (now top-level)
     SearchActivities opts ->
-      executeSearchActivitiesCommand outputFormat jsonPathOpt database opts
+      executeSearchActivitiesCommand fmt jp database opts
 
     SearchFlows opts ->
-      executeSearchFlowsCommand outputFormat jsonPathOpt database opts
+      executeSearchFlowsCommand fmt jp database opts
 
-    -- No synonyms command - synonyms are included in flow responses
-
-    -- LCIA computation
     LCIA uuid lciaOpts ->
-      executeLCIACommand outputFormat jsonPathOpt database uuid lciaOpts
+      executeLCIACommand fmt jp database uuid lciaOpts
 
-    -- Matrix debugging
     DebugMatrices uuid debugOpts ->
       executeDebugMatricesCommand database uuid debugOpts
 
-    -- Matrix export
     ExportMatrices outputDir ->
       executeExportMatricesCommand database outputDir
 
+    -- Manager-level commands already handled above
+    _ -> pure ()
+
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeActivityCommand fmt jsonPathOpt database uuid = do
+executeActivityCommand fmt jsonPathOpt database uuid =
   case Service.getActivityInfo defaultUnitConfig database uuid of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute activity tree command
 executeActivityTreeCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> Int -> IO ()
-executeActivityTreeCommand fmt jsonPathOpt database uuid depth = do
+executeActivityTreeCommand fmt jsonPathOpt database uuid depth =
   case Service.getActivityTree database uuid depth of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
@@ -137,14 +162,14 @@ executeActivityInventoryCommand fmt jsonPathOpt database uuid = do
 
 -- | Execute flow info command
 executeFlowCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeFlowCommand fmt jsonPathOpt database flowId = do
+executeFlowCommand fmt jsonPathOpt database flowId =
   case Service.getFlowInfo database flowId of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
 -- | Execute flow activities command
 executeFlowActivitiesCommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> IO ()
-executeFlowActivitiesCommand fmt jsonPathOpt database flowId = do
+executeFlowActivitiesCommand fmt jsonPathOpt database flowId =
   case Service.getFlowActivities database flowId of
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
@@ -169,7 +194,6 @@ executeSearchFlowsCommand fmt jsonPathOpt database opts = do
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
-
 -- | Execute LCIA command with method file
 executeLCIACommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> LCIAOptions -> IO ()
 executeLCIACommand fmt jsonPathOpt database uuid opts = do
@@ -180,23 +204,19 @@ executeLCIACommand fmt jsonPathOpt database uuid opts = do
     Left err -> reportServiceError err
     Right result -> do
       reportProgress Info "LCIA computation completed"
-
-      -- Output to console in requested format
       outputResult fmt jsonPathOpt result
 
-      -- Export to XML if requested
       case lciaOutput opts of
-        Just outputPath -> do
+        Just outputPath ->
           case Service.exportLCIAAsXML result outputPath of
-            Left err -> Progress.reportError $ "XML export failed: " ++ show err
+            Left err -> reportError $ "XML export failed: " ++ show err
             Right _ -> reportProgress Info $ "Results exported to XML: " ++ outputPath
         Nothing -> return ()
 
-      -- Export to CSV if requested
       case lciaCSV opts of
-        Just csvPath -> do
+        Just csvPath ->
           case Service.exportLCIAAsCSV result csvPath of
-            Left err -> Progress.reportError $ "CSV export failed: " ++ show err
+            Left err -> reportError $ "CSV export failed: " ++ show err
             Right _ -> reportProgress Info $ "Results exported to CSV: " ++ csvPath
         Nothing -> return ()
 
@@ -231,12 +251,11 @@ executeExportMatricesCommand database outputDir = do
 
 -- | Output result in the specified format
 outputResult :: OutputFormat -> Maybe Text -> Value -> IO ()
-outputResult fmt jsonPathOpt result = do
+outputResult fmt jsonPathOpt result =
   BSL.putStrLn $ formatOutputWithPath fmt jsonPathOpt result
 
 -- | Report service errors to stderr and exit
 reportServiceError :: Service.ServiceError -> IO ()
 reportServiceError err = do
-  Progress.reportError $ "Error: " ++ show err
+  reportError $ "Error: " ++ show err
   exitFailure
-

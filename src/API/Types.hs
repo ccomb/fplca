@@ -210,6 +210,30 @@ data MethodCollectionStatusAPI = MethodCollectionStatusAPI
     }
     deriving (Generic)
 
+-- | Reference data list response (flow synonyms, compartment mappings, units)
+data RefDataListResponse = RefDataListResponse
+    { rdlItems :: [RefDataStatusAPI]
+    }
+    deriving (Generic)
+
+-- | Reference data status for API responses
+data RefDataStatusAPI = RefDataStatusAPI
+    { rdaName        :: Text
+    , rdaDisplayName :: Text
+    , rdaDescription :: Maybe Text
+    , rdaStatus      :: Text  -- "loaded" | "unloaded"
+    , rdaIsUploaded  :: Bool
+    , rdaIsAuto      :: Bool
+    , rdaEntryCount  :: Int
+    }
+    deriving (Generic)
+
+-- | Synonym groups response
+newtype SynonymGroupsResponse = SynonymGroupsResponse
+    { sgrGroups :: [[Text]]
+    }
+    deriving (Generic)
+
 -- | Full method details
 data MethodDetail = MethodDetail
     { mdId :: UUID
@@ -250,6 +274,7 @@ data MappingStatus = MappingStatus
     , mstMethodName :: Text     -- Method name
     , mstTotalFactors :: Int    -- Total CFs in method
     , mstMappedByUUID :: Int    -- Matched by exact UUID
+    , mstMappedByCAS :: Int     -- Matched by CAS number
     , mstMappedByName :: Int    -- Matched by normalized name
     , mstMappedBySynonym :: Int -- Matched via synonym group
     , mstUnmapped :: Int        -- Not matched
@@ -498,3 +523,9 @@ instance FromJSON UploadRequest
 instance FromJSON UploadResponse
 instance FromJSON MethodCollectionListResponse
 instance FromJSON MethodCollectionStatusAPI
+instance ToJSON RefDataListResponse
+instance ToJSON RefDataStatusAPI
+instance ToJSON SynonymGroupsResponse
+instance FromJSON RefDataListResponse
+instance FromJSON RefDataStatusAPI
+instance FromJSON SynonymGroupsResponse

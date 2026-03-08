@@ -20,6 +20,10 @@ import Pages.FlowMapping
 import Pages.MethodDetail
 import Pages.Methods
 import Pages.MethodUpload
+import Pages.FlowSynonyms
+import Pages.FlowSynonymDetail
+import Pages.CompartmentMappings
+import Pages.Units
 import Pages.Products
 import Pages.Resources
 import Pages.Tree
@@ -290,6 +294,15 @@ navigateToPage shared page =
         FlowMappingActive ->
             Shared.NavigateTo MethodsRoute
 
+        FlowSynonymsActive ->
+            Shared.NavigateTo FlowSynonymsRoute
+
+        CompartmentMappingsActive ->
+            Shared.NavigateTo CompartmentMappingsRoute
+
+        UnitsActive ->
+            Shared.NavigateTo UnitsRoute
+
 
 routeToActivityId : Route -> Maybe String
 routeToActivityId route =
@@ -399,6 +412,10 @@ main =
         |> Spa.addPublicPage mappers Route.matchMethodUpload Pages.MethodUpload.page
         |> Spa.addPublicPage mappers Route.matchMethodDetail Pages.MethodDetail.page
         |> Spa.addPublicPage mappers Route.matchFlowMapping Pages.FlowMapping.page
+        |> Spa.addPublicPage mappers Route.matchFlowSynonyms Pages.FlowSynonyms.page
+        |> Spa.addPublicPage mappers Route.matchFlowSynonymDetail Pages.FlowSynonymDetail.page
+        |> Spa.addPublicPage mappers Route.matchCompartmentMappings Pages.CompartmentMappings.page
+        |> Spa.addPublicPage mappers Route.matchUnits Pages.Units.page
         |> Spa.beforeRouteChange Shared.RouteChanged
         |> Spa.application View.map
             { toRoute = Route.toRoute

@@ -264,6 +264,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
             , dbCachedFactorization = Nothing
             , dbSynonymDB = Nothing  -- Will be populated at runtime from embedded DB
             , dbFlowsByName = M.empty  -- Will be populated at runtime
+            , dbFlowsByCAS = M.empty  -- Will be populated at runtime
             }
 
 -- | Build indexes with ProcessIds

@@ -1,5 +1,7 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 
 {- |
 Module      : API.DatabaseHandlers
@@ -23,6 +25,15 @@ module API.DatabaseHandlers
     , removeDependencyHandler
     , setDataPathHandler
     , finalizeDatabaseHandler
+      -- * Reference data handlers
+    , RefDataKind(..)
+    , listRefData
+    , loadRefData
+    , unloadRefData
+    , deleteRefData
+    , uploadRefData
+    , getFlowSynonymGroupsHandler
+    , downloadRefDataHandler
       -- * Helpers
     , convertDbStatus
     , simpleAction
@@ -37,24 +48,28 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import Servant (Handler, throwError, errBody, err400, err404, err500)
+import qualified Data.Text.IO as T
+import Servant (Handler, throwError, errBody, err400, err404, err500, addHeader, Headers, Header)
 import System.FilePath ((</>))
+import qualified System.Directory
 
 import qualified Config
-import Config (DatabaseConfig(..))
+import Config (DatabaseConfig(..), MethodConfig(..), RefDataConfig(..))
 import qualified Data.Vector as V
 import Types (Database(..), unresolvedCount)
 import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
+import Control.Concurrent.STM (readTVarIO)
 import Database.Manager
-    ( DatabaseManager
+    ( DatabaseManager(..)
     , DatabaseStatus(..)
     , DatabaseLoadStatus(..)
     , DatabaseSetupInfo(..)
     , SetupError(..)
     , DepLoadResult(..)
     , LoadedDatabase(..)
+    , RefDataStatus(..)
     , addDatabase
     , addDependencyToStaged
     , addMethodCollection
@@ -67,13 +82,21 @@ import Database.Manager
     , removeDependencyFromStaged
     , setDataPath
     , unloadDatabase
+    -- Flow synonyms
+    , listFlowSynonyms, loadFlowSynonyms, unloadFlowSynonyms, addFlowSynonyms, removeFlowSynonyms, getFlowSynonymGroups
+    -- Compartment mappings
+    , listCompartmentMappings, loadCompartmentMappings, unloadCompartmentMappings, addCompartmentMappings, removeCompartmentMappings
+    -- Unit definitions
+    , listUnitDefs, loadUnitDefs, unloadUnitDefs, addUnitDefs, removeUnitDefs
     )
-import Config (MethodConfig(..))
 import API.Types
     ( ActivateResponse(..)
     , LoadDatabaseResponse(..)
     , DatabaseListResponse(..)
     , DatabaseStatusAPI(..)
+    , RefDataListResponse(..)
+    , RefDataStatusAPI(..)
+    , SynonymGroupsResponse(..)
     , UploadRequest(..)
     , UploadResponse(..)
     )
@@ -352,3 +375,119 @@ simpleAction action successMsg = do
     return $ case result of
         Left err -> ActivateResponse False err Nothing
         Right () -> ActivateResponse True successMsg Nothing
+
+--------------------------------------------------------------------------------
+-- Reference Data Handlers (flow synonyms, compartment mappings, units)
+--------------------------------------------------------------------------------
+
+-- | Which kind of reference data we're operating on
+data RefDataKind = FlowSynonyms | CompartmentMappings | UnitDefs
+
+-- | Dispatch to the right Manager functions based on kind
+rdOps :: RefDataKind
+      -> ( DatabaseManager -> IO [RefDataStatus]
+         , DatabaseManager -> Text -> IO (Either Text ())
+         , DatabaseManager -> Text -> IO (Either Text ())
+         , DatabaseManager -> RefDataConfig -> IO ()
+         , DatabaseManager -> Text -> IO (Either Text ())
+         , Text  -- upload subdir
+         )
+rdOps FlowSynonyms =
+    (listFlowSynonyms, loadFlowSynonyms, unloadFlowSynonyms, addFlowSynonyms, removeFlowSynonyms, "flow-synonyms")
+rdOps CompartmentMappings =
+    (listCompartmentMappings, loadCompartmentMappings, unloadCompartmentMappings, addCompartmentMappings, removeCompartmentMappings, "compartment-mappings")
+rdOps UnitDefs =
+    (listUnitDefs, loadUnitDefs, unloadUnitDefs, addUnitDefs, removeUnitDefs, "units")
+
+convertRefDataStatus :: RefDataStatus -> RefDataStatusAPI
+convertRefDataStatus s = RefDataStatusAPI
+    { rdaName        = rdsName s
+    , rdaDisplayName = rdsDisplayName s
+    , rdaDescription = rdsDescription s
+    , rdaStatus      = case rdsStatus s of Loaded -> "loaded"; _ -> "unloaded"
+    , rdaIsUploaded  = rdsIsUploaded s
+    , rdaIsAuto      = rdsIsAuto s
+    , rdaEntryCount  = rdsEntryCount s
+    }
+
+listRefData :: RefDataKind -> DatabaseManager -> Handler RefDataListResponse
+listRefData kind mgr = do
+    let (listFn, _, _, _, _, _) = rdOps kind
+    statuses <- liftIO $ listFn mgr
+    return $ RefDataListResponse (map convertRefDataStatus statuses)
+
+loadRefData :: RefDataKind -> DatabaseManager -> Text -> Handler ActivateResponse
+loadRefData kind mgr name = do
+    let (_, loadFn, _, _, _, _) = rdOps kind
+    simpleAction (loadFn mgr name) ("Loaded: " <> name)
+
+unloadRefData :: RefDataKind -> DatabaseManager -> Text -> Handler ActivateResponse
+unloadRefData kind mgr name = do
+    let (_, _, unloadFn, _, _, _) = rdOps kind
+    simpleAction (unloadFn mgr name) ("Unloaded: " <> name)
+
+deleteRefData :: RefDataKind -> DatabaseManager -> Text -> Handler ActivateResponse
+deleteRefData kind mgr name = do
+    let (_, _, _, _, removeFn, _) = rdOps kind
+    simpleAction (removeFn mgr name) ("Deleted: " <> name)
+
+uploadRefData :: RefDataKind -> DatabaseManager -> UploadRequest -> Handler UploadResponse
+uploadRefData kind mgr req = do
+    let (_, _, _, addFn, _, subdir) = rdOps kind
+    let csvDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
+    case csvDataResult of
+        Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
+        Right csvBytes -> do
+            baseDir <- liftIO UploadedDB.getDataDir
+            let slug = T.toLower $ T.intercalate "-" $ T.words $ urName req
+                uploadDir = baseDir </> "uploads" </> T.unpack subdir </> T.unpack slug
+                csvPath = uploadDir </> "data.csv"
+            liftIO $ do
+                System.Directory.createDirectoryIfMissing True uploadDir
+                BSL.writeFile csvPath (BSL.fromStrict csvBytes)
+                let metaContent = T.intercalate "\n"
+                        [ "[meta]"
+                        , "version = 1"
+                        , "displayName = " <> quote (urName req)
+                        , maybe "" (\d -> "description = " <> quote d) (urDescription req)
+                        , ""
+                        ]
+                T.writeFile (uploadDir </> "meta.toml") metaContent
+            let rd = RefDataConfig
+                    { rdName = urName req
+                    , rdPath = csvPath
+                    , rdActive = False
+                    , rdIsUploaded = True
+                    , rdIsAuto = False
+                    , rdDescription = urDescription req
+                    }
+            liftIO $ addFn mgr rd
+            return $ UploadResponse True "Uploaded successfully" (Just slug) Nothing
+  where
+    quote t = "\"" <> T.replace "\"" "\\\"" t <> "\""
+
+getFlowSynonymGroupsHandler :: DatabaseManager -> Text -> Handler SynonymGroupsResponse
+getFlowSynonymGroupsHandler mgr name = do
+    result <- liftIO $ getFlowSynonymGroups mgr name
+    case result of
+        Left err -> throwError $ err404 { errBody = BSL.fromStrict $ T.encodeUtf8 err }
+        Right groups -> return $ SynonymGroupsResponse groups
+
+downloadRefDataHandler :: RefDataKind -> DatabaseManager -> Text -> Handler (Headers '[Header "Content-Disposition" Text] BSL.ByteString)
+downloadRefDataHandler kind mgr name = do
+    let tvar = case kind of
+            FlowSynonyms        -> dmAvailableFlowSyns mgr
+            CompartmentMappings -> dmAvailableCompMaps mgr
+            UnitDefs            -> dmAvailableUnitDefs mgr
+    available <- liftIO $ readTVarIO tvar
+    case M.lookup name available of
+        Nothing -> throwError $ err404 { errBody = "Not found" }
+        Just rd -> do
+            let csvPath = rdPath rd
+            exists <- liftIO $ System.Directory.doesFileExist csvPath
+            if not exists
+                then throwError $ err404 { errBody = "CSV file not found" }
+                else do
+                    content <- liftIO $ BSL.readFile csvPath
+                    let disposition = "attachment; filename=\"" <> name <> ".csv\""
+                    return $ addHeader disposition content

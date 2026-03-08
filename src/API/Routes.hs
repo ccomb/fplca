@@ -13,7 +13,7 @@ import Method.Mapping (computeLCIAScore, mapMethodFlows, MatchStrategy(..), Mapp
 import qualified Data.Vector as V
 import Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import SynonymDB (SynonymDB, emptySynonymDB)
-import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..))
+import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..), getMergedUnitConfig)
 import qualified Database.Manager as DM
 import Database.Upload (DatabaseFormat(..))
 import API.DatabaseHandlers (simpleAction)
@@ -23,7 +23,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), RefDataStatusAPI(..), SynonymGroupsResponse(..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
@@ -88,6 +88,24 @@ type LCAAPI =
                 :<|> "method-collections" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "method-collections" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
                 :<|> "method-collections" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                -- Reference data endpoints (flow synonyms, compartment mappings, units)
+                :<|> "flow-synonyms" :> Get '[JSON] RefDataListResponse
+                :<|> "flow-synonyms" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
+                :<|> "flow-synonyms" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
+                :<|> "flow-synonyms" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
+                :<|> "flow-synonyms" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "flow-synonyms" :> Capture "name" Text :> "groups" :> Get '[JSON] SynonymGroupsResponse
+                :<|> "flow-synonyms" :> Capture "name" Text :> "download" :> Get '[OctetStream] (Headers '[Header "Content-Disposition" Text] BSL.ByteString)
+                :<|> "compartment-mappings" :> Get '[JSON] RefDataListResponse
+                :<|> "compartment-mappings" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
+                :<|> "compartment-mappings" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
+                :<|> "compartment-mappings" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
+                :<|> "compartment-mappings" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "units" :> Get '[JSON] RefDataListResponse
+                :<|> "units" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
+                :<|> "units" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
+                :<|> "units" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
+                :<|> "units" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
                 -- Auth endpoint (login)
@@ -182,6 +200,26 @@ lcaServer dbManager maxTreeDepth password =
         :<|> unloadMethodCollectionHandler
         :<|> DBHandlers.deleteMethodHandler dbManager
         :<|> DBHandlers.uploadMethodHandler dbManager
+        -- Flow synonyms
+        :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.deleteRefData DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.getFlowSynonymGroupsHandler dbManager
+        :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms dbManager
+        -- Compartment mappings
+        :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings dbManager
+        :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings dbManager
+        :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings dbManager
+        :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings dbManager
+        :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings dbManager
+        -- Units
+        :<|> DBHandlers.listRefData DBHandlers.UnitDefs dbManager
+        :<|> DBHandlers.loadRefData DBHandlers.UnitDefs dbManager
+        :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs dbManager
+        :<|> DBHandlers.deleteRefData DBHandlers.UnitDefs dbManager
+        :<|> DBHandlers.uploadRefData DBHandlers.UnitDefs dbManager
         :<|> getLogsHandler
         :<|> postAuth
   where
@@ -212,7 +250,7 @@ lcaServer dbManager maxTreeDepth password =
     getActivityInfo :: Text -> Text -> Handler ActivityInfo
     getActivityInfo dbName processId = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        let unitCfg = dmUnitConfig dbManager
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
         case Service.getActivityInfo unitCfg db processId of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
@@ -264,7 +302,8 @@ lcaServer dbManager maxTreeDepth password =
             case UUID.fromText activityUuidText of
                 Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
                 Just activityUuid -> do
-                    let loopAwareTree = buildLoopAwareTree db activityUuid maxTreeDepth
+                    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+                    let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
                     return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
     -- Activity inventory calculation (full supply chain LCI)
@@ -357,10 +396,7 @@ lcaServer dbManager maxTreeDepth password =
     -- Pure helper: compute LCIA result for a single method against an inventory
     computeCategoryResult :: Database -> Inventory -> Method -> LCIAResult
     computeCategoryResult db inventory method =
-        let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-            flowsByUUID = dbFlows db
-            flowsByName = dbFlowsByName db
-            mappings = mapMethodFlows synDB flowsByUUID flowsByName method
+        let mappings = mapMethodToFlows db method
             stats = computeMappingStats mappings
             score = computeLCIAScore inventory mappings
             unmappedNames = take 50 [mcfFlowName cf | (cf, Nothing) <- mappings]
@@ -443,12 +479,7 @@ lcaServer dbManager maxTreeDepth password =
     getMethodMapping methodIdText dbParam = do
         (db, _) <- requireDatabaseByParam dbManager dbParam
         method <- loadMethodByUUID methodIdText
-        -- Get SynonymDB and flow name index from database
-        let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-            flowsByUUID = dbFlows db
-            flowsByName = dbFlowsByName db
-        -- Run the mapping
-        let mappings = mapMethodFlows synDB flowsByUUID flowsByName method
+        let mappings = mapMethodToFlows db method
             stats = computeMappingStats mappings
             totalFactors = length mappings
             coverage = if totalFactors > 0
@@ -470,6 +501,7 @@ lcaServer dbManager maxTreeDepth password =
             , mstMethodName = methodName method
             , mstTotalFactors = msTotal stats
             , mstMappedByUUID = msByUUID stats
+            , mstMappedByCAS = msByCAS stats
             , mstMappedByName = msByName stats
             , mstMappedBySynonym = msBySynonym stats
             , mstUnmapped = msUnmatched stats
@@ -484,10 +516,7 @@ lcaServer dbManager maxTreeDepth password =
     getFlowCFMapping dbName methodIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-            flowsByUUID = dbFlows db
-            flowsByName = dbFlowsByName db
-            mappings = mapMethodFlows synDB flowsByUUID flowsByName method
+        let mappings = mapMethodToFlows db method
             -- Build reverse index: DB flow UUID → (MethodCF, MatchStrategy)
             reverseIndex = M.fromList
                 [(flowId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
@@ -622,6 +651,12 @@ searchFlowsInternal db (Just query) _langParam limitParam offsetParam = do
     let flows = findFlowsBySynonym db query
         flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
     liftIO $ paginateResults flowSearchResults limitParam offsetParam
+
+-- | Map method CFs to database flows (pure helper to avoid duplication)
+mapMethodToFlows :: Database -> Method -> [(MethodCF, Maybe (Flow, MatchStrategy))]
+mapMethodToFlows db method =
+    let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+    in mapMethodFlows synDB (dbFlows db) (dbFlowsByName db) (dbFlowsByCAS db) method
 
 -- | Proxy for the API
 lcaAPI :: Proxy LCAAPI

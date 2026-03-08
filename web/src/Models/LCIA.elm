@@ -50,6 +50,7 @@ type alias MappingStatus =
     , mstMethodName : String
     , mstTotalFactors : Int
     , mstMappedByUUID : Int
+    , mstMappedByCAS : Int
     , mstMappedByName : Int
     , mstMappedBySynonym : Int
     , mstUnmapped : Int
@@ -145,6 +146,7 @@ mappingStatusDecoder =
         |> required "mstMethodName" D.string
         |> required "mstTotalFactors" D.int
         |> required "mstMappedByUUID" D.int
+        |> required "mstMappedByCAS" D.int
         |> required "mstMappedByName" D.int
         |> required "mstMappedBySynonym" D.int
         |> required "mstUnmapped" D.int

@@ -58,6 +58,9 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 [ menuLabel "Manage"
                 , menuItem currentPage DatabasesActive "fas fa-database" "Databases" False
                 , menuItem currentPage MethodsActive "fas fa-flask" "Methods" False
+                , menuItem currentPage FlowSynonymsActive "fas fa-exchange-alt" "Flows" False
+                , menuItem currentPage CompartmentMappingsActive "fas fa-layer-group" "Compartments" False
+                , menuItem currentPage UnitsActive "fas fa-ruler" "Units" False
                 ]
             , -- SEARCH section
               div [ class "menu-items" ]

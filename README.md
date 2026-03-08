@@ -8,21 +8,26 @@ It loads EcoSpold2, EcoSpold1, and SimaPro CSV databases, builds supply chain de
 
 - **Browse** activities and flows across multiple databases
 - **Explore** supply chain trees and force-directed dependency graphs
-- **Compute** life cycle inventories (LCI) and impact scores (LCIA)
+- **Compute** life cycle inventories (LCI) and impact scores (LCIA) — single method or batch across a full collection
+- **Map** method characterization factors to database flows with a 4-step cascade (UUID → CAS → name → synonym) and coverage statistics
 - **Link** databases across nomenclatures (e.g., Agribalyse referencing Ecoinvent)
-- **Upload** your own databases via the web UI, without touching config files
+- **Upload** databases and method collections via the web UI, without touching config files
 
 ---
 
 ## Key Features
 
 - **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV
-- **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction needed
+- **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
-- **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, and database management
+- **LCIA method collections**: Load ILCD method packages (ZIP or directory) from config or upload via UI; CSV format also supported
+- **Flow mapping engine**: 4-step matching cascade (UUID → CAS → name → synonym) with per-strategy coverage statistics and inspection UI
+- **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
+- **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via UI, or toggled independently
+- **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, method management, and reference data pages
 - **Desktop application**: Native Windows/Linux app — no installation or configuration needed
 - **REST API and CLI**: Scriptable interface for automation and integration
-- **Fast cache**: Per-database cache with automatic schema-based invalidation; loading Ecoinvent goes from ~45s cold to ~2-3s cached
+- **Fast cache**: Per-database cache with automatic schema-based invalidation; Ecoinvent loads in ~45s cold, ~2-3s cached
 - **Optional access control**: Single-code login with cookie-based session
 
 ---
@@ -64,7 +69,7 @@ fplca --data ./ECOINVENT3.12 lcia "12345678-..." --method ./EF-3.1.xml
 
 ## Configuration
 
-A TOML config file enables multi-database setups with explicit dependency ordering:
+A TOML config file enables multi-database setups, method collections, and reference data:
 
 ```toml
 [server]
@@ -95,10 +100,25 @@ load = true
 
 [[methods]]
 name = "EF-3.1"
-path = "../EF-v3.1/ILCD/lciamethods"
+path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
+
+[[flow-synonyms]]
+name = "Default flow synonyms"
+path = "data/flows.csv"        # CSV with two columns: name1,name2
+active = true
+
+[[compartment-mappings]]
+name = "Default compartment mapping"
+path = "data/compartments.csv"
+active = true
+
+[[units]]
+name = "Default units"
+path = "data/units.csv"
+active = true
 ```
 
-The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies.
+The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies. Reference data sections (`flow-synonyms`, `compartment-mappings`, `units`) can also be uploaded and toggled at runtime via the web UI.
 
 ---
 
@@ -110,27 +130,48 @@ The `depends` field ensures dependency databases load first and their flows are 
 | Tree | Hierarchical upstream dependency view |
 | Graph | Force-directed network with configurable cutoff |
 | Inventory | Environmental flows split into Emissions and Resources |
-| LCIA | Impact scores per category with flow mapping statistics |
+| LCIA | Impact scores per category with method picker; single or batch across a collection |
+| Methods | Load, unload, upload, and inspect ILCD method collections |
+| Flow Mapping | Per-method CF coverage: matched by UUID/CAS/name/synonym, unmapped list |
 | Databases | Load, unload, upload, and configure cross-database links |
 | Database Setup | Data path picker, dependency editor, linking diagnostics |
+| Flow Synonyms | Manage synonym sets; browse groups, download auto-extracted pairs |
+| Compartment Mappings | Manage compartment name mappings |
+| Units | Manage unit definitions for dimensional analysis |
 
 ---
 
 ## REST API
 
 ```
-GET  /api/v1/databases                              List databases and status
-POST /api/v1/databases/upload                       Upload a database archive
-POST /api/v1/databases/{name}/load                  Load a configured database
-POST /api/v1/databases/{name}/finalize              Finalize cross-DB linking
-GET  /api/v1/db/{name}/activity/{id}                Activity details
-GET  /api/v1/db/{name}/activity/{id}/tree           Supply chain tree
-GET  /api/v1/db/{name}/activity/{id}/inventory      Life cycle inventory
-GET  /api/v1/db/{name}/activity/{id}/lcia/{method}  LCIA score
-GET  /api/v1/search/activities?db=&name=&geo=       Search activities
-GET  /api/v1/search/flows?db=&q=                    Search flows
-GET  /api/v1/methods                                List LCIA methods
-POST /api/v1/auth                                   Login (returns session cookie)
+GET  /api/v1/databases                                      List databases and status
+POST /api/v1/databases/upload                               Upload a database archive
+POST /api/v1/databases/{name}/load                          Load a configured database
+POST /api/v1/databases/{name}/finalize                      Finalize cross-DB linking
+GET  /api/v1/db/{name}/activity/{id}                        Activity details
+GET  /api/v1/db/{name}/activity/{id}/tree                   Supply chain tree
+GET  /api/v1/db/{name}/activity/{id}/inventory              Life cycle inventory
+GET  /api/v1/db/{name}/activity/{id}/lcia/{methodId}        LCIA score (single method)
+GET  /api/v1/db/{name}/activity/{id}/lcia-batch/{collection} LCIA batch (all categories)
+GET  /api/v1/search/activities?db=&name=&geo=               Search activities
+GET  /api/v1/search/flows?db=&q=                            Search flows
+GET  /api/v1/methods                                        List individual methods
+GET  /api/v1/method/{id}                                    Method details
+GET  /api/v1/method/{id}/factors                            Characterization factors
+GET  /api/v1/method/{id}/mapping?db=                        Mapping coverage stats
+GET  /api/v1/db/{name}/method/{id}/flow-mapping             Per-flow mapping detail
+GET  /api/v1/method-collections                             List method collections
+POST /api/v1/method-collections/{name}/load                 Load a method collection
+POST /api/v1/method-collections/{name}/unload               Unload a method collection
+POST /api/v1/method-collections/upload                      Upload a method package
+GET  /api/v1/flow-synonyms                                  List synonym sets
+POST /api/v1/flow-synonyms/{name}/load                      Activate a synonym set
+POST /api/v1/flow-synonyms/{name}/unload                    Deactivate a synonym set
+GET  /api/v1/flow-synonyms/{name}/groups                    Browse synonym groups
+GET  /api/v1/flow-synonyms/{name}/download                  Download synonym CSV
+GET  /api/v1/compartment-mappings                           List compartment mappings
+GET  /api/v1/units                                          List unit definitions
+POST /api/v1/auth                                           Login (returns session cookie)
 ```
 
 ---

@@ -14,6 +14,7 @@ type alias ListRow msg =
     , description : String
     , count : Int
     , isUploaded : Bool
+    , isAuto : Bool
     , format : String
     , onNavigate : Maybe msg
     }
@@ -70,7 +71,10 @@ viewRow row =
                 text ""
             ]
         , td [ class "has-text-grey" ]
-            [ if row.isUploaded then
+            [ if row.isAuto then
+                span [ class "tag is-info is-light" ] [ text "Auto" ]
+
+              else if row.isUploaded then
                 text "Uploaded"
 
               else

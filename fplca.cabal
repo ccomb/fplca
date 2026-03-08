@@ -59,7 +59,6 @@ executable fplca
                      , random
                      , petsc-hs
                      , base64-bytestring
-                     , file-embed
                      , toml-reader
                      , filelock
                      , temporary
@@ -88,10 +87,12 @@ executable fplca
                      , Database.UploadedDatabase
                      , SynonymDB
                      , SynonymDB.Types
+                     , SynonymDB.Extract
                      , Method.Types
                      , Method.Parser
                      , Method.ParserCSV
                      , Method.Mapping
+                     , Method.FlowResolver
                      , API.Routes
                      , API.Types
                      , API.DatabaseHandlers
@@ -103,24 +104,6 @@ executable fplca
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser
-  default-language:    Haskell2010
-
--- Tool to compile synonym database JSON to embedded binary
-executable synonyms-compiler
-  main-is:             Tools/SynonymsCompiler.hs
-  hs-source-dirs:      src
-  ghc-options:         -threaded -rtsopts
-  build-depends:       base >=4.14 && <5
-                     , optparse-applicative
-                     , text
-                     , containers
-                     , bytestring
-                     , store
-                     , zstd
-                     , aeson
-                     , vector
-                     , deepseq
-  other-modules:       SynonymDB.Types
   default-language:    Haskell2010
 
 --executable test-mumps
@@ -165,9 +148,11 @@ test-suite acv-tests
                      , Method.Parser
                      , Method.ParserCSV
                      , Method.Mapping
+                     , Method.FlowResolver
                      , API.Types
                      , SynonymDB
                      , SynonymDB.Types
+                     , SynonymDB.Extract
                      , EcoSpold.Common
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
@@ -197,7 +182,6 @@ test-suite acv-tests
                      , stm
                      , xml-types
                      , conduit
-                     , file-embed
                      , process
                      , cassava
   default-language:    Haskell2010

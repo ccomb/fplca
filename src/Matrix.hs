@@ -48,7 +48,6 @@ module Matrix (
 
 import Progress
 import Types
-import UnitConversion (convertExchangeAmount)
 import Control.Exception (catch, SomeException)
 import Control.Monad (forM_, when, unless)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar, readMVar, modifyMVar_)

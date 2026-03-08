@@ -8,32 +8,47 @@
 module Method.Parser
     ( parseMethodFile
     , parseMethodBytes
+    , parseMethodFileWithFlows
+    , parseMethodBytesWithFlows
+    , extractFlowName
+    , extractCompartmentFromDesc
     ) where
 
 import Control.Monad (when)
 import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
+import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Xeno.SAX as X
 
 import EcoSpold.Common (bsToText, isElement)
 import Method.Types
+import Method.FlowResolver (ILCDFlowInfo(..))
 
 -- | Parse an ILCD LCIA Method XML file
 parseMethodFile :: FilePath -> IO (Either String Method)
-parseMethodFile path = do
+parseMethodFile path = parseMethodFileWithFlows M.empty path
+
+-- | Parse with ILCD flow info enrichment
+parseMethodFileWithFlows :: M.Map UUID ILCDFlowInfo -> FilePath -> IO (Either String Method)
+parseMethodFileWithFlows flowInfo path = do
     bytes <- BS.readFile path
-    return $ parseMethodBytes bytes
+    return $ parseMethodBytesWithFlows flowInfo bytes
 
 -- | Parse ILCD LCIA Method XML from ByteString
 parseMethodBytes :: BS.ByteString -> Either String Method
-parseMethodBytes bytes =
+parseMethodBytes = parseMethodBytesWithFlows M.empty
+
+-- | Parse with ILCD flow info enrichment
+parseMethodBytesWithFlows :: M.Map UUID ILCDFlowInfo -> BS.ByteString -> Either String Method
+parseMethodBytesWithFlows flowInfo bytes =
     case X.fold openTag attribute endOpen textHandler closeTag cdataHandler initialState bytes of
         Left err -> Left $ "XML parse error: " ++ show err
-        Right state -> buildMethod state
+        Right state -> buildMethod flowInfo state
 
 -- | Parser state accumulator
 data ParseState = ParseState
@@ -46,6 +61,7 @@ data ParseState = ParseState
     , psFactors       :: ![MethodCF]
     -- Current factor being parsed
     , psCurrentFlowId :: !Text
+    , psCurrentFlowURI :: !Text
     , psCurrentFlowName :: !Text
     , psCurrentDirection :: !Text
     , psCurrentValue  :: !Text
@@ -66,6 +82,7 @@ initialState = ParseState
     , psMethodology = ""
     , psFactors = []
     , psCurrentFlowId = ""
+    , psCurrentFlowURI = ""
     , psCurrentFlowName = ""
     , psCurrentDirection = ""
     , psCurrentValue = ""
@@ -93,6 +110,9 @@ attribute state attrName attrValue
     -- Capture flow UUID from referenceToFlowDataSet
     | psInFactor state && attrName == "refObjectId" && inFlowRef =
         state { psCurrentFlowId = bsToText attrValue }
+    -- Capture URI as secondary UUID source
+    | psInFactor state && attrName == "uri" && inFlowRef =
+        state { psCurrentFlowURI = bsToText attrValue }
     | otherwise = state
   where
     inFlowRef = case psPath state of
@@ -115,18 +135,22 @@ cdataHandler = textHandler
 -- | Handle closing tags
 closeTag :: ParseState -> BS.ByteString -> ParseState
 closeTag state tagName
-    -- End of factor element - build the CF
+    -- End of factor element - build the CF (enrichment happens in buildMethod)
     | isElement tagName "factor" && psInFactor state =
-        let cf = MethodCF
-                { mcfFlowRef = parseUUIDSafe (psCurrentFlowId state)
+        let flowUUID = resolveFlowUUID (psCurrentFlowId state) (psCurrentFlowURI state)
+            cf = MethodCF
+                { mcfFlowRef = flowUUID
                 , mcfFlowName = extractFlowName (psCurrentFlowName state)
                 , mcfDirection = parseDirection (psCurrentDirection state)
                 , mcfValue = parseDoubleSafe (psCurrentValue state)
+                , mcfCompartment = extractCompartmentFromDesc (psCurrentFlowName state)
+                , mcfCAS = Nothing  -- enriched in buildMethod from flow XMLs
                 }
         in state { psPath = dropPath
                  , psInFactor = False
                  , psFactors = cf : psFactors state
                  , psCurrentFlowId = ""
+                 , psCurrentFlowURI = ""
                  , psCurrentFlowName = ""
                  , psCurrentDirection = ""
                  , psCurrentValue = ""
@@ -213,9 +237,9 @@ closeTag state tagName
         [] -> []
     accumulatedText = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
 
--- | Build the final Method from parsed state
-buildMethod :: ParseState -> Either String Method
-buildMethod state = do
+-- | Build the final Method from parsed state, enriching CFs with flow XML data
+buildMethod :: M.Map UUID ILCDFlowInfo -> ParseState -> Either String Method
+buildMethod flowInfo state = do
     when (T.null (psMethodId state)) $
         Left "Missing method UUID"
     when (T.null (psMethodName state)) $
@@ -224,6 +248,9 @@ buildMethod state = do
     methodUUID <- case UUID.fromText (psMethodId state) of
         Just u -> Right u
         Nothing -> Left $ "Invalid method UUID: " ++ T.unpack (psMethodId state)
+
+    let factors = reverse (psFactors state)
+        enrichedFactors = map (enrichCF flowInfo) factors
 
     Right $ Method
         { methodId = methodUUID
@@ -236,8 +263,38 @@ buildMethod state = do
         , methodMethodology = if T.null (psMethodology state)
                                 then Nothing
                                 else Just (psMethodology state)
-        , methodFactors = reverse (psFactors state)  -- Restore original order
+        , methodFactors = enrichedFactors
         }
+
+-- | Enrich a MethodCF with data from ILCD flow XMLs
+enrichCF :: M.Map UUID ILCDFlowInfo -> MethodCF -> MethodCF
+enrichCF flowInfo cf = case M.lookup (mcfFlowRef cf) flowInfo of
+    Nothing -> cf  -- no flow XML found, keep fallback data from shortDescription
+    Just info -> cf
+        { mcfFlowName    = ilcdBaseName info  -- proper baseName replaces extracted name
+        , mcfCompartment = firstJust (ilcdCompartment info) (mcfCompartment cf)
+        , mcfCAS         = ilcdCAS info
+        }
+  where
+    firstJust (Just a) _ = Just a
+    firstJust Nothing  b = b
+
+-- | Resolve flow UUID: prefer refObjectId, fall back to extracting UUID from URI path
+resolveFlowUUID :: Text -> Text -> UUID
+resolveFlowUUID refId uri
+    | not (T.null refId), Just u <- UUID.fromText refId = u
+    | not (T.null uri) = extractUUIDFromURI uri
+    | otherwise = UUID.nil
+
+-- | Extract UUID from a URI like "../flows/08a91e70-3ddc-11dd-a2a8-0050c2490048.xml"
+extractUUIDFromURI :: Text -> UUID
+extractUUIDFromURI uri =
+    let filename = last $ T.splitOn "/" uri
+        stem = fromMaybe filename $ T.stripSuffix ".xml" filename
+    in fromMaybe UUID.nil (UUID.fromText stem)
+  where
+    last [] = ""
+    last xs = Prelude.last xs
 
 -- | Parse UUID from text, return nil UUID on failure
 parseUUIDSafe :: Text -> UUID.UUID
@@ -257,9 +314,38 @@ parseDirection txt
     | otherwise = Output
 
 -- | Extract flow name from shortDescription
--- Format: "flow name (Mass, kg, Emissions to ...)"
+-- Format: "methane (fossil) (Mass, kg, Emissions to ...)"
+-- The flow name may contain parentheses (e.g. "methane (fossil)"),
+-- so we find the "(Mass" / "(Volume" marker as the boundary.
 extractFlowName :: Text -> Text
 extractFlowName txt =
-    let -- Find first opening paren
-        nameEnd = T.takeWhile (/= '(') txt
-    in T.strip nameEnd
+    let markers = ["(Mass", "(Volume", "(Area", "(Energy", "(Length", "(Number of items"]
+        findMarker [] = Nothing
+        findMarker (m:ms) = case T.breakOn m txt of
+            (before, rest) | not (T.null rest) -> Just before
+            _ -> findMarker ms
+    in T.strip $ case findMarker markers of
+        Just before -> before
+        Nothing     -> txt  -- no marker found: use full text
+
+-- | Extract compartment info from shortDescription as fallback
+-- Format: "... Emissions to air, non-urban ..."
+extractCompartmentFromDesc :: Text -> Maybe Compartment
+extractCompartmentFromDesc txt
+    | "Emissions to air" `T.isInfixOf` txt =
+        Just (Compartment "air" (extractSubFromDesc "Emissions to air" txt) "")
+    | "Emissions to water" `T.isInfixOf` txt =
+        Just (Compartment "water" (extractSubFromDesc "Emissions to water" txt) "")
+    | "Emissions to soil" `T.isInfixOf` txt =
+        Just (Compartment "soil" (extractSubFromDesc "Emissions to soil" txt) "")
+    | "Resources" `T.isInfixOf` txt =
+        Just (Compartment "natural resource" "" "")
+    | otherwise = Nothing
+  where
+    extractSubFromDesc prefix t =
+        let (_, after) = T.breakOn prefix t
+            rest = T.drop (T.length prefix) after
+            -- Rest might be ", non-urban air or from high stacks)"
+            cleaned = T.dropWhile (\c -> c == ',' || c == ' ') rest
+            sub = T.takeWhile (/= ')') cleaned
+        in T.strip sub

@@ -158,6 +158,7 @@ viewDatabaseRow confirmingDelete loadingDbs unloadingDb deletingDb db =
         , description = db.description |> Maybe.withDefault ""
         , count = db.activityCount
         , isUploaded = db.isUploaded
+        , isAuto = False
         , format = db.format |> Maybe.withDefault ""
         , onNavigate =
             case db.status of

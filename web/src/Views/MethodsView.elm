@@ -107,6 +107,7 @@ viewMethodRow confirmingDelete loadingMethods unloadingMethod deletingMethod mc 
         , description = mc.description |> Maybe.withDefault ""
         , count = mc.methodCount
         , isUploaded = mc.isUploaded
+        , isAuto = False
         , format = mc.format |> Maybe.withDefault ""
         , onNavigate =
             case mc.status of

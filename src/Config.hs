@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -9,8 +8,7 @@ module Config
     , ServerConfig(..)
     , DatabaseConfig(..)
     , MethodConfig(..)
-    , UnitsConfig(..)
-    , UnitAliasConfig(..)
+    , RefDataConfig(..)
       -- * Loading
     , loadConfig
     , loadConfigFile
@@ -24,25 +22,26 @@ module Config
     , resolveLoadOrder
     ) where
 
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import GHC.Generics (Generic)
-import qualified TOML
-import TOML (DecodeTOML(..), Decoder, getField, getFieldOpt, getFieldOptWith, getArrayOf, decodeFile)
+import TOML (DecodeTOML(..), getField, getFieldOpt, getFieldOptWith, getArrayOf, decodeFile)
 import Control.Monad (when, forM_)
 import System.Directory (doesFileExist)
 import Database.Upload (DatabaseFormat(..))
 
 -- | Main configuration type
 data Config = Config
-    { cfgServer    :: !ServerConfig
-    , cfgDatabases :: ![DatabaseConfig]
-    , cfgMethods   :: ![MethodConfig]
-    , cfgUnits     :: !(Maybe UnitsConfig)  -- Optional custom unit definitions
+    { cfgServer              :: !ServerConfig
+    , cfgDatabases           :: ![DatabaseConfig]
+    , cfgMethods             :: ![MethodConfig]
+    , cfgFlowSynonyms        :: ![RefDataConfig]
+    , cfgCompartmentMappings :: ![RefDataConfig]
+    , cfgUnits               :: ![RefDataConfig]
     } deriving (Show, Eq, Generic)
 
 -- | Server configuration
@@ -75,17 +74,15 @@ data MethodConfig = MethodConfig
     , mcDescription :: !(Maybe Text)   -- Optional description
     } deriving (Show, Eq, Generic)
 
--- | Unit configuration for dimensional analysis
--- Allows defining custom unit aliases with dimension expressions
-data UnitsConfig = UnitsConfig
-    { ucDimensions :: ![Text]                      -- Base dimension names in order
-    , ucAliases    :: !(Map Text UnitAliasConfig)  -- Unit name → {dim, factor}
-    } deriving (Show, Eq, Generic)
-
--- | Single unit alias definition
-data UnitAliasConfig = UnitAliasConfig
-    { uacDim    :: !Text    -- Dimension expression like "mass*length" or "length/time"
-    , uacFactor :: !Double  -- Conversion factor to SI base units
+-- | Reusable config for reference data (flow synonyms, compartment mappings, units).
+-- All three resource types share this shape.
+data RefDataConfig = RefDataConfig
+    { rdName        :: !Text
+    , rdPath        :: !FilePath
+    , rdActive      :: !Bool
+    , rdIsUploaded  :: !Bool
+    , rdIsAuto      :: !Bool       -- True for auto-extracted synonym sets
+    , rdDescription :: !(Maybe Text)
     } deriving (Show, Eq, Generic)
 
 -- | Default server configuration
@@ -102,56 +99,40 @@ defaultConfig = Config
     { cfgServer = defaultServerConfig
     , cfgDatabases = []
     , cfgMethods = []
-    , cfgUnits = Nothing
+    , cfgFlowSynonyms = []
+    , cfgCompartmentMappings = []
+    , cfgUnits = []
     }
 
 -- TOML Decoders
 
 instance DecodeTOML Config where
     tomlDecoder = do
-        cfgServer <- getFieldOptWith tomlDecoder "server" >>= \case
-            Just s  -> pure s
-            Nothing -> pure defaultServerConfig
-        cfgDatabases <- getFieldOptWith (getArrayOf tomlDecoder) "databases" >>= \case
-            Just dbs -> pure dbs
-            Nothing  -> pure []
-        cfgMethods <- getFieldOptWith (getArrayOf tomlDecoder) "methods" >>= \case
-            Just ms -> pure ms
-            Nothing -> pure []
-        cfgUnits <- getFieldOptWith tomlDecoder "units"
+        cfgServer <- fromMaybe defaultServerConfig <$> getFieldOptWith tomlDecoder "server"
+        cfgDatabases <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "databases"
+        cfgMethods <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "methods"
+        cfgFlowSynonyms <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "flow-synonyms"
+        cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
+        cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
         pure Config{..}
 
 instance DecodeTOML ServerConfig where
     tomlDecoder = do
-        scPort <- getFieldOpt "port" >>= \case
-            Just p  -> pure p
-            Nothing -> pure 8081
-        scHost <- getFieldOpt "host" >>= \case
-            Just h  -> pure h
-            Nothing -> pure "127.0.0.1"
+        scPort <- fromMaybe 8081 <$> getFieldOpt "port"
+        scHost <- fromMaybe "127.0.0.1" <$> getFieldOpt "host"
         scPassword <- getFieldOpt "password"
         pure ServerConfig{..}
 
 instance DecodeTOML DatabaseConfig where
     tomlDecoder = do
         dcName <- getField "name"
-        dcDisplayName <- getFieldOpt "displayName" >>= \case
-            Just dn -> pure dn
-            Nothing -> pure dcName  -- Fall back to name if no displayName
+        dcDisplayName <- fromMaybe dcName <$> getFieldOpt "displayName"
         dcPath <- getField "path"
         dcDescription <- getFieldOpt "description"
-        dcLoad <- getFieldOpt "load" >>= \case
-            Just l  -> pure l
-            Nothing -> pure False  -- Default to NOT loading at startup
-        dcDefault <- getFieldOpt "default" >>= \case
-            Just d  -> pure d
-            Nothing -> pure False
-        dcDepends <- getFieldOptWith (getArrayOf tomlDecoder) "depends" >>= \case
-            Just ds -> pure ds
-            Nothing -> pure []
-        dcLocationAliases <- getFieldOpt "locationAliases" >>= \case
-            Just m  -> pure m
-            Nothing -> pure M.empty
+        dcLoad <- fromMaybe False <$> getFieldOpt "load"
+        dcDefault <- fromMaybe False <$> getFieldOpt "default"
+        dcDepends <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "depends"
+        dcLocationAliases <- fromMaybe M.empty <$> getFieldOpt "locationAliases"
         let dcFormat = Nothing  -- Format is detected at runtime, not stored in config
         let dcIsUploaded = False  -- Databases from TOML are not uploaded
         pure DatabaseConfig{..}
@@ -160,28 +141,20 @@ instance DecodeTOML MethodConfig where
     tomlDecoder = do
         mcName <- getField "name"
         mcPath <- getField "path"
-        mcActive <- getFieldOpt "active" >>= \case
-            Just a  -> pure a
-            Nothing -> pure True  -- Default to active
+        mcActive <- fromMaybe True <$> getFieldOpt "active"
         let mcIsUploaded = False  -- Methods from TOML are not uploaded
         mcDescription <- getFieldOpt "description"
         pure MethodConfig{..}
 
-instance DecodeTOML UnitsConfig where
+instance DecodeTOML RefDataConfig where
     tomlDecoder = do
-        ucDimensions <- getFieldOpt "dimensions" >>= \case
-            Just dims -> pure dims
-            Nothing -> pure ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        ucAliases <- getFieldOpt "aliases" >>= \case
-            Just m  -> pure m
-            Nothing -> pure M.empty
-        pure UnitsConfig{..}
-
-instance DecodeTOML UnitAliasConfig where
-    tomlDecoder = do
-        uacDim <- getField "dim"
-        uacFactor <- getField "factor"
-        pure UnitAliasConfig{..}
+        rdName <- getField "name"
+        rdPath <- getField "path"
+        rdActive <- fromMaybe True <$> getFieldOpt "active"
+        let rdIsUploaded = False  -- TOML entries are not uploaded
+        let rdIsAuto = False
+        rdDescription <- getFieldOpt "description"
+        pure RefDataConfig{..}
 
 -- | Load configuration from a TOML file
 loadConfigFile :: FilePath -> IO (Either Text Config)

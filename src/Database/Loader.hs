@@ -108,6 +108,12 @@ import Text.Printf (printf)
 cacheMagic :: BS.ByteString
 cacheMagic = "FPLCACHE"
 
+-- | Merge two Flow records with the same UUID, combining their synonyms.
+-- When multiple .spold files reference the same biosphere flow, each may carry
+-- different synonyms. M.fromListWith mergeFlows ensures no synonym is lost.
+mergeFlows :: Flow -> Flow -> Flow
+mergeFlows a b = a { flowSynonyms = M.unionWith S.union (flowSynonyms a) (flowSynonyms b) }
+
 {- |
 Schema signature automatically derived from the Database type structure.
 
@@ -122,7 +128,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 2
+     in hi `xor` lo `xor` 3
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -558,7 +564,7 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let successResults = [r | Right r <- results]
                 let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip7 successResults
                 let !finalProcMap = M.unions procMaps
-                let !finalFlowMap = M.unions flowMaps
+                let !finalFlowMap = M.unionsWith mergeFlows flowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
                 let !finalSupplierLinks = M.unions supplierLinksLists
@@ -646,7 +652,7 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr:_) -> return $ Left firstErr
             [] -> do
                 let !procMap = M.fromList [e | Right e <- procEntries]
-                let !flowMap = M.fromList [(flowId f, f) | f <- allFlows]
+                let !flowMap = M.fromListWith mergeFlows [(flowId f, f) | f <- allFlows]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
                 -- Build dataset number index: dsNum → (actUUID, prodUUID)
                 let !dsIndex = M.fromList
@@ -697,7 +703,7 @@ loadSingleEcoSpold1File locationAliases filepath = do
     -- Build activity map from all parsed activities
     let expanded = map buildProcEntryFromResult results
         !procMap = M.fromList [(key, act) | (key, act) <- expanded]
-        !flowMap = M.fromList [(flowId f, f) | (_, flows, _, _, _) <- results, f <- flows]
+        !flowMap = M.fromListWith mergeFlows [(flowId f, f) | (_, flows, _, _, _) <- results, f <- flows]
         !unitMap = M.fromList [(unitId u, u) | (_, _, units, _, _) <- results, u <- units]
         -- Build dataset number index: dsNum → (actUUID, prodUUID)
         !dsIndex = M.fromList

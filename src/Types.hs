@@ -384,7 +384,8 @@ data Database = Database
     -- Runtime-only fields (not serialized to cache)
     , dbCachedFactorization :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
     , dbSynonymDB :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
-    , dbFlowsByName :: !(M.Map Text [Flow]) -- Flow name index for efficient lookup
+    , dbFlowsByName :: !(M.Map Text [Flow]) -- Biosphere flow name index for LCIA matching
+    , dbFlowsByCAS :: !(M.Map Text [Flow]) -- CAS → biosphere flows for LCIA matching
     }
     deriving (Generic, NFData)
 
@@ -476,6 +477,7 @@ instance Store Database where
             , dbCachedFactorization = Nothing
             , dbSynonymDB = Nothing
             , dbFlowsByName = M.empty
+            , dbFlowsByCAS = M.empty
             }
 
 -- | Helper functions for ProcessId and Database operations
@@ -555,12 +557,13 @@ parseProcessId db filename = case T.splitOn "_" filename of
 addSynonymDBToDatabase :: Database -> SynonymDB -> Database
 addSynonymDBToDatabase db synDB = db { dbSynonymDB = Just synDB }
 
--- | Build the flow name index from the flow database
--- Groups flows by their normalized names for efficient lookup
-buildFlowNameIndex :: FlowDB -> M.Map Text [Flow]
-buildFlowNameIndex flowDB =
-    M.fromListWith (++) $ concatMap flowEntries (M.elems flowDB)
+-- | Build the flow name index from biosphere flows only.
+-- Groups flows by their normalized names for efficient LCIA lookup.
+buildFlowNameIndex :: FlowDB -> S.Set UUID -> M.Map Text [Flow]
+buildFlowNameIndex flowDB bioUUIDs =
+    M.fromListWith (++) $ concatMap flowEntries bioFlows
   where
+    bioFlows = filter (\f -> S.member (flowId f) bioUUIDs) (M.elems flowDB)
     flowEntries f =
         let primary = normalizeName (flowName f)
             synKeys = [ normalizeName syn
@@ -568,9 +571,21 @@ buildFlowNameIndex flowDB =
                       , syn <- S.toList syns ]
         in [(k, [f]) | k <- nub (primary : synKeys)]
 
--- | Add flow name index to a Database
+-- | Build CAS index from biosphere flows
+buildFlowCASIndex :: FlowDB -> S.Set UUID -> M.Map Text [Flow]
+buildFlowCASIndex flowDB bioUUIDs =
+    M.fromListWith (++) [(cas, [f]) | f <- M.elems flowDB
+                                    , S.member (flowId f) bioUUIDs
+                                    , Just cas <- [flowCAS f]
+                                    , not (T.null cas)]
+
+-- | Add biosphere flow indexes (name + CAS) to a Database
 addFlowNameIndexToDatabase :: Database -> Database
-addFlowNameIndexToDatabase db = db { dbFlowsByName = buildFlowNameIndex (dbFlows db) }
+addFlowNameIndexToDatabase db =
+    let bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
+    in db { dbFlowsByName = buildFlowNameIndex (dbFlows db) bioUUIDs
+          , dbFlowsByCAS  = buildFlowCASIndex (dbFlows db) bioUUIDs
+          }
 
 -- | Add both SynonymDB and flow name index to a Database
 -- Convenience function for post-load initialization

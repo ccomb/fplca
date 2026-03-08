@@ -10,6 +10,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
 import Method.Parser
 import Method.ParserCSV (parseMethodCSVBytes)
@@ -45,31 +46,42 @@ spec = do
             it "handles complex names" $ do
                 normalizeName "  Carbon Dioxide (biogenic), in air  " `shouldBe` "carbon dioxide biogenic in air"
 
-        describe "loadEmbeddedSynonymDB" $ do
-            it "loads the embedded synonym database" $ do
-                db <- loadEmbeddedSynonymDB
-                -- Should have loaded some data
-                synNameToId db `shouldSatisfy` (not . null)
-                synIdToNames db `shouldSatisfy` (not . null)
+        describe "buildFromCSV" $ do
+            it "builds a synonym DB from CSV pairs" $ do
+                let csv = "name1,name2\ncarbon dioxide,co2\nco2,carbon dioxide (fossil)\n"
+                case buildFromCSV csv of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right db -> do
+                        synNameToId db `shouldSatisfy` (not . M.null)
+                        synIdToNames db `shouldSatisfy` (not . M.null)
 
             it "can look up 'carbon dioxide'" $ do
-                db <- loadEmbeddedSynonymDB
-                let result = lookupSynonymGroup db "carbon dioxide"
-                result `shouldSatisfy` maybe False (const True)
+                let csv = "name1,name2\ncarbon dioxide,co2\n"
+                case buildFromCSV csv of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right db -> do
+                        let result = lookupSynonymGroup db "carbon dioxide"
+                        result `shouldSatisfy` maybe False (const True)
 
-            it "maps 'co2' to same group as 'carbon dioxide'" $ do
-                db <- loadEmbeddedSynonymDB
-                let co2Group = lookupSynonymGroup db "co2"
-                    carbonGroup = lookupSynonymGroup db "carbon dioxide"
-                co2Group `shouldBe` carbonGroup
+            it "maps 'co2' to same group as 'carbon dioxide' (transitive)" $ do
+                let csv = "name1,name2\ncarbon dioxide,co2\n"
+                case buildFromCSV csv of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right db -> do
+                        let co2Group = lookupSynonymGroup db "co2"
+                            carbonGroup = lookupSynonymGroup db "carbon dioxide"
+                        co2Group `shouldBe` carbonGroup
 
             it "can retrieve synonyms for a group" $ do
-                db <- loadEmbeddedSynonymDB
-                case lookupSynonymGroup db "carbon dioxide" of
-                    Nothing -> expectationFailure "carbon dioxide not found in DB"
-                    Just gid -> do
-                        let synonyms = getSynonyms db gid
-                        synonyms `shouldSatisfy` maybe False (not . null)
+                let csv = "name1,name2\ncarbon dioxide,co2\nco2,methane\n"
+                case buildFromCSV csv of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right db ->
+                        case lookupSynonymGroup db "carbon dioxide" of
+                            Nothing -> expectationFailure "carbon dioxide not found in DB"
+                            Just gid -> do
+                                let synonyms = getSynonyms db gid
+                                synonyms `shouldSatisfy` maybe False (not . null)
 
     describe "Method Parser" $ do
         describe "parseMethodBytes" $ do
@@ -231,8 +243,8 @@ spec = do
                     -- Inventory: CO2 = 10 kg, CH4 = 2 kg
                     inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
                     -- Method: CO2 CF = 1.0, CH4 CF = 28.0
-                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0
-                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing
                     co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
                     ch4Flow = mkTestFlow ch4Uuid "Methane"
                     mappings = [ (co2CF, Just (co2Flow, ByUUID))
@@ -245,8 +257,8 @@ spec = do
                 let co2Uuid = UUID.fromWords 1 2 3 4
                     ch4Uuid = UUID.fromWords 5 6 7 8
                     inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
-                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0
-                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing
                     co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
                     mappings = [ (co2CF, Just (co2Flow, ByUUID))
                                , (ch4CF, Nothing)  -- CH4 not mapped
@@ -260,7 +272,7 @@ spec = do
                     -- Inventory has only CO2
                     inventory = M.fromList [(co2Uuid, 10.0)]
                     -- Method has N2O that's not in inventory
-                    n2oCF = MethodCF n2oUuid "Dinitrogen monoxide" Output 265.0
+                    n2oCF = MethodCF n2oUuid "Dinitrogen monoxide" Output 265.0 Nothing Nothing
                     n2oFlow = mkTestFlow n2oUuid "Dinitrogen monoxide"
                     mappings = [ (n2oCF, Just (n2oFlow, ByName)) ]
                 -- Score = 0 (N2O not in inventory)
@@ -270,7 +282,7 @@ spec = do
                 let oilUuid = UUID.fromWords 11 12 13 14
                     -- Resource extraction has negative sign in inventory
                     inventory = M.fromList [(oilUuid, -5.0)]
-                    oilCF = MethodCF oilUuid "Crude oil" Input 42.0
+                    oilCF = MethodCF oilUuid "Crude oil" Input 42.0 Nothing Nothing
                     oilFlow = mkTestFlow oilUuid "Crude oil"
                     mappings = [ (oilCF, Just (oilFlow, ByUUID)) ]
                 -- Score = -5 * 42 = -210 (negative = resource depletion)

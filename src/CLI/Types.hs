@@ -16,8 +16,8 @@ data OutputFormat =
 
 -- | Global options that apply to all commands
 data GlobalOptions = GlobalOptions
-  { configFile :: Maybe FilePath  -- Config file (--config), alternative to --data
-  , dataDir :: Maybe FilePath     -- Data directory (--data), overrides env and default
+  { configFile :: Maybe FilePath  -- Config file (--config), required
+  , dbName :: Maybe Text          -- Database name (--db), selects which loaded database to query
   , methodsDir :: Maybe FilePath  -- Methods directory (--methods) for LCIA methods
   , format :: Maybe OutputFormat  -- Output format (--format)
   , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)
@@ -42,6 +42,13 @@ data Command =
   | LCIA Text LCIAOptions                 -- LCIA computation
   | DebugMatrices Text DebugMatricesOptions -- Matrix debugging for activity
   | ExportMatrices FilePath               -- Export matrices in universal format
+    -- Listing commands (mirror API)
+  | Databases                              -- List loaded databases
+  | MethodCollections                      -- List method collections
+  | Methods                                -- List loaded methods (flattened)
+  | Synonyms                               -- List synonym sources
+  | CompartmentMappings                    -- List compartment mappings
+  | Units                                  -- List unit definitions
   deriving (Eq, Show, Generic)
 
 -- | Server-specific options

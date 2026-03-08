@@ -138,6 +138,11 @@ viewStrategyBadges mapping =
 
               else
                 Nothing
+            , if mapping.mstMappedByCAS > 0 then
+                Just (span [ class "tag is-link is-light", style "font-size" "0.75rem" ] [ text (String.fromInt mapping.mstMappedByCAS ++ " cas") ])
+
+              else
+                Nothing
             , if mapping.mstMappedByName > 0 then
                 Just (span [ class "tag is-success is-light", style "font-size" "0.75rem" ] [ text (String.fromInt mapping.mstMappedByName ++ " name") ])
 

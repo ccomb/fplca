@@ -504,7 +504,7 @@ getActivityTree db queryText maxDepth = do
             [] -> queryText  -- Fallback
     case UUID.fromText activityUuidText of
         Just activityUuid ->
-            let loopAwareTree = buildLoopAwareTree db activityUuid maxDepth
+            let loopAwareTree = buildLoopAwareTree defaultUnitConfig db activityUuid maxDepth
                 treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
              in Right $ toJSON treeExport
         Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText

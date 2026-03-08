@@ -17,11 +17,11 @@ module Database.Manager
     , MissingSupplier(..)
     , DependencySuggestion(..)
     , MethodCollectionStatus(..)
+    , RefDataStatus(..)
       -- * Re-exports
     , DepLoadResult(..)
       -- * Initialization
     , initDatabaseManager
-    , initSingleDatabaseManager
       -- * Operations
     , getDatabase
     , listDatabases
@@ -37,6 +37,26 @@ module Database.Manager
     , getLoadedMethods
     , addMethodCollection
     , removeMethodCollection
+      -- * Reference Data Operations
+    , listFlowSynonyms
+    , loadFlowSynonyms
+    , unloadFlowSynonyms
+    , addFlowSynonyms
+    , removeFlowSynonyms
+    , listCompartmentMappings
+    , loadCompartmentMappings
+    , unloadCompartmentMappings
+    , addCompartmentMappings
+    , removeCompartmentMappings
+    , listUnitDefs
+    , loadUnitDefs
+    , unloadUnitDefs
+    , addUnitDefs
+    , removeUnitDefs
+    , getFlowSynonymGroups
+    , getMergedSynonymDB
+    , getMergedCompartmentMap
+    , getMergedUnitConfig
       -- * Staged Database Operations
     , getStagedDatabase
     , getDatabaseSetupInfo
@@ -72,13 +92,15 @@ import Data.List (isPrefixOf, nub, sortOn)
 import Data.Ord (Down(..))
 
 import Config
+import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Matrix (precomputeMatrixFactorization, addFactorizationToDatabase, clearCachedKspSolver)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Progress (reportProgress, reportProgressWithTiming, reportError, ProgressLevel(..))
 import Database (buildDatabaseWithMatrices)
-import SynonymDB (SynonymDB)
-import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), Exchange(..), UUID, exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), emptyCrossDBLinkingStats, crossDBLinksCount, crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
+import SynonymDB (SynonymDB(..), emptySynonymDB, buildFromCSV, mergeSynonymDBs, synonymCount)
+import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapSize)
+import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), Exchange(..), UUID, Flow(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), emptyCrossDBLinkingStats, crossDBLinksCount, crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
 import qualified UnitConversion as UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -92,8 +114,11 @@ import System.FilePath (takeExtension, dropExtension, (</>))
 import System.Directory (removeDirectoryRecursive)
 import API.Types (DepLoadResult(..))
 import Method.Types (Method(..))
-import Method.Parser (parseMethodFile)
+import qualified Method.Parser
 import Method.ParserCSV (parseMethodCSV)
+import qualified Method.FlowResolver as FlowResolver
+import Method.FlowResolver (ILCDFlowInfo)
+import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
 
 -- | A fully loaded database with solver ready for queries
 data LoadedDatabase = LoadedDatabase
@@ -297,16 +322,23 @@ data DatabaseManager = DatabaseManager
     , dmAvailableDbs     :: !(TVar (Map Text DatabaseConfig))  -- All configured databases
     , dmAvailableMethods :: !(TVar (Map Text MethodConfig))    -- All configured method collections
     , dmLoadedMethods    :: !(TVar (Map Text [Method]))        -- name → parsed impact categories
-    , dmSynonymDB        :: !SynonymDB                         -- Shared synonym database
+    -- Reference data: flow synonyms
+    , dmAvailableFlowSyns :: !(TVar (Map Text RefDataConfig))
+    , dmLoadedFlowSyns    :: !(TVar (Map Text SynonymDB))
+    -- Reference data: compartment mappings
+    , dmAvailableCompMaps :: !(TVar (Map Text RefDataConfig))
+    , dmLoadedCompMaps    :: !(TVar (Map Text CompartmentMap))
+    -- Reference data: unit definitions
+    , dmAvailableUnitDefs :: !(TVar (Map Text RefDataConfig))
+    , dmLoadedUnitDefs    :: !(TVar (Map Text UnitConversion.UnitConfig))
     , dmNoCache          :: !Bool                              -- Caching disabled flag
-    , dmUnitConfig       :: !UnitConversion.UnitConfig         -- Unit configuration
     }
 
 -- | Initialize database manager from config
 -- Pre-loads databases with load=true at startup
 -- Also discovers uploaded databases from uploads/ directory
-initDatabaseManager :: Config -> SynonymDB -> Bool -> Maybe FilePath -> IO DatabaseManager
-initDatabaseManager config synonymDB noCache _configPath = do
+initDatabaseManager :: Config -> Bool -> Maybe FilePath -> IO DatabaseManager
+initDatabaseManager config noCache _configPath = do
     -- Get configured databases and detect their format
     configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
         resolvedPath <- resolveDataPath (dcPath dbConfig)
@@ -319,32 +351,33 @@ initDatabaseManager config synonymDB noCache _configPath = do
     -- Merge configured + uploaded
     let allDbs = configuredDbs ++ uploadedDbs
 
-    -- Build UnitConfig from config (or use defaults)
-    unitConfig <- case cfgUnits config of
-        Nothing -> do
-            reportProgress Info "Using default unit configuration"
-            return UnitConversion.defaultUnitConfig
-        Just unitsToml -> do
-            let aliases = M.map (\uac -> (uacDim uac, uacFactor uac)) (ucAliases unitsToml)
-            case UnitConversion.buildUnitConfigFromToml (ucDimensions unitsToml) aliases of
-                Right cfg -> do
-                    reportProgress Info $ "Loaded " ++ show (M.size aliases) ++ " custom unit aliases from config"
-                    return cfg
-                Left err -> do
-                    reportError $ "Invalid [units] config: " <> T.unpack err <> " - using defaults"
-                    return UnitConversion.defaultUnitConfig
-
     -- Create TVars
     loadedDbsVar <- newTVarIO M.empty
-    stagedDbsVar <- newTVarIO M.empty  -- Staged databases awaiting finalization
-    stagingDbsVar <- newTVarIO S.empty -- Databases currently being staged (race guard)
-    indexedDbsVar <- newTVarIO M.empty  -- Pre-built indexes for cross-DB linking
+    stagedDbsVar <- newTVarIO M.empty
+    stagingDbsVar <- newTVarIO S.empty
+    indexedDbsVar <- newTVarIO M.empty
     availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- allDbs]
-    -- Discover uploaded methods from uploads/methods/ directory
+
+    -- Discover uploaded methods
     uploadedMethodConfigs <- discoverUploadedMethodConfigs
     let allMethods = cfgMethods config ++ uploadedMethodConfigs
     availableMethodsVar <- newTVarIO $ M.fromList [(mcName mc, mc) | mc <- allMethods]
     loadedMethodsVar <- newTVarIO M.empty
+
+    -- Reference data TVars (flow synonyms, compartment mappings, units)
+    -- Discover uploaded reference data from uploads/<type>/ directories
+    uploadedFlowSyns <- discoverUploadedRefData "uploads/flow-synonyms"
+    uploadedCompMaps <- discoverUploadedRefData "uploads/compartment-mappings"
+    uploadedUnitDefs <- discoverUploadedRefData "uploads/units"
+    let allFlowSyns = cfgFlowSynonyms config ++ uploadedFlowSyns
+        allCompMaps = cfgCompartmentMappings config ++ uploadedCompMaps
+        allUnitDefs = cfgUnits config ++ uploadedUnitDefs
+    availableFlowSynsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allFlowSyns]
+    loadedFlowSynsVar <- newTVarIO M.empty
+    availableCompMapsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allCompMaps]
+    loadedCompMapsVar <- newTVarIO M.empty
+    availableUnitDefsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allUnitDefs]
+    loadedUnitDefsVar <- newTVarIO M.empty
 
     let manager = DatabaseManager
             { dmLoadedDbs = loadedDbsVar
@@ -354,10 +387,19 @@ initDatabaseManager config synonymDB noCache _configPath = do
             , dmAvailableDbs = availableDbsVar
             , dmAvailableMethods = availableMethodsVar
             , dmLoadedMethods = loadedMethodsVar
-            , dmSynonymDB = synonymDB
+            , dmAvailableFlowSyns = availableFlowSynsVar
+            , dmLoadedFlowSyns = loadedFlowSynsVar
+            , dmAvailableCompMaps = availableCompMapsVar
+            , dmLoadedCompMaps = loadedCompMapsVar
+            , dmAvailableUnitDefs = availableUnitDefsVar
+            , dmLoadedUnitDefs = loadedUnitDefsVar
             , dmNoCache = noCache
-            , dmUnitConfig = unitConfig
             }
+
+    -- Auto-load active reference data (flow synonyms, compartment mappings, units)
+    autoLoadRefData flowSynOps loadedFlowSynsVar allFlowSyns
+    autoLoadRefData compMapOps loadedCompMapsVar allCompMaps
+    autoLoadRefData unitDefOps loadedUnitDefsVar allUnitDefs
 
     -- Resolve load order: expand load=true transitively through depends, then topo-sort
     let allDbConfigs = allDbs
@@ -369,20 +411,36 @@ initDatabaseManager config synonymDB noCache _configPath = do
             reportProgress Info $ "Loading " ++ show (length dbsToLoad) ++ " database(s) in dependency order: "
                 ++ T.unpack (T.intercalate " → " loadOrder)
             totalStart <- getCurrentTime
+            synonymDB <- getMergedSynonymDB manager
+            unitConfig <- getMergedUnitConfig manager
             forM_ dbsToLoad $ \dbConfig -> do
                 reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-                -- Get currently loaded IndexedDatabases for cross-DB linking
                 currentIndexedDbs <- readTVarIO indexedDbsVar
                 let otherIndexes = M.elems currentIndexedDbs
                 result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes
                 case result of
                     Right loaded -> do
-                        -- Build index from the loaded Database for future cross-DB linking
                         let indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
                         atomically $ do
                             modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
                             modifyTVar' indexedDbsVar (M.insert (dcName dbConfig) indexedDb)
                         reportProgress Info $ "  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)
+                        -- Auto-extract synonyms from biosphere flows
+                        let db = ldDatabase loaded
+                            bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
+                            !pairs = extractFromEcoSpold2 (dbFlows db) bioUUIDs
+                            -- Count biosphere flows that have synonyms
+                            !bioFlowsWithSyns = length
+                                [ () | f <- M.elems (dbFlows db)
+                                     , S.member (flowId f) bioUUIDs
+                                     , not (M.null (flowSynonyms f))
+                                ]
+                        reportProgress Info $ "  [EXTRACT] " <> T.unpack (dcName dbConfig)
+                            <> ": " <> show (S.size bioUUIDs) <> " bio flows, "
+                            <> show bioFlowsWithSyns <> " with synonyms, "
+                            <> show (length pairs) <> " pairs"
+                        autoCreateFlowSynonyms manager (dcName dbConfig)
+                            ("Auto-extracted from " <> dcDisplayName dbConfig) pairs
                     Left err ->
                         reportError $ "  [FAIL] Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
             totalEnd <- getCurrentTime
@@ -398,10 +456,14 @@ initDatabaseManager config synonymDB noCache _configPath = do
     forM_ activeMethods $ \mc -> do
         result <- loadMethodCollectionFromConfig mc
         case result of
-            Right methods -> do
+            Right (methods, flowInfo) -> do
                 atomically $ modifyTVar' loadedMethodsVar (M.insert (mcName mc) methods)
                 reportProgress Info $ "  [OK] Loaded method: " <> T.unpack (mcName mc)
                     <> " (" <> show (length methods) <> " impact categories)"
+                -- Auto-extract synonyms from ILCD flow definitions
+                let !pairs = extractFromILCDFlows flowInfo
+                autoCreateFlowSynonyms manager (mcName mc)
+                    ("Auto-extracted from " <> mcName mc) pairs
             Left err ->
                 reportError $ "  [FAIL] Failed to load method " <> T.unpack (mcName mc) <> ": " <> T.unpack err
 
@@ -450,36 +512,6 @@ discoverUploadedMethodConfigs = do
             , mcIsUploaded = True
             , mcDescription = UploadedDB.umDescription meta
             }
-
--- | Initialize a single-database manager (for --data mode)
--- Creates a config with one database and initializes it
-initSingleDatabaseManager :: FilePath -> SynonymDB -> Bool -> IO DatabaseManager
-initSingleDatabaseManager dataPath synonymDB noCache = do
-    -- Resolve archives and detect format
-    resolvedPath <- resolveDataPath dataPath
-    format <- Upload.detectDatabaseFormat resolvedPath
-
-    let dbConfig = DatabaseConfig
-            { dcName = "default"
-            , dcDisplayName = T.pack dataPath  -- Use path as display name
-            , dcPath = resolvedPath
-            , dcDescription = Just "Single database mode (--data)"
-            , dcLoad = True
-            , dcDefault = True
-            , dcDepends = []
-            , dcLocationAliases = M.empty
-            , dcFormat = Just format
-            , dcIsUploaded = False  -- Command-line specified, not uploaded
-            }
-
-    let config = Config
-            { cfgServer = defaultServerConfig
-            , cfgDatabases = [dbConfig]
-            , cfgMethods = []
-            , cfgUnits = Nothing
-            }
-
-    initDatabaseManager config synonymDB noCache Nothing
 
 -- | Get a database by name
 getDatabase :: DatabaseManager -> Text -> IO (Maybe LoadedDatabase)
@@ -883,22 +915,29 @@ loadDatabaseSingleFromConfig manager dbName = do
                     -- Get currently loaded IndexedDatabases for cross-DB linking
                     currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
                     let otherIndexes = M.elems currentIndexedDbs
+                    synonymDB <- getMergedSynonymDB manager
+                    unitConfig <- getMergedUnitConfig manager
                     eitherResult <- try $ loadDatabaseFromConfigWithCrossDB
                         dbConfig
-                        (dmSynonymDB manager)
-                        (dmUnitConfig manager)
+                        synonymDB
+                        unitConfig
                         (dmNoCache manager)
                         otherIndexes
                     case eitherResult of
                         Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
                         Right (Left err) -> return $ Left err
                         Right (Right loaded) -> do
-                            -- Build index from the loaded Database for future cross-DB linking
-                            let indexedDb = buildIndexedDatabaseFromDB dbName (dmSynonymDB manager) (ldDatabase loaded)
+                            let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
                             atomically $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
                                 modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
                             reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
+                            -- Auto-extract synonyms from biosphere flows
+                            let db = ldDatabase loaded
+                                bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
+                                pairs = extractFromEcoSpold2 (dbFlows db) bioUUIDs
+                            autoCreateFlowSynonyms manager dbName
+                                ("Auto-extracted from " <> dcDisplayName dbConfig) pairs
                             return $ Right loaded
 
 -- | Auto-load unloaded dependencies via loadDatabaseSingle
@@ -993,11 +1032,13 @@ stageUploadedDatabase manager dbConfig = do
                 _ -> return path
 
             -- Parse and run cross-DB linking (but don't build matrices)
+            synonymDB <- getMergedSynonymDB manager
+            unitConfig <- getMergedUnitConfig manager
             loadResult <- Loader.loadDatabaseWithCrossDBLinking
                 locationAliases
                 otherIndexes
-                (dmSynonymDB manager)
-                (dmUnitConfig manager)
+                synonymDB
+                unitConfig
                 loadPath
 
             case loadResult of
@@ -1418,10 +1459,12 @@ addDependencyToStaged manager dbName depName = do
                         then sdSelectedDeps staged
                         else depName : sdSelectedDeps staged
                     selectedIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
+                synonymDB <- getMergedSynonymDB manager
+                unitConfig <- getMergedUnitConfig manager
                 (_, newStats) <- Loader.fixActivityLinksWithCrossDB
                     selectedIndexes
-                    (dmSynonymDB manager)
-                    (dmUnitConfig manager)
+                    synonymDB
+                    unitConfig
                     (sdSimpleDB staged)
 
                 -- Update staged database with new stats and dependency
@@ -1451,10 +1494,12 @@ removeDependencyFromStaged manager dbName depName = do
             -- Re-run cross-DB linking without the removed dependency
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
             let remainingIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
+            synonymDB <- getMergedSynonymDB manager
+            unitConfig <- getMergedUnitConfig manager
             (_, newStats) <- Loader.fixActivityLinksWithCrossDB
                 remainingIndexes
-                (dmSynonymDB manager)
-                (dmUnitConfig manager)
+                synonymDB
+                unitConfig
                 (sdSimpleDB staged)
 
             -- Update staged database
@@ -1511,7 +1556,8 @@ finalizeDatabase manager dbName = do
                         }
 
                 -- Initialize runtime fields
-                let dbWithRuntime = initializeRuntimeFields dbWithLinks (dmSynonymDB manager)
+                synonymDB <- getMergedSynonymDB manager
+                let dbWithRuntime = initializeRuntimeFields dbWithLinks synonymDB
 
                 -- Precompute factorization and create shared solver
                 let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
@@ -1529,7 +1575,7 @@ finalizeDatabase manager dbName = do
                         }
 
                 -- Move from staged to loaded
-                let indexedDb = buildIndexedDatabaseFromDB dbName (dmSynonymDB manager) dbWithFactorization
+                let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithFactorization
                 atomically $ do
                     modifyTVar' (dmStagedDbs manager) (M.delete dbName)
                     modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
@@ -1545,21 +1591,39 @@ finalizeDatabase manager dbName = do
 -- Method Collection Management
 --------------------------------------------------------------------------------
 
--- | Load methods from a MethodConfig directory (parse all .xml files)
-loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text [Method])
+-- | Load methods from a MethodConfig path (directory or archive).
+-- Handles ZIP/7z archives via resolveDataPath, finds method XMLs,
+-- and enriches CFs from ILCD flow XMLs when available.
+loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text ([Method], M.Map UUID ILCDFlowInfo))
 loadMethodCollectionFromConfig mc = do
-    let dir = mcPath mc
-    isDir <- doesDirectoryExist dir
+    -- Resolve archives (ZIP → extracted directory)
+    resolvedPath <- resolveDataPath (mcPath mc)
+    isDir <- doesDirectoryExist resolvedPath
     if not isDir
-        then return $ Left $ "Method directory not found: " <> T.pack dir
+        then return $ Left $ "Method path not found: " <> T.pack (mcPath mc)
         else do
+            -- Find method directory (handles nested ILCD structures)
+            dir <- findMethodDirectory resolvedPath
             files <- listDirectory dir
             let xmlFiles = filter (\f -> map toLower (takeExtension f) == ".xml") files
                 csvFiles = filter (\f -> map toLower (takeExtension f) == ".csv") files
             if null xmlFiles && null csvFiles
                 then return $ Left $ "No method files (.xml/.csv) found in: " <> T.pack dir
                 else do
-                    xmlResults <- forM xmlFiles $ \f -> parseMethodFile (dir </> f)
+                    -- Try to find sibling flows/ directory for CF enrichment
+                    mFlowsDir <- FlowResolver.resolveFlowDirectory dir
+                    flowInfo <- case mFlowsDir of
+                        Nothing -> do
+                            reportProgress Info "  No flows/ directory found, using shortDescription fallback"
+                            return M.empty
+                        Just flowsDir -> do
+                            reportProgress Info $ "  Loading ILCD flow XMLs from: " <> flowsDir
+                            info <- FlowResolver.parseFlowDirectory flowsDir
+                            reportProgress Info $ "  Loaded " <> show (M.size info) <> " flow definitions"
+                            return info
+                    -- Parse method files with flow enrichment
+                    xmlResults <- forM xmlFiles $ \f ->
+                        Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
                     csvResults <- forM csvFiles $ \f -> parseMethodCSV (dir </> f)
                     let (xmlErrs, xmlMethods) = partitionEithers xmlResults
                         (csvErrs, csvMethodLists) = partitionEithers csvResults
@@ -1573,7 +1637,7 @@ loadMethodCollectionFromConfig mc = do
                             reportProgress Info $ "  Parsed " <> show xmlOk <> " XML, " <> show csvOk <> " CSV file(s)"
                             when (not (null errs)) $
                                 reportProgress Warning $ "  " <> show (length errs) <> " method file(s) failed to parse"
-                            return $ Right methods
+                            return $ Right (methods, flowInfo)
   where
     partitionEithers = foldr f ([], [])
       where f (Left  a) (ls, rs) = (a:ls, rs)
@@ -1613,12 +1677,16 @@ loadMethodCollection manager name = do
                         Left err -> do
                             reportProgress Error $ "  [FAIL] " <> T.unpack name <> ": " <> T.unpack err
                             return $ Left err
-                        Right methods -> do
+                        Right (methods, flowInfo) -> do
                             atomically $ modifyTVar' (dmLoadedMethods manager) (M.insert name methods)
                             let totalCFs = sum $ map (length . methodFactors) methods
                             reportProgress Info $ "  [OK] Loaded: " <> T.unpack name
                                 <> " (" <> show (length methods) <> " impact categories, "
                                 <> show totalCFs <> " characterization factors)"
+                            -- Auto-extract synonyms from ILCD flow definitions
+                            let pairs = extractFromILCDFlows flowInfo
+                            autoCreateFlowSynonyms manager name
+                                ("Auto-extracted from " <> name) pairs
                             return $ Right ()
 
 -- | Unload a method collection from memory
@@ -1676,3 +1744,299 @@ removeMethodCollection manager name = do
                         -- Directory already missing, just remove from memory
                         atomically $ modifyTVar' (dmAvailableMethods manager) (M.delete name)
                         return $ Right ()
+
+--------------------------------------------------------------------------------
+-- Merged reference data helpers
+--------------------------------------------------------------------------------
+
+-- | Get the merged SynonymDB from all loaded synonym databases.
+getMergedSynonymDB :: DatabaseManager -> IO SynonymDB
+getMergedSynonymDB manager = do
+    loaded <- readTVarIO (dmLoadedFlowSyns manager)
+    return $ if M.null loaded then emptySynonymDB
+             else mergeSynonymDBs (M.elems loaded)
+
+-- | Get the merged CompartmentMap from all loaded compartment mappings.
+getMergedCompartmentMap :: DatabaseManager -> IO CompartmentMap
+getMergedCompartmentMap manager = do
+    loaded <- readTVarIO (dmLoadedCompMaps manager)
+    return $ M.unions (M.elems loaded)
+
+-- | Get the merged UnitConfig from all loaded unit definitions.
+getMergedUnitConfig :: DatabaseManager -> IO UnitConversion.UnitConfig
+getMergedUnitConfig manager = do
+    loaded <- readTVarIO (dmLoadedUnitDefs manager)
+    return $ if M.null loaded then UnitConversion.defaultUnitConfig
+             else UnitConversion.mergeUnitConfigs (M.elems loaded)
+
+-- | Status of a reference data resource for API responses
+data RefDataStatus = RefDataStatus
+    { rdsName        :: !Text
+    , rdsDisplayName :: !Text
+    , rdsDescription :: !(Maybe Text)
+    , rdsStatus      :: !DatabaseLoadStatus
+    , rdsIsUploaded  :: !Bool
+    , rdsIsAuto      :: !Bool
+    , rdsEntryCount  :: !Int
+    } deriving (Show, Eq, Generic)
+
+instance ToJSON RefDataStatus where
+    toJSON RefDataStatus{..} = A.object
+        [ "rdsName" .= rdsName
+        , "rdsDisplayName" .= rdsDisplayName
+        , "rdsDescription" .= rdsDescription
+        , "rdsStatus" .= rdsStatus
+        , "rdsIsUploaded" .= rdsIsUploaded
+        , "rdsIsAuto" .= rdsIsAuto
+        , "rdsEntryCount" .= rdsEntryCount
+        ]
+
+instance FromJSON RefDataStatus where
+    parseJSON = A.withObject "RefDataStatus" $ \v -> RefDataStatus
+        <$> v .: "rdsName"
+        <*> v .: "rdsDisplayName"
+        <*> v .:? "rdsDescription"
+        <*> v .: "rdsStatus"
+        <*> v .: "rdsIsUploaded"
+        <*> v .: "rdsIsAuto"
+        <*> v .: "rdsEntryCount"
+
+--------------------------------------------------------------------------------
+-- Generic ref-data operations (shared by flow synonyms, compartment maps, units)
+--------------------------------------------------------------------------------
+
+-- | Operations for a ref-data kind — everything that varies between the three.
+data RefDataOps a = RefDataOps
+    { rdoAvailableVar :: !(DatabaseManager -> TVar (Map Text RefDataConfig))
+    , rdoLoadedVar    :: !(DatabaseManager -> TVar (Map Text a))
+    , rdoParse        :: !(BL.ByteString -> Either Text a)
+    , rdoCount        :: !(a -> Int)
+    , rdoLabel        :: !String
+    , rdoUploadDir    :: !FilePath
+    , rdoCanDelete    :: !(RefDataConfig -> Bool)
+    }
+
+flowSynOps :: RefDataOps SynonymDB
+flowSynOps = RefDataOps dmAvailableFlowSyns dmLoadedFlowSyns
+    (first T.pack . buildFromCSV) synonymCount "flow synonyms" "uploads/flow-synonyms"
+    (\rd -> rdIsUploaded rd || rdIsAuto rd)
+
+compMapOps :: RefDataOps CompartmentMap
+compMapOps = RefDataOps dmAvailableCompMaps dmLoadedCompMaps
+    (first T.pack . buildCompartmentMapFromCSV) compartmentMapSize "compartment mapping" "uploads/compartment-mappings"
+    rdIsUploaded
+
+unitDefOps :: RefDataOps UnitConversion.UnitConfig
+unitDefOps = RefDataOps dmAvailableUnitDefs dmLoadedUnitDefs
+    UnitConversion.buildFromCSV UnitConversion.unitCount "units" "uploads/units"
+    rdIsUploaded
+
+listRefDataG :: RefDataOps a -> DatabaseManager -> IO [RefDataStatus]
+listRefDataG ops manager = do
+    available <- readTVarIO (rdoAvailableVar ops manager)
+    loaded <- readTVarIO (rdoLoadedVar ops manager)
+    return [RefDataStatus
+        { rdsName = rdName rd, rdsDisplayName = rdName rd, rdsDescription = rdDescription rd
+        , rdsStatus = if M.member (rdName rd) loaded then Loaded else Unloaded
+        , rdsIsUploaded = rdIsUploaded rd, rdsIsAuto = rdIsAuto rd
+        , rdsEntryCount = maybe 0 (rdoCount ops) (M.lookup (rdName rd) loaded)
+        } | rd <- M.elems available]
+
+loadRefDataG :: RefDataOps a -> DatabaseManager -> Text -> IO (Either Text ())
+loadRefDataG ops manager name = do
+    available <- readTVarIO (rdoAvailableVar ops manager)
+    case M.lookup name available of
+        Nothing -> return $ Left $ T.pack (rdoLabel ops) <> " not found: " <> name
+        Just rd -> do
+            loaded <- readTVarIO (rdoLoadedVar ops manager)
+            if M.member name loaded then return $ Right ()
+            else do
+                result <- loadRefDataCSV (rdPath rd)
+                case result of
+                    Left err -> return $ Left err
+                    Right csvData -> case rdoParse ops csvData of
+                        Left err -> return $ Left err
+                        Right val -> do
+                            atomically $ modifyTVar' (rdoLoadedVar ops manager) (M.insert name val)
+                            reportProgress Info $ "Loaded " <> rdoLabel ops <> ": " <> T.unpack name
+                            return $ Right ()
+
+unloadRefDataG :: RefDataOps a -> DatabaseManager -> Text -> IO (Either Text ())
+unloadRefDataG ops manager name = do
+    loaded <- readTVarIO (rdoLoadedVar ops manager)
+    if M.member name loaded then do
+        atomically $ modifyTVar' (rdoLoadedVar ops manager) (M.delete name)
+        reportProgress Info $ "Unloaded " <> rdoLabel ops <> ": " <> T.unpack name
+        return $ Right ()
+    else return $ Left $ T.pack (rdoLabel ops) <> " not loaded: " <> name
+
+addRefDataG :: RefDataOps a -> DatabaseManager -> RefDataConfig -> IO ()
+addRefDataG ops manager rd =
+    atomically $ modifyTVar' (rdoAvailableVar ops manager) (M.insert (rdName rd) rd)
+
+removeRefDataG :: RefDataOps a -> DatabaseManager -> Text -> IO (Either Text ())
+removeRefDataG ops manager name = do
+    available <- readTVarIO (rdoAvailableVar ops manager)
+    case M.lookup name available of
+        Nothing -> return $ Left $ T.pack (rdoLabel ops) <> " not found: " <> name
+        Just rd | not (rdoCanDelete ops rd) -> return $ Left $ "Cannot delete preinstalled " <> T.pack (rdoLabel ops)
+        Just _ -> do
+            loaded <- readTVarIO (rdoLoadedVar ops manager)
+            if M.member name loaded
+                then return $ Left "Unload before deleting"
+                else do
+                    removeUploadedRefData (rdoUploadDir ops) name
+                    atomically $ modifyTVar' (rdoAvailableVar ops manager) (M.delete name)
+                    return $ Right ()
+
+-- | Auto-load active reference data at startup
+autoLoadRefData :: RefDataOps a -> TVar (Map Text a) -> [RefDataConfig] -> IO ()
+autoLoadRefData ops loadedVar configs =
+    forM_ (filter rdActive configs) $ \rd -> do
+        result <- loadRefDataCSV (rdPath rd)
+        case result of
+            Right csvData -> case rdoParse ops csvData of
+                Right val -> do
+                    atomically $ modifyTVar' loadedVar (M.insert (rdName rd) val)
+                    reportProgress Info $ "  [OK] Loaded " <> rdoLabel ops <> ": " <> T.unpack (rdName rd)
+                        <> " (" <> show (rdoCount ops val) <> " entries)"
+                Left err ->
+                    reportError $ "  [FAIL] Failed to parse " <> rdoLabel ops <> " " <> T.unpack (rdName rd) <> ": " <> T.unpack err
+            Left err -> reportError $ "  [FAIL] Failed to read " <> T.unpack (rdName rd) <> ": " <> T.unpack err
+
+-- Public API: delegates to generic ops
+
+listFlowSynonyms :: DatabaseManager -> IO [RefDataStatus]
+listFlowSynonyms = listRefDataG flowSynOps
+
+loadFlowSynonyms :: DatabaseManager -> Text -> IO (Either Text ())
+loadFlowSynonyms = loadRefDataG flowSynOps
+
+unloadFlowSynonyms :: DatabaseManager -> Text -> IO (Either Text ())
+unloadFlowSynonyms = unloadRefDataG flowSynOps
+
+addFlowSynonyms :: DatabaseManager -> RefDataConfig -> IO ()
+addFlowSynonyms = addRefDataG flowSynOps
+
+removeFlowSynonyms :: DatabaseManager -> Text -> IO (Either Text ())
+removeFlowSynonyms = removeRefDataG flowSynOps
+
+-- | Get synonym groups for a specific loaded flow synonyms resource.
+getFlowSynonymGroups :: DatabaseManager -> Text -> IO (Either Text [[Text]])
+getFlowSynonymGroups manager name = do
+    loaded <- readTVarIO (dmLoadedFlowSyns manager)
+    case M.lookup name loaded of
+        Nothing -> return $ Left $ "Flow synonyms not loaded: " <> name
+        Just synDB -> return $ Right $ M.elems (synIdToNames synDB)
+
+listCompartmentMappings :: DatabaseManager -> IO [RefDataStatus]
+listCompartmentMappings = listRefDataG compMapOps
+
+loadCompartmentMappings :: DatabaseManager -> Text -> IO (Either Text ())
+loadCompartmentMappings = loadRefDataG compMapOps
+
+unloadCompartmentMappings :: DatabaseManager -> Text -> IO (Either Text ())
+unloadCompartmentMappings = unloadRefDataG compMapOps
+
+addCompartmentMappings :: DatabaseManager -> RefDataConfig -> IO ()
+addCompartmentMappings = addRefDataG compMapOps
+
+removeCompartmentMappings :: DatabaseManager -> Text -> IO (Either Text ())
+removeCompartmentMappings = removeRefDataG compMapOps
+
+listUnitDefs :: DatabaseManager -> IO [RefDataStatus]
+listUnitDefs = listRefDataG unitDefOps
+
+loadUnitDefs :: DatabaseManager -> Text -> IO (Either Text ())
+loadUnitDefs = loadRefDataG unitDefOps
+
+unloadUnitDefs :: DatabaseManager -> Text -> IO (Either Text ())
+unloadUnitDefs = unloadRefDataG unitDefOps
+
+addUnitDefs :: DatabaseManager -> RefDataConfig -> IO ()
+addUnitDefs = addRefDataG unitDefOps
+
+removeUnitDefs :: DatabaseManager -> Text -> IO (Either Text ())
+removeUnitDefs = removeRefDataG unitDefOps
+
+--------------------------------------------------------------------------------
+-- Reference data helpers
+--------------------------------------------------------------------------------
+
+-- | Load CSV file content from path.
+loadRefDataCSV :: FilePath -> IO (Either Text BL.ByteString)
+loadRefDataCSV path = do
+    exists <- doesFileExist path
+    if not exists
+        then return $ Left $ "File not found: " <> T.pack path
+        else Right <$> BL.readFile path
+
+-- | Discover uploaded reference data from a directory.
+-- Each subdirectory should contain a data.csv and optional meta.toml.
+discoverUploadedRefData :: FilePath -> IO [RefDataConfig]
+discoverUploadedRefData baseDir = do
+    exists <- doesDirectoryExist baseDir
+    if not exists then return []
+    else do
+        entries <- listDirectory baseDir
+        fmap catMaybes $ forM entries $ \entry -> do
+            let dirPath = baseDir </> entry
+                csvPath = dirPath </> "data.csv"
+            csvExists <- doesFileExist csvPath
+            if csvExists then do
+                let name = T.pack entry
+                    isAuto = "auto-" `T.isPrefixOf` name
+                reportProgress Info $ "Discovered uploaded ref data: " <> T.unpack name
+                return $ Just RefDataConfig
+                    { rdName = name
+                    , rdPath = csvPath
+                    , rdActive = False  -- Never auto-load uploaded
+                    , rdIsUploaded = True
+                    , rdIsAuto = isAuto
+                    , rdDescription = Nothing
+                    }
+            else return Nothing
+
+-- | Remove uploaded reference data directory.
+removeUploadedRefData :: FilePath -> Text -> IO ()
+removeUploadedRefData baseDir name = do
+    let uploadDir = baseDir </> T.unpack name
+    exists <- doesDirectoryExist uploadDir
+    when exists $ do
+        result <- try $ removeDirectoryRecursive uploadDir
+        case result of
+            Left (e :: SomeException) ->
+                reportError $ "Failed to delete " <> uploadDir <> ": " <> show e
+            Right () ->
+                reportProgress Info $ "Deleted: " <> uploadDir
+
+-- | Auto-create flow synonyms from extracted pairs.
+-- Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv,
+-- registers and auto-loads the synonym set.
+autoCreateFlowSynonyms :: DatabaseManager -> Text -> Text -> [(Text, Text)] -> IO ()
+autoCreateFlowSynonyms _ _ _ [] = return ()
+autoCreateFlowSynonyms manager sourceName description pairs = do
+    let slug = "auto-" <> sourceName
+        dir  = "uploads/flow-synonyms" </> T.unpack slug
+        path = dir </> "data.csv"
+    createDirectoryIfMissing True dir
+    BL.writeFile path (synonymPairsToCSV pairs)
+    let rd = RefDataConfig
+            { rdName = slug
+            , rdPath = path
+            , rdActive = True
+            , rdIsUploaded = True
+            , rdIsAuto = True
+            , rdDescription = Just description
+            }
+    addFlowSynonyms manager rd
+    -- Auto-load immediately
+    csvResult <- loadRefDataCSV path
+    case csvResult of
+        Right csvData -> case buildFromCSV csvData of
+            Right synDB -> do
+                atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
+                reportProgress Info $ "  [AUTO] " <> T.unpack slug
+                    <> ": " <> show (length pairs) <> " synonym pairs"
+            Left err -> reportError $ "  [FAIL] Auto synonym parse: " <> err
+        Left err -> reportError $ "  [FAIL] Auto synonym read: " <> T.unpack err

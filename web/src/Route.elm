@@ -25,6 +25,11 @@ module Route exposing
     , matchMethodUpload
     , matchMethodDetail
     , matchFlowMapping
+    , matchFlowSynonyms
+    , FlowSynonymDetailFlags
+    , matchFlowSynonymDetail
+    , matchCompartmentMappings
+    , matchUnits
     , matchHome
     , routeToDatabase
     , ActivePage(..)
@@ -62,6 +67,10 @@ type Route
     | MethodUploadRoute
     | MethodDetailRoute String (Maybe String) -- collection, ?db=dbName
     | FlowMappingRoute String (Maybe String) -- methodId, ?db=dbName
+    | FlowSynonymsRoute
+    | FlowSynonymDetailRoute String -- resource name
+    | CompartmentMappingsRoute
+    | UnitsRoute
     | NotFoundRoute
 
 
@@ -79,6 +88,9 @@ type ActivePage
     | MethodUploadActive
     | MethodDetailActive
     | FlowMappingActive
+    | FlowSynonymsActive
+    | CompartmentMappingsActive
+    | UnitsActive
 
 
 routeToActivePage : Route -> ActivePage
@@ -119,6 +131,18 @@ routeToActivePage route =
 
         FlowMappingRoute _ _ ->
             FlowMappingActive
+
+        FlowSynonymsRoute ->
+            FlowSynonymsActive
+
+        FlowSynonymDetailRoute _ ->
+            FlowSynonymsActive
+
+        CompartmentMappingsRoute ->
+            CompartmentMappingsActive
+
+        UnitsRoute ->
+            UnitsActive
 
         NotFoundRoute ->
             ActivitiesActive
@@ -163,6 +187,10 @@ routeParser =
         , Parser.map MethodUploadRoute (Parser.s "methods" </> Parser.s "upload")
         , Parser.map MethodDetailRoute (Parser.s "methods" </> string <?> Query.string "db")
         , Parser.map MethodsRoute (Parser.s "methods")
+        , Parser.map FlowSynonymDetailRoute (Parser.s "flow-synonyms" </> string)
+        , Parser.map FlowSynonymsRoute (Parser.s "flow-synonyms")
+        , Parser.map CompartmentMappingsRoute (Parser.s "compartment-mappings")
+        , Parser.map UnitsRoute (Parser.s "units")
         , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit })
             (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "upstream")
@@ -270,6 +298,18 @@ routeToUrl route =
         FlowMappingRoute methodId db ->
             "/mapping/" ++ methodId
                 ++ appendQuery [ Maybe.map (Url.Builder.string "db") db ]
+
+        FlowSynonymsRoute ->
+            "/flow-synonyms"
+
+        FlowSynonymDetailRoute name ->
+            "/flow-synonyms/" ++ name
+
+        CompartmentMappingsRoute ->
+            "/compartment-mappings"
+
+        UnitsRoute ->
+            "/units"
 
         NotFoundRoute ->
             "/"
@@ -480,6 +520,50 @@ matchFlowMapping route =
     case route of
         FlowMappingRoute methodId db ->
             Just { methodId = methodId, db = db }
+
+        _ ->
+            Nothing
+
+
+matchFlowSynonyms : Route -> Maybe ()
+matchFlowSynonyms route =
+    case route of
+        FlowSynonymsRoute ->
+            Just ()
+
+        _ ->
+            Nothing
+
+
+type alias FlowSynonymDetailFlags =
+    { name : String }
+
+
+matchFlowSynonymDetail : Route -> Maybe FlowSynonymDetailFlags
+matchFlowSynonymDetail route =
+    case route of
+        FlowSynonymDetailRoute name ->
+            Just { name = name }
+
+        _ ->
+            Nothing
+
+
+matchCompartmentMappings : Route -> Maybe ()
+matchCompartmentMappings route =
+    case route of
+        CompartmentMappingsRoute ->
+            Just ()
+
+        _ ->
+            Nothing
+
+
+matchUnits : Route -> Maybe ()
+matchUnits route =
+    case route of
+        UnitsRoute ->
+            Just ()
 
         _ ->
             Nothing

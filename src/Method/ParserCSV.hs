@@ -94,10 +94,12 @@ mkMethod methodology catName impactName unit colIdx rows delim =
     let !ns       = csvMethodNamespace
         !methodId = UUID5.generateNamed ns (bsKey $ "method:" <> impactName)
         !factors  = [ MethodCF
-                        { mcfFlowRef   = UUID5.generateNamed ns (bsKey $ sub <> "::" <> comp)
-                        , mcfFlowName  = sub
-                        , mcfDirection = directionFromCompartment comp
-                        , mcfValue     = v
+                        { mcfFlowRef     = UUID5.generateNamed ns (bsKey $ sub <> "::" <> comp)
+                        , mcfFlowName    = sub
+                        , mcfDirection   = directionFromCompartment comp
+                        , mcfValue       = v
+                        , mcfCompartment = parseCSVCompartment comp
+                        , mcfCAS         = Nothing
                         }
                     | row <- rows
                     , let cells = splitRow delim row
@@ -128,6 +130,18 @@ directionFromCompartment :: Text -> FlowDirection
 directionFromCompartment comp
     | T.toCaseFold comp == "resources" = Input
     | otherwise                        = Output
+
+-- | Parse compartment from CSV compartment column.
+-- Format: "Emissions to air", "Emissions to fresh water", "Resources", etc.
+parseCSVCompartment :: Text -> Maybe Compartment
+parseCSVCompartment comp
+    | T.null comp = Nothing
+    | "air" `T.isInfixOf` lc = Just (Compartment "air" "" "")
+    | "water" `T.isInfixOf` lc = Just (Compartment "water" "" "")
+    | "soil" `T.isInfixOf` lc = Just (Compartment "soil" "" "")
+    | "resource" `T.isInfixOf` lc = Just (Compartment "natural resource" "" "")
+    | otherwise = Nothing
+  where lc = T.toCaseFold comp
 
 -- | Auto-detect delimiter: semicolon if the line contains ';', else comma.
 detectDelimiter :: BS.ByteString -> Word8

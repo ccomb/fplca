@@ -6,9 +6,9 @@
 -- Maps characterization factor flows from LCIA methods to database flows
 -- using multiple matching strategies:
 -- 1. UUID match (exact)
--- 2. Name match (normalized)
--- 3. Synonym match (via synonym group)
--- 4. Fuzzy match (string similarity)
+-- 2. CAS match (normalized CAS number)
+-- 3. Name match (normalized, compartment-aware)
+-- 4. Synonym match (via synonym group, compartment-aware)
 module Method.Mapping
     ( -- * Mapping functions
       mapMethodFlows
@@ -20,15 +20,16 @@ module Method.Mapping
     , findFlowByUUID
     , findFlowByName
     , findFlowBySynonym
+    , findFlowByCAS
       -- * Statistics
     , MappingStats(..)
     , computeMappingStats
     ) where
 
-import Data.List (find, sortBy)
+import Data.Foldable (asum)
+import Data.List (find)
 import qualified Data.Map.Strict as M
-import Data.Maybe (mapMaybe, listToMaybe)
-import Data.Ord (comparing, Down(..))
+import Data.Maybe (isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
@@ -41,6 +42,7 @@ import SynonymDB
 -- | Matching strategy used to find a flow
 data MatchStrategy
     = ByUUID       -- ^ Exact UUID match
+    | ByCAS        -- ^ CAS number match
     | ByName       -- ^ Normalized name match
     | BySynonym    -- ^ Via synonym group
     | ByFuzzy      -- ^ Fuzzy string matching
@@ -51,6 +53,7 @@ data MatchStrategy
 data MappingStats = MappingStats
     { msTotal      :: !Int  -- ^ Total CFs in method
     , msByUUID     :: !Int  -- ^ Matched by UUID
+    , msByCAS      :: !Int  -- ^ Matched by CAS
     , msByName     :: !Int  -- ^ Matched by name
     , msBySynonym  :: !Int  -- ^ Matched by synonym
     , msByFuzzy    :: !Int  -- ^ Matched by fuzzy
@@ -63,71 +66,112 @@ data MappingStats = MappingStats
 mapMethodFlows
     :: SynonymDB
     -> M.Map UUID Flow       -- ^ Flow database indexed by UUID
-    -> M.Map Text [Flow]     -- ^ Flow database indexed by normalized name
+    -> M.Map Text [Flow]     -- ^ Biosphere flows indexed by normalized name
+    -> M.Map Text [Flow]     -- ^ Biosphere flows indexed by CAS number
     -> Method
     -> [(MethodCF, Maybe (Flow, MatchStrategy))]
-mapMethodFlows synDB flowsByUUID flowsByName method =
-    map (\cf -> (cf, mapSingleFlow synDB flowsByUUID flowsByName cf))
+mapMethodFlows synDB flowsByUUID flowsByName flowsByCAS method =
+    map (\cf -> (cf, mapSingleFlow synDB flowsByUUID flowsByName flowsByCAS cf))
         (methodFactors method)
 
 -- | Map a single method CF to a database flow
 --
 -- Tries matching strategies in order:
 -- 1. UUID match
--- 2. Name match
--- 3. Synonym match
--- Returns the first successful match with its strategy
+-- 2. CAS match (with compartment preference)
+-- 3. Name match (with compartment preference)
+-- 4. Synonym match (with compartment preference)
 mapSingleFlow
     :: SynonymDB
     -> M.Map UUID Flow
     -> M.Map Text [Flow]
+    -> M.Map Text [Flow]
     -> MethodCF
     -> Maybe (Flow, MatchStrategy)
-mapSingleFlow synDB flowsByUUID flowsByName cf =
-    -- Try strategies in order of preference
-    case findFlowByUUID flowsByUUID (mcfFlowRef cf) of
-        Just flow -> Just (flow, ByUUID)
-        Nothing ->
-            case findFlowByName flowsByName (mcfFlowName cf) of
-                Just flow -> Just (flow, ByName)
-                Nothing ->
-                    case findFlowBySynonym synDB flowsByName (mcfFlowName cf) of
-                        Just flow -> Just (flow, BySynonym)
-                        Nothing -> Nothing  -- Could add fuzzy matching here
+mapSingleFlow synDB flowsByUUID flowsByName flowsByCAS cf =
+    let tag s f = fmap (\x -> (x, s)) f
+    in asum
+        [ tag ByUUID    $ findFlowByUUID flowsByUUID (mcfFlowRef cf)
+        , tag ByCAS     $ mcfCAS cf >>= \cas -> findFlowByCAS flowsByCAS cas (mcfCompartment cf)
+        , tag ByName    $ findFlowByNameComp flowsByName (mcfFlowName cf) (mcfCompartment cf)
+        , tag BySynonym $ findFlowBySynonymComp synDB flowsByName (mcfFlowName cf) (mcfCompartment cf)
+        ]
 
 -- | Find flow by exact UUID match
 findFlowByUUID :: M.Map UUID Flow -> UUID -> Maybe Flow
 findFlowByUUID flowsByUUID uuid = M.lookup uuid flowsByUUID
 
--- | Find flow by normalized name match
-findFlowByName :: M.Map Text [Flow] -> Text -> Maybe Flow
-findFlowByName flowsByName name =
-    let normalized = normalizeName name
-    in case M.lookup normalized flowsByName of
-        Just (f:_) -> Just f  -- Take first match
-        _ -> Nothing
+-- | Find flow by CAS number with compartment preference
+findFlowByCAS :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowByCAS flowsByCAS cas mComp =
+    case M.lookup cas flowsByCAS of
+        Just flows -> Just (pickByCompartment flows mComp)
+        Nothing    -> Nothing
 
--- | Find flow via synonym group
---
--- 1. Look up the method flow name in synonym DB
--- 2. Get all synonyms in that group
--- 3. Try to find a flow matching any synonym
+-- | Find flow by normalized name match (compartment-aware)
+findFlowByName :: M.Map Text [Flow] -> Text -> Maybe Flow
+findFlowByName flowsByName name = findFlowByNameComp flowsByName name Nothing
+
+-- | Find flow by normalized name with compartment preference
+findFlowByNameComp :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowByNameComp flowsByName name mComp =
+    case M.lookup (normalizeName name) flowsByName of
+        Just flows@(_:_) -> Just (pickByCompartment flows mComp)
+        _                -> Nothing
+
+-- | Find flow via synonym group (compartment-aware)
 findFlowBySynonym :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Flow
-findFlowBySynonym synDB flowsByName name =
+findFlowBySynonym synDB flowsByName name = findFlowBySynonymComp synDB flowsByName name Nothing
+
+-- | Find flow via synonym group with compartment preference
+findFlowBySynonymComp :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowBySynonymComp synDB flowsByName name mComp =
     case lookupSynonymGroup synDB name of
         Nothing -> Nothing
         Just groupId ->
             case getSynonyms synDB groupId of
                 Nothing -> Nothing
                 Just synonyms ->
-                    -- Try each synonym until we find a match
-                    listToMaybe $ mapMaybe (findFlowByName flowsByName) synonyms
+                    let candidates = concatMap (lookupFlows flowsByName) synonyms
+                    in if null candidates then Nothing
+                       else Just (pickByCompartment candidates mComp)
+  where
+    lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
+
+-- | Pick the best flow match based on compartment preference.
+-- When multiple flows match by name or CAS, prefer the one matching the CF's compartment.
+pickByCompartment :: [Flow] -> Maybe Compartment -> Flow
+pickByCompartment flows Nothing = head flows
+pickByCompartment flows (Just comp) =
+    case find (exactCompMatch comp) flows of
+        Just f  -> f
+        Nothing -> case find (mediumMatch comp) flows of
+            Just f  -> f
+            Nothing -> head flows
+  where
+    -- Exact: same medium + subcompartment
+    exactCompMatch (Compartment med sub _) f =
+        let cat = T.toLower (flowCategory f)
+            subcomp = maybe "" T.toLower (flowSubcompartment f)
+        in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
+
+    -- Medium only: "air", "water", "soil"
+    mediumMatch (Compartment med _ _) f =
+        matchMedium med (T.toLower (flowCategory f))
+
+    -- Check if medium matches the flow category (handles "air/urban" etc.)
+    matchMedium med cat
+        | T.null med  = True
+        | med == cat  = True
+        | med `T.isInfixOf` cat = True
+        | otherwise   = False
 
 -- | Compute statistics about mapping results
 computeMappingStats :: [(MethodCF, Maybe (Flow, MatchStrategy))] -> MappingStats
 computeMappingStats mappings = MappingStats
     { msTotal = length mappings
     , msByUUID = count ByUUID
+    , msByCAS = count ByCAS
     , msByName = count ByName
     , msBySynonym = count BySynonym
     , msByFuzzy = count ByFuzzy
@@ -135,16 +179,6 @@ computeMappingStats mappings = MappingStats
     }
   where
     count strategy = length $ filter ((== Just strategy) . fmap snd . snd) mappings
-    isNothing Nothing = True
-    isNothing _ = False
-
--- | Build a name index for flows
---
--- Groups flows by their normalized names for efficient lookup
-buildFlowNameIndex :: [Flow] -> M.Map Text [Flow]
-buildFlowNameIndex flows =
-    M.fromListWith (++)
-        [(normalizeName (flowName f), [f]) | f <- flows]
 
 -- | Compute LCIA score from inventory and flow mappings
 --
@@ -156,22 +190,21 @@ computeLCIAScore inventory mappings =
 
 -- | Convert mapping result to FlowMapping type
 toFlowMapping :: (MethodCF, Maybe (Flow, MatchStrategy)) -> FlowMapping
-toFlowMapping (cf, result) = FlowMapping
-    { fmMethodFlowRef = mcfFlowRef cf
-    , fmMethodFlowName = mcfFlowName cf
-    , fmDbFlowId = fmap (flowId . fst) result
-    , fmMatchType = case result of
-        Nothing -> Unmatched
-        Just (_, ByUUID) -> ExactUUID
-        Just (_, ByName) -> ExactName
-        Just (_, BySynonym) -> SynonymMatch 0  -- Could include actual group ID
-        Just (_, ByFuzzy) -> FuzzyMatch 0.0
-        Just (_, NoMatch) -> Unmatched
-    , fmConfidence = case result of
-        Nothing -> 0.0
-        Just (_, ByUUID) -> 1.0
-        Just (_, ByName) -> 1.0
-        Just (_, BySynonym) -> 0.9
-        Just (_, ByFuzzy) -> 0.5
-        Just (_, NoMatch) -> 0.0
-    }
+toFlowMapping (cf, result) =
+    let (mtype, conf) = maybe (Unmatched, 0.0) (strategyInfo . snd) result
+    in FlowMapping
+        { fmMethodFlowRef = mcfFlowRef cf
+        , fmMethodFlowName = mcfFlowName cf
+        , fmDbFlowId = fmap (flowId . fst) result
+        , fmMatchType = mtype
+        , fmConfidence = conf
+        }
+
+-- | Map a match strategy to its (MatchType, confidence) pair
+strategyInfo :: MatchStrategy -> (MatchType, Double)
+strategyInfo ByUUID   = (ExactUUID,      1.0)
+strategyInfo ByCAS    = (CASMatch,       1.0)
+strategyInfo ByName   = (ExactName,      1.0)
+strategyInfo BySynonym = (SynonymMatch 0, 0.9)
+strategyInfo ByFuzzy  = (FuzzyMatch 0.0, 0.5)
+strategyInfo NoMatch  = (Unmatched,      0.0)

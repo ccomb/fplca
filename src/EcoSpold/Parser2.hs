@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile) where
+module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
 
 import Types
 import EcoSpold.Common (bsToText, bsToDouble, bsToInt, isElement)
@@ -17,6 +17,14 @@ import qualified Data.UUID.V5 as UUID5
 import System.FilePath (takeBaseName)
 import System.IO (hPutStrLn, stderr)
 import qualified Xeno.SAX as X
+
+-- | Normalize CAS number by stripping leading zeros from first segment.
+-- Ecoinvent zero-pads: "001309-36-0" → "1309-36-0". ILCD uses canonical form.
+normalizeCAS :: Text -> Text
+normalizeCAS cas = case T.splitOn "-" cas of
+    [a, b, c] -> let a' = T.dropWhile (== '0') a
+                 in (if T.null a' then "0" else a') <> "-" <> b <> "-" <> c
+    _         -> T.strip cas
 
 -- | Namespace UUID for generating deterministic UUIDs from invalid text
 -- Using UUID v5 (SHA1-based) with a custom namespace for test data compatibility
@@ -89,6 +97,7 @@ data ElementaryData = ElementaryData
     , edCompartments :: ![Text]
     , edSubcompartments :: ![Text]
     , edSynonyms :: !(M.Map Text (S.Set Text))
+    , edCAS :: !(Maybe Text)
     }
     deriving (Eq)
 
@@ -148,7 +157,7 @@ parseWithXeno xmlContent processId =
                 | isElement tagName "intermediateExchange" =
                     InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty)
                 | isElement tagName "elementaryExchange" =
-                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty)
+                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing)
                 | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
                 -- DON'T switch context for child elements (synonym, compartment, etc) - keep parent exchange context
                 | otherwise = psContext cleanState
@@ -177,6 +186,7 @@ parseWithXeno xmlContent processId =
                         | isElement name "unitId" && not isInsideProperty = edata{edUnitId = bsToText value}
                         | isElement name "inputGroup" = edata{edInputGroup = bsToText value}
                         | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
+                        | isElement name "casNumber" = edata{edCAS = Just (normalizeCAS (bsToText value))}
                         | otherwise = edata
                 in state{psContext = InElementaryExchange updated}
             InGeneralCommentText _ ->
@@ -313,7 +323,7 @@ parseWithXeno xmlContent processId =
                             unitUUID
                             Biosphere
                             (edSynonyms edata)
-                            Nothing  -- CAS - not in EcoSpold2 data
+                            (edCAS edata)
                             Nothing  -- substanceId - to be filled later
                         unitNameWarning = if T.null (edUnitName edata)
                                           then ["[WARNING] Missing unit name for elementary exchange with flow ID: "

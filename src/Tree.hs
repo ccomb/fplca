@@ -4,7 +4,7 @@
 module Tree (buildLoopAwareTree) where
 
 import Types
-import UnitConversion (convertExchangeAmount)
+import UnitConversion (UnitConfig, convertExchangeAmount)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Vector as V
@@ -23,8 +23,8 @@ isTechnosphereInput _ ex =
 
 -- | Get converted exchange amount ensuring unit compatibility
 -- Converts exchange amount to the target activity's reference unit for proper scaling
-getConvertedExchangeAmount :: Database -> Exchange -> UUID -> Double
-getConvertedExchangeAmount db exchange targetActivityUUID =
+getConvertedExchangeAmount :: UnitConfig -> Database -> Exchange -> UUID -> Double
+getConvertedExchangeAmount unitCfg db exchange targetActivityUUID =
     let originalAmount = exchangeAmount exchange
         -- Get exchange unit name
         exchangeUnitName = case M.lookup (exchangeUnitId exchange) (dbUnits db) of
@@ -36,19 +36,19 @@ getConvertedExchangeAmount db exchange targetActivityUUID =
             Nothing -> "unknown"
     in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
        then originalAmount  -- No conversion possible, use original
-       else convertExchangeAmount exchangeUnitName targetReferenceUnit originalAmount
+       else convertExchangeAmount unitCfg exchangeUnitName targetReferenceUnit originalAmount
 
 -- | Build loop-aware tree for SVG export with maximum depth limit
-buildLoopAwareTree :: Database -> UUID -> Int -> LoopAwareTree
-buildLoopAwareTree db rootUUID maxDepth =
+buildLoopAwareTree :: UnitConfig -> Database -> UUID -> Int -> LoopAwareTree
+buildLoopAwareTree unitCfg db rootUUID maxDepth =
     let maxNodes = 300  -- Maximum total nodes to prevent performance issues
-        (tree, _) = buildLoopAwareTreeWithVisited db rootUUID S.empty 0 maxDepth maxNodes
+        (tree, _) = buildLoopAwareTreeWithVisited unitCfg db rootUUID S.empty 0 maxDepth maxNodes
     in tree
 
 -- | Helper function with visited set, depth tracking, and node count limit
 -- Returns (tree, remainingNodeBudget)
-buildLoopAwareTreeWithVisited :: Database -> UUID -> S.Set UUID -> Int -> Int -> Int -> (LoopAwareTree, Int)
-buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth remainingNodes
+buildLoopAwareTreeWithVisited :: UnitConfig -> Database -> UUID -> S.Set UUID -> Int -> Int -> Int -> (LoopAwareTree, Int)
+buildLoopAwareTreeWithVisited unitCfg db activityUUID visited depth maxDepth remainingNodes
     -- Stop if node budget exhausted
     | remainingNodes <= 0 =
         case findActivityByActivityUUID db activityUUID of
@@ -81,8 +81,8 @@ buildLoopAwareTreeWithVisited db activityUUID visited depth maxDepth remainingNo
                         | otherwise =
                             case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows db)) of
                                 (Just targetUUID, Just flow) ->
-                                    let convertedAmount = getConvertedExchangeAmount db ex targetUUID
-                                        (subtree, budget') = buildLoopAwareTreeWithVisited db targetUUID vis d maxD budget
+                                    let convertedAmount = getConvertedExchangeAmount unitCfg db ex targetUUID
+                                        (subtree, budget') = buildLoopAwareTreeWithVisited unitCfg db targetUUID vis d maxD budget
                                         (restChildren, finalBudget') = buildChildrenWithBudget exs vis d maxD budget'
                                     in ((convertedAmount, flow, subtree) : restChildren, finalBudget')
                                 _ -> buildChildrenWithBudget exs vis d maxD budget

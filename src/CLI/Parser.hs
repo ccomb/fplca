@@ -24,16 +24,18 @@ globalOptionsParser = do
                 ( long "config"
                     <> short 'c'
                     <> metavar "FILE"
-                    <> help "TOML config file for multi-database setup (alternative to --data)"
+                    <> help "TOML config file (required)"
                 )
 
-    dataDir <-
+    dbName <-
         optional $
-            strOption
-                ( long "data"
-                    <> metavar "PATH"
-                    <> help "Data directory (overrides $DATADIR and current directory)"
-                )
+            ( T.pack
+                <$> strOption
+                    ( long "db"
+                        <> metavar "NAME"
+                        <> help "Database name to query (from config file)"
+                    )
+            )
 
     methodsDir <-
         optional $
@@ -100,6 +102,12 @@ commandParser =
             <> OA.command "lcia" (info (lciaParser <**> helper) (progDesc "Compute LCIA scores with characterization method"))
             <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
             <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
+            <> OA.command "databases" (info (pure Databases <**> helper) (progDesc "List databases"))
+            <> OA.command "method-collections" (info (pure MethodCollections <**> helper) (progDesc "List method collections"))
+            <> OA.command "methods" (info (pure Methods <**> helper) (progDesc "List loaded methods"))
+            <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
+            <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
+            <> OA.command "units" (info (pure Units <**> helper) (progDesc "List unit definitions"))
         )
 
 -- | Server command parser
@@ -362,10 +370,10 @@ cliParserInfo =
             <> header "fplca - Command-line interface for fpLCA"
             <> footer
                 "Examples:\n\
-                \  fplca --data ./ecoinvent activity aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid\n\
-                \  fplca --data ./ecoinvent tree aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --depth 3\n\
-                \  fplca activities --name electricity --limit 10\n\
-                \  fplca inventory aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --format json\n\
-                \  fplca lcia aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_productX-uuid --method pef.xml --csv results.csv\n\
-                \  fplca server --port 8080"
+                \  fplca --config fplca.toml server --port 8081\n\
+                \  fplca --config fplca.toml --db ecoinvent activities --name electricity --limit 10\n\
+                \  fplca --config fplca.toml activity UUID\n\
+                \  fplca --config fplca.toml tree UUID --depth 3\n\
+                \  fplca --config fplca.toml inventory UUID --format json\n\
+                \  fplca --config fplca.toml lcia UUID --method pef.xml --csv results.csv"
         )
