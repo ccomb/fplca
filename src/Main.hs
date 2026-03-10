@@ -23,23 +23,20 @@ import API.Auth (authMiddleware)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Types
-import CLI.Types (Command(Server), ServerOptions(..))
 import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..))
 import Database.Manager (initDatabaseManager, DatabaseManager(..))
 import Matrix (initializePetscForServer)
 import Progress
-import Progress (waitForNewLines)
 import Control.Concurrent.STM (readTVarIO)
 
 -- For server mode
 import API.Routes (lcaAPI, lcaServer)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
-import qualified Data.Text.Encoding as TE
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
-import Network.Wai (Application, Request (..), Response, ResponseReceived (..), rawPathInfo, rawQueryString, requestMethod, requestHeaders, pathInfo, mapResponseHeaders, responseStream)
-import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, ssRedirectToIndex, staticApp)
+import Network.Wai (Application, Request (..), Response, ResponseReceived, rawPathInfo, rawQueryString, requestMethod, requestHeaders, pathInfo, mapResponseHeaders, responseStream)
+import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, staticApp)
 import Network.Wai.Handler.Warp (runSettings, setPort, setTimeout, defaultSettings)
 import Servant (serve)
 import WaiAppStatic.Types (unsafeToPiece, MaxAge(..), ssMaxAge)
@@ -164,8 +161,8 @@ overrideLoad dbNames dbConfig =
 createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Application
 createServerApp dbManager maxTreeDepth staticDir desktopMode password req respond = do
   let path = rawPathInfo req
-      queryString = rawQueryString req
-      fullUrl = path <> queryString
+      qs = rawQueryString req
+      fullUrl = path <> qs
 
   -- Simple request logging (suppress in desktop mode)
   unless desktopMode $ do

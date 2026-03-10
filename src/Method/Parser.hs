@@ -289,16 +289,12 @@ resolveFlowUUID refId uri
 -- | Extract UUID from a URI like "../flows/08a91e70-3ddc-11dd-a2a8-0050c2490048.xml"
 extractUUIDFromURI :: Text -> UUID
 extractUUIDFromURI uri =
-    let filename = last $ T.splitOn "/" uri
+    let filename = lastItem $ T.splitOn "/" uri
         stem = fromMaybe filename $ T.stripSuffix ".xml" filename
     in fromMaybe UUID.nil (UUID.fromText stem)
   where
-    last [] = ""
-    last xs = Prelude.last xs
-
--- | Parse UUID from text, return nil UUID on failure
-parseUUIDSafe :: Text -> UUID.UUID
-parseUUIDSafe txt = fromMaybe UUID.nil (UUID.fromText txt)
+    lastItem [] = ""
+    lastItem xs = Prelude.last xs
 
 -- | Parse Double from text, return 0 on failure
 parseDoubleSafe :: Text -> Double

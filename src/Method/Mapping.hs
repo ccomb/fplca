@@ -29,13 +29,13 @@ module Method.Mapping
 import Data.Foldable (asum)
 import Data.List (find)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isNothing, mapMaybe)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
 
 import Matrix (Inventory)
-import Types (Flow(..), FlowType(..))
+import Types (Flow(..))
 import Method.Types
 import SynonymDB
 
@@ -188,23 +188,3 @@ computeLCIAScore inventory mappings =
     sum [qty * mcfValue cf | (cf, Just (flow, _)) <- mappings
                            , Just qty <- [M.lookup (flowId flow) inventory]]
 
--- | Convert mapping result to FlowMapping type
-toFlowMapping :: (MethodCF, Maybe (Flow, MatchStrategy)) -> FlowMapping
-toFlowMapping (cf, result) =
-    let (mtype, conf) = maybe (Unmatched, 0.0) (strategyInfo . snd) result
-    in FlowMapping
-        { fmMethodFlowRef = mcfFlowRef cf
-        , fmMethodFlowName = mcfFlowName cf
-        , fmDbFlowId = fmap (flowId . fst) result
-        , fmMatchType = mtype
-        , fmConfidence = conf
-        }
-
--- | Map a match strategy to its (MatchType, confidence) pair
-strategyInfo :: MatchStrategy -> (MatchType, Double)
-strategyInfo ByUUID   = (ExactUUID,      1.0)
-strategyInfo ByCAS    = (CASMatch,       1.0)
-strategyInfo ByName   = (ExactName,      1.0)
-strategyInfo BySynonym = (SynonymMatch 0, 0.9)
-strategyInfo ByFuzzy  = (FuzzyMatch 0.0, 0.5)
-strategyInfo NoMatch  = (Unmatched,      0.0)

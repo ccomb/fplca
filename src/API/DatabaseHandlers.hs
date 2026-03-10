@@ -53,7 +53,6 @@ import Servant (Handler, throwError, errBody, err400, err404, err500, addHeader,
 import System.FilePath ((</>))
 import qualified System.Directory
 
-import qualified Config
 import Config (DatabaseConfig(..), MethodConfig(..), RefDataConfig(..))
 import qualified Data.Vector as V
 import Types (Database(..), unresolvedCount)
@@ -67,7 +66,6 @@ import Database.Manager
     , DatabaseLoadStatus(..)
     , DatabaseSetupInfo(..)
     , SetupError(..)
-    , DepLoadResult(..)
     , LoadedDatabase(..)
     , RefDataStatus(..)
     , addDatabase
@@ -220,14 +218,14 @@ makeStatusFromLoadedDb loaded =
                  then "partially_linked"
                  else "loaded"
     in DatabaseStatusAPI
-        { dsaName = Config.dcName config
-        , dsaDisplayName = Config.dcDisplayName config
-        , dsaDescription = Config.dcDescription config
-        , dsaLoadAtStartup = Config.dcLoad config
+        { dsaName = dcName config
+        , dsaDisplayName = dcDisplayName config
+        , dsaDescription = dcDescription config
+        , dsaLoadAtStartup = dcLoad config
         , dsaStatus = status
-        , dsaIsUploaded = Config.dcIsUploaded config
-        , dsaPath = T.pack (Config.dcPath config)
-        , dsaFormat = formatDisplayText <$> Config.dcFormat config
+        , dsaIsUploaded = dcIsUploaded config
+        , dsaPath = T.pack (dcPath config)
+        , dsaFormat = formatDisplayText <$> dcFormat config
         , dsaActivityCount = V.length (dbActivities db)
         }
 
@@ -312,7 +310,7 @@ finalizeDatabaseHandler dbManager dbName = do
         Right (Left err) -> return $ ActivateResponse False err Nothing
         Right (Right loaded) -> do
             let status = makeStatusFromLoadedDb loaded
-            return $ ActivateResponse True ("Finalized database: " <> Config.dcDisplayName (ldConfig loaded)) (Just status)
+            return $ ActivateResponse True ("Finalized database: " <> dcDisplayName (ldConfig loaded)) (Just status)
 
 -- | Upload a new method collection
 -- Same flow as database upload but creates MethodConfig entry
@@ -349,12 +347,12 @@ uploadMethodHandler dbManager req = do
                     liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
                     -- Create MethodConfig and add to manager
-                    let mc = Config.MethodConfig
-                            { Config.mcName = urName req
-                            , Config.mcPath = methodDir
-                            , Config.mcActive = False
-                            , Config.mcIsUploaded = True
-                            , Config.mcDescription = urDescription req
+                    let mc = MethodConfig
+                            { mcName = urName req
+                            , mcPath = methodDir
+                            , mcActive = False
+                            , mcIsUploaded = True
+                            , mcDescription = urDescription req
                             }
                     liftIO $ addMethodCollection dbManager mc
 

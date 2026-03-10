@@ -215,10 +215,10 @@ updateConfigFromHeader cfg key value = case BS8.map toLower key of
     "product stages" -> cfg { spFileType = "product stages" }
     "csv separator" -> cfg { spDelimiter = parseDelimiter value }
     "decimal separator" -> cfg { spDecimal = if BS.null value then ',' else BS8.head value }
-    "short date format" -> cfg { spDateFormat = decodeBS value }
+    "short date format" -> cfg { spDateFormat = localDecodeBS value }
     _ -> cfg
   where
-    decodeBS = TE.decodeUtf8With TEE.lenientDecode
+    localDecodeBS = TE.decodeUtf8With TEE.lenientDecode
     parseDelimiter v
         | v == "Semicolon" = ';'
         | v == "Comma"     = ','
@@ -618,7 +618,7 @@ techRowToExchange isInput TechExchangeRow{..}
 
 -- | Convert biosphere row to exchange
 bioRowToExchange :: Bool -> Text -> BioExchangeRow -> Exchange
-bioRowToExchange isInput compartment BioExchangeRow{..} =
+bioRowToExchange isInput _compartment BioExchangeRow{..} =
     let flowUUID = generateFlowUUID berName berCompartment berUnit
         unitUUID = generateUnitUUID berUnit
     in BiosphereExchange

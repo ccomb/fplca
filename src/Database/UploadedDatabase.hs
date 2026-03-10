@@ -28,7 +28,7 @@ import qualified Data.Text.IO as TIO
 import GHC.Generics (Generic)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, createDirectoryIfMissing)
 import System.Environment (lookupEnv)
-import System.FilePath ((</>), takeFileName, splitDirectories)
+import System.FilePath ((</>), splitDirectories)
 import Text.Read (readMaybe)
 
 -- Re-export DatabaseFormat from Database.Upload (single definition)

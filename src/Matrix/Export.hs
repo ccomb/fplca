@@ -72,7 +72,7 @@ extractMatrixDebugInfo database targetUUID flowFilter = do
             Nothing -> bioTriples
             Just filterText ->
                 let matchingFlowIndices =
-                        [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) [0 ..], Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
+                        [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) ([0 ..] :: [Int]), Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
                  in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples
@@ -166,7 +166,7 @@ exportBiosphereMatrixData filePath debugInfo = do
 
         matrixRows =
             [ csvRow bioTriple
-            | bioTriple@(SparseTriple row col value) <- U.toList bioTriples
+            | bioTriple@(SparseTriple _row _col value) <- U.toList bioTriples
             , abs value > 1e-20
             ]
 
@@ -177,7 +177,7 @@ exportBiosphereMatrixData filePath debugInfo = do
                 , maybe "unknown" (T.unpack . flowName) (getFlow rowInt)
                 , maybe "unknown" T.unpack (getFlowUnit rowInt)
                 , maybe "unknown" (T.unpack . processIdToText database) (getActivityProcessId colInt)
-                , maybe "unknown" (T.unpack . activityName) (getActivity colInt)
+                , maybe "unknown" (T.unpack . activityName) (lookupActivity colInt)
                 , show value
                 , show (realContribution colInt)
                 ]
@@ -195,8 +195,8 @@ exportBiosphereMatrixData filePath debugInfo = do
             getActivityProcessId colIdx =
                 L.find (\pid -> fromIntegral (activityIndex V.! fromEnum pid) == colIdx)
                        [toEnum 0 .. toEnum (V.length activities - 1)]
-            getActivity :: Int -> Maybe Activity
-            getActivity colIdx = do
+            lookupActivity :: Int -> Maybe Activity
+            lookupActivity colIdx = do
                 processId <- getActivityProcessId colIdx
                 if fromEnum processId < V.length activities
                     then Just (activities V.! fromEnum processId)
@@ -240,7 +240,7 @@ exportIEIndex filePath db = do
         processIdTable = dbProcessIdTable db
         flows = dbFlows db
 
-        rows = V.toList $ V.imap (\idx (actUuid, prodUuid) ->
+        rows = V.toList $ V.imap (\idx (_actUuid, prodUuid) ->
                 let activity = activities V.! idx
                     refProduct = case [ex | ex <- exchanges activity, exchangeIsReference ex] of
                         (ex:_) -> case M.lookup (exchangeFlowId ex) flows of
@@ -283,7 +283,7 @@ exportEEIndex filePath db = do
                            T.pack (show idx)
                     Nothing ->
                         escapeCsvField (T.pack (show flowUuid)) <> ";unknown;;;" <> T.pack (show idx)
-            ) (V.toList bioFlowUUIDs) [0..]
+            ) (V.toList bioFlowUUIDs) ([0..] :: [Int])
 
         header = "name;compartment;subcompartment;unitName;index"
         content = T.unlines (header : rows)
@@ -298,7 +298,7 @@ exportAMatrix filePath db = do
         activityCount = dbActivityCount db
 
         diagonalEntries = [T.pack $ show i ++ ";" ++ show i ++ ";1.0;;;;;"
-                          | i <- [0..fromIntegral activityCount - 1]]
+                          | i <- [0..fromIntegral activityCount - 1 :: Int]]
 
         offDiagonalRows = U.foldr (\(SparseTriple row col value) acc ->
                 let rowStr = T.pack $ show row ++ ";" ++ show col ++ ";" ++

@@ -48,7 +48,7 @@ import Control.Exception (try, SomeException)
 import Control.Monad (when)
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (diffUTCTime, getCurrentTime)
 import GHC.Stats (getRTSStats, RTSStats(..))
 import System.Directory (getFileSize, doesFileExist)
 import System.IO (stderr, hPutStrLn, hFlush)
@@ -205,5 +205,4 @@ reportCacheInfo cacheFile = do
     exists <- doesFileExist cacheFile
     when exists $ do
         size <- getFileSize cacheFile
-        let sizeMB = fromIntegral size / (1024 * 1024) :: Double
         reportCacheOperation $ "Cache file: " ++ cacheFile ++ " (" ++ formatBytes (fromIntegral size) ++ ")"

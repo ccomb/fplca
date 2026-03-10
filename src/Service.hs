@@ -4,7 +4,7 @@
 module Service where
 
 import CLI.Types (DebugMatricesOptions (..))
-import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, toList, fromList)
+import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, toList)
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver)
 import Database (findActivitiesByFields, findFlowsBySynonym)
@@ -13,18 +13,15 @@ import Types
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
-import Data.Int (Int32)
 import qualified Data.List as L
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import System.IO
 
 -- | Domain service errors
 data ServiceError
@@ -124,11 +121,11 @@ convertToInventoryExport db processId rootActivity inventory =
         inventoryList = M.toList inventory
 
         !flowDetails =
-            [ InventoryFlowDetail flow quantity unitName isEmission category
+            [ InventoryFlowDetail flow quantity uName isEmission category
             | (flowUUID, quantity) <- inventoryList
             , quantity /= 0  -- Exclude flows with zero quantities
             , Just flow <- [M.lookup flowUUID (dbFlows db)]
-            , let !unitName = getUnitNameForFlow (dbUnits db) flow
+            , let !uName = getUnitNameForFlow (dbUnits db) flow
                   !isEmission = not (isResourceExtraction flow quantity)
                   !category = flowCategory flow
             ]
@@ -401,7 +398,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                                 then extractBiosphereNodesAndEdges db activity processIdText depth nodes' edgeAcc
                                 else (nodes', edgeAcc)
          in (nodes'', edges', TreeStats 1 0 1)
-    TreeLoop uuid name depth ->
+    TreeLoop uuid name loopDepth ->
         let nodeId = getTreeNodeId db tree  -- Use ProcessId format for consistency
             uuidText = UUID.toText uuid  -- Keep bare UUID for loopTarget
             -- Look up the actual activity to get real unit and location
@@ -417,7 +414,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enLocation = actualLocation
                     , enUnit = actualUnit
                     , enNodeType = LoopNode
-                    , enDepth = depth
+                    , enDepth = loopDepth
                     , enLoopTarget = Just uuidText
                     , enParentId = parentId
                     , enChildrenCount = 0 -- Loops don't expand
@@ -443,8 +440,8 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                     , enCompartment = Nothing
                     }
             nodes' = M.insert currentProcessId parentNode nodeAcc -- Use ProcessId as key
-            processChild (quantity, flow, subtree) (nodeAcc, edgeAcc, statsAcc) =
-                let (childNodes, childEdges, childStats) = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc edgeAcc
+            processChild (quantity, flow, subtree) (nodeAcc', edgeAcc', statsAcc) =
+                let (childNodes, childEdges, childStats') = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc' edgeAcc'
                     edge =
                         TreeEdge
                             { teFrom = currentProcessId -- Now ProcessId format
@@ -454,14 +451,14 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                             , teUnit = getUnitNameForFlow (dbUnits db) flow
                             , teEdgeType = TechnosphereEdge
                             }
-                    newStats = combineStats statsAcc childStats
+                    newStats = combineStats statsAcc childStats'
                  in (childNodes, edge : childEdges, newStats)
-            (finalNodes, finalEdges, childStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
+            (finalNodes, finalEdges, combinedStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
             -- Add biosphere nodes and edges only for depth 0 (root level)
             (finalNodesWithBio, finalEdgesWithBio) = if depth == 0
                                                       then extractBiosphereNodesAndEdges db activity currentProcessId depth finalNodes finalEdges
                                                       else (finalNodes, finalEdges)
-         in (finalNodesWithBio, finalEdgesWithBio, childStats)
+         in (finalNodesWithBio, finalEdgesWithBio, combinedStats)
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
@@ -484,7 +481,7 @@ convertToTreeExport db _rootProcessId maxDepth tree =
 -- | Get activity tree as rich TreeExport with configurable depth
 getActivityTree :: Database -> Text -> Int -> Either ServiceError Value
 getActivityTree db queryText maxDepth = do
-    (processId, activity) <- resolveActivityAndProcessId db queryText
+    (_processId, _activity) <- resolveActivityAndProcessId db queryText
     -- Get the activity UUID from the processIdText (which is activityUUID_productUUID)
     let activityUuidText = case T.splitOn "_" queryText of
             (uuid:_) -> uuid
@@ -518,7 +515,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                     -- Always include the root activity (processId) even if below threshold
                     let allSignificantActivities =
                             [ (fromIntegral idx :: ProcessId, val)
-                            | (idx, val) <- zip [0..] supplyList
+                            | (idx, val) <- zip [(0 :: Int)..] supplyList
                             , abs val > threshold
                             ]
                         -- Ensure root activity is always included
@@ -566,7 +563,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                       case [ex | ex <- techExchanges, exchangeActivityLinkId ex == Just targetUUID] of
                                           (ex:_) -> M.lookup (exchangeFlowId ex) flows
                                           [] -> Nothing  -- No matching exchange found
-                                  unitName = case flowInfo of
+                                  uName = case flowInfo of
                                       Just flow -> getUnitNameForFlow units flow
                                       Nothing -> "unknown"
                                   flowNameText = case flowInfo of
@@ -574,7 +571,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                       Nothing -> "Unknown flow"
                               in case (sourceNodeId, targetNodeId) of
                                   (Just src, Just tgt) ->
-                                      Just $ GraphEdge src tgt (realToFrac value) unitName flowNameText
+                                      Just $ GraphEdge src tgt (realToFrac value) uName flowNameText
                                   _ -> Nothing
                             | SparseTriple row col value <- U.toList techTriples
                             , value /= 0.0
@@ -644,7 +641,7 @@ searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int ->
 searchFlows _ Nothing _ _ _ = return $ Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False 0.0
 searchFlows db (Just query) langParam limitParam offsetParam = do
     startTime <- getCurrentTime
-    let lang = maybe "en" id langParam
+    let _lang = maybe "en" id langParam
         limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
         allResults = findFlowsBySynonym db query
@@ -696,7 +693,7 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam = do
 
 -- | Calculate extended metadata for an activity
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
-calculateActivityMetadata db activity =
+calculateActivityMetadata _db activity =
     let allExchanges = exchanges activity
         uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
         techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
@@ -768,7 +765,7 @@ convertActivityForAPI unitCfg db processId activity =
     convertExchangeWithUnit exchange =
         let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
-                TechnosphereExchange flowId _ _ isInput _ linkId _ _
+                TechnosphereExchange fId _ _ isInput _ linkId _ _
                     | isInput && linkId /= UUID.nil ->
                         -- EcoSpold path: use explicit activity link
                         case findActivityByActivityUUID db linkId of
@@ -780,7 +777,7 @@ convertActivityForAPI unitCfg db processId activity =
                     | isInput ->
                         -- SimaPro path: linkId is nil, resolve by product flow UUID
                         -- Uses fallback to name+unit matching when UUID lookup fails (e.g., tkm vs kgkm)
-                        case findProcessIdByProductFlowWithFallback unitCfg db flowId of
+                        case findProcessIdByProductFlowWithFallback unitCfg db fId of
                             Just pid | Just act <- getActivity db pid ->
                                 (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
                             _ -> -- Try cross-DB links
@@ -821,8 +818,8 @@ getReferenceProductInfo flows units activity =
         (ex : _) ->
             let name = maybe "" flowName (M.lookup (exchangeFlowId ex) flows)
                 amount = exchangeAmount ex
-                unitName = getUnitNameForExchange units ex
-            in (name, amount, unitName)
+                uName = getUnitNameForExchange units ex
+            in (name, amount, uName)
         [] -> ("", 1.0, "")
 
 -- | Get all products (ProcessIds) for an activity UUID using the products index
@@ -881,8 +878,8 @@ getActivityReferenceProductDetail db activity = do
         (ex : _) -> Just ex
     flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
     let usageCount = getFlowUsageCount db (flowId flow)
-    let unitName = getUnitNameForFlow (dbUnits db) flow
-    return $ FlowDetail flow unitName usageCount
+    let uName = getUnitNameForFlow (dbUnits db) flow
+    return $ FlowDetail flow uName usageCount
 
 -- | Get activities that use a specific flow as ActivitySummary list
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
@@ -927,13 +924,13 @@ getFlowInfo :: Database -> Text -> Either ServiceError Value
 getFlowInfo db flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
-        Just flowId ->
-            case M.lookup flowId (dbFlows db) of
+        Just fId ->
+            case M.lookup fId (dbFlows db) of
                 Nothing -> Left $ FlowNotFound flowIdText
                 Just flow ->
-                    let usageCount = getFlowUsageCount db flowId
-                        unitName = getUnitNameForFlow (dbUnits db) flow
-                        flowDetail = FlowDetail flow unitName usageCount
+                    let usageCount = getFlowUsageCount db fId
+                        uName = getUnitNameForFlow (dbUnits db) flow
+                        flowDetail = FlowDetail flow uName usageCount
                      in Right $ toJSON flowDetail
 
 -- | Get activities that use a specific flow as JSON (for CLI)
@@ -941,18 +938,18 @@ getFlowActivities :: Database -> Text -> Either ServiceError Value
 getFlowActivities db flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
-        Just flowId ->
-            case M.lookup flowId (dbFlows db) of
+        Just fId ->
+            case M.lookup fId (dbFlows db) of
                 Nothing -> Left $ FlowNotFound flowIdText
                 Just _ ->
-                    let activities = getActivitiesUsingFlow db flowId
+                    let activities = getActivitiesUsingFlow db fId
                      in Right $ toJSON activities
 
 -- | Get available synonym languages (placeholder)
 -- | Compute LCIA scores (placeholder)
 computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
 computeLCIA db queryText methodFile = do
-    (processId, activity) <- resolveActivityAndProcessId db queryText
+    (processId, _activity) <- resolveActivityAndProcessId db queryText
     let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", processIdToText db processId)]
      in Right $ toJSON placeholder
 

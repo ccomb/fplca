@@ -11,17 +11,13 @@ module ConfigWriter
     , updateDatabaseLoadFlag
     ) where
 
-import Control.Exception (bracket, try, SomeException)
-import Control.Monad (when)
+import Control.Exception (try, SomeException)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Map.Strict as M
-import System.Directory (doesFileExist, renameFile, removeFile)
+import System.Directory (doesFileExist, renameFile)
 import System.FileLock (SharedExclusive(..), withFileLock)
 import System.FilePath ((<.>))
-import System.IO (hClose, openTempFile)
-import System.IO.Error (tryIOError)
 
 import Config (DatabaseConfig(..), loadConfigFile, Config(..))
 
@@ -178,8 +174,6 @@ rewriteConfigWithDatabases originalContent databases =
 updateLoadInText :: Text -> Text -> Bool -> Text
 updateLoadInText content dbName newLoad =
     let lines' = T.lines content
-        loadText = if newLoad then "load = true" else "load = false"
-        activeText = if newLoad then "active = true" else "active = false"
     in T.unlines $ updateInSection lines' False
   where
     updateInSection [] _ = []

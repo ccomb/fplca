@@ -4,7 +4,6 @@ module CLI.Types where
 
 import Data.Text (Text)
 import GHC.Generics
-import Text.Read (readMaybe)
 
 -- | Output format for CLI commands
 data OutputFormat =

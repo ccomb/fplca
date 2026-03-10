@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -12,24 +13,19 @@ module Types (
 
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
-import qualified Data.Aeson as Aeson
-import Data.Store (Store(..), Size(..), decodeEx, encode)
-import Data.Word (Word32)
-import Data.Hashable (Hashable)
+import Data.Store (Store(..), Size(..))
 import Data.Int (Int16, Int32)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Generic as VG
 import qualified Data.Vector.Generic.Mutable as VGM
-import qualified Data.Vector.Unboxed.Mutable as VUM
-import GHC.Generics (Generic, Generic1)
+import GHC.Generics (Generic)
 
 import Data.List (nub)
 import SynonymDB (normalizeName)

@@ -51,17 +51,11 @@ import Types
 import Control.Exception (catch, SomeException)
 import Control.Monad (forM_, when, unless)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar, readMVar, modifyMVar_)
-import Control.Monad.ST
 import Data.Int (Int32)
-import Data.List (elemIndex, sortOn)
 import qualified Data.Map as M
-import Data.Maybe (fromJust, fromMaybe, mapMaybe)
-import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
@@ -130,7 +124,7 @@ toList = U.toList
 
 -- | Convert sparse triplets to petsc-hs format
 buildPetscMatrixData :: [(Int, Int, Double)] -> Int -> V.Vector (Int, Int, PetscScalar_)
-buildPetscMatrixData triplets n =
+buildPetscMatrixData triplets _n =
     let
         -- Convert to PETSc CDouble format
         petscTriplets = [(i, j, realToFrac val) | (i, j, val) <- triplets]
@@ -162,7 +156,7 @@ solveSparseLinearSystemWithFactorization factorization demandVec = do
                 techTriples = U.toList $ U.filter (\(SparseTriple i j _) -> i /= j) $ U.map (\(SparseTriple i j val) -> SparseTriple i j (-val)) systemMatrix
             solveSparseLinearSystemPETSc [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- techTriples] (fromIntegral n) demandVec
 
-        Just (ksp, petscMat, n) -> do
+        Just (_ksp, _petscMat, n) -> do
             reportMatrixOperation $ "Using cached solver for database '" ++ T.unpack dbId ++ "' (" ++ show n ++ " activities) - ultra-fast solve"
 
             -- Time the ultra-fast solve with thread synchronization and error handling
@@ -176,9 +170,9 @@ solveSparseLinearSystemWithFactorization factorization demandVec = do
                             Just (kspSolver, _, _) -> do
                                 -- Create fresh vectors for each request to avoid shared state
                                 let rhsData = V.fromList $ map realToFrac $ toList demandVec
-                                let comm = commWorld
+                                let comm' = commWorld
 
-                                withVecNew comm rhsData $ \rhs -> do
+                                withVecNew comm' rhsData $ \rhs -> do
                                     withVecDuplicate rhs $ \solution -> do
                                         -- Use the pre-factorized solver with thread safety
                                         kspSolve kspSolver rhs solution
@@ -238,15 +232,15 @@ solveSparseLinearSystemPETSc techTriples n demandVec = do
         let nzPattern = ConstNZPR (fromIntegral $ length aggregatedTriples, fromIntegral $ length aggregatedTriples)
 
         -- Use PETSc within the already initialized context (no re-initialization)
-        let comm = commWorld
-        result <- withPetscMatrix comm n n MatAij matrixData nzPattern InsertValues $ \mat ->
-            withVecNew comm rhsData $ \rhs -> do
+        let comm' = commWorld
+        result <- withPetscMatrix comm' n n MatAij matrixData nzPattern InsertValues $ \mat ->
+            withVecNew comm' rhsData $ \rhs -> do
                 let (_, _, _, matMutable) = fromPetscMatrix mat
 
                 -- Time the solver execution with enhanced error handling
                 withProgressTiming Solver "PETSc solve with environment options" $ do
                     -- Use explicit KSP setup to ensure PETSC_OPTIONS are consumed properly
-                    withKsp comm $ \ksp -> do
+                    withKsp comm' $ \ksp -> do
                         -- Set up operators first
                         kspSetOperators ksp matMutable matMutable
 
@@ -496,10 +490,10 @@ buildDemandVectorFromIndex activityIndex rootProcessId =
     let n = V.length activityIndex
         -- The activityIndex is a direct mapping: ProcessId -> matrix index
         -- So we just look up the ProcessId (which is an index) in the vector
-        rootIndex = if fromIntegral rootProcessId >= 0 && fromIntegral rootProcessId < n
+        rootIndex = if fromIntegral rootProcessId >= (0 :: Int) && fromIntegral rootProcessId < n
                     then fromIntegral $ activityIndex V.! fromIntegral rootProcessId
                     else error $ "FATAL: ProcessId not found in activity index: " ++ show rootProcessId
-     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1]]
+     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1 :: Int]]
 
 {- |
 Initialize PETSc once for the entire server lifetime.
@@ -538,11 +532,11 @@ precomputeMatrixFactorization dbName techTriples n = do
         -- Create and cache the actual PETSc factorized solver
         let matrixData = buildPetscMatrixData systemMatrix n
         let nzPattern = ConstNZPR (fromIntegral $ length systemMatrix, fromIntegral $ length systemMatrix)
-        let comm = commWorld
+        let comm' = commWorld
 
         -- Create the PETSc matrix and factorize it
-        mat <- petscMatrixCreate comm n n MatAij matrixData nzPattern InsertValues
-        ksp <- kspCreate comm
+        mat <- petscMatrixCreate comm' n n MatAij matrixData nzPattern InsertValues
+        ksp <- kspCreate comm'
         let (_, _, _, matMutable) = fromPetscMatrix mat
 
         kspSetOperators ksp matMutable matMutable

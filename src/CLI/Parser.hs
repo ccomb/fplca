@@ -8,7 +8,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Options.Applicative
 import qualified Options.Applicative as OA
-import Text.Read (readMaybe)
 
 -- | Main CLI parser combining global options and optional command
 -- If no command is given, just load database and exit (useful for cache generation)

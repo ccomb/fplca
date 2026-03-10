@@ -52,7 +52,7 @@ module Database.CrossLinking
 
 import Data.Char (isUpper, isAlpha)
 import Data.List (maximumBy)
-import Data.Maybe (mapMaybe, fromMaybe)
+import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
 import Data.Ord (comparing)
 import Data.Text (Text)
@@ -61,7 +61,7 @@ import Data.UUID (UUID)
 
 import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
 import qualified UnitConversion as UC
-import Types (SimpleDatabase(..), Database(..), Activity(..), Exchange(..), Flow(..), UUID, getActivity, LinkBlocker(..))
+import Types (SimpleDatabase(..), Database(..), Activity(..), Exchange(..), Flow(..), getActivity, LinkBlocker(..))
 import qualified Data.Vector as V
 
 -- | Pre-indexed database for fast cross-DB supplier lookup
@@ -304,7 +304,7 @@ buildIndexedDatabaseFromDB dbName synDB db =
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
     [ (flowName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (flowName flow))
-    | (pid, (actUUID, prodUUID)) <- zip [0..] (V.toList (dbProcessIdTable db))
+    | (pid, (actUUID, prodUUID)) <- zip ([0..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
     , isReferenceExchange ex

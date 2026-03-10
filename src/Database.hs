@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Database where
 
@@ -8,7 +9,6 @@ import Types
 import Data.Int (Int32)
 import Data.List (sort)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -77,7 +77,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
 
     -- Build technosphere sparse triplets
     reportMatrixOperation "Building technosphere matrix triplets"
-    let buildTechTriple normalizationFactor j consumerActivity consumerPid ex
+    let buildTechTriple normalizationFactor j consumerActivity _consumerPid ex
             | not (isTechnosphereExchange ex) = ([], [])
             | not (exchangeIsInput ex) = ([], [])
             | exchangeIsReference ex && not (exchangeIsInput ex) = ([], [])
@@ -158,7 +158,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                 results = map buildNormalizedTechTriple (exchanges consumerActivity)
              in (concatMap fst results, concatMap snd results)
 
-        allResults = map buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
+        allResults = map buildActivityTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1 :: ProcessId]]
         !techTriples = VU.fromList $ concatMap fst allResults
         techWarnings = concatMap snd allResults
 
@@ -173,13 +173,13 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
             V.fromList $ sort $
                 S.toList $
                     S.fromList
-                        [ exchangeFlowId ex | pid <- [0 .. fromIntegral activityCount - 1], let activity = dbActivities V.! fromIntegral pid, ex <- exchanges activity, isBiosphereExchange ex
+                        [ exchangeFlowId ex | pid <- [0 .. fromIntegral activityCount - 1 :: Int], let act = dbActivities V.! pid, ex <- exchanges act, isBiosphereExchange ex
                         ]
         bioFlowCount = fromIntegral $ V.length bioFlowUUIDs :: Int32
         bioFlowIndex = M.fromList $ zip (V.toList bioFlowUUIDs) [0 ..]
 
         !bioTriples =
-            let buildBioTriple normalizationFactor j activity ex
+            let buildBioTriple normalizationFactor j _activity ex
                     | not (isBiosphereExchange ex) = []
                     | otherwise =
                         case M.lookup (exchangeFlowId ex) bioFlowIndex of
@@ -227,7 +227,7 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                         buildNormalizedBioTriple = buildBioTriple normalizationFactor j activity
                      in concatMap buildNormalizedBioTriple (exchanges activity)
 
-                !result = VU.fromList $ concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1]]
+                !result = VU.fromList $ concatMap buildActivityBioTriplets [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1 :: ProcessId]]
              in result
 
     reportMatrixOperation ("Biosphere matrix: " ++ show (VU.length bioTriples) ++ " non-zero entries")
@@ -353,12 +353,12 @@ findActivitiesByFields db nameParam geoParam productParam =
         nameFiltered = case nameParam of
             Nothing -> activities
             Just name ->
-                let words = filter (not . T.null) $ T.words (T.toLower name)
+                let searchWords = filter (not . T.null) $ T.words (T.toLower name)
                     -- Check if all words match (each word must be in name OR location)
                     matchesAllWords a =
                         let nameLower = T.toLower (activityName a)
                             locationLower = T.toLower (activityLocation a)
-                         in all (\w -> T.isInfixOf w nameLower || T.isInfixOf w locationLower) words
+                         in all (\w -> T.isInfixOf w nameLower || T.isInfixOf w locationLower) searchWords
                  in [a | a <- activities, matchesAllWords a]
 
         -- Filter by geography if provided (substring match)
@@ -371,8 +371,8 @@ findActivitiesByFields db nameParam geoParam productParam =
         -- Filter by product if provided (substring match)
         productFiltered = case productParam of
             Nothing -> geoFiltered
-            Just product ->
-                let productLower = T.toLower product
+            Just prod ->
+                let productLower = T.toLower prod
                  in [ a | a <- geoFiltered, any
                                                 ( \ex ->
                                                     exchangeIsReference ex

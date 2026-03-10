@@ -101,17 +101,16 @@ import Progress (reportProgress, reportProgressWithTiming, reportError, Progress
 import Database (buildDatabaseWithMatrices)
 import SynonymDB (SynonymDB(..), emptySynonymDB, buildFromCSV, buildFromPairs, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
 import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapSize)
-import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), Exchange(..), UUID, Flow(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), emptyCrossDBLinkingStats, crossDBLinksCount, crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
+import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
 import qualified UnitConversion as UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
 import Database.CrossLinking (IndexedDatabase(..), buildIndexedDatabaseFromDB)
-import qualified Database.CrossLinking
 import qualified Database.Upload as Upload
-import Database.Upload (anyDataFilesIn, findMethodDirectory)
+import Database.Upload (findMethodDirectory)
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified SimaPro.Parser as SimaPro
-import System.FilePath (takeExtension, dropExtension, (</>))
+import System.FilePath (dropExtension, (</>))
 import System.Directory (removeDirectoryRecursive)
 import API.Types (DepLoadResult(..))
 import Method.Types (Method(..))
@@ -490,16 +489,16 @@ computeDepLevels :: Map Text DatabaseConfig -> [Text] -> [[Text]]
 computeDepLevels configMap loadOrder =
     let -- Compute level for each name: max(levels of deps) + 1, or 0 if no deps
         levelOf :: Map Text Int -> Text -> Int
-        levelOf levels name = case M.lookup name configMap of
+        levelOf lvls name = case M.lookup name configMap of
             Nothing -> 0
             Just cfg -> case dcDepends cfg of
                 [] -> 0
-                deps -> 1 + maximum [M.findWithDefault 0 d levels | d <- deps]
+                deps -> 1 + maximum [M.findWithDefault 0 d lvls | d <- deps]
         -- Fold through topo-sorted order to assign levels
-        levels = foldl (\acc name -> M.insert name (levelOf acc name) acc) M.empty loadOrder
+        levels' = foldl (\acc name -> M.insert name (levelOf acc name) acc) M.empty loadOrder
         -- Group by level
-        maxLevel = if M.null levels then 0 else maximum (M.elems levels)
-    in [[name | name <- loadOrder, M.findWithDefault 0 name levels == lvl] | lvl <- [0..maxLevel]]
+        maxLevel = if M.null levels' then 0 else maximum (M.elems levels')
+    in [[name | name <- loadOrder, M.findWithDefault 0 name levels' == lvl] | lvl <- [0..maxLevel]]
 
 -- | Discover uploaded databases from uploads/ directory
 -- Reads meta.toml from each subdirectory and converts to DatabaseConfig
@@ -719,92 +718,6 @@ buildActivityMap activities = M.fromList
     , refExchange <- take 1 refExchanges  -- Take first reference product
     , let productUUID = exchangeFlowId refExchange
     ]
-
--- | Load raw database from path (file or directory)
--- Location aliases are used for EcoSpold1 supplier linking (wrongLocation → correctLocation)
-loadDatabaseRaw :: T.Text -> M.Map T.Text T.Text -> FilePath -> Bool -> IO (Either Text Database)
-loadDatabaseRaw dbName locationAliases path noCache = do
-    isFile <- doesFileExist path
-    if isFile && isCacheFile path
-        then do
-            -- Direct cache file (aliases don't apply - cache was built with them)
-            mDb <- Loader.loadDatabaseFromCacheFile path
-            case mDb of
-                Just db -> return $ Right db
-                Nothing -> return $ Left $ "Failed to load cache file: " <> T.pack path
-        else do
-            -- Check what format the directory contains
-            format <- detectDirectoryFormat path
-            case format of
-                FormatCSV -> do
-                    -- Determine the CSV file path (direct file or find in directory)
-                    isFileCheck <- doesFileExist path
-                    csvFile <- if isFileCheck
-                        then return path
-                        else do
-                            csvFiles <- findCSVFiles path
-                            case csvFiles of
-                                [] -> error $ "No CSV files found in: " ++ path
-                                (f:_) -> return f
-                    -- Try to load from cache first (same as EcoSpold)
-                    if noCache
-                        then do
-                            -- No caching: parse CSV directly
-                            reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                            (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
-                            reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                            let activityMap = buildActivityMap activities
-                            !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
-                            return $ Right db
-                        else do
-                            -- Try cache first
-                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
-                            case mCachedDb of
-                                Just db -> return $ Right db
-                                Nothing -> do
-                                    -- Parse SimaPro CSV
-                                    reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                                    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
-                                    reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                                    let activityMap = buildActivityMap activities
-                                    !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
-                                    -- Save to cache for next time
-                                    Loader.saveCachedDatabaseWithMatrices dbName path db
-                                    return $ Right db
-                FormatUnknown ->
-                    return $ Left $ "No supported database files found in: " <> T.pack path <>
-                                   ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv)"
-                -- FormatSpold and FormatXML use the same loader (handles both formats)
-                _ ->
-                    if noCache
-                        then do
-                            -- No caching: load and build from scratch
-                            loadResult <- Loader.loadDatabaseWithLocationAliases locationAliases path
-                            case loadResult of
-                                Left err -> return $ Left err
-                                Right simpleDb -> do
-                                    !db <- buildDatabaseWithMatrices
-                                        (sdbActivities simpleDb)
-                                        (sdbFlows simpleDb)
-                                        (sdbUnits simpleDb)
-                                    return $ Right db
-                        else do
-                            -- Try to load from cache, build if missing
-                            mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
-                            case mCachedDb of
-                                Just db -> return $ Right db
-                                Nothing -> do
-                                    -- Build and cache (with location aliases applied)
-                                    loadResult <- Loader.loadDatabaseWithLocationAliases locationAliases path
-                                    case loadResult of
-                                        Left err -> return $ Left err
-                                        Right simpleDb -> do
-                                            !db <- buildDatabaseWithMatrices
-                                                (sdbActivities simpleDb)
-                                                (sdbFlows simpleDb)
-                                                (sdbUnits simpleDb)
-                                            Loader.saveCachedDatabaseWithMatrices dbName path db
-                                            return $ Right db
 
 -- | Load raw database from path with cross-database linking support
 loadDatabaseRawWithCrossDB
@@ -1140,7 +1053,7 @@ removeDatabase manager dbName = do
                             if pathExists
                                 then do
                                     -- Delete the database directory immediately
-                                    result <- try $ removeDirectoryRecursive uploadDir
+                                    result <- tryIO $ removeDirectoryRecursive uploadDir
                                     case result of
                                         Left (e :: SomeException) ->
                                             return $ Left $ "Failed to delete: " <> T.pack (show e)
@@ -1153,8 +1066,8 @@ removeDatabase manager dbName = do
                                     reportProgress Info $ "Directory already missing: " <> uploadDir
                                     removeFromMemory manager dbName
   where
-    try :: IO a -> IO (Either SomeException a)
-    try = Control.Exception.try
+    tryIO :: IO a -> IO (Either SomeException a)
+    tryIO = Control.Exception.try
     deleteCacheFile name = do
         cacheFile <- Loader.generateMatrixCacheFilename name ""
         let zstdFile = cacheFile ++ ".zst"

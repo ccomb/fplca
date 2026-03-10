@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 -- | EcoSpold1 SAX Parser for Ecoinvent 2.x formats
 -- This parser handles the older EcoSpold1 XML format (.XML files)
@@ -34,12 +35,6 @@ generateFlowUUID :: Int -> Int -> Text -> Text -> UUID
 generateFlowUUID datasetNumber exchangeNumber flowName category =
     let key = T.pack (show datasetNumber) <> ":" <> T.pack (show exchangeNumber)
               <> ":" <> flowName <> ":" <> category
-    in UUID5.generateNamed ecospold1Namespace (BS.unpack $ TE.encodeUtf8 key)
-
--- | Generate deterministic UUID for activity from dataset number
-generateActivityUUID :: Int -> Text -> Text -> UUID
-generateActivityUUID datasetNumber activityName location =
-    let key = T.pack (show datasetNumber) <> ":" <> activityName <> ":" <> location
     in UUID5.generateNamed ecospold1Namespace (BS.unpack $ TE.encodeUtf8 key)
 
 -- | Generate deterministic UUID for unit from unit name

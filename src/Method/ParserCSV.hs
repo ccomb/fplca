@@ -92,7 +92,7 @@ isLabelRow line =
 mkMethod :: Maybe Text -> Text -> Text -> Text -> Int -> [BS.ByteString] -> Word8 -> Method
 mkMethod methodology catName impactName unit colIdx rows delim =
     let !ns       = csvMethodNamespace
-        !methodId = UUID5.generateNamed ns (bsKey $ "method:" <> impactName)
+        !mId      = UUID5.generateNamed ns (bsKey $ "method:" <> impactName)
         !factors  = [ MethodCF
                         { mcfFlowRef     = UUID5.generateNamed ns (bsKey $ sub <> "::" <> comp)
                         , mcfFlowName    = sub
@@ -112,7 +112,7 @@ mkMethod methodology catName impactName unit colIdx rows delim =
                     , Just v <- [parseDouble raw]
                     ]
     in Method
-        { methodId          = methodId
+        { methodId          = mId
         , methodName        = impactName
         , methodDescription = Nothing
         , methodUnit        = if T.null unit then "unknown" else unit

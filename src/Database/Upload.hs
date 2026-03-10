@@ -29,7 +29,7 @@ module Database.Upload
 
 import Data.Aeson (ToJSON(..), FromJSON(..), withText)
 import qualified Data.Aeson as A
-import Control.Exception (try, catch, SomeException)
+import Control.Exception (try, SomeException)
 import Control.Monad (forM, filterM)
 import Data.Char (isAlphaNum, toLower)
 import Data.List (isSuffixOf, isPrefixOf, sortOn)
@@ -43,7 +43,7 @@ import System.Directory (createDirectoryIfMissing, listDirectory, doesDirectoryE
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
 import Data.Ord (Down(..))
-import System.FilePath ((</>), takeExtension, takeDirectory, makeRelative)
+import System.FilePath ((</>), takeExtension)
 import System.Info (os)
 import System.Process (readProcessWithExitCode)
 
@@ -410,13 +410,6 @@ countDataFilesIn dir = do
     return $ length $ filter isDataExt exts
   where
     isDataExt e = e == ".spold" || e == ".xml" || e == ".csv"
-
--- | Check if a directory contains .spold files (EcoSpold2)
-hasSpoldFilesIn :: FilePath -> IO Bool
-hasSpoldFilesIn d = do
-    fs <- listDirectory d
-    let extensions = map (map toLower . takeExtension) fs
-    return $ any (== ".spold") extensions
 
 -- | Check if a directory contains any recognized data files directly.
 -- Uses content-aware checks for XML and CSV to avoid false positives

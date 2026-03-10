@@ -34,8 +34,8 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Xeno.SAX as X
 import GHC.Generics (Generic)
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, createDirectoryIfMissing, removeFile, getModificationTime)
-import System.FilePath ((</>), takeExtension, takeFileName)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, removeFile, getModificationTime)
+import System.FilePath ((</>), takeExtension)
 import Data.Char (toLower)
 
 import EcoSpold.Common (bsToText, isElement)

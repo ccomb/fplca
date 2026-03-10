@@ -220,7 +220,6 @@ parseWithXeno xmlContent processId =
                         finalOutputGroup = if T.null (idOutputGroup idata) then psPendingOutputGroup state else idOutputGroup idata
                         isInput = not $ T.null finalInputGroup
                         isOutput = T.null finalInputGroup
-                        amount = idAmount idata
                         -- Reference flow identification:
                         -- Reference products are identified ONLY by outputGroup="0"
                         -- This works for both normal production (positive amount) and waste treatment (negative amount)
@@ -348,7 +347,7 @@ parseWithXeno xmlContent processId =
                 _ -> state{psPath = tail (psPath state)}
         | isElement tagName "text" =
             case psContext state of
-                InGeneralCommentText idx ->
+                InGeneralCommentText _idx ->
                     let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
                         -- Store as (index, text) pair for later sorting
                     in if T.null txt
@@ -417,7 +416,7 @@ parseWithXeno xmlContent processId =
 
     -- Build final result from parse state
     buildResult :: ParseState -> ProcessId -> Either String (Activity, [Flow], [Unit])
-    buildResult st pid =
+    buildResult st _pid =
         let name = case psActivityName st of
                 Just n -> n
                 Nothing -> "Unknown Activity"

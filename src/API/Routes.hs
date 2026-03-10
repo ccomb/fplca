@@ -12,10 +12,9 @@ import SharedSolver (SharedSolver)
 import Method.Mapping (computeLCIAScore, mapMethodFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
 import qualified Data.Vector as V
 import Method.Types (Method(..), MethodCF(..), FlowDirection(..))
-import SynonymDB (SynonymDB, emptySynonymDB)
+import SynonymDB (emptySynonymDB)
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..), getMergedUnitConfig)
 import qualified Database.Manager as DM
-import Database.Upload (DatabaseFormat(..))
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import Progress (getLogLines, reportProgress, ProgressLevel(Info))
@@ -23,9 +22,8 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), RefDataStatusAPI(..), SynonymGroupsResponse(..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), UnmappedFlowAPI (..), DatabaseListResponse(..), DatabaseStatusAPI(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
-import Data.Aeson.Types (Result (..), fromJSON)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
@@ -33,7 +31,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import GHC.Generics
 import Servant
@@ -42,7 +40,6 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (intercalate)
 import Numeric (showFFloat)
-import Network.HTTP.Types.Header (hSetCookie)
 
 -- | API type definition - RESTful design with focused endpoints
 type LCAAPI =
@@ -226,9 +223,9 @@ lcaServer dbManager maxTreeDepth password =
     getLogsHandler :: Maybe Int -> Handler Value
     getLogsHandler sinceMaybe = do
         let since = fromMaybe 0 sinceMaybe
-        (nextIndex, lines) <- liftIO $ getLogLines since
+        (nextIndex, logLines) <- liftIO $ getLogLines since
         return $ object
-            [ "lines" .= lines
+            [ "lines" .= logLines
             , "nextIndex" .= nextIndex
             ]
 
@@ -254,6 +251,7 @@ lcaServer dbManager maxTreeDepth password =
         case Service.getActivityInfo unitCfg db processId of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+            Left _ -> throwError err500{errBody = "Internal server error"}
             Right result -> case fromJSON result of
                 Success activityInfo -> return activityInfo
                 Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
@@ -292,7 +290,7 @@ lcaServer dbManager maxTreeDepth password =
     getActivityTree :: Text -> Text -> Handler TreeExport
     getActivityTree dbName processId = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        withValidatedActivity db processId $ \activity -> do
+        withValidatedActivity db processId $ \_activity -> do
             -- Use CLI --tree-depth option for configurable depth
             -- Default depth limit prevents DOS attacks via deep tree requests
             -- Extract activity UUID from processId (format: activityUUID_productUUID)
@@ -385,7 +383,7 @@ lcaServer dbManager maxTreeDepth password =
 
     -- Log a single category result in the batch
     logBatchCategory :: Int -> LCIAResult -> IO ()
-    logBatchCategory invSize result = do
+    logBatchCategory _invSize result = do
         let mapped = lrMappedFlows result
             total = mapped + lrUnmappedFlows result
             scoreTxt = showFFloat (Just 4) (lrScore result) ""
@@ -429,8 +427,8 @@ lcaServer dbManager maxTreeDepth password =
         (db, _) <- requireDatabaseByParam dbManager dbParam
         withValidatedFlow db flowIdText $ \flow -> do
             let usageCount = Service.getFlowUsageCount db (flowId flow)
-            let unitName = getUnitNameForFlow (dbUnits db) flow
-            return $ FlowDetail flow unitName usageCount
+            let flowUnitName = getUnitNameForFlow (dbUnits db) flow
+            return $ FlowDetail flow flowUnitName usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Maybe Text -> Handler [ActivitySummary]

@@ -62,7 +62,6 @@ import Data.Store (decodeEx, encode)
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
-import Data.Hashable (hash)
 import Data.List (sortBy, sortOn, group, sort, unzip7)
 import Data.Ord (Down(..))
 import qualified Data.Map as M
@@ -74,7 +73,6 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Typeable (typeOf, typeRepFingerprint)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
@@ -82,12 +80,9 @@ import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDat
 import Database.CrossLinking
     ( LinkingContext(..)
     , CrossDBLinkResult(..)
-    , LinkBlocker(..)
     , LinkWarning(..)
     , IndexedDatabase(..)
-    , SupplierEntry(..)
     , findSupplierAcrossDatabases
-    , buildIndexedDatabase
     , defaultLinkingThreshold
     , extractProductPrefixes
     , normalizeUnicode
@@ -96,7 +91,7 @@ import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
 import Progress
 import Types
-import SynonymDB (SynonymDB, emptySynonymDB)
+import SynonymDB (SynonymDB)
 import qualified UnitConversion as UC
 import qualified SimaPro.Parser as SimaPro
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
@@ -209,7 +204,7 @@ reportUnlinkedSummary summary
         let activities = usActivities summary
             activityCount = M.size activities
             -- Sort activities by number of unlinked exchanges (descending)
-            sortedActivities = take 10 $ reverse $ sortOn (length . snd) $ M.toList activities
+            sortedActivities = take 10 $ reverse $ sortOn' (length . snd) $ M.toList activities
             remainingCount = activityCount - length sortedActivities
 
         reportProgress Warning $
@@ -233,7 +228,7 @@ reportUnlinkedSummary summary
         when (remainingCount > 0) $
             reportProgress Warning $ printf "  ... and %d more activities" remainingCount
   where
-    sortOn f = sortBy (\a b -> compare (f a) (f b))
+    sortOn' f = sortBy (\a b -> compare (f a) (f b))
     nub = map head . group . sort
 
 -- | Normalize text for matching: lowercase, strip whitespace, normalize Unicode
@@ -616,7 +611,7 @@ loadEcoSpoldDirectory locationAliases dir = do
 
     -- Process one worker's share of files
     processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, FlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
-    processWorker startTime isEcoSpold1 (workerNum, workerFiles) = do
+    processWorker _startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
@@ -1290,9 +1285,9 @@ reportCrossDBLinkingStats nActivities stats = do
     when (nFallbacks > 0) $ do
         reportProgress Info $
             printf "Location fallbacks: %d unique products matched with different location" nFallbacks
-        forM_ uniqueFallbacks $ \(product, requested, actual) ->
+        forM_ uniqueFallbacks $ \(prod, requested, actual) ->
             reportProgress Info $
-                printf "  - %s: %s → %s" (T.unpack product) (T.unpack requested) (T.unpack actual)
+                printf "  - %s: %s → %s" (T.unpack prod) (T.unpack requested) (T.unpack actual)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"
