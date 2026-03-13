@@ -669,7 +669,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
                         }
 
 -- | Detected format of a database directory
-data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatUnknown
+data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatILCD | FormatUnknown
     deriving (Show, Eq)
 
 -- | Detect the format of files in a directory
@@ -688,16 +688,20 @@ detectDirectoryFormat path = do
                 _ -> FormatUnknown
         else if isDir
             then do
-                files <- listDirectory path
-                let extensions = map (map toLower . takeExtension) files
-                -- Check for different formats (in order of preference)
-                if any (== ".spold") extensions
-                    then return FormatSpold
-                    else if any (== ".csv") extensions
-                        then return FormatCSV
-                        else if any (== ".xml") extensions
-                            then return FormatXML
-                            else return FormatUnknown
+                -- Check for ILCD format first (has processes/ subdirectory)
+                hasProcesses <- doesDirectoryExist (path </> "processes")
+                if hasProcesses then return FormatILCD
+                else do
+                    files <- listDirectory path
+                    let extensions = map (map toLower . takeExtension) files
+                    -- Check for different formats (in order of preference)
+                    if any (== ".spold") extensions
+                        then return FormatSpold
+                        else if any (== ".csv") extensions
+                            then return FormatCSV
+                            else if any (== ".xml") extensions
+                                then return FormatXML
+                                else return FormatUnknown
             else return FormatUnknown
 
 -- | Find CSV files in a directory
@@ -778,8 +782,8 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                                     return $ Right db
                 FormatUnknown ->
                     return $ Left $ "No supported database files found in: " <> T.pack path <>
-                                   ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv)"
-                -- FormatSpold and FormatXML use the same loader - WITH cross-DB linking
+                                   ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv), ILCD"
+                -- FormatSpold, FormatXML and FormatILCD use the same loader - WITH cross-DB linking
                 _ -> do
                     -- Try cache first (skip if stale: has unresolved links but deps are now available)
                     mCachedDb <- if noCache then return Nothing
@@ -1273,6 +1277,7 @@ discoverCandidatePaths dbConfig = do
                 Upload.EcoSpold2     -> "EcoSpold 2"
                 Upload.EcoSpold1     -> "EcoSpold 1"
                 Upload.SimaProCSV    -> "SimaPro CSV"
+                Upload.ILCDProcess   -> "ILCD"
                 Upload.UnknownFormat -> "Unknown"
         return (T.pack rel, label, count)
   where

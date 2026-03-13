@@ -52,6 +52,7 @@ data DatabaseFormat
     = SimaProCSV     -- SimaPro CSV export
     | EcoSpold1      -- EcoSpold v1 XML format
     | EcoSpold2      -- EcoSpold v2 XML format
+    | ILCDProcess    -- ILCD process dataset format
     | UnknownFormat  -- Could not detect format
     deriving (Show, Eq, Generic)
 
@@ -59,6 +60,7 @@ instance ToJSON DatabaseFormat where
     toJSON EcoSpold2     = A.String "EcoSpold 2"
     toJSON EcoSpold1     = A.String "EcoSpold 1"
     toJSON SimaProCSV    = A.String "SimaPro CSV"
+    toJSON ILCDProcess   = A.String "ILCD"
     toJSON UnknownFormat = A.String ""
 
 instance FromJSON DatabaseFormat where
@@ -66,6 +68,7 @@ instance FromJSON DatabaseFormat where
         "EcoSpold 2"  -> pure EcoSpold2
         "EcoSpold 1"  -> pure EcoSpold1
         "SimaPro CSV" -> pure SimaProCSV
+        "ILCD"        -> pure ILCDProcess
         _             -> pure UnknownFormat
 
 -- | Progress event for upload/loading operations
@@ -376,18 +379,40 @@ extractArchive format archiveData targetDir = do
 
 -- | Find the actual data directory (picks the candidate with the most data files)
 -- Archives often contain multiple folders (e.g., "datasets", "MasterData")
+-- For ILCD: detects directories with a processes/ subdirectory first.
 findDataDirectory :: FilePath -> IO FilePath
 findDataDirectory dir = do
-    candidates <- findAllDataDirectories dir
-    case candidates of
-        []    -> return dir
-        [one] -> return one
-        many  -> pickByFileCount many
+    -- Check for ILCD format first (recursively find dirs with processes/ subdir)
+    ilcdDir <- findILCDRoot dir
+    case ilcdDir of
+        Just d  -> return d
+        Nothing -> do
+            candidates <- findAllDataDirectories dir
+            case candidates of
+                []    -> return dir
+                [one] -> return one
+                many  -> pickByFileCount many
   where
     pickByFileCount dirs = do
         counts <- mapM (\d -> (,) d <$> countDataFilesIn d) dirs
         let sorted = sortOn (Down . snd) counts
         return $ fst (head sorted)
+
+    -- Recursively find the first directory containing a processes/ subdirectory
+    findILCDRoot d = do
+        hasProcesses <- doesDirectoryExist (d </> "processes")
+        if hasProcesses then return (Just d)
+        else do
+            entries <- listDirectory d
+            subdirs <- filterM doesDirectoryExist (map (d </>) entries)
+            findFirst subdirs
+
+    findFirst [] = return Nothing
+    findFirst (d:ds) = do
+        r <- findILCDRoot d
+        case r of
+            Just _  -> return r
+            Nothing -> findFirst ds
 
 -- | Find all directories containing recognized data files under a root.
 findAllDataDirectories :: FilePath -> IO [FilePath]
@@ -417,17 +442,21 @@ countDataFilesIn dir = do
 anyDataFilesIn :: FilePath -> IO Bool
 anyDataFilesIn d = do
     fs <- listDirectory d
-    let fullPaths = map (d </>) fs
-        extensions = map (map toLower . takeExtension) fs
-    if any (== ".spold") extensions
-        then return True
-        else do
-            let xmlFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".xml"]
-            isEcoSpold <- if null xmlFiles then return False else checkForEcoSpold1 xmlFiles
-            if isEcoSpold then return True
+    -- ILCD detection: directory contains a processes/ subdirectory
+    hasProcessesDir <- doesDirectoryExist (d </> "processes")
+    if hasProcessesDir then return True
+    else do
+        let fullPaths = map (d </>) fs
+            extensions = map (map toLower . takeExtension) fs
+        if any (== ".spold") extensions
+            then return True
             else do
-                let csvFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".csv"]
-                if null csvFiles then return False else checkForSimaProCSV csvFiles
+                let xmlFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".xml"]
+                isEcoSpold <- if null xmlFiles then return False else checkForEcoSpold1 xmlFiles
+                if isEcoSpold then return True
+                else do
+                    let csvFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".csv"]
+                    if null csvFiles then return False else checkForSimaProCSV csvFiles
 
 -- | Find the best directory containing ILCD method XML files.
 -- Picks the candidate with the most method files (same pattern as findDataDirectory).
@@ -495,6 +524,7 @@ countDataFiles d format = do
     isDataFile SimaProCSV f = ".csv" `isSuffixOf` map toLower f
     isDataFile EcoSpold1 f = ".xml" `isSuffixOf` map toLower f
     isDataFile EcoSpold2 f = ".spold" `isSuffixOf` map toLower f
+    isDataFile ILCDProcess f = ".xml" `isSuffixOf` map toLower f
     isDataFile UnknownFormat _ = True
 
 -- | Recursively list all files in a directory
@@ -529,22 +559,27 @@ detectDatabaseFormat path = do
                 _ -> return UnknownFormat
         else if isDir
             then do
-                fs <- listDirectoryRecursive path
-                let extensions = map (map toLower . takeExtension) fs
-                let hasSpold = any (== ".spold") extensions
-                    hasXml = any (== ".xml") extensions
-                    hasCsv = any (== ".csv") extensions
-                if hasSpold
-                    then return EcoSpold2
-                    else if hasXml
-                        then do
-                            isEcoSpold1 <- checkForEcoSpold1 fs
-                            return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
-                        else if hasCsv
-                            then do
-                                isSimaPro <- checkForSimaProCSV fs
-                                return $ if isSimaPro then SimaProCSV else UnknownFormat
-                            else return UnknownFormat
+                -- Check for ILCD format: has a processes/ subdirectory
+                hasProcesses <- doesDirectoryExist (path </> "processes")
+                if hasProcesses
+                    then return ILCDProcess
+                    else do
+                        fs <- listDirectoryRecursive path
+                        let extensions = map (map toLower . takeExtension) fs
+                        let hasSpold = any (== ".spold") extensions
+                            hasXml = any (== ".xml") extensions
+                            hasCsv = any (== ".csv") extensions
+                        if hasSpold
+                            then return EcoSpold2
+                            else if hasXml
+                                then do
+                                    isEcoSpold1 <- checkForEcoSpold1 fs
+                                    return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                                else if hasCsv
+                                    then do
+                                        isSimaPro <- checkForSimaProCSV fs
+                                        return $ if isSimaPro then SimaProCSV else UnknownFormat
+                                    else return UnknownFormat
             else return UnknownFormat
 
 -- | Check if XML files are EcoSpold1 format

@@ -94,6 +94,7 @@ import Types
 import SynonymDB (SynonymDB)
 import qualified UnitConversion as UC
 import qualified SimaPro.Parser as SimaPro
+import qualified ILCD.Parser as ILCD
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
 import Database.UploadedDatabase (getDataDir)
 import System.FilePath (takeBaseName, takeExtension, (</>))
@@ -408,7 +409,11 @@ loadDatabaseWithLocationAliases locationAliases path = do
             ".xml" -> loadSingleEcoSpold1File locationAliases path
             _      -> return $ Left $ T.pack $ "Unsupported file type: " ++ path
         else if isDir
-            then loadEcoSpoldDirectory locationAliases path
+            then do
+                hasProcesses <- doesDirectoryExist (path </> "processes")
+                if hasProcesses
+                    then ILCD.parseILCDDirectory path
+                    else loadEcoSpoldDirectory locationAliases path
             else return $ Left $ T.pack $ "Path does not exist: " ++ path
 
 -- | Load SimaPro CSV file

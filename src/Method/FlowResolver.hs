@@ -30,6 +30,7 @@ import qualified Data.Map.Strict as M
 import Data.Store (Store, encode, decodeEx)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Read as TR
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Xeno.SAX as X
@@ -45,10 +46,12 @@ import Progress (reportProgress, ProgressLevel(..))
 
 -- | Enrichment data extracted from an ILCD flow XML
 data ILCDFlowInfo = ILCDFlowInfo
-    { ilcdBaseName    :: !Text
-    , ilcdCompartment :: !(Maybe Compartment)
-    , ilcdCAS         :: !(Maybe Text)  -- normalized CAS
-    , ilcdSynonyms    :: ![Text]        -- from <common:synonyms xml:lang="en">, semicolon-split
+    { ilcdBaseName       :: !Text
+    , ilcdCompartment    :: !(Maybe Compartment)
+    , ilcdCAS            :: !(Maybe Text)  -- normalized CAS
+    , ilcdSynonyms       :: ![Text]        -- from <common:synonyms xml:lang="en">, semicolon-split
+    , ilcdFlowType       :: !Text          -- "Elementary flow" / "Product flow" / "Waste flow"
+    , ilcdFlowPropertyRef :: !(Maybe UUID) -- reference flow property UUID (for unit resolution)
     } deriving (Show, Generic, NFData, Store)
 
 -- | Given a method directory (containing lciamethods/), find the sibling flows/ directory.
@@ -160,10 +163,15 @@ data FlowParseState = FlowParseState
     , fpsSynonyms    :: ![Text]  -- accumulated synonym names
     , fpsInSynonyms  :: !Bool    -- inside <common:synonyms>
     , fpsLangIsEn    :: !Bool    -- current synonyms element has xml:lang="en"
+    , fpsFlowType    :: !Text    -- <typeOfDataSet> text
+    , fpsRefFlowPropIdx :: !Int  -- referenceToReferenceFlowProperty index
+    , fpsCurrentFPIdx   :: !Int  -- current flowProperty dataSetInternalID
+    , fpsFlowPropRef    :: !(Maybe UUID) -- resolved flow property UUID
+    , fpsInFlowProperty :: !Bool -- inside <flowProperty>
     }
 
 initialFlowState :: FlowParseState
-initialFlowState = FlowParseState "" "" "" [] [] [] False [] False False
+initialFlowState = FlowParseState "" "" "" [] [] [] False [] False False "" 0 (-1) Nothing False
 
 -- | Parse a single ILCD flow XML from bytes
 parseFlowXML :: BS.ByteString -> Maybe (UUID, ILCDFlowInfo)
@@ -175,13 +183,22 @@ parseFlowXML bytes =
     openTag s tag =
         let !inSyn = isElement tag "synonyms" || fpsInSynonyms s
             !inBase = isElement tag "baseName" || fpsInBaseName s
+            !inFP = isElement tag "flowProperty" || fpsInFlowProperty s
         in s { fpsPath = tag : fpsPath s, fpsTextAccum = []
              , fpsInBaseName = inBase, fpsInSynonyms = inSyn
-             , fpsLangIsEn = if isElement tag "synonyms" then False else fpsLangIsEn s }
+             , fpsLangIsEn = if isElement tag "synonyms" then False else fpsLangIsEn s
+             , fpsInFlowProperty = inFP }
 
     attr s name value
         | fpsInSynonyms s && isElement name "lang" && bsToText value == "en" =
             s { fpsLangIsEn = True }
+        | isElement name "dataSetInternalID" && fpsInFlowProperty s =
+            s { fpsCurrentFPIdx = case TR.decimal (bsToText value) of
+                    Right (n, _) -> n
+                    Left _       -> -1 }
+        | isElement name "refObjectId" && fpsInFlowProperty s
+            && fpsCurrentFPIdx s == fpsRefFlowPropIdx s =
+            s { fpsFlowPropRef = UUID.fromText (bsToText value) }
         | isElement name "level" = s
         | otherwise = s
 
@@ -200,6 +217,16 @@ parseFlowXML bytes =
               , fpsTextAccum = [], fpsInBaseName = False }
         | isElement tag "CASNumber" =
             s { fpsPath = dropPath s, fpsCAS = accum s, fpsTextAccum = [] }
+        | isElement tag "typeOfDataSet" && T.null (fpsFlowType s) =
+            s { fpsPath = dropPath s, fpsFlowType = accum s, fpsTextAccum = [] }
+        | isElement tag "referenceToReferenceFlowProperty" =
+            s { fpsPath = dropPath s
+              , fpsRefFlowPropIdx = case TR.decimal (accum s) of
+                    Right (n, _) -> n
+                    Left _       -> 0
+              , fpsTextAccum = [] }
+        | isElement tag "flowProperty" =
+            s { fpsPath = dropPath s, fpsTextAccum = [], fpsInFlowProperty = False }
         | isElement tag "synonyms" =
             let !syns = if fpsLangIsEn s
                         then filter (not . T.null) $ map T.strip $ T.splitOn ";" (accum s)
@@ -227,11 +254,13 @@ parseFlowXML bytes =
         let baseName = fpsBaseName s
         if T.null baseName then Nothing
         else Just (uuid, ILCDFlowInfo
-            { ilcdBaseName    = baseName
-            , ilcdCompartment = parseCompartment (fpsCategories s)
-            , ilcdCAS         = if T.null (fpsCAS s) then Nothing
-                                else Just (normalizeCAS (fpsCAS s))
-            , ilcdSynonyms    = fpsSynonyms s
+            { ilcdBaseName       = baseName
+            , ilcdCompartment    = parseCompartment (fpsCategories s)
+            , ilcdCAS            = if T.null (fpsCAS s) then Nothing
+                                   else Just (normalizeCAS (fpsCAS s))
+            , ilcdSynonyms       = fpsSynonyms s
+            , ilcdFlowType       = fpsFlowType s
+            , ilcdFlowPropertyRef = fpsFlowPropRef s
             })
 
 -- | Parse compartment from ILCD category levels.
