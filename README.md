@@ -2,7 +2,7 @@
 
 **fpLCA** is a Life Cycle Assessment engine that turns LCA databases into inspectable, queryable answers — fast.
 
-It loads EcoSpold2, EcoSpold1, and SimaPro CSV databases, builds supply chain dependency trees, computes life cycle inventories using sparse matrix algebra, and applies characterization methods for impact assessment. Everything runs in-memory against your own data.
+It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds supply chain dependency trees, computes life cycle inventories using sparse matrix algebra, and applies characterization methods for impact assessment. Everything runs in-memory against your own data.
 
 ## What It Does
 
@@ -10,14 +10,14 @@ It loads EcoSpold2, EcoSpold1, and SimaPro CSV databases, builds supply chain de
 - **Explore** supply chain trees and force-directed dependency graphs
 - **Compute** life cycle inventories (LCI) and impact scores (LCIA) — single method or batch across a full collection
 - **Map** method characterization factors to database flows with a 4-step cascade (UUID → CAS → name → synonym) and coverage statistics
-- **Link** databases across nomenclatures (e.g., Agribalyse referencing Ecoinvent)
+- **Link** databases across nomenclatures (e.g., a sector database referencing Agribalyse)
 - **Upload** databases and method collections via the web UI, without touching config files
 
 ---
 
 ## Key Features
 
-- **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV
+- **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
 - **LCIA method collections**: Load ILCD method packages (ZIP or directory) from config or upload via UI; CSV format also supported
@@ -26,8 +26,7 @@ It loads EcoSpold2, EcoSpold1, and SimaPro CSV databases, builds supply chain de
 - **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via UI, or toggled independently
 - **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, method management, and reference data pages
 - **Desktop application**: Native Windows/Linux app — no installation or configuration needed
-- **REST API and CLI**: Scriptable interface for automation and integration
-- **Fast cache**: Per-database cache with automatic schema-based invalidation; Ecoinvent loads in ~45s cold, ~2-3s cached
+- **Fast cache**: Per-database cache with automatic schema-based invalidation; large databases load in ~45s cold, ~2-3s cached
 - **Optional access control**: Single-code login with cookie-based session
 
 ---
@@ -44,29 +43,39 @@ Download and run the installer for Windows or Linux from the releases page. The 
 # Build (requires PETSc/SLEPc — see Building section)
 ./build.sh
 
-# Run with a config file
-cabal run fplca -- --config fplca.toml server --port 8081
+# Start the server
+fplca --config fplca.toml server --port 8081
 # Open http://localhost:8081
 ```
 
 ### Command Line
 
+The CLI is a lightweight HTTP client that connects to a running server (~0.2s per command). Start the server once, then query it freely:
+
 ```bash
-# Search activities
-fplca --config fplca.toml activities --name "electricity" --geo "DE"
+# Start server (loads databases into memory once)
+fplca --config fplca.toml server --port 8081
 
-# Supply chain tree
-fplca --config fplca.toml tree "12345678-..." --tree-depth 3
+# In another terminal — all commands talk to the server via HTTP
+fplca --config fplca.toml activities --name "electricity" --geo "FR"
+fplca --config fplca.toml --db agribalyse tree "12345678-..." --depth 3
+fplca --config fplca.toml --db agribalyse lcia "12345678-..." --method METHOD_UUID
+```
 
-# Life cycle inventory
-fplca --config fplca.toml inventory "12345678-..."
+### Interactive REPL
 
-# Impact assessment
-fplca --config fplca.toml lcia "12345678-..." --method ./EF-3.1.xml
+```bash
+# Launch REPL (auto-starts the server if not running)
+fplca --config fplca.toml repl
 
-# Database and method management
-fplca --config fplca.toml database upload mydb.7z --name "My Database"
-fplca --config fplca.toml method upload EF-3.1.zip --name "EF 3.1"
+# Inside the REPL:
+# fplca> activities --name "wheat"
+# fplca> use agribalyse
+# fplca[agribalyse]> inventory UUID
+# fplca[agribalyse]> :format table
+# fplca[agribalyse]> lcia UUID --method METHOD_UUID
+# fplca[agribalyse]> :help
+# fplca[agribalyse]> :quit
 ```
 
 ---
@@ -82,18 +91,11 @@ host = "127.0.0.1"
 password = "mysecret"          # optional — omit to disable auth
 
 [[databases]]
-name = "ecoinvent-3.12"
-displayName = "Ecoinvent 3.12"
-path = "DBs/ecoinvent3.12.7z"  # archives supported natively
-description = "Cutoff System Model, EcoSpold2"
-load = true
-
-[[databases]]
 name = "agribalyse-3.2"
 displayName = "Agribalyse 3.2"
 path = "DBs/AGB32_final.CSV"
 description = "SimaPro CSV"
-load = false
+load = true
 
 [[databases]]
 name = "my-sector-db"
@@ -194,20 +196,32 @@ POST   /api/v1/auth                                           Login (returns ses
 | Option | Description |
 |--------|-------------|
 | `--config FILE` | TOML config file for multi-database setup |
-| `--db NAME` | Database name to query (from config file) |
-| `--format FORMAT` | Output format: `json` (default), `csv`, `table`, `pretty` |
+| `--url URL` | Server URL (default: from config; or set `FPLCA_URL`) |
+| `--password PWD` | Server password (or set `FPLCA_PASSWORD`) |
+| `--db NAME` | Database name to query |
+| `--format FORMAT` | Output format: `pretty` (default), `json`, `table`, `csv` |
 | `--jsonpath PATH` | Field to extract for CSV output (e.g., `srResults`) |
 | `--tree-depth N` | Maximum tree depth (default: 2) |
 | `--no-cache` | Disable caching (for development) |
 
+### Modes of Operation
+
+```bash
+# Start server (loads databases — run once)
+fplca --config fplca.toml server --port 8081
+
+# Single HTTP command (connects to running server, ~0.2s)
+fplca --config fplca.toml [--db NAME] COMMAND [OPTIONS]
+
+# Interactive REPL (auto-starts server if not running)
+fplca --config fplca.toml repl
+```
+
 ### Search
 
 ```bash
-# Find activities by name, geography, product
 fplca activities --name "electricity" --geo "DE" --limit 10
 fplca activities --product "steel" --limit 10 --offset 20
-
-# Find flows by keyword
 fplca flows --query "carbon dioxide" --limit 5
 ```
 
@@ -223,10 +237,10 @@ fplca tree "12345678-..." --tree-depth 3
 # Life cycle inventory
 fplca inventory "12345678-..."
 
-# Impact assessment
-fplca lcia "12345678-..." --method ./EF-3.1.xml
+# Impact assessment (--method takes a method UUID, not a file path)
+fplca lcia "12345678-..." --method METHOD_UUID
 
-# Matrix export (Ecoinvent universal format)
+# Matrix export (Ecoinvent universal format — runs locally, not via HTTP)
 fplca export-matrices ./output_dir
 ```
 
@@ -234,19 +248,19 @@ fplca export-matrices ./output_dir
 
 ```bash
 # Summary: how well does a method match a database?
-fplca --db "Agribalyse 3.2" mapping METHOD_UUID
+fplca --db agribalyse mapping METHOD_UUID
 
 # See every mapped CF with its match strategy (uuid/cas/name/synonym)
-fplca --db "Agribalyse 3.2" mapping METHOD_UUID --matched
+fplca --db agribalyse mapping METHOD_UUID --matched
 
 # List CFs that found no DB flow
-fplca --db "Agribalyse 3.2" mapping METHOD_UUID --unmatched
+fplca --db agribalyse mapping METHOD_UUID --unmatched
 
 # List DB biosphere flows with no CF
-fplca --db "Agribalyse 3.2" mapping METHOD_UUID --uncharacterized
+fplca --db agribalyse mapping METHOD_UUID --uncharacterized
 
-# Machine-readable
-fplca --db "Agribalyse 3.2" mapping METHOD_UUID --matched --format json
+# Machine-readable output
+fplca --db agribalyse mapping METHOD_UUID --matched --format json
 ```
 
 ### Database and Method Management
@@ -277,7 +291,7 @@ fplca method delete ef-31                        # delete
 | Supply chain tree | `GET /database/{db}/activity/{id}/tree` | `tree ID --depth N` |
 | Supply chain graph | `GET /database/{db}/activity/{id}/graph?cutoff=` | — |
 | Life cycle inventory | `GET /database/{db}/activity/{id}/inventory` | `inventory ID` |
-| LCIA (single method) | `GET /database/{db}/activity/{id}/lcia/{methodId}` | `lcia ID --method FILE` |
+| LCIA (single method) | `GET /database/{db}/activity/{id}/lcia/{methodId}` | `lcia ID --method METHOD_UUID` |
 | LCIA batch | `GET /database/{db}/activity/{id}/lcia-batch/{col}` | — |
 | Flow details | `GET /database/{db}/flow/{flowId}` | `flow FLOW_ID` |
 | Flow activities | `GET /database/{db}/flow/{flowId}/activities` | `flow FLOW_ID activities` |
@@ -304,8 +318,8 @@ fplca method delete ef-31                        # delete
 | Compartment mappings | `GET /compartment-mappings` | `compartment-mappings` |
 | Units | `GET /units` | `units` |
 | **Matrix Export** | | |
-| Universal format | — | `export-matrices DIR` |
-| Debug matrices | — | `debug-matrices ID --output FILE` |
+| Universal format | — | `export-matrices DIR` (local only) |
+| Debug matrices | — | `debug-matrices ID --output FILE` (local only) |
 | **Auth** | | |
 | Login | `POST /auth` | — |
 
@@ -356,11 +370,11 @@ docker run -p 8081:8081 -v /path/to/data:/data fplca
 
 ## Performance
 
-Databases are loaded entirely into memory. A schema-aware cache (`.bin.zst` per database, stored in `cache/`) makes subsequent startups fast:
+Databases are loaded entirely into memory. A schema-aware cache (`.bin.zst` per database, stored in `cache/`) makes subsequent startups fast. Once the server is running, CLI commands complete in ~0.2s.
 
 | Database | Cold load | Cached load |
 |----------|-----------|-------------|
-| Ecoinvent 3.12 (25k activities) | ~45s | ~2-3s |
+| Large database (25k activities) | ~45s | ~2-3s |
 | Small sector database | ~2s | <0.5s |
 
 Matrix solving uses PETSc sparse solvers. Inventory computation for a typical supply chain takes under 15 seconds on a large database.
