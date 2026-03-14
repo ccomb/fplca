@@ -78,6 +78,22 @@ globalOptionsParser = do
                 <> help "Disable caching for testing and development"
             )
 
+    serverUrl <-
+        optional $
+            strOption
+                ( long "url"
+                    <> metavar "URL"
+                    <> help "Server URL for HTTP client mode (or set FPLCA_URL env var)"
+                )
+
+    serverPassword <-
+        optional $
+            strOption
+                ( long "password"
+                    <> metavar "PASSWORD"
+                    <> help "Password for authentication (or set FPLCA_PASSWORD env var)"
+                )
+
     pure GlobalOptions{..}
 
 -- | Output format reader for optparse-applicative
@@ -108,6 +124,7 @@ commandParser =
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
             <> OA.command "units" (info (pure Units <**> helper) (progDesc "List unit definitions"))
             <> OA.command "mapping" (info (mappingParser <**> helper) (progDesc "Analyze flow mapping coverage between a method and database"))
+            <> OA.command "repl" (info (pure Repl <**> helper) (progDesc "Interactive REPL over HTTP (connects to running server)"))
         )
 
 -- | Database command parser with optional subcommand (defaults to list)
@@ -165,13 +182,6 @@ serverOptionsParser = do
                 <> metavar "PORT"
                 <> help "Server port (default: 8080)"
             )
-    serverPassword <-
-        optional $
-            strOption
-                ( long "password"
-                    <> metavar "PASSWORD"
-                    <> help "Password for HTTP Basic Auth (or set FPLCA_PASSWORD env var)"
-                )
     serverLoadDbs <-
         optional $
             option
@@ -335,12 +345,12 @@ lciaParser = do
 -- | LCIA options parser
 lciaOptionsParser :: Parser LCIAOptions
 lciaOptionsParser = do
-    lciaMethod <-
-        strOption
+    lciaMethodId <-
+        T.pack <$> strOption
             ( long "method"
                 <> short 'm'
-                <> metavar "FILE"
-                <> help "Characterization method file (XML, required for LCIA)"
+                <> metavar "METHOD_UUID"
+                <> help "Method UUID (method must be loaded on the server)"
             )
 
     lciaOutput <-
@@ -433,14 +443,14 @@ cliParserInfo =
             <> header "fplca - Command-line interface for fpLCA"
             <> footer
                 "Examples:\n\
-                \  fplca --config fplca.toml server --port 8081\n\
-                \  fplca --config fplca.toml --db ecoinvent activities --name electricity --limit 10\n\
-                \  fplca --config fplca.toml activity UUID\n\
-                \  fplca --config fplca.toml tree UUID --depth 3\n\
-                \  fplca --config fplca.toml inventory UUID --format json\n\
-                \  fplca --config fplca.toml lcia UUID --method pef.xml --csv results.csv\n\
-                \  fplca --config fplca.toml database upload mydb.7z --name \"My Database\"\n\
-                \  fplca --config fplca.toml database delete my-database\n\
+                \  fplca --config fplca.toml server --port 8081         # Start server\n\
+                \  fplca --config fplca.toml --db ecoinvent activities --name electricity\n\
+                \  fplca --config fplca.toml --db ecoinvent activity UUID\n\
+                \  fplca --config fplca.toml --db ecoinvent tree UUID --depth 3\n\
+                \  fplca --config fplca.toml --db ecoinvent inventory UUID\n\
+                \  fplca --config fplca.toml --db ecoinvent lcia UUID --method METHOD_UUID\n\
+                \  fplca --config fplca.toml database                   # List databases\n\
+                \  fplca --config fplca.toml database upload mydb.7z --name \"My DB\"\n\
                 \  fplca --config fplca.toml method upload pef.zip --name \"PEF\"\n\
-                \  fplca --config fplca.toml method delete pef"
+                \  fplca --config fplca.toml repl                       # Interactive mode"
         )

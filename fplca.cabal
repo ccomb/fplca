@@ -64,6 +64,8 @@ executable fplca
                      , temporary
                      , process
                      , cassava
+                     , http-client
+                     , haskeline
 
   -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
   if !os(windows)
@@ -100,6 +102,8 @@ executable fplca
                      , CLI.Types
                      , CLI.Parser
                      , CLI.Command
+                     , CLI.Client
+                     , CLI.Repl
                      , EcoSpold.Common
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1

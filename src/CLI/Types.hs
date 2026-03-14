@@ -22,6 +22,8 @@ data GlobalOptions = GlobalOptions
   , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)
   , treeDepth :: Int             -- Maximum tree depth (--tree-depth)
   , noCache :: Bool              -- Disable caching (--no-cache)
+  , serverUrl :: Maybe String    -- Server URL (--url) for HTTP client mode
+  , serverPassword :: Maybe String -- Auth password (--password, FPLCA_PASSWORD, or config)
   } deriving (Eq, Show, Generic)
 
 -- | Main CLI commands - all top-level for maximum discoverability
@@ -50,6 +52,7 @@ data Command =
   | CompartmentMappings                    -- List compartment mappings
   | Units                                  -- List unit definitions
   | Mapping MappingOptions                 -- Flow mapping coverage analysis
+  | Repl                                   -- Interactive REPL over HTTP
   deriving (Eq, Show, Generic)
 
 -- | Database management actions
@@ -76,7 +79,6 @@ data UploadArgs = UploadArgs
 -- | Server-specific options
 data ServerOptions = ServerOptions
   { serverPort :: Int               -- Server port (--port)
-  , serverPassword :: Maybe String  -- Password for HTTP Basic Auth (--password or FPLCA_PASSWORD)
   , serverLoadDbs :: Maybe [Text]   -- Databases to load at startup (--load db1,db2)
   , serverDesktopMode :: Bool       -- Desktop mode (--desktop): print port and minimize logging
   , serverStaticDir :: Maybe FilePath -- Static directory (--static-dir): override default web/dist
@@ -123,7 +125,7 @@ data SearchFlowsOptions = SearchFlowsOptions
 
 -- | LCIA computation options
 data LCIAOptions = LCIAOptions
-  { lciaMethod :: FilePath        -- --method (required for LCIA)
+  { lciaMethodId :: Text          -- Method UUID (methods loaded on server)
   , lciaOutput :: Maybe FilePath  -- --output XML export
   , lciaCSV :: Maybe FilePath     -- --csv export
   } deriving (Eq, Show, Generic)

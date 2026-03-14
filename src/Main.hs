@@ -20,12 +20,15 @@ import Text.Read (readMaybe)
 
 -- fpLCA imports
 import API.Auth (authMiddleware)
+import CLI.Client (resolveRemoteConfig, executeRemoteCommand)
+import CLI.Repl (runRepl)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Types
 import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..))
 import Database.Manager (initDatabaseManager, DatabaseManager(..))
 import Matrix (initializePetscForServer)
+import Network.HTTP.Client (newManager, defaultManagerSettings)
 import Progress
 import Control.Concurrent.STM (readTVarIO)
 
@@ -50,7 +53,9 @@ main = do
 
   case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
     (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
-    (Just cmd, Just cfgFile)                 -> runCLIWithConfig cliConfig cmd cfgFile
+    (Just Repl, Just cfgFile)                -> runReplMode cliConfig cfgFile
+    (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
+    (Just cmd, Just cfgFile)                 -> runCLIViaAPI cliConfig cmd cfgFile
     (Nothing, Just cfgFile)                  -> runConfigLoadOnly cliConfig cfgFile
     _                                        -> die "--config is required"
 
@@ -65,13 +70,35 @@ loadConfigOrDie cfgFile = do
       exitFailure
     Right config -> return config
 
--- | Run CLI command through DatabaseManager
+-- | Commands that require local database access (not available via HTTP)
+isLocalCommand :: Command -> Bool
+isLocalCommand (DebugMatrices _ _) = True
+isLocalCommand (ExportMatrices _)  = True
+isLocalCommand _                   = False
+
+-- | Run local-only CLI commands through DatabaseManager (loads DBs, PETSc)
 runCLIWithConfig :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIWithConfig cliConfig cmd cfgFile = do
   config <- loadConfigOrDie cfgFile
   initializePetscForServer
   dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
   executeCommand cliConfig cmd dbManager
+
+-- | Run CLI commands via HTTP against a running server (lightweight, no DB loading)
+runCLIViaAPI :: CLIConfig -> Command -> FilePath -> IO ()
+runCLIViaAPI cliConfig cmd cfgFile = do
+  config <- loadConfigOrDie cfgFile
+  mgr <- newManager defaultManagerSettings
+  rc <- resolveRemoteConfig (globalOptions cliConfig) config
+  executeRemoteCommand mgr rc (globalOptions cliConfig) cmd
+
+-- | Run interactive REPL over HTTP (auto-starts server if needed)
+runReplMode :: CLIConfig -> FilePath -> IO ()
+runReplMode cliConfig cfgFile = do
+  config <- loadConfigOrDie cfgFile
+  mgr <- newManager defaultManagerSettings
+  rc <- resolveRemoteConfig (globalOptions cliConfig) config
+  runRepl mgr rc (globalOptions cliConfig) cfgFile
 
 -- | Run server with multi-database configuration file
 runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()
@@ -106,9 +133,9 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
   initializePetscForServer
 
   -- Get password from CLI, config, or env var
-  password <- case serverPassword serverOpts of
+  password <- case CLI.Types.serverPassword (globalOptions cliConfig) of
     Just pwd -> return (Just pwd)
-    Nothing -> case scPassword (cfgServer config) of
+    Nothing -> case scPassword (cfgServer effectiveConfig) of
       Just pwd -> return (Just $ T.unpack pwd)
       Nothing -> lookupEnv "FPLCA_PASSWORD"
 

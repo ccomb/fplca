@@ -224,31 +224,12 @@ executeSearchFlowsCommand fmt jsonPathOpt database opts = do
     Left err -> reportServiceError err
     Right result -> outputResult fmt jsonPathOpt result
 
--- | Execute LCIA command with method file
+-- | LCIA is now handled via HTTP client (see CLI.Client)
+-- This stub exists only for the local executeDbCommand pattern match
 executeLCIACommand :: OutputFormat -> Maybe Text -> Database -> T.Text -> LCIAOptions -> IO ()
-executeLCIACommand fmt jsonPathOpt database uuid opts = do
-  reportProgress Info $ "Computing LCIA for activity: " ++ T.unpack uuid
-  reportProgress Info $ "Using method file: " ++ CLI.Types.lciaMethod opts
-
-  case Service.computeLCIA database uuid (CLI.Types.lciaMethod opts) of
-    Left err -> reportServiceError err
-    Right result -> do
-      reportProgress Info "LCIA computation completed"
-      outputResult fmt jsonPathOpt result
-
-      case lciaOutput opts of
-        Just outputPath ->
-          case Service.exportLCIAAsXML result outputPath of
-            Left err -> reportError $ "XML export failed: " ++ show err
-            Right _ -> reportProgress Info $ "Results exported to XML: " ++ outputPath
-        Nothing -> return ()
-
-      case lciaCSV opts of
-        Just csvPath ->
-          case Service.exportLCIAAsCSV result csvPath of
-            Left err -> reportError $ "CSV export failed: " ++ show err
-            Right _ -> reportProgress Info $ "Results exported to CSV: " ++ csvPath
-        Nothing -> return ()
+executeLCIACommand _ _ _ _ _ = do
+  reportError "LCIA is only available via HTTP. Start the server first: fplca --config fplca.toml server"
+  exitFailure
 
 -- | Execute matrix debugging command
 executeDebugMatricesCommand :: Database -> T.Text -> DebugMatricesOptions -> IO ()
