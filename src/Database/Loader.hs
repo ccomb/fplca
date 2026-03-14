@@ -48,6 +48,8 @@ module Database.Loader
       -- * Database Analysis
     , countTotalTechInputs
     , countUnlinkedExchanges
+      -- * Internal Linking
+    , fixSimaProActivityLinks
       -- * Reporting
     , reportCrossDBLinkingStats
     ) where

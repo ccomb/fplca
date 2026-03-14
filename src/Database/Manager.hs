@@ -762,8 +762,9 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                             reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
                             (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
                             reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                            let activityMap = buildActivityMap activities
-                            !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                            let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
+                            linkedDb <- Loader.fixSimaProActivityLinks simpleDb
+                            !db <- buildDatabaseWithMatrices (sdbActivities linkedDb) flowDB unitDB
                             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
                             return $ Right db
                         else do
@@ -776,8 +777,9 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                                     reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
                                     (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
                                     reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                                    let activityMap = buildActivityMap activities
-                                    !db <- buildDatabaseWithMatrices activityMap flowDB unitDB
+                                    let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
+                                    linkedDb <- Loader.fixSimaProActivityLinks simpleDb
+                                    !db <- buildDatabaseWithMatrices (sdbActivities linkedDb) flowDB unitDB
                                     Loader.saveCachedDatabaseWithMatrices dbName path db
                                     return $ Right db
                 FormatUnknown ->
