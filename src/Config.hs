@@ -33,6 +33,7 @@ import TOML (DecodeTOML(..), getField, getFieldOpt, getFieldOptWith, getArrayOf,
 import Control.Monad (when, forM_)
 import System.Directory (doesFileExist)
 import Database.Upload (DatabaseFormat(..))
+import Plugin.Config (PluginConfig)
 
 -- | Main configuration type
 data Config = Config
@@ -42,6 +43,7 @@ data Config = Config
     , cfgFlowSynonyms        :: ![RefDataConfig]
     , cfgCompartmentMappings :: ![RefDataConfig]
     , cfgUnits               :: ![RefDataConfig]
+    , cfgPlugins             :: ![PluginConfig]
     } deriving (Show, Eq, Generic)
 
 -- | Server configuration
@@ -102,6 +104,7 @@ defaultConfig = Config
     , cfgFlowSynonyms = []
     , cfgCompartmentMappings = []
     , cfgUnits = []
+    , cfgPlugins = []
     }
 
 -- TOML Decoders
@@ -114,6 +117,7 @@ instance DecodeTOML Config where
         cfgFlowSynonyms <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "flow-synonyms"
         cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
         cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
+        cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
         pure Config{..}
 
 instance DecodeTOML ServerConfig where

@@ -10,6 +10,7 @@ import qualified Matrix
 import Matrix (Inventory)
 import SharedSolver (SharedSolver)
 import Method.Mapping (computeLCIAScore, mapMethodToFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
+import Plugin.Types (PluginRegistry(..))
 import qualified Data.Vector as V
 import Method.Types (Method(..), MethodCF(..), FlowDirection(..))
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupInfo(..), getDatabase, MethodCollectionStatus(..), getMergedUnitConfig)
@@ -385,7 +386,8 @@ lcaServer dbManager maxTreeDepth password =
     -- Pure helper: compute LCIA result for a single method against an inventory
     computeCategoryResult :: Database -> Inventory -> Method -> LCIAResult
     computeCategoryResult db inventory method =
-        let mappings = mapMethodToFlows db method
+        let mappers = prMappers (dmPlugins dbManager)
+            mappings = mapMethodToFlows mappers db method
             stats = computeMappingStats mappings
             score = computeLCIAScore inventory mappings
             unmappedNames = take 50 [mcfFlowName cf | (cf, Nothing) <- mappings]
@@ -468,7 +470,8 @@ lcaServer dbManager maxTreeDepth password =
     getMethodMapping dbName methodIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let mappings = mapMethodToFlows db method
+        let mappers = prMappers (dmPlugins dbManager)
+            mappings = mapMethodToFlows mappers db method
             stats = computeMappingStats mappings
             totalFactors = length mappings
             coverage = if totalFactors > 0
@@ -505,7 +508,8 @@ lcaServer dbManager maxTreeDepth password =
     getFlowCFMapping dbName methodIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let mappings = mapMethodToFlows db method
+        let mappers = prMappers (dmPlugins dbManager)
+            mappings = mapMethodToFlows mappers db method
             -- Build reverse index: DB flow UUID → (MethodCF, MatchStrategy)
             reverseIndex = M.fromList
                 [(flowId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]

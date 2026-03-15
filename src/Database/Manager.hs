@@ -92,6 +92,8 @@ import Data.List (isPrefixOf, nub, sortOn)
 import Data.Ord (Down(..))
 
 import Config
+import Plugin.Types (PluginRegistry)
+import Plugin.Config (buildRegistry)
 import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -332,6 +334,7 @@ data DatabaseManager = DatabaseManager
     , dmAvailableUnitDefs :: !(TVar (Map Text RefDataConfig))
     , dmLoadedUnitDefs    :: !(TVar (Map Text UnitConversion.UnitConfig))
     , dmNoCache          :: !Bool                              -- Caching disabled flag
+    , dmPlugins          :: !PluginRegistry                    -- Plugin registry (built-in + external)
     }
 
 -- | Initialize database manager from config
@@ -394,6 +397,7 @@ initDatabaseManager config noCache _configPath = do
             , dmAvailableUnitDefs = availableUnitDefsVar
             , dmLoadedUnitDefs = loadedUnitDefsVar
             , dmNoCache = noCache
+            , dmPlugins = buildRegistry (cfgPlugins config)
             }
 
     -- Auto-load active reference data (flow synonyms, compartment mappings, units)

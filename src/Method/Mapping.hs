@@ -4,23 +4,23 @@
 -- | Flow Mapping Engine
 --
 -- Maps characterization factor flows from LCIA methods to database flows
--- using multiple matching strategies:
--- 1. UUID match (exact)
--- 2. CAS match (normalized CAS number)
--- 3. Name match (normalized, compartment-aware)
--- 4. Synonym match (via synonym group, compartment-aware)
+-- using a configurable cascade of MapperHandles (plugin architecture).
+-- Default cascade: UUID → CAS → Name → Synonym.
 module Method.Mapping
     ( -- * Mapping functions
       mapMethodFlows
     , mapMethodToFlows
     , mapSingleFlow
+    , buildMapContext
       -- * LCIA scoring
     , computeLCIAScore
       -- * Matching strategies
     , MatchStrategy(..)
     , findFlowByUUID
     , findFlowByName
+    , findFlowByNameComp
     , findFlowBySynonym
+    , findFlowBySynonymComp
     , findFlowByCAS
       -- * Statistics
     , MappingStats(..)
@@ -30,7 +30,7 @@ module Method.Mapping
 import Data.Foldable (asum)
 import Data.List (find)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
@@ -38,6 +38,7 @@ import Data.UUID (UUID)
 import Matrix (Inventory)
 import Types (Database(..), Flow(..))
 import Method.Types
+import Plugin.Types (MapperHandle(..), MapContext(..), MapQuery(..), MapResult(..))
 import SynonymDB
 
 -- | Matching strategy used to find a flow
@@ -61,42 +62,59 @@ data MappingStats = MappingStats
     , msUnmatched  :: !Int  -- ^ Not matched
     } deriving (Eq, Show)
 
--- | Map all method flows to database flows
---
--- Returns a list of (MethodCF, Maybe (Flow, MatchStrategy)) pairs
+-- | Build a MapContext from a Database (convenience for callers)
+buildMapContext :: Database -> MapContext
+buildMapContext db = MapContext
+    { mcFlowsByUUID = dbFlows db
+    , mcFlowsByName = dbFlowsByName db
+    , mcFlowsByCAS  = dbFlowsByCAS db
+    , mcSynonymDB   = fromMaybe emptySynonymDB (dbSynonymDB db)
+    , mcActivities  = M.empty
+    }
+
+-- | Map all method flows to database flows using mapper handles.
+-- Mappers are tried in priority order (assumed pre-sorted).
 mapMethodFlows
-    :: SynonymDB
-    -> M.Map UUID Flow       -- ^ Flow database indexed by UUID
-    -> M.Map Text [Flow]     -- ^ Biosphere flows indexed by normalized name
-    -> M.Map Text [Flow]     -- ^ Biosphere flows indexed by CAS number
+    :: [MapperHandle]
+    -> MapContext
     -> Method
     -> [(MethodCF, Maybe (Flow, MatchStrategy))]
-mapMethodFlows synDB flowsByUUID flowsByName flowsByCAS method =
-    map (\cf -> (cf, mapSingleFlow synDB flowsByUUID flowsByName flowsByCAS cf))
-        (methodFactors method)
+mapMethodFlows mappers ctx method =
+    map (\cf -> (cf, mapSingleFlow mappers ctx cf)) (methodFactors method)
 
--- | Map a single method CF to a database flow
---
--- Tries matching strategies in order:
--- 1. UUID match
--- 2. CAS match (with compartment preference)
--- 3. Name match (with compartment preference)
--- 4. Synonym match (with compartment preference)
+-- | Map a single CF using the mapper handle cascade.
+-- Each mapper is tried in order; the first match wins.
 mapSingleFlow
-    :: SynonymDB
-    -> M.Map UUID Flow
-    -> M.Map Text [Flow]
-    -> M.Map Text [Flow]
+    :: [MapperHandle]
+    -> MapContext
     -> MethodCF
     -> Maybe (Flow, MatchStrategy)
-mapSingleFlow synDB flowsByUUID flowsByName flowsByCAS cf =
-    let tag s f = fmap (\x -> (x, s)) f
-    in asum
-        [ tag ByUUID    $ findFlowByUUID flowsByUUID (mcfFlowRef cf)
-        , tag ByCAS     $ mcfCAS cf >>= \cas -> findFlowByCAS flowsByCAS cas (mcfCompartment cf)
-        , tag ByName    $ findFlowByNameComp flowsByName (mcfFlowName cf) (mcfCompartment cf)
-        , tag BySynonym $ findFlowBySynonymComp synDB flowsByName (mcfFlowName cf) (mcfCompartment cf)
-        ]
+mapSingleFlow mappers ctx cf =
+    asum [tryMapper m | m <- mappers]
+  where
+    tryMapper m = case mhMatch m ctx (MatchCF cf) of
+        Just mr -> do
+            flow <- M.lookup (mrTargetId mr) (mcFlowsByUUID ctx)
+            pure (flow, strategyFromText (mrStrategy mr))
+        Nothing -> Nothing
+
+-- | Convenience wrapper: map method CFs using the given mappers + DB.
+mapMethodToFlows :: [MapperHandle] -> Database -> Method -> [(MethodCF, Maybe (Flow, MatchStrategy))]
+mapMethodToFlows mappers db = mapMethodFlows mappers (buildMapContext db)
+
+-- | Convert strategy text back to MatchStrategy
+strategyFromText :: Text -> MatchStrategy
+strategyFromText t = case T.toLower t of
+    "uuid"    -> ByUUID
+    "cas"     -> ByCAS
+    "name"    -> ByName
+    "synonym" -> BySynonym
+    "fuzzy"   -> ByFuzzy
+    _         -> ByFuzzy  -- Unknown strategies map to fuzzy
+
+-- ──────────────────────────────────────────────
+-- Low-level matching functions (used by built-in MapperHandles)
+-- ──────────────────────────────────────────────
 
 -- | Find flow by exact UUID match
 findFlowByUUID :: M.Map UUID Flow -> UUID -> Maybe Flow
@@ -105,9 +123,7 @@ findFlowByUUID flowsByUUID uuid = M.lookup uuid flowsByUUID
 -- | Find flow by CAS number with compartment preference
 findFlowByCAS :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
 findFlowByCAS flowsByCAS cas mComp =
-    case M.lookup cas flowsByCAS of
-        Just flows -> Just (pickByCompartment flows mComp)
-        Nothing    -> Nothing
+    fmap (`pickByCompartment` mComp) (M.lookup cas flowsByCAS)
 
 -- | Find flow by normalized name match (compartment-aware)
 findFlowByName :: M.Map Text [Flow] -> Text -> Maybe Flow
@@ -140,7 +156,6 @@ findFlowBySynonymComp synDB flowsByName name mComp =
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
 
 -- | Pick the best flow match based on compartment preference.
--- When multiple flows match by name or CAS, prefer the one matching the CF's compartment.
 pickByCompartment :: [Flow] -> Maybe Compartment -> Flow
 pickByCompartment flows Nothing = head flows
 pickByCompartment flows (Just comp) =
@@ -150,17 +165,14 @@ pickByCompartment flows (Just comp) =
             Just f  -> f
             Nothing -> head flows
   where
-    -- Exact: same medium + subcompartment
     exactCompMatch (Compartment med sub _) f =
         let cat = T.toLower (flowCategory f)
             subcomp = maybe "" T.toLower (flowSubcompartment f)
         in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
 
-    -- Medium only: "air", "water", "soil"
     mediumMatch (Compartment med _ _) f =
         matchMedium med (T.toLower (flowCategory f))
 
-    -- Check if medium matches the flow category (handles "air/urban" etc.)
     matchMedium med cat
         | T.null med  = True
         | med == cat  = True
@@ -181,17 +193,8 @@ computeMappingStats mappings = MappingStats
   where
     count strategy = length $ filter ((== Just strategy) . fmap snd . snd) mappings
 
--- | Convenience wrapper: map method CFs to database flows using DB indexes
-mapMethodToFlows :: Database -> Method -> [(MethodCF, Maybe (Flow, MatchStrategy))]
-mapMethodToFlows db method =
-    let synDB = maybe emptySynonymDB id (dbSynonymDB db)
-    in mapMethodFlows synDB (dbFlows db) (dbFlowsByName db) (dbFlowsByCAS db) method
-
 -- | Compute LCIA score from inventory and flow mappings
---
--- For each mapped flow: score += inventory[flow_uuid] * CF_value
 computeLCIAScore :: Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
 computeLCIAScore inventory mappings =
     sum [qty * mcfValue cf | (cf, Just (flow, _)) <- mappings
                            , Just qty <- [M.lookup (flowId flow) inventory]]
-
