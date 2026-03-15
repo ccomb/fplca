@@ -1,0 +1,6 @@
+cradle:
+  cabal:
+    - path: "src/"
+      component: "fplca:exe:fplca"
+    - path: "test/"
+      component: "fplca:test:acv-tests"
