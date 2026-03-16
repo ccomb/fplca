@@ -22,7 +22,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityInfo (..), ActivitySummary (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SupplyChainResponse(..), VariantRequest(..), VariantResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -54,6 +54,7 @@ type LCAAPI =
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> Get '[JSON] SupplyChainResponse
+                :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "variant" :> ReqBody '[JSON] VariantRequest :> Post '[JSON] VariantResponse
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia-batch" :> Capture "collection" Text :> Get '[JSON] [LCIAResult]
                 :<|> "database" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
@@ -165,6 +166,7 @@ lcaServer dbManager maxTreeDepth password =
         :<|> getActivityInventory
         :<|> getActivityGraph
         :<|> getActivitySupplyChain
+        :<|> postActivityVariant
         :<|> getActivityLCIA
         :<|> getActivityLCIABatch
         :<|> getActivityAnalyze
@@ -336,6 +338,18 @@ lcaServer dbManager maxTreeDepth password =
             Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right supplyChain -> return supplyChain
+
+    -- Activity variant endpoint (Sherman-Morrison substitution)
+    postActivityVariant :: Text -> Text -> VariantRequest -> Handler VariantResponse
+    postActivityVariant dbName processId variantReq = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        result <- liftIO $ Service.createVariant db sharedSolver processId variantReq
+        case result of
+            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left _ -> throwError err500{errBody = "Internal server error"}
+            Right variantResp -> return variantResp
 
     -- Activity LCIA endpoint (single method)
     getActivityLCIA :: Text -> Text -> Text -> Handler LCIAResult

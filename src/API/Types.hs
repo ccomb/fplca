@@ -400,6 +400,36 @@ data SupplyChainPathNode = SupplyChainPathNode
     }
     deriving (Generic)
 
+-- | Variant request — substitute suppliers in the technosphere matrix
+data VariantRequest = VariantRequest
+    { vrSubstitutions :: [Substitution]
+    }
+    deriving (Generic)
+
+-- | A single supplier substitution
+data Substitution = Substitution
+    { subFrom :: Text  -- Original supplier ProcessId
+    , subTo :: Text    -- Replacement supplier ProcessId
+    }
+    deriving (Generic)
+
+-- | Variant response — modified scaling vector and optional inventory
+data VariantResponse = VariantResponse
+    { varOriginalProcessId :: Text
+    , varSubstitutions :: [SubstitutionResult]
+    , varSupplyChain :: [SupplyChainEntry]  -- Variant supply chain (top entries)
+    , varTotalActivities :: Int
+    }
+    deriving (Generic)
+
+-- | Result of a single substitution
+data SubstitutionResult = SubstitutionResult
+    { sbrFrom :: Text
+    , sbrTo :: Text
+    , sbrCoefficient :: Double  -- Exchange amount that was swapped
+    }
+    deriving (Generic)
+
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
@@ -528,6 +558,10 @@ instance ToJSON FlowCFEntry
 instance ToJSON SupplyChainResponse
 instance ToJSON SupplyChainEntry
 instance ToJSON SupplyChainPathNode
+instance ToJSON VariantResponse
+instance ToJSON SubstitutionResult
+instance FromJSON VariantRequest
+instance FromJSON Substitution
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a)

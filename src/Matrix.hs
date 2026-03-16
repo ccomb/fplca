@@ -36,6 +36,7 @@ module Matrix (
     applyBiosphereMatrix,
     computeInventoryMatrix,
     computeInventoryWithDependencies,
+    shermanMorrisonVariant,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
@@ -361,6 +362,53 @@ applyBiosphereMatrix db supplyVec =
 computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
 computeInventoryMatrix db rootProcessId =
     applyBiosphereMatrix db <$> computeScalingVector db rootProcessId
+
+{- |
+Sherman-Morrison rank-1 update for ingredient substitution (~4ms per variant).
+
+Swapping supplier oldSup → newSup for activity 'row' is a rank-1 update to (I-A).
+Instead of re-factorizing (~3s), we reuse the cached factorization:
+
+    x' = x - z · (v^T · x) / (1 + v^T · z)
+
+where z = inv(I-A) · u is one back-substitution, u = coeff·(e_oldSup - e_newSup),
+and v = e_row.
+
+Returns Left if the update is singular (|1 + v^T·z| < epsilon).
+-}
+shermanMorrisonVariant
+    :: Database
+    -> Vector              -- ^ Original scaling vector x
+    -> Int                 -- ^ Activity being modified (row = consumer index)
+    -> Int                 -- ^ Old supplier index (to remove)
+    -> Int                 -- ^ New supplier index (to add)
+    -> Double              -- ^ Exchange coefficient a (amount consumed)
+    -> IO (Either T.Text Vector)  -- ^ Variant scaling vector x'
+shermanMorrisonVariant db x row oldSup newSup coeff = do
+    let n = U.length x
+        -- Build u = coeff · (e_oldSup - e_newSup)
+        u = fromList [if i == oldSup then coeff
+                      else if i == newSup then -coeff
+                      else 0.0
+                     | i <- [0 .. n - 1]]
+    -- Solve (I-A)z = u using cached factorization (~2ms)
+    z <- case dbCachedFactorization db of
+        Just f  -> solveSparseLinearSystemWithFactorization f u
+        Nothing -> do
+            let techTriples = dbTechnosphereTriples db
+                activityCount = dbActivityCount db
+            solveSparseLinearSystem
+                [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+                (fromIntegral activityCount) u
+    -- Apply rank-1 update formula
+    let vtx = x U.! row       -- v^T · x where v = e_row
+        vtz = z U.! row       -- v^T · z
+        denom = 1.0 + vtz
+    if abs denom < 1e-12
+        then return $ Left "Sherman-Morrison update is singular — substitution creates a degenerate supply chain"
+        else do
+            let scale = vtx / denom
+            return $ Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
 
 {- |
 Compute inventory with cross-database dependencies.

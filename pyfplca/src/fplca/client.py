@@ -2,7 +2,7 @@
 
 import requests
 
-from .types import Activity, SupplyChain
+from .types import Activity, SupplyChain, Variant
 
 
 class Client:
@@ -112,6 +112,35 @@ class Client:
         )
         r.raise_for_status()
         return SupplyChain.from_json(r.json())
+
+    # -- Variants (Sherman-Morrison substitution) --
+
+    def create_variant(
+        self,
+        process_id: str,
+        substitutions: list[dict],
+    ) -> Variant:
+        """Create a variant by substituting suppliers.
+
+        Args:
+            process_id: Base activity ProcessId
+            substitutions: List of {"from": old_supplier_pid, "to": new_supplier_pid}
+
+        Returns:
+            Variant with modified supply chain
+        """
+        body = {
+            "vrSubstitutions": [
+                {"subFrom": s["from"], "subTo": s["to"]}
+                for s in substitutions
+            ]
+        }
+        r = requests.post(
+            self._db_url(f"activity/{process_id}/variant"),
+            json=body,
+        )
+        r.raise_for_status()
+        return Variant.from_json(r.json())
 
     # -- Tree --
 

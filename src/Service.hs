@@ -4,16 +4,17 @@
 module Service where
 
 import CLI.Types (DebugMatricesOptions (..))
-import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, toList)
+import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), SupplyChainEntry (..), SupplyChainPathNode (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SubstitutionResult (..), SupplyChainEntry (..), SupplyChainPathNode (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), VariantRequest (..), VariantResponse (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
+import Data.Int (Int32)
 import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -1076,6 +1077,114 @@ reconstructPath parents root target
         | otherwise = case M.lookup node parents of
             Just parent -> go parent (node : acc)
             Nothing -> []
+
+-- | Create a variant by applying Sherman-Morrison rank-1 updates.
+-- Each substitution swaps one supplier for another in the technosphere matrix.
+createVariant :: Database -> SharedSolver -> Text -> VariantRequest
+              -> IO (Either ServiceError VariantResponse)
+createVariant db sharedSolver processIdText varReq = do
+    case resolveActivityAndProcessId db processIdText of
+        Left err -> return $ Left err
+        Right (processId, _rootActivity) -> do
+            case validateProcessIdInMatrixIndex db processId of
+                Left err -> return $ Left err
+                Right () -> do
+                    -- Get original scaling vector
+                    let activityIndex = dbActivityIndex db
+                        demandVec = buildDemandVectorFromIndex activityIndex processId
+                    originalX <- solveWithSharedSolver sharedSolver demandVec
+
+                    -- Apply substitutions sequentially (Sherman-Morrison-Woodbury)
+                    let applySubstitution x sub = do
+                            case (resolveActivityAndProcessId db (subFrom sub),
+                                  resolveActivityAndProcessId db (subTo sub)) of
+                                (Left err, _) -> return $ Left err
+                                (_, Left err) -> return $ Left err
+                                (Right (oldPid, _), Right (newPid, _)) -> do
+                                    -- Find the exchange coefficient from the tech matrix
+                                    let coeff = findTechCoefficient db processId oldPid
+                                    case coeff of
+                                        Nothing -> return $ Left $ MatrixError $
+                                            "No technosphere link from " <> processIdToText db processId
+                                            <> " to supplier " <> subFrom sub
+                                        Just a -> do
+                                            smResult <- shermanMorrisonVariant db x
+                                                (fromIntegral processId)
+                                                (fromIntegral oldPid)
+                                                (fromIntegral newPid) a
+                                            return $ case smResult of
+                                                Left msg -> Left $ MatrixError msg
+                                                Right x' -> Right x'
+
+                    -- Fold substitutions
+                    let subs = vrSubstitutions varReq
+                    result <- foldSubstitutions originalX subs applySubstitution
+
+                    case result of
+                        Left err -> return $ Left err
+                        Right variantX -> do
+                            -- Build response with variant supply chain
+                            let supplyList = toList variantX
+                                entries =
+                                    [ (fromIntegral idx :: ProcessId, val)
+                                    | (idx, val) <- zip [(0 :: Int)..] supplyList
+                                    , abs val > 1e-12
+                                    , fromIntegral idx /= (processId :: ProcessId)
+                                    ]
+                                -- Sort by absolute value descending, take top 100
+                                sorted = take 100 $ L.sortBy (\(_, a) (_, b) -> compare (abs b) (abs a)) entries
+
+                                mkEntry (pid, scalingFactor) =
+                                    let activity = dbActivities db V.! fromIntegral pid
+                                        refAmount = getReferenceProductAmount activity
+                                    in SupplyChainEntry
+                                        { sceProcessId = processIdToText db pid
+                                        , sceName = activityName activity
+                                        , sceLocation = activityLocation activity
+                                        , sceQuantity = scalingFactor * refAmount
+                                        , sceUnit = activityUnit activity
+                                        , sceScalingFactor = scalingFactor
+                                        , scePath = []  -- No BFS for variant (performance)
+                                        }
+
+                                subResults = [ SubstitutionResult
+                                    { sbrFrom = subFrom s
+                                    , sbrTo = subTo s
+                                    , sbrCoefficient = maybe 0 id $
+                                        case resolveActivityAndProcessId db (subFrom s) of
+                                            Right (oldPid, _) -> findTechCoefficient db processId oldPid
+                                            _ -> Nothing
+                                    } | s <- subs ]
+
+                            return $ Right VariantResponse
+                                { varOriginalProcessId = processIdToText db processId
+                                , varSubstitutions = subResults
+                                , varSupplyChain = map mkEntry sorted
+                                , varTotalActivities = length entries
+                                }
+  where
+    foldSubstitutions :: U.Vector Double -> [Substitution]
+                      -> (U.Vector Double -> Substitution -> IO (Either ServiceError (U.Vector Double)))
+                      -> IO (Either ServiceError (U.Vector Double))
+    foldSubstitutions x [] _ = return $ Right x
+    foldSubstitutions x (s:ss) f = do
+        result <- f x s
+        case result of
+            Left (MatrixError msg) -> return $ Left $ MatrixError msg
+            Left err -> return $ Left err
+            Right x' -> foldSubstitutions x' ss f
+
+-- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
+findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double
+findTechCoefficient db consumer supplier =
+    let techTriples = dbTechnosphereTriples db
+        consumerIdx = fromIntegral consumer :: Int32
+        supplierIdx = fromIntegral supplier :: Int32
+        matching = U.filter (\(SparseTriple row col _) -> row == supplierIdx && col == consumerIdx)
+                            techTriples
+    in if U.null matching
+       then Nothing
+       else let SparseTriple _ _ val = U.head matching in Just val
 
 -- | Get available synonym languages (placeholder)
 -- | Compute LCIA scores (placeholder)
