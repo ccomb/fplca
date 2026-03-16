@@ -10,7 +10,7 @@ import SharedSolver (SharedSolver, solveWithSharedSolver)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), SupplyChainEntry (..), SupplyChainPathNode (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
@@ -958,6 +958,124 @@ getFlowActivities db flowIdText = do
                 Just _ ->
                     let activities = getActivitiesUsingFlow db fId
                      in Right $ toJSON activities
+
+-- | Compute the supply chain for an activity using the scaling vector.
+-- Returns all upstream activities with their scaling factors and shortest paths.
+getSupplyChain :: Database -> SharedSolver -> Text -> Maybe Text -> Maybe Int -> Maybe Double
+              -> IO (Either ServiceError SupplyChainResponse)
+getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam = do
+    case resolveActivityAndProcessId db processIdText of
+        Left err -> return $ Left err
+        Right (processId, rootActivity) -> do
+            case validateProcessIdInMatrixIndex db processId of
+                Left err -> return $ Left err
+                Right () -> do
+                    -- Solve (I-A)x = d for scaling vector
+                    let activityIndex = dbActivityIndex db
+                        demandVec = buildDemandVectorFromIndex activityIndex processId
+                    supplyVec <- solveWithSharedSolver sharedSolver demandVec
+                    let supplyList = toList supplyVec
+
+                    -- BFS from root through technosphere matrix for shortest paths
+                    let parentMap = bfsUpstream (dbTechnosphereTriples db) (fromIntegral processId)
+
+                    -- Collect all non-zero entries
+                    let minQ = maybe 0 id minQuantityParam
+                        limit = maybe 100 id limitParam
+                        allEntries =
+                            [ (fromIntegral idx :: ProcessId, val)
+                            | (idx, val) <- zip [(0 :: Int)..] supplyList
+                            , abs val > minQ
+                            , fromIntegral idx /= (processId :: ProcessId)  -- exclude root
+                            ]
+
+                    -- Filter by name (case-insensitive substring)
+                    let nameMatches activity = case nameFilter of
+                            Nothing -> True
+                            Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold (activityName activity)
+
+                        filtered =
+                            [ (pid, val, activity)
+                            | (pid, val) <- allEntries
+                            , let activity = dbActivities db V.! fromIntegral pid
+                            , nameMatches activity
+                            ]
+
+                    -- Sort by quantity descending, apply limit
+                    let sorted = take limit $ L.sortBy (\(_, a, _) (_, b, _) -> compare (abs b) (abs a)) filtered
+
+                    -- Build response entries with paths
+                    let mkEntry (pid, scalingFactor, activity) =
+                            let refAmount = getReferenceProductAmount activity
+                                path = reconstructPath parentMap (fromIntegral processId) (fromIntegral pid)
+                                pathNodes = map (\i ->
+                                    let a = dbActivities db V.! i
+                                    in SupplyChainPathNode (processIdToText db (fromIntegral i)) (activityName a)
+                                    ) path
+                            in SupplyChainEntry
+                                { sceProcessId = processIdToText db pid
+                                , sceName = activityName activity
+                                , sceLocation = activityLocation activity
+                                , sceQuantity = scalingFactor * refAmount
+                                , sceUnit = activityUnit activity
+                                , sceScalingFactor = scalingFactor
+                                , scePath = pathNodes
+                                }
+
+                        rootSummary = ActivitySummary
+                            { prsId = processIdToText db processId
+                            , prsName = activityName rootActivity
+                            , prsLocation = activityLocation rootActivity
+                            , prsProduct = maybe (activityName rootActivity) id
+                                (getReferenceProductName (dbFlows db) rootActivity)
+                            , prsProductAmount = getReferenceProductAmount rootActivity
+                            , prsProductUnit = activityUnit rootActivity
+                            }
+
+                    return $ Right SupplyChainResponse
+                        { scrRoot = rootSummary
+                        , scrTotalActivities = length allEntries
+                        , scrFilteredActivities = length filtered
+                        , scrSupplyChain = map mkEntry sorted
+                        }
+
+-- | Get reference product amount for an activity (defaults to 1.0)
+getReferenceProductAmount :: Activity -> Double
+getReferenceProductAmount activity =
+    case [exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex] of
+        (amt:_) -> amt
+        [] -> 1.0
+
+-- | BFS from root through the technosphere matrix.
+-- A[row, col] > 0 means activity col consumes product from activity row.
+-- Returns parent map: node → parent (for path reconstruction).
+bfsUpstream :: U.Vector SparseTriple -> Int -> M.Map Int Int
+bfsUpstream techTriples root =
+    let -- Build adjacency: consumer (col) → [supplier (row)]
+        adj = M.fromListWith (++) [(fromIntegral col, [fromIntegral row])
+                                  | SparseTriple row col _val <- U.toList techTriples
+                                  , row /= col]
+        -- BFS
+        go [] parents = parents
+        go (node:queue) parents =
+            let neighbors = M.findWithDefault [] node adj
+                unvisited = filter (`M.notMember` parents) neighbors
+                parents' = L.foldl' (\p n -> M.insert n node p) parents unvisited
+            in go (queue ++ unvisited) parents'
+    in go [root] (M.singleton root root)
+
+-- | Reconstruct path from root to target using BFS parent map
+reconstructPath :: M.Map Int Int -> Int -> Int -> [Int]
+reconstructPath parents root target
+    | target == root = [root]
+    | M.notMember target parents = []  -- unreachable
+    | otherwise = reverse $ go target []
+  where
+    go node acc
+        | node == root = root : acc
+        | otherwise = case M.lookup node parents of
+            Just parent -> go parent (node : acc)
+            Nothing -> []
 
 -- | Get available synonym languages (placeholder)
 -- | Compute LCIA scores (placeholder)

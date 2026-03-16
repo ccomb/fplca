@@ -1,0 +1,140 @@
+"""HTTP client for all fpLCA API endpoints."""
+
+import requests
+
+from .types import Activity, SupplyChain
+
+
+class Client:
+    """HTTP client for the fpLCA REST API.
+
+    Usage::
+
+        c = Client(db="agribalyse-3.2")
+        plants = c.search_activities(name="at plant")
+        chain = c.get_supply_chain(plants[0].process_id, name="at farm")
+    """
+
+    def __init__(self, base_url: str = "http://localhost:8081", db: str = ""):
+        self.base_url = base_url.rstrip("/")
+        self.db = db
+
+    def _db_url(self, path: str) -> str:
+        return f"{self.base_url}/api/v1/database/{self.db}/{path}"
+
+    def _api_url(self, path: str) -> str:
+        return f"{self.base_url}/api/v1/{path}"
+
+    def use(self, db_name: str) -> "Client":
+        """Return a new client targeting a different database."""
+        return Client(base_url=self.base_url, db=db_name)
+
+    # -- Database management --
+
+    def list_databases(self) -> list[dict]:
+        r = requests.get(self._api_url("database"))
+        r.raise_for_status()
+        return r.json()["dlrDatabases"]
+
+    def load_database(self, db_name: str) -> dict:
+        r = requests.post(self._api_url(f"database/{db_name}/load"))
+        r.raise_for_status()
+        return r.json()
+
+    def unload_database(self, db_name: str) -> dict:
+        r = requests.post(self._api_url(f"database/{db_name}/unload"))
+        r.raise_for_status()
+        return r.json()
+
+    # -- Search --
+
+    def search_activities(
+        self,
+        name: str | None = None,
+        geo: str | None = None,
+        product: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Activity]:
+        params: dict = {"limit": limit, "offset": offset}
+        if name:
+            params["name"] = name
+        if geo:
+            params["geo"] = geo
+        if product:
+            params["product"] = product
+        r = requests.get(self._db_url("activities"), params=params)
+        r.raise_for_status()
+        return [Activity.from_json(a) for a in r.json()["srResults"]]
+
+    def search_flows(self, query: str | None = None, limit: int = 100) -> list[dict]:
+        params: dict = {"limit": limit}
+        if query:
+            params["q"] = query
+        r = requests.get(self._db_url("flows"), params=params)
+        r.raise_for_status()
+        return r.json()["srResults"]
+
+    # -- Activity details --
+
+    def get_activity(self, process_id: str) -> dict:
+        r = requests.get(self._db_url(f"activity/{process_id}"))
+        r.raise_for_status()
+        return r.json()
+
+    def get_inputs(self, process_id: str) -> list[dict]:
+        r = requests.get(self._db_url(f"activity/{process_id}/inputs"))
+        r.raise_for_status()
+        return r.json()
+
+    def get_outputs(self, process_id: str) -> list[dict]:
+        r = requests.get(self._db_url(f"activity/{process_id}/outputs"))
+        r.raise_for_status()
+        return r.json()
+
+    # -- Supply chain (scaling vector based) --
+
+    def get_supply_chain(
+        self,
+        process_id: str,
+        name: str | None = None,
+        limit: int = 100,
+        min_quantity: float = 0,
+    ) -> SupplyChain:
+        params: dict = {"limit": limit}
+        if name:
+            params["name"] = name
+        if min_quantity > 0:
+            params["min-quantity"] = min_quantity
+        r = requests.get(
+            self._db_url(f"activity/{process_id}/supply-chain"),
+            params=params,
+        )
+        r.raise_for_status()
+        return SupplyChain.from_json(r.json())
+
+    # -- Tree --
+
+    def get_tree(self, process_id: str) -> dict:
+        r = requests.get(self._db_url(f"activity/{process_id}/tree"))
+        r.raise_for_status()
+        return r.json()
+
+    # -- Inventory & LCIA --
+
+    def get_inventory(self, process_id: str) -> dict:
+        r = requests.get(self._db_url(f"activity/{process_id}/inventory"))
+        r.raise_for_status()
+        return r.json()
+
+    def get_lcia(self, process_id: str, method_id: str) -> dict:
+        r = requests.get(self._db_url(f"activity/{process_id}/lcia/{method_id}"))
+        r.raise_for_status()
+        return r.json()
+
+    def get_lcia_batch(self, process_id: str, collection: str) -> list[dict]:
+        r = requests.get(
+            self._db_url(f"activity/{process_id}/lcia-batch/{collection}")
+        )
+        r.raise_for_status()
+        return r.json()

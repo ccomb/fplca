@@ -32,6 +32,8 @@ Performance characteristics:
 module Matrix (
     Vector,
     Inventory,
+    computeScalingVector,
+    applyBiosphereMatrix,
     computeInventoryMatrix,
     computeInventoryWithDependencies,
     buildDemandVectorFromIndex,
@@ -324,37 +326,41 @@ Output:
 Performance: ~7s total for full Ecoinvent database (25K products)
 - 3.5s cache loading + 3s solver + 0.5s biosphere calculation
 -}
-computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
-computeInventoryMatrix db rootProcessId = do
+{- |
+Compute the scaling vector by solving (I - A)x = d.
+
+Returns the supply vector where x[i] is the scaling factor for activity i
+(how much of activity i is needed to produce one unit of the root activity).
+-}
+computeScalingVector :: Database -> ProcessId -> IO Vector
+computeScalingVector db rootProcessId = do
     let activityCount = dbActivityCount db
-        bioFlowCount = dbBiosphereCount db
-
-        -- Use pre-built sparse coordinate lists from database
         techTriples = dbTechnosphereTriples db
-        bioTriples = dbBiosphereTriples db
         activityIndex = dbActivityIndex db
-        -- CRITICAL FIX: Rebuild bioFlowIndex from dbBiosphereFlows to ensure consistency
-        -- with the B matrix which was built using indices from the same vector.
-        -- Storing both the Map and the vector is redundant and error-prone.
-        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0..]
-
-        -- Build demand vector (will error if ProcessId not in index - validation happens at service layer)
         demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
-
-    -- Solve sparse LCA equation: (I - A) * supply = demand using PETSc
-    -- Try to use cached factorization for faster solving
-    supplyVec <- case dbCachedFactorization db of
+    case dbCachedFactorization db of
         Just factorization -> solveSparseLinearSystemWithFactorization factorization demandVec
         Nothing -> solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) demandVec
 
-    let -- Calculate inventory using sparse biosphere matrix: g = B * supply
-        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
+{- |
+Apply the biosphere matrix to a scaling vector: g = B * x.
 
-        -- Build result map using the stored bioFlowIndex (ensures consistency with bioTriples)
-        result = M.fromList [(uuid, inventoryVec U.! idx)
-                           | (uuid, idx) <- M.toList bioFlowIndex
-                           , idx < U.length inventoryVec]
-    return result
+Converts the scaling vector (activity scaling factors) into a biosphere inventory
+(environmental flows) by multiplying with the biosphere intervention matrix.
+-}
+applyBiosphereMatrix :: Database -> Vector -> Inventory
+applyBiosphereMatrix db supplyVec =
+    let bioFlowCount = dbBiosphereCount db
+        bioTriples = dbBiosphereTriples db
+        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0..]
+        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
+    in M.fromList [(uuid, inventoryVec U.! idx)
+                  | (uuid, idx) <- M.toList bioFlowIndex
+                  , idx < U.length inventoryVec]
+
+computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
+computeInventoryMatrix db rootProcessId =
+    applyBiosphereMatrix db <$> computeScalingVector db rootProcessId
 
 {- |
 Compute inventory with cross-database dependencies.

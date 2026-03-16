@@ -372,6 +372,34 @@ data UploadResponse = UploadResponse
     }
     deriving (Generic)
 
+-- | Supply chain response — all upstream activities with scaling factors
+data SupplyChainResponse = SupplyChainResponse
+    { scrRoot :: ActivitySummary
+    , scrTotalActivities :: Int
+    , scrFilteredActivities :: Int
+    , scrSupplyChain :: [SupplyChainEntry]
+    }
+    deriving (Generic)
+
+-- | A single entry in the supply chain
+data SupplyChainEntry = SupplyChainEntry
+    { sceProcessId :: Text
+    , sceName :: Text
+    , sceLocation :: Text
+    , sceQuantity :: Double       -- scalingFactor × reference product amount
+    , sceUnit :: Text
+    , sceScalingFactor :: Double   -- raw value from scaling vector
+    , scePath :: [SupplyChainPathNode]  -- shortest path from root
+    }
+    deriving (Generic)
+
+-- | A node in the supply chain path
+data SupplyChainPathNode = SupplyChainPathNode
+    { scpProcessId :: Text
+    , scpName :: Text
+    }
+    deriving (Generic)
+
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
@@ -497,6 +525,9 @@ instance ToJSON MappingStatus
 instance ToJSON UnmappedFlowAPI
 instance ToJSON FlowCFMapping
 instance ToJSON FlowCFEntry
+instance ToJSON SupplyChainResponse
+instance ToJSON SupplyChainEntry
+instance ToJSON SupplyChainPathNode
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a)

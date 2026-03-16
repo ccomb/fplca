@@ -42,8 +42,8 @@ cache/
 !README.md
 !CHANGELOG.md
 
-# temporary python stuff
-pyproject.toml
+# temporary python stuff (not pyfplca/)
+/pyproject.toml
 
 # hidden files
 .*

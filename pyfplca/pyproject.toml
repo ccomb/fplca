@@ -1,0 +1,13 @@
+[project]
+name = "pyfplca"
+version = "0.1.0"
+description = "Python client for fpLCA — Life Cycle Assessment engine"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends._legacy:_Backend"
