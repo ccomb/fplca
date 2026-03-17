@@ -23,7 +23,7 @@ import Text.Read (readMaybe)
 
 -- fpLCA imports
 import API.Auth (authMiddleware)
-import CLI.Client (resolveRemoteConfig, executeRemoteCommand)
+import CLI.Client (RemoteConfig(..), resolveRemoteConfig, executeRemoteCommand)
 import CLI.Repl (runRepl)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
@@ -60,6 +60,7 @@ main = do
     (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
     (Just cmd, Just cfgFile)                 -> runCLIViaAPI cliConfig cmd cfgFile
     (Nothing, Just cfgFile)                  -> runConfigLoadOnly cliConfig cfgFile
+    (Just Stop, Nothing)                     -> runStopWithoutConfig cliConfig
     _                                        -> die "--config is required"
 
 -- | Load config or die with error message
@@ -93,7 +94,7 @@ runCLIViaAPI :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIViaAPI cliConfig cmd cfgFile = do
   config <- loadConfigOrDie cfgFile
   mgr <- newManager defaultManagerSettings
-  rc <- resolveRemoteConfig (globalOptions cliConfig) config
+  rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
   executeRemoteCommand mgr rc (globalOptions cliConfig) cmd
 
 -- | Run interactive REPL over HTTP (auto-starts server if needed)
@@ -101,8 +102,15 @@ runReplMode :: CLIConfig -> FilePath -> IO ()
 runReplMode cliConfig cfgFile = do
   config <- loadConfigOrDie cfgFile
   mgr <- newManager defaultManagerSettings
-  rc <- resolveRemoteConfig (globalOptions cliConfig) config
+  rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
   runRepl mgr rc (globalOptions cliConfig) cfgFile
+
+-- | Run stop without config — resolveRemoteConfig falls back to env vars / defaults
+runStopWithoutConfig :: CLIConfig -> IO ()
+runStopWithoutConfig cliConfig = do
+    mgr <- newManager defaultManagerSettings
+    rc <- resolveRemoteConfig (globalOptions cliConfig) Nothing
+    executeRemoteCommand mgr rc (globalOptions cliConfig) Stop
 
 -- | Run server with multi-database configuration file
 runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()

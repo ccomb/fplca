@@ -125,6 +125,7 @@ commandParser =
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
             <> OA.command "units" (info (pure Units <**> helper) (progDesc "List unit definitions"))
             <> OA.command "mapping" (info (mappingParser <**> helper) (progDesc "Analyze flow mapping coverage between a method and database"))
+            <> OA.command "stop" (info (pure Stop <**> helper) (progDesc "Stop running server (uses --config or --url to find it)"))
             <> OA.command "repl" (info (pure Repl <**> helper) (progDesc "Interactive REPL over HTTP (connects to running server)"))
         )
 

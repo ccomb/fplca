@@ -53,6 +53,7 @@ data Command =
   | CompartmentMappings                    -- List compartment mappings
   | Units                                  -- List unit definitions
   | Mapping MappingOptions                 -- Flow mapping coverage analysis
+  | Stop                                   -- Stop running server
   | Repl                                   -- Interactive REPL over HTTP
   deriving (Eq, Show, Generic)
 

@@ -42,21 +42,23 @@ data RemoteConfig = RemoteConfig
     , rcAuth    :: Maybe String
     }
 
--- | Resolve server URL and auth from CLI flags, env vars, and config
-resolveRemoteConfig :: GlobalOptions -> Config -> IO RemoteConfig
-resolveRemoteConfig globalOpts config = do
+-- | Resolve server URL and auth from CLI flags, env vars, and config (optional)
+resolveRemoteConfig :: GlobalOptions -> Maybe Config -> IO RemoteConfig
+resolveRemoteConfig globalOpts mbConfig = do
     url <- case serverUrl globalOpts of
         Just u  -> return u
         Nothing -> do
             envUrl <- lookupEnv "FPLCA_URL"
             case envUrl of
                 Just u  -> return u
-                Nothing -> do
-                    let sc = cfgServer config
-                    return $ "http://" ++ T.unpack (scHost sc) ++ ":" ++ show (scPort sc)
+                Nothing -> case cfgServer <$> mbConfig of
+                    Just sc -> return $ "http://" ++ T.unpack (scHost sc) ++ ":" ++ show (scPort sc)
+                    Nothing -> do
+                        reportError "No server URL: use --config, --url, or FPLCA_URL"
+                        exitFailure
     pwd <- case serverPassword globalOpts of
         Just p  -> return (Just p)
-        Nothing -> case scPassword (cfgServer config) of
+        Nothing -> case mbConfig >>= scPassword . cfgServer of
             Just p  -> return (Just $ T.unpack p)
             Nothing -> lookupEnv "FPLCA_PASSWORD"
     return RemoteConfig { rcBaseUrl = url, rcAuth = pwd }
@@ -147,6 +149,12 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             db <- resolveDbName mgr rc (dbName globalOpts)
             let methodId = T.unpack (mappingMethodId opts)
             apiGet mgr rc (dbPath db ++ "/method/" ++ methodId ++ "/mapping") >>= output fmt jp
+
+        Stop -> do
+            result <- apiPost mgr rc "/api/v1/shutdown" (object [])
+            case result of
+                Right _  -> putStrLn $ "Server at " ++ rcBaseUrl rc ++ " stopped"
+                Left err -> reportError err >> exitFailure
 
         -- Local-only commands should never reach here
         Server _         -> reportError "Server command is local-only" >> exitFailure
