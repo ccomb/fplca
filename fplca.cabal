@@ -64,6 +64,7 @@ executable fplca
                      , cassava
                      , http-client
                      , haskeline
+                     , megaparsec
 
   -- Unix-specific dependency for SIGPIPE handling (not available on Windows)
   if !os(windows)
@@ -106,6 +107,7 @@ executable fplca
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser
+                     , SimaPro.Expr
                      , ILCD.Parser
                      , Plugin.Types
                      , Plugin.Builtin
@@ -166,6 +168,7 @@ test-suite acv-tests
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser
+                     , SimaPro.Expr
                      , ILCD.Parser
                      , Plugin.Types
                      , Plugin.Builtin
@@ -202,4 +205,5 @@ test-suite acv-tests
                      , toml-reader
                      , http-client
                      , http-types
+                     , megaparsec
   default-language:    Haskell2010

@@ -392,6 +392,8 @@ buildActivity flowInfoMap flowDB unitDB p = Activity
     , activityLocation = iprLocation p
     , activityUnit = refUnit
     , exchanges = map (mkExchange (iprRefFlowIdx p)) (iprExchanges p)
+    , activityParams = M.empty
+    , activityParamExprs = M.empty
     }
   where
     refUnit = case findRefExchange p of

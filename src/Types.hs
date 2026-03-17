@@ -184,6 +184,8 @@ data Activity = Activity
     , activityLocation :: !Text -- Code de localisation (ex: FR, RER)
     , activityUnit :: !Text -- Unité de référence
     , exchanges :: ![Exchange] -- Liste des échanges
+    , activityParams :: !(M.Map Text Double) -- Resolved SimaPro parameter values
+    , activityParamExprs :: !(M.Map Text Text) -- Raw SimaPro parameter expressions (for re-evaluation)
     }
     deriving (Generic, NFData, Store)
 

@@ -10,14 +10,17 @@ class Client:
 
     Usage::
 
-        c = Client(db="agribalyse-3.2")
+        c = Client(db="agribalyse-3.2", password="1234")
         plants = c.search_activities(name="at plant")
         chain = c.get_supply_chain(plants[0].process_id, name="at farm")
     """
 
-    def __init__(self, base_url: str = "http://localhost:8081", db: str = ""):
+    def __init__(self, base_url: str = "http://localhost:8081", db: str = "", password: str = ""):
         self.base_url = base_url.rstrip("/")
         self.db = db
+        self._session = requests.Session()
+        if password:
+            self._session.headers["Authorization"] = f"Bearer {password}"
 
     def _db_url(self, path: str) -> str:
         return f"{self.base_url}/api/v1/database/{self.db}/{path}"
@@ -26,23 +29,27 @@ class Client:
         return f"{self.base_url}/api/v1/{path}"
 
     def use(self, db_name: str) -> "Client":
-        """Return a new client targeting a different database."""
-        return Client(base_url=self.base_url, db=db_name)
+        """Return a new client targeting a different database (shares session)."""
+        c = Client.__new__(Client)
+        c.base_url = self.base_url
+        c.db = db_name
+        c._session = self._session
+        return c
 
     # -- Database management --
 
     def list_databases(self) -> list[dict]:
-        r = requests.get(self._api_url("database"))
+        r = self._session.get(self._api_url("database"))
         r.raise_for_status()
         return r.json()["dlrDatabases"]
 
     def load_database(self, db_name: str) -> dict:
-        r = requests.post(self._api_url(f"database/{db_name}/load"))
+        r = self._session.post(self._api_url(f"database/{db_name}/load"))
         r.raise_for_status()
         return r.json()
 
     def unload_database(self, db_name: str) -> dict:
-        r = requests.post(self._api_url(f"database/{db_name}/unload"))
+        r = self._session.post(self._api_url(f"database/{db_name}/unload"))
         r.raise_for_status()
         return r.json()
 
@@ -63,7 +70,7 @@ class Client:
             params["geo"] = geo
         if product:
             params["product"] = product
-        r = requests.get(self._db_url("activities"), params=params)
+        r = self._session.get(self._db_url("activities"), params=params)
         r.raise_for_status()
         return [Activity.from_json(a) for a in r.json()["srResults"]]
 
@@ -71,24 +78,24 @@ class Client:
         params: dict = {"limit": limit}
         if query:
             params["q"] = query
-        r = requests.get(self._db_url("flows"), params=params)
+        r = self._session.get(self._db_url("flows"), params=params)
         r.raise_for_status()
         return r.json()["srResults"]
 
     # -- Activity details --
 
     def get_activity(self, process_id: str) -> dict:
-        r = requests.get(self._db_url(f"activity/{process_id}"))
+        r = self._session.get(self._db_url(f"activity/{process_id}"))
         r.raise_for_status()
         return r.json()
 
     def get_inputs(self, process_id: str) -> list[dict]:
-        r = requests.get(self._db_url(f"activity/{process_id}/inputs"))
+        r = self._session.get(self._db_url(f"activity/{process_id}/inputs"))
         r.raise_for_status()
         return r.json()
 
     def get_outputs(self, process_id: str) -> list[dict]:
-        r = requests.get(self._db_url(f"activity/{process_id}/outputs"))
+        r = self._session.get(self._db_url(f"activity/{process_id}/outputs"))
         r.raise_for_status()
         return r.json()
 
@@ -106,7 +113,7 @@ class Client:
             params["name"] = name
         if min_quantity > 0:
             params["min-quantity"] = min_quantity
-        r = requests.get(
+        r = self._session.get(
             self._db_url(f"activity/{process_id}/supply-chain"),
             params=params,
         )
@@ -135,7 +142,7 @@ class Client:
                 for s in substitutions
             ]
         }
-        r = requests.post(
+        r = self._session.post(
             self._db_url(f"activity/{process_id}/variant"),
             json=body,
         )
@@ -145,24 +152,24 @@ class Client:
     # -- Tree --
 
     def get_tree(self, process_id: str) -> dict:
-        r = requests.get(self._db_url(f"activity/{process_id}/tree"))
+        r = self._session.get(self._db_url(f"activity/{process_id}/tree"))
         r.raise_for_status()
         return r.json()
 
     # -- Inventory & LCIA --
 
     def get_inventory(self, process_id: str) -> dict:
-        r = requests.get(self._db_url(f"activity/{process_id}/inventory"))
+        r = self._session.get(self._db_url(f"activity/{process_id}/inventory"))
         r.raise_for_status()
         return r.json()
 
     def get_lcia(self, process_id: str, method_id: str) -> dict:
-        r = requests.get(self._db_url(f"activity/{process_id}/lcia/{method_id}"))
+        r = self._session.get(self._db_url(f"activity/{process_id}/lcia/{method_id}"))
         r.raise_for_status()
         return r.json()
 
     def get_lcia_batch(self, process_id: str, collection: str) -> list[dict]:
-        r = requests.get(
+        r = self._session.get(
             self._db_url(f"activity/{process_id}/lcia-batch/{collection}")
         )
         r.raise_for_status()

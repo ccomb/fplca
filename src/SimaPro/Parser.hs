@@ -17,6 +17,7 @@ module SimaPro.Parser
     ) where
 
 import Types
+import qualified SimaPro.Expr as Expr
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
@@ -72,7 +73,9 @@ data ProductRow = ProductRow
     { prName :: !Text
     , prUnit :: !Text
     , prAmount :: !Double
+    , prAmountRaw :: !Text
     , prAllocation :: !Double
+    , prAllocRaw :: !Text
     , prWasteType :: !Text
     , prCategory :: !Text
     , prComment :: !Text
@@ -84,6 +87,7 @@ data TechExchangeRow = TechExchangeRow
     { terName :: !Text
     , terUnit :: !Text
     , terAmount :: !Double
+    , terAmountRaw :: !Text
     , terUncertainty :: !Text
     , terComment :: !Text
     }
@@ -95,6 +99,7 @@ data BioExchangeRow = BioExchangeRow
     , berCompartment :: !Text
     , berUnit :: !Text
     , berAmount :: !Double
+    , berAmountRaw :: !Text
     , berUncertainty :: !Text
     , berComment :: !Text
     }
@@ -126,6 +131,8 @@ data ProcessBlock = ProcessBlock
     , pbEmissionsWater :: ![BioExchangeRow]
     , pbEmissionsSoil :: ![BioExchangeRow]
     , pbFinalWaste :: ![BioExchangeRow]
+    , pbInputParams :: ![(Text, Text)]   -- name -> raw value
+    , pbCalcParams  :: ![(Text, Text)]   -- name -> expression
     }
     deriving (Show, Eq)
 
@@ -152,6 +159,8 @@ emptyProcessBlock = ProcessBlock
     , pbEmissionsWater = []
     , pbEmissionsSoil = []
     , pbFinalWaste = []
+    , pbInputParams = []
+    , pbCalcParams = []
     }
 
 -- ============================================================================
@@ -172,6 +181,10 @@ data SectionType
     | SecFinalWaste
     | SecInputParams
     | SecCalcParams
+    | SecDbInputParams
+    | SecDbCalcParams
+    | SecProjInputParams
+    | SecProjCalcParams
     | SecNone
     deriving (Show, Eq)
 
@@ -190,6 +203,10 @@ data ParseAcc = ParseAcc
     , paCurrentBlock :: !ProcessBlock
     , paBlocks :: ![ProcessBlock]
     , paLineNum :: !Int
+    , paDbInputParams   :: ![(Text, Text)]
+    , paDbCalcParams    :: ![(Text, Text)]
+    , paProjInputParams :: ![(Text, Text)]
+    , paProjCalcParams  :: ![(Text, Text)]
     }
 
 -- ============================================================================
@@ -245,6 +262,10 @@ detectSection line = case BS8.strip line of
     "Final waste flows" -> Just SecFinalWaste
     "Input parameters" -> Just SecInputParams
     "Calculated parameters" -> Just SecCalcParams
+    "Database Input parameters" -> Just SecDbInputParams
+    "Database Calculated parameters" -> Just SecDbCalcParams
+    "Project Input parameters" -> Just SecProjInputParams
+    "Project Calculated parameters" -> Just SecProjCalcParams
     "Non material emissions" -> Just SecNone  -- Ignore
     "Social issues" -> Just SecNone
     "Economic issues" -> Just SecNone
@@ -294,16 +315,30 @@ splitCSV delim bs =
         Right rows | not (V.null rows) -> V.toList (V.head rows)
         _ -> BS8.split delim bs  -- fallback to naive on parse error
 
+-- | Parse a parameter row: name;value_or_expression;...
+parseParamRow :: SimaProConfig -> BS.ByteString -> Maybe (Text, Text)
+parseParamRow cfg line =
+    let fields = splitCSV (spDelimiter cfg) line
+    in case fields of
+        (name:value:_) ->
+            let n = decodeBS (BS8.strip name)
+                v = Expr.normalizeExpr (spDecimal cfg) (decodeBS (BS8.strip value))
+            in if T.null n then Nothing else Just (n, v)
+        _ -> Nothing
+
 -- | Parse a product row (ByteString input, Text output)
 parseProductRow :: SimaProConfig -> BS.ByteString -> Maybe ProductRow
 parseProductRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
+        norm = Expr.normalizeExpr (spDecimal cfg) . decodeBS . BS8.strip
     in case fields of
         (name:unit:amount:alloc:waste:cat:rest) -> Just ProductRow
             { prName = decodeBS (BS8.strip name)
             , prUnit = decodeBS (BS8.strip unit)
             , prAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , prAmountRaw = norm amount
             , prAllocation = parseAmount (spDecimal cfg) (BS8.strip alloc)
+            , prAllocRaw = norm alloc
             , prWasteType = decodeBS (BS8.strip waste)
             , prCategory = decodeBS (BS8.strip cat)
             , prComment = decodeBS (BS8.intercalate ";" rest)
@@ -314,11 +349,13 @@ parseProductRow cfg line =
 parseTechRow :: SimaProConfig -> BS.ByteString -> Maybe TechExchangeRow
 parseTechRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
+        norm = Expr.normalizeExpr (spDecimal cfg) . decodeBS . BS8.strip
     in case fields of
         (name:unit:amount:unc:_:_:_:rest) -> Just TechExchangeRow
             { terName = decodeBS (BS8.strip name)
             , terUnit = decodeBS (BS8.strip unit)
             , terAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , terAmountRaw = norm amount
             , terUncertainty = decodeBS (BS8.strip unc)
             , terComment = decodeBS (BS8.intercalate ";" rest)
             }
@@ -326,6 +363,7 @@ parseTechRow cfg line =
             { terName = decodeBS (BS8.strip name)
             , terUnit = decodeBS (BS8.strip unit)
             , terAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , terAmountRaw = norm amount
             , terUncertainty = ""
             , terComment = decodeBS (BS8.intercalate ";" rest)
             }
@@ -335,12 +373,14 @@ parseTechRow cfg line =
 parseBioRow :: SimaProConfig -> BS.ByteString -> Maybe BioExchangeRow
 parseBioRow cfg line =
     let fields = splitCSV (spDelimiter cfg) line
+        norm = Expr.normalizeExpr (spDecimal cfg) . decodeBS . BS8.strip
     in case fields of
         (name:compartment:unit:amount:unc:_:_:_:rest) -> Just BioExchangeRow
             { berName = decodeBS (BS8.strip name)
             , berCompartment = decodeBS (BS8.strip compartment)
             , berUnit = decodeBS (BS8.strip unit)
             , berAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , berAmountRaw = norm amount
             , berUncertainty = decodeBS (BS8.strip unc)
             , berComment = decodeBS (BS8.intercalate ";" rest)
             }
@@ -349,6 +389,7 @@ parseBioRow cfg line =
             , berCompartment = decodeBS (BS8.strip compartment)
             , berUnit = decodeBS (BS8.strip unit)
             , berAmount = parseAmount (spDecimal cfg) (BS8.strip amount)
+            , berAmountRaw = norm amount
             , berUncertainty = ""
             , berComment = decodeBS (BS8.intercalate ";" rest)
             }
@@ -391,9 +432,22 @@ processLine acc@ParseAcc{..} line
     | Just sec <- detectSection line =
         acc { paState = InSection sec }
 
-    -- In a section, parse row
+    -- In a section, parse row (route db/project params to ParseAcc, process params to block)
     | InSection sec <- paState, not (BS.null (BS8.strip line)) =
-        acc { paCurrentBlock = addRowToBlock paConfig sec line paCurrentBlock }
+        case sec of
+            SecDbInputParams -> case parseParamRow paConfig line of
+                Just p  -> acc { paDbInputParams = p : paDbInputParams }
+                Nothing -> acc
+            SecDbCalcParams -> case parseParamRow paConfig line of
+                Just p  -> acc { paDbCalcParams = p : paDbCalcParams }
+                Nothing -> acc
+            SecProjInputParams -> case parseParamRow paConfig line of
+                Just p  -> acc { paProjInputParams = p : paProjInputParams }
+                Nothing -> acc
+            SecProjCalcParams -> case parseParamRow paConfig line of
+                Just p  -> acc { paProjCalcParams = p : paProjCalcParams }
+                Nothing -> acc
+            _ -> acc { paCurrentBlock = addRowToBlock paConfig sec line paCurrentBlock }
 
     -- Metadata key-value pairs
     | paState == BetweenBlocks || isMetadataKey (BS8.strip line) =
@@ -445,6 +499,12 @@ addRowToBlock cfg sec line block = case sec of
         Nothing -> block
     SecFinalWaste -> case parseBioRow cfg line of
         Just row -> block { pbFinalWaste = row : pbFinalWaste block }
+        Nothing -> block
+    SecInputParams -> case parseParamRow cfg line of
+        Just p  -> block { pbInputParams = p : pbInputParams block }
+        Nothing -> block
+    SecCalcParams -> case parseParamRow cfg line of
+        Just p  -> block { pbCalcParams = p : pbCalcParams block }
         Nothing -> block
     _ -> block
 
@@ -524,27 +584,53 @@ extractLocation name =
                 _ -> go (T.dropWhileEnd (== '/') before)
     isGeoCode t = T.length t >= 2 && isUpper (T.head t)
 
+-- | Resolve a parameterized amount: try expression evaluation, fall back to numeric parse
+resolveAmount :: M.Map Text Double -> Text -> Double -> Double
+resolveAmount env raw fallback
+    | T.null raw = fallback
+    | otherwise = case Expr.evaluate env raw of
+        Right v -> v
+        Left _  -> fallback
+
 -- | Convert ProcessBlock to list of Activities (one per product)
 -- This matches EcoSpold behavior where multi-product processes create multiple activities
-processBlockToActivity :: ProcessBlock -> [(Activity, [Flow], [Unit])]
-processBlockToActivity ProcessBlock{..} =
-    let -- Extract location from process name if not specified
+-- Global params (db + project level) are passed in and combined with process-level params.
+processBlockToActivity :: ([(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)])
+                       -> ProcessBlock -> [(Activity, [Flow], [Unit])]
+processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
+    let -- Build parameter environment: input params first, then calculated params
+        evalParam env (name, rawVal) = case Expr.evaluate env rawVal of
+            Right v -> M.insert name v env
+            Left _  -> env
+        env0 = foldl' evalParam M.empty (reverse dbInputPs)
+        env1 = foldl' evalParam env0 (reverse projInputPs)
+        env2 = foldl' evalParam env1 (reverse pbInputParams)
+        env3 = foldl' evalParam env2 (reverse dbCalcPs)
+        env4 = foldl' evalParam env3 (reverse projCalcPs)
+        env  = foldl' evalParam env4 (reverse pbCalcParams)
+
+        -- Raw expression map for re-evaluation
+        allExprs = reverse dbInputPs ++ reverse projInputPs ++ reverse pbInputParams
+                ++ reverse dbCalcPs ++ reverse projCalcPs ++ reverse pbCalcParams
+        exprMap = M.fromList allExprs
+
+        -- Extract location from process name if not specified
         (_, locFromName) = extractLocation pbName
         location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
 
         -- Convert avoided products (shared across all activities)
-        avoidedExchanges = map (productToExchange False) pbAvoidedProducts
+        avoidedExchanges = map (productToExchange env False) pbAvoidedProducts
 
         -- Convert technosphere inputs (shared across all activities)
-        techExchanges = concatMap (techRowToExchange True) (pbMaterials ++ pbElectricity)
-        wasteExchanges = concatMap (techRowToExchange True) pbWasteToTreatment
+        techExchanges = concatMap (techRowToExchange env True) (pbMaterials ++ pbElectricity)
+        wasteExchanges = concatMap (techRowToExchange env True) pbWasteToTreatment
 
         -- Convert biosphere exchanges (shared across all activities)
-        resourceExchanges = map (bioRowToExchange True "resource") pbResources
-        airExchanges = map (bioRowToExchange False "air") pbEmissionsAir
-        waterExchanges = map (bioRowToExchange False "water") pbEmissionsWater
-        soilExchanges = map (bioRowToExchange False "soil") pbEmissionsSoil
-        wasteFlowExchanges = map (bioRowToExchange False "waste") pbFinalWaste
+        resourceExchanges = map (bioRowToExchange env True "resource") pbResources
+        airExchanges = map (bioRowToExchange env False "air") pbEmissionsAir
+        waterExchanges = map (bioRowToExchange env False "water") pbEmissionsWater
+        soilExchanges = map (bioRowToExchange env False "soil") pbEmissionsSoil
+        wasteFlowExchanges = map (bioRowToExchange env False "waste") pbFinalWaste
 
         sharedExchanges = avoidedExchanges ++
                           techExchanges ++ wasteExchanges ++
@@ -564,7 +650,7 @@ processBlockToActivity ProcessBlock{..} =
         -- Create one activity per product
         makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
         makeActivity prod =
-            let productExchange = productToExchange True prod
+            let productExchange = productToExchange env True prod
                 (cleanProductName, locFromProduct) = extractLocation (prName prod)
                 effectiveLoc = if T.null location then locFromProduct else location
                 activity = Activity
@@ -575,20 +661,23 @@ processBlockToActivity ProcessBlock{..} =
                     , activityLocation = effectiveLoc
                     , activityUnit = prUnit prod
                     , exchanges = productExchange : sharedExchanges
+                    , activityParams = env
+                    , activityParamExprs = exprMap
                     }
             in (activity, allFlows, allUnits)
 
     in map makeActivity pbProducts
 
 -- | Convert product row to exchange
-productToExchange :: Bool -> ProductRow -> Exchange
-productToExchange isRef ProductRow{..} =
+productToExchange :: M.Map Text Double -> Bool -> ProductRow -> Exchange
+productToExchange env isRef ProductRow{..} =
     let cleanName = fst (extractLocation prName)
         flowUUID = generateFlowUUID cleanName "" prUnit
         unitUUID = generateUnitUUID prUnit
+        amount = resolveAmount env prAmountRaw prAmount
     in TechnosphereExchange
         { techFlowId = flowUUID
-        , techAmount = prAmount
+        , techAmount = amount
         , techUnitId = unitUUID
         , techIsInput = False  -- Products are outputs
         , techIsReference = isRef
@@ -598,16 +687,16 @@ productToExchange isRef ProductRow{..} =
         }
 
 -- | Convert technosphere row to exchange
-techRowToExchange :: Bool -> TechExchangeRow -> [Exchange]
-techRowToExchange isInput TechExchangeRow{..}
-    | terAmount == 0 = []
+techRowToExchange :: M.Map Text Double -> Bool -> TechExchangeRow -> [Exchange]
+techRowToExchange env isInput TechExchangeRow{..}
+    | resolvedAmount == 0 = []
     | otherwise =
         let (cleanName, location) = extractLocation terName
             flowUUID = generateFlowUUID cleanName "" terUnit
             unitUUID = generateUnitUUID terUnit
         in [TechnosphereExchange
             { techFlowId = flowUUID
-            , techAmount = abs terAmount
+            , techAmount = abs resolvedAmount
             , techUnitId = unitUUID
             , techIsInput = isInput
             , techIsReference = False
@@ -615,15 +704,18 @@ techRowToExchange isInput TechExchangeRow{..}
             , techProcessLinkId = Nothing
             , techLocation = location
             }]
+  where
+    resolvedAmount = resolveAmount env terAmountRaw terAmount
 
 -- | Convert biosphere row to exchange
-bioRowToExchange :: Bool -> Text -> BioExchangeRow -> Exchange
-bioRowToExchange isInput _compartment BioExchangeRow{..} =
+bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> Exchange
+bioRowToExchange env isInput _compartment BioExchangeRow{..} =
     let flowUUID = generateFlowUUID berName berCompartment berUnit
         unitUUID = generateUnitUUID berUnit
+        amount = resolveAmount env berAmountRaw berAmount
     in BiosphereExchange
         { bioFlowId = flowUUID
-        , bioAmount = berAmount
+        , bioAmount = amount
         , bioUnitId = unitUUID
         , bioIsInput = isInput
         , bioLocation = ""
@@ -773,13 +865,19 @@ parseSimaProCSV path = do
             , paCurrentBlock = emptyProcessBlock
             , paBlocks = []
             , paLineNum = 0
+            , paDbInputParams = []
+            , paDbCalcParams = []
+            , paProjInputParams = []
+            , paProjCalcParams = []
             }
     -- Use strict foldl' to process lines (ByteString directly)
     finalAcc <- evaluate $ foldl' processLine initialAcc lines'
     let blocks = reverse (paBlocks finalAcc)
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
-    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity) blocks
+    let globalParams = ( paDbInputParams finalAcc, paDbCalcParams finalAcc
+                       , paProjInputParams finalAcc, paProjCalcParams finalAcc )
+    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity globalParams) blocks
     let activities = map (\(a,_,_) -> a) converted
         allFlows = concatMap (\(_,f,_) -> f) converted
         allUnits = concatMap (\(_,_,u) -> u) converted

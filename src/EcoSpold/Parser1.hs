@@ -353,7 +353,7 @@ parseWithXeno xmlContent =
                 Just u -> u
                 Nothing -> "UNKNOWN_UNIT"
             description = reverse (psDescription st)
-            activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
+            activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st) M.empty M.empty
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
         in case applyCutoffStrategy activity of
@@ -641,7 +641,7 @@ parseAllWithXeno xmlContent =
                 Just u -> u
                 Nothing -> "UNKNOWN_UNIT"
             description = reverse (psDescription st)
-            activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st)
+            activity = Activity name description M.empty M.empty location refUnit (reverse $ psExchanges st) M.empty M.empty
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
         in case applyCutoffStrategy activity of

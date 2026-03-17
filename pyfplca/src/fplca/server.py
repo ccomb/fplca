@@ -7,6 +7,11 @@ from pathlib import Path
 
 import requests
 
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
+
 
 class Server:
     """Manages the fpLCA server process.
@@ -14,19 +19,37 @@ class Server:
     Usage::
 
         with Server(config="fplca.toml") as srv:
-            client = Client(port=srv.port, db="agribalyse-3.2")
+            client = Client(base_url=srv.base_url, db="agribalyse-3.2", password=srv.password)
             activities = client.search_activities(name="at plant")
     """
 
-    def __init__(self, config: str = "fplca.toml", port: int = 8081, binary: str = "fplca"):
+    def __init__(self, config: str = "fplca.toml", port: int = 0, binary: str = "fplca"):
         self.config = config
-        self.port = port
         self.binary = binary
         self._process: subprocess.Popen | None = None
+
+        # Read port and password from config
+        cfg = self._read_config()
+        server_cfg = cfg.get("server", {})
+        self.port = port or server_cfg.get("port", 8081)
+        self.password = server_cfg.get("password", "")
 
     @property
     def base_url(self) -> str:
         return f"http://localhost:{self.port}"
+
+    def _read_config(self) -> dict:
+        """Read the TOML config file."""
+        try:
+            with open(self.config, "rb") as f:
+                return tomllib.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _auth_headers(self) -> dict:
+        if self.password:
+            return {"Authorization": f"Bearer {self.password}"}
+        return {}
 
     def _find_binary(self) -> str:
         """Find the fplca binary: explicit path, package bin/, or PATH."""
@@ -47,7 +70,11 @@ class Server:
     def is_alive(self) -> bool:
         """Health check — GET /api/v1/database, return True if 200."""
         try:
-            r = requests.get(f"{self.base_url}/api/v1/database", timeout=2)
+            r = requests.get(
+                f"{self.base_url}/api/v1/database",
+                headers=self._auth_headers(),
+                timeout=2,
+            )
             return r.status_code == 200
         except requests.ConnectionError:
             return False
@@ -85,7 +112,11 @@ class Server:
     def stop(self) -> None:
         """Stop the server via shutdown endpoint, then terminate process."""
         try:
-            requests.post(f"{self.base_url}/api/v1/shutdown", timeout=5)
+            requests.post(
+                f"{self.base_url}/api/v1/shutdown",
+                headers=self._auth_headers(),
+                timeout=5,
+            )
         except requests.ConnectionError:
             pass
         if self._process:
