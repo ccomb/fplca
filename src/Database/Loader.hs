@@ -126,7 +126,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 3
+     in hi `xor` lo `xor` 4
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -370,7 +370,11 @@ fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb consume
                             key = (normalizeText (flowName flow), lookupLoc)
                         in case M.lookup key idx of
                             Just (actUUID, prodUUID) -> linked actUUID prodUUID
-                            Nothing -> unlinked flow lookupLoc
+                            Nothing ->
+                                -- Tier 3: name-only fallback (safe for EcoSpold1 where names include {LOCATION})
+                                case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                    Just (actUUID, prodUUID, _) -> linked actUUID prodUUID
+                                    Nothing -> unlinked flow lookupLoc
             Nothing ->
                 (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, emptyUnlinkedSummary)
