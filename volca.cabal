@@ -206,4 +206,8 @@ test-suite acv-tests
                      , http-client
                      , http-types
                      , megaparsec
+
+  if !os(windows)
+    build-depends: unix
+
   default-language:    Haskell2010

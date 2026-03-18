@@ -172,7 +172,7 @@ ENV LD_LIBRARY_PATH=/opt/petsc/lib
 
 # PETSC_OPTIONS: MUMPS direct solver settings
 # -malloc_hbw false is Docker-specific (no high-bandwidth memory)
-ENV PETSC_OPTIONS="-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1 -malloc_hbw false"
+ENV PETSC_OPTIONS="-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1 -malloc_hbw false -no_signal_handler"
 
 WORKDIR /app
 

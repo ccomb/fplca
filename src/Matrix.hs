@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
@@ -66,6 +67,9 @@ import qualified Data.Vector.Unboxed.Mutable as MU
 import Numerical.PETSc.Internal
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)  -- Used only for NOINLINE global singletons
+#ifndef mingw32_HOST_OS
+import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
+#endif
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
@@ -97,6 +101,11 @@ petscGlobalInit = do
     initialized <- readIORef petscInitialized
     unless initialized $ do
         petscInit0  -- Initialize PETSc/MPI without automatic finalization
+#ifndef mingw32_HOST_OS
+        -- Restore GHC's SIGPIPE handling: PETSc installs a fatal handler
+        -- that calls MPI_Abort on SIGPIPE, killing long-running servers
+        _ <- installHandler sigPIPE Ignore Nothing
+#endif
         writeIORef petscInitialized True
 
 -- | Clear cached KSP solver for a database (call when unloading)

@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
@@ -16,9 +15,6 @@ import Options.Applicative
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure, die, ExitCode(..))
 import System.IO (hFlush, stdout)
-#ifndef mingw32_HOST_OS
-import System.Posix.Signals (installHandler, Handler(Ignore), sigPIPE)
-#endif
 import Text.Read (readMaybe)
 
 -- VoLCA imports
@@ -134,13 +130,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
 
   let port = serverPort serverOpts
 
-  -- Install SIGPIPE handler (Unix only - not needed on Windows)
-#ifndef mingw32_HOST_OS
-  reportProgress Info "Installing SIGPIPE handler to prevent client disconnect crashes"
-  _ <- installHandler sigPIPE Ignore Nothing
-#endif
-
-  -- Initialize PETSc/MPI context
+  -- Initialize PETSc/MPI context (also restores SIGPIPE handler on Unix)
   reportProgress Info "Initializing PETSc/MPI for persistent matrix operations"
   initializePetscForServer
   -- Flush stdout after PETSc init: PETSc's C printf may leave data in the
