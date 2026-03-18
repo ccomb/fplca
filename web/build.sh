@@ -35,6 +35,9 @@ if [ ! -f dist/fontawesome.min.css ]; then
     rm -rf dist/fontawesome-free-6.0.0-web dist/fa.zip
 fi
 
+# Copy static assets
+cp volca.svg dist/volca.svg
+
 # Build Elm to temporary file (use local elm from node_modules)
 echo "Compiling Elm..."
 npx elm make src/Main.elm --output=dist/main.tmp.js --optimize
