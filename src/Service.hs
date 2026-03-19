@@ -10,7 +10,7 @@ import SharedSolver (SharedSolver, solveWithSharedSolver)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SubstitutionResult (..), SupplyChainEntry (..), SupplyChainPathNode (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), VariantRequest (..), VariantResponse (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SubstitutionResult (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), VariantRequest (..), VariantResponse (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
@@ -961,7 +961,7 @@ getFlowActivities db flowIdText = do
                      in Right $ toJSON activities
 
 -- | Compute the supply chain for an activity using the scaling vector.
--- Returns all upstream activities with their scaling factors and shortest paths.
+-- Returns all upstream activities with their scaling factors and subgraph edges.
 getSupplyChain :: Database -> SharedSolver -> Text -> Maybe Text -> Maybe Int -> Maybe Double
               -> IO (Either ServiceError SupplyChainResponse)
 getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam = do
@@ -976,9 +976,6 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                         demandVec = buildDemandVectorFromIndex activityIndex processId
                     supplyVec <- solveWithSharedSolver sharedSolver demandVec
                     let supplyList = toList supplyVec
-
-                    -- BFS from root through technosphere matrix for shortest paths
-                    let parentMap = bfsUpstream (dbTechnosphereTriples db) (fromIntegral processId)
 
                     -- Collect all non-zero entries
                     let minQ = maybe 0 id minQuantityParam
@@ -1005,14 +1002,21 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                     -- Sort by quantity descending, apply limit
                     let sorted = take limit $ L.sortBy (\(_, a, _) (_, b, _) -> compare (abs b) (abs a)) filtered
 
-                    -- Build response entries with paths
+                    -- Extract edges: filter technosphere triples to full upstream subgraph
+                    -- (all non-zero entries, not just filtered ones, so paths can be reconstructed)
+                    let allIndices = S.fromList (processId : map fst allEntries)
+                        edges = [ SupplyChainEdge
+                                    (processIdToText db (fromIntegral row))
+                                    (processIdToText db (fromIntegral col))
+                                    val
+                                | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
+                                , S.member (fromIntegral row) allIndices
+                                , S.member (fromIntegral col) allIndices
+                                ]
+
+                    -- Build response entries
                     let mkEntry (pid, scalingFactor, activity) =
                             let refAmount = getReferenceProductAmount activity
-                                path = reconstructPath parentMap (fromIntegral processId) (fromIntegral pid)
-                                pathNodes = map (\i ->
-                                    let a = dbActivities db V.! i
-                                    in SupplyChainPathNode (processIdToText db (fromIntegral i)) (activityName a)
-                                    ) path
                             in SupplyChainEntry
                                 { sceProcessId = processIdToText db pid
                                 , sceName = activityName activity
@@ -1020,7 +1024,6 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                                 , sceQuantity = scalingFactor * refAmount
                                 , sceUnit = activityUnit activity
                                 , sceScalingFactor = scalingFactor
-                                , scePath = pathNodes
                                 }
 
                         rootSummary = ActivitySummary
@@ -1038,6 +1041,7 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                         , scrTotalActivities = length allEntries
                         , scrFilteredActivities = length filtered
                         , scrSupplyChain = map mkEntry sorted
+                        , scrEdges = edges
                         }
 
 -- | Get reference product amount for an activity (defaults to 1.0)
@@ -1046,37 +1050,6 @@ getReferenceProductAmount activity =
     case [exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex] of
         (amt:_) -> amt
         [] -> 1.0
-
--- | BFS from root through the technosphere matrix.
--- A[row, col] > 0 means activity col consumes product from activity row.
--- Returns parent map: node → parent (for path reconstruction).
-bfsUpstream :: U.Vector SparseTriple -> Int -> M.Map Int Int
-bfsUpstream techTriples root =
-    let -- Build adjacency: consumer (col) → [supplier (row)]
-        adj = M.fromListWith (++) [(fromIntegral col, [fromIntegral row])
-                                  | SparseTriple row col _val <- U.toList techTriples
-                                  , row /= col]
-        -- BFS
-        go [] parents = parents
-        go (node:queue) parents =
-            let neighbors = M.findWithDefault [] node adj
-                unvisited = filter (`M.notMember` parents) neighbors
-                parents' = L.foldl' (\p n -> M.insert n node p) parents unvisited
-            in go (queue ++ unvisited) parents'
-    in go [root] (M.singleton root root)
-
--- | Reconstruct path from root to target using BFS parent map
-reconstructPath :: M.Map Int Int -> Int -> Int -> [Int]
-reconstructPath parents root target
-    | target == root = [root]
-    | M.notMember target parents = []  -- unreachable
-    | otherwise = go target []
-  where
-    go node acc
-        | node == root = root : acc
-        | otherwise = case M.lookup node parents of
-            Just parent -> go parent (node : acc)
-            Nothing -> []
 
 -- | Create a variant by applying Sherman-Morrison rank-1 updates.
 -- Each substitution swaps one supplier for another in the technosphere matrix.
@@ -1144,7 +1117,6 @@ createVariant db sharedSolver processIdText varReq = do
                                         , sceQuantity = scalingFactor * refAmount
                                         , sceUnit = activityUnit activity
                                         , sceScalingFactor = scalingFactor
-                                        , scePath = []  -- No BFS for variant (performance)
                                         }
 
                                 subResults = [ SubstitutionResult

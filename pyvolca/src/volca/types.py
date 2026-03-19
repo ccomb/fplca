@@ -25,16 +25,6 @@ class Activity:
 
 
 @dataclass
-class SupplyChainPathNode:
-    process_id: str
-    name: str
-
-    @classmethod
-    def from_json(cls, d: dict) -> "SupplyChainPathNode":
-        return cls(process_id=d["scpProcessId"], name=d["scpName"])
-
-
-@dataclass
 class SupplyChainEntry:
     process_id: str
     name: str
@@ -42,7 +32,6 @@ class SupplyChainEntry:
     quantity: float
     unit: str
     scaling_factor: float
-    path: list[SupplyChainPathNode] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChainEntry":
@@ -53,7 +42,21 @@ class SupplyChainEntry:
             quantity=d["sceQuantity"],
             unit=d["sceUnit"],
             scaling_factor=d["sceScalingFactor"],
-            path=[SupplyChainPathNode.from_json(p) for p in d.get("scePath", [])],
+        )
+
+
+@dataclass
+class SupplyChainEdge:
+    from_id: str
+    to_id: str
+    amount: float
+
+    @classmethod
+    def from_json(cls, d: dict) -> "SupplyChainEdge":
+        return cls(
+            from_id=d["sceEdgeFrom"],
+            to_id=d["sceEdgeTo"],
+            amount=d["sceEdgeAmount"],
         )
 
 
@@ -63,6 +66,7 @@ class SupplyChain:
     total_activities: int
     filtered_activities: int
     entries: list[SupplyChainEntry] = field(default_factory=list)
+    edges: list[SupplyChainEdge] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChain":
@@ -71,6 +75,7 @@ class SupplyChain:
             total_activities=d["scrTotalActivities"],
             filtered_activities=d["scrFilteredActivities"],
             entries=[SupplyChainEntry.from_json(e) for e in d["scrSupplyChain"]],
+            edges=[SupplyChainEdge.from_json(e) for e in d.get("scrEdges", [])],
         )
 
 

@@ -378,6 +378,7 @@ data SupplyChainResponse = SupplyChainResponse
     , scrTotalActivities :: Int
     , scrFilteredActivities :: Int
     , scrSupplyChain :: [SupplyChainEntry]
+    , scrEdges :: [SupplyChainEdge]
     }
     deriving (Generic)
 
@@ -389,14 +390,14 @@ data SupplyChainEntry = SupplyChainEntry
     , sceQuantity :: Double       -- scalingFactor × reference product amount
     , sceUnit :: Text
     , sceScalingFactor :: Double   -- raw value from scaling vector
-    , scePath :: [SupplyChainPathNode]  -- shortest path from root
     }
     deriving (Generic)
 
--- | A node in the supply chain path
-data SupplyChainPathNode = SupplyChainPathNode
-    { scpProcessId :: Text
-    , scpName :: Text
+-- | An edge in the upstream supply chain subgraph
+data SupplyChainEdge = SupplyChainEdge
+    { sceEdgeFrom   :: Text    -- supplier processId
+    , sceEdgeTo     :: Text    -- consumer processId
+    , sceEdgeAmount :: Double  -- technosphere coefficient
     }
     deriving (Generic)
 
@@ -557,7 +558,7 @@ instance ToJSON FlowCFMapping
 instance ToJSON FlowCFEntry
 instance ToJSON SupplyChainResponse
 instance ToJSON SupplyChainEntry
-instance ToJSON SupplyChainPathNode
+instance ToJSON SupplyChainEdge
 instance ToJSON VariantResponse
 instance ToJSON SubstitutionResult
 instance FromJSON VariantRequest
