@@ -94,6 +94,7 @@ import Data.Ord (Down(..))
 import Config
 import Plugin.Types (PluginRegistry(..), TransformHandle(..), TransformContext(..), TransformResult(..))
 import Plugin.Config (buildRegistry)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -118,6 +119,7 @@ import API.Types (DepLoadResult(..))
 import Method.Types (Method(..))
 import qualified Method.Parser
 import Method.ParserCSV (parseMethodCSV)
+import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import qualified Method.FlowResolver as FlowResolver
 import Method.FlowResolver (ILCDFlowInfo)
 import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
@@ -1597,7 +1599,11 @@ loadMethodCollectionFromConfig mc = do
                     -- Parse method files with flow enrichment
                     xmlResults <- forM xmlFiles $ \f ->
                         Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
-                    csvResults <- forM csvFiles $ \f -> parseMethodCSV (dir </> f)
+                    csvResults <- forM csvFiles $ \f -> do
+                        bytes <- BS.readFile (dir </> f)
+                        if isSimaProMethodCSV bytes
+                            then return $ parseSimaProMethodCSVBytes bytes
+                            else parseMethodCSV (dir </> f)
                     let (xmlErrs, xmlMethods) = partitionEithers xmlResults
                         (csvErrs, csvMethodLists) = partitionEithers csvResults
                         methods = xmlMethods ++ concat csvMethodLists

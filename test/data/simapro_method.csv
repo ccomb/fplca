@@ -1,0 +1,62 @@
+{SimaPro 10.2.0.0}
+{methods}
+{Date: 01/01/2025}
+{Time: 12:00:00}
+{Project: Test}
+{CSV Format version: 9.0.0}
+{CSV separator: Semicolon}
+{Decimal separator: .}
+{Date separator: /}
+{Short date format: dd/MM/yyyy}
+
+Method
+
+Name
+Test EF Method
+
+Version
+1;00
+
+Comment
+A test method for unit testing.
+
+Category
+European
+
+Use Damage Assessment
+No
+
+Use Normalization
+No
+
+Use Weighting
+No
+
+Use Addition
+No
+
+Impact category
+Climate change;kg CO2 eq
+
+Substances
+Air;(unspecified);Carbon dioxide, fossil;000124-38-9;1;kg
+Air;(unspecified);Methane, fossil;000074-82-8;29.8;kg
+Air;indoor;Carbon dioxide, fossil;000124-38-9;0;kg
+Soil;(unspecified);Carbon dioxide, fossil;000124-38-9;1;kg
+
+Impact category
+Acidification;mol H+ eq
+
+Substances
+Air;(unspecified);Ammonia;007664-41-7;3.02;kg
+Air;(unspecified);Sulfur dioxide;007446-09-5;1.31;kg
+Water;(unspecified);Nitrate;014797-55-8;0.028;kg
+
+Impact category
+Water use;m3 depriv.
+
+Substances
+Raw;(unspecified);Water, lake;007732-18-5;1;m3
+Raw;(unspecified);Water, river;007732-18-5;1;m3
+
+End

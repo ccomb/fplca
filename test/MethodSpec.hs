@@ -14,6 +14,7 @@ import qualified Data.ByteString.Lazy as BL
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
 import Method.Parser
 import Method.ParserCSV (parseMethodCSVBytes)
+import Method.ParserSimaPro (parseSimaProMethodCSVBytes, isSimaProMethodCSV)
 import Method.Types
 import SynonymDB
 import Types (Flow(..), FlowType(..))
@@ -291,6 +292,86 @@ spec = do
             it "returns 0 for empty mappings" $ do
                 let inventory = M.fromList [(UUID.fromWords 1 2 3 4, 100.0)]
                 computeLCIAScore inventory [] `shouldBe` 0.0
+
+    describe "SimaPro Method CSV Parser" $ do
+        it "detects SimaPro method CSV format" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            isSimaProMethodCSV csv `shouldBe` True
+
+        it "does not detect tabular CSV as SimaPro format" $ do
+            csv <- BS.readFile "test/data/method.csv"
+            isSimaProMethodCSV csv `shouldBe` False
+
+        it "parses 3 impact categories from fixture" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> length methods `shouldBe` 3
+
+        it "parses Climate change category correctly" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let cc = head methods
+                    methodName cc `shouldBe` "Climate change"
+                    methodUnit cc `shouldBe` "kg CO2 eq"
+                    methodCategory cc `shouldBe` "Climate change"
+                    methodMethodology cc `shouldBe` Just "Test EF Method"
+                    length (methodFactors cc) `shouldBe` 4
+
+        it "parses CO2 characterization factor = 1.0" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let cc = head methods
+                        co2 = head (methodFactors cc)
+                    mcfFlowName co2 `shouldBe` "Carbon dioxide, fossil"
+                    mcfValue co2 `shouldBe` 1.0
+                    mcfDirection co2 `shouldBe` Output
+                    mcfCAS co2 `shouldBe` Just "124-38-9"
+
+        it "parses Methane CF = 29.8" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let cc = head methods
+                        ch4 = (methodFactors cc) !! 1
+                    mcfFlowName ch4 `shouldBe` "Methane, fossil"
+                    mcfValue ch4 `shouldBe` 29.8
+
+        it "parses Water use with Input direction" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let wu = methods !! 2
+                    methodName wu `shouldBe` "Water use"
+                    methodUnit wu `shouldBe` "m3 depriv."
+                    let waterCF = head (methodFactors wu)
+                    mcfDirection waterCF `shouldBe` Input
+                    mcfCompartment waterCF `shouldBe` Just (Compartment "natural resource" "" "")
+
+        it "normalizes CAS numbers (strips leading zeros)" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let acid = methods !! 1
+                        nh3 = head (methodFactors acid)
+                    mcfCAS nh3 `shouldBe` Just "7664-41-7"
+
+        it "produces deterministic UUIDs" $ do
+            csv <- BS.readFile "test/data/simapro_method.csv"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods1 -> do
+                    case parseSimaProMethodCSVBytes csv of
+                        Left err -> expectationFailure $ "Parse failed: " ++ err
+                        Right methods2 ->
+                            map methodId methods1 `shouldBe` map methodId methods2
 
 -- Helper for testing Either values
 isLeft :: Either a b -> Bool

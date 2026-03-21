@@ -14,6 +14,13 @@ module SimaPro.Parser
     , generateActivityUUID
     , generateFlowUUID
     , generateUnitUUID
+      -- * Shared utilities (used by Method.ParserSimaPro)
+    , defaultConfig
+    , simaproNamespace
+    , ensureUtf8
+    , splitCSV
+    , parseAmount
+    , decodeBS
     ) where
 
 import Types
@@ -658,7 +665,10 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
                     { activityName = cleanProductName
                     , activityDescription = if T.null pbComment then [] else [pbComment]
                     , activitySynonyms = M.empty
-                    , activityClassification = M.empty
+                    , activityClassification = M.fromList $ filter (not . T.null . snd)
+                        [ ("Category type", pbCategoryType)
+                        , ("Category", prCategory prod)
+                        ]
                     , activityLocation = effectiveLoc
                     , activityUnit = prUnit prod
                     , exchanges = productExchange : sharedExchanges

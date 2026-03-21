@@ -92,6 +92,7 @@ executable volca
                      , Method.Types
                      , Method.Parser
                      , Method.ParserCSV
+                     , Method.ParserSimaPro
                      , Method.Mapping
                      , Method.FlowResolver
                      , API.Routes
@@ -159,6 +160,7 @@ test-suite acv-tests
                      , Method.Types
                      , Method.Parser
                      , Method.ParserCSV
+                     , Method.ParserSimaPro
                      , Method.Mapping
                      , Method.FlowResolver
                      , API.Types
