@@ -7,8 +7,9 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 ## What It Does
 
 - **Browse** activities and flows across multiple databases
-- **Explore** supply chain trees and force-directed dependency graphs
+- **Explore** supply chain trees, force-directed dependency graphs, and supply chain composition by sector classification
 - **Compute** life cycle inventories (LCI) and impact scores (LCIA) — single method or batch across a full collection
+- **Normalize and weight** LCIA results with Raw / Normalized / Weighted view toggle; compute a single-score in Pt when normalization-weighting data is available
 - **Map** method characterization factors to database flows with a 4-step cascade (UUID → CAS → name → synonym) and coverage statistics
 - **Link** databases across nomenclatures (e.g., a sector database referencing Agribalyse)
 - **Upload** databases and method collections via the web UI, without touching config files
@@ -20,11 +21,13 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 - **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
-- **LCIA method collections**: Load ILCD method packages (ZIP or directory) from config or upload via UI; CSV format also supported
+- **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config or UI
+- **Normalization and weighting**: Batch LCIA computes normalized and weighted scores per category and a single aggregated score (Pt) when NW data is present in the method collection
 - **Flow mapping engine**: 4-step matching cascade (UUID → CAS → name → synonym) with per-strategy coverage statistics and inspection UI
+- **Activity classifications**: ISIC, CPC, and category fields parsed from EcoSpold1/2 and ILCD, with a Composition page showing supply chain breakdown by classification
 - **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
 - **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via UI, or toggled independently
-- **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, method management, and reference data pages
+- **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, method management, composition, and reference data pages
 - **Desktop application**: Native Windows/Linux app — no installation or configuration needed
 - **Fast cache**: Per-database cache with automatic schema-based invalidation; large databases load in ~45s cold, ~2-3s cached
 - **Optional access control**: Single-code login with cookie-based session
@@ -108,6 +111,9 @@ load = true
 name = "EF-3.1"
 path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 
+# SimaPro method CSV exports and tabular CSV are also accepted:
+# path = "DBs/EF3.1_methods.csv"
+
 [[flow-synonyms]]
 name = "Default flow synonyms"
 path = "data/flows.csv"        # CSV with two columns: name1,name2
@@ -136,8 +142,9 @@ The `depends` field ensures dependency databases load first and their flows are 
 | Tree | Hierarchical upstream dependency view |
 | Graph | Force-directed network with configurable cutoff |
 | Inventory | Environmental flows split into Emissions and Resources |
-| LCIA | Impact scores per category with method picker; single or batch across a collection |
-| Methods | Load, unload, upload, and inspect ILCD method collections |
+| LCIA | Impact scores per category with method picker; Raw / Normalized / Weighted toggle; single-score footer when NW data is available |
+| Composition | Supply chain breakdown by activity classification (ISIC/CPC/category) |
+| Methods | Load, unload, upload, and inspect ILCD and SimaPro method collections |
 | Flow Mapping | Per-method CF coverage: matched by UUID/CAS/name/synonym, unmapped list |
 | Databases | Load, unload, upload, and configure cross-database links |
 | Database Setup | Data path picker, dependency editor, linking diagnostics |
@@ -156,8 +163,9 @@ GET    /api/v1/db/{name}/activity/{id}                  Activity details
 GET    /api/v1/db/{name}/activity/{id}/tree             Supply chain tree
 GET    /api/v1/db/{name}/activity/{id}/inventory        Life cycle inventory
 GET    /api/v1/db/{name}/activity/{id}/graph?cutoff=    Supply chain graph
+GET    /api/v1/db/{name}/activity/{id}/supply-chain     Supply chain composition
 GET    /api/v1/db/{name}/activity/{id}/lcia/{methodId}  LCIA score (single method)
-GET    /api/v1/db/{name}/activity/{id}/lcia-batch/{col} LCIA batch (all categories)
+GET    /api/v1/db/{name}/activity/{id}/lcia-batch/{col} LCIA batch (all categories, with optional NW scores and single-score)
 GET    /api/v1/db/{name}/activities?name=&geo=&product= Search activities
 GET    /api/v1/db/{name}/flows?q=&lang=                 Search flows
 GET    /api/v1/db/{name}/flow/{flowId}                  Flow details
@@ -186,6 +194,8 @@ GET    /api/v1/compartment-mappings                           List compartment m
 GET    /api/v1/units                                          List unit definitions
 POST   /api/v1/auth                                           Login (returns session cookie)
 ```
+
+The `lcia-batch` response includes per-category `normalizedScore` and `weightedScore` fields (when normalization-weighting data is present in the method collection), plus a `singleScore` sum in Pt.
 
 ---
 
@@ -327,6 +337,7 @@ All API routes are prefixed with `/api/v1/`. A dash (—) means the feature is o
 
 ---
 
+
 ## Building
 
 ### Linux / macOS
@@ -391,7 +402,7 @@ export LD_LIBRARY_PATH="petsc-3.24.2/arch-linux-c-opt/lib"
 cabal test --test-show-details=streaming
 ```
 
-Tests cover matrix construction (sign convention), inventory calculation (golden values), parsers, and matrix export format compliance.
+Tests cover matrix construction (sign convention), inventory calculation (golden values), parsers (EcoSpold1/2, ILCD, SimaPro, classification fields), and matrix export format compliance.
 
 ---
 
