@@ -326,7 +326,7 @@ searchActivities dbName query =
     Http.get
         { url =
             Url.Builder.absolute
-                [ "api", "v1", "database", dbName, "activities" ]
+                [ "api", "v1", "db", dbName, "activities" ]
                 [ Url.Builder.string "name" query
                 , Url.Builder.int "limit" 20
                 ]
@@ -346,7 +346,7 @@ searchActivitiesWithOffset dbName query offset limit =
     Http.get
         { url =
             Url.Builder.absolute
-                [ "api", "v1", "database", dbName, "activities" ]
+                [ "api", "v1", "db", dbName, "activities" ]
                 [ Url.Builder.string "name" query
                 , Url.Builder.int "limit" limit
                 , Url.Builder.int "offset" offset
