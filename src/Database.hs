@@ -6,6 +6,7 @@ module Database where
 
 import Progress
 import Types
+import UnitConversion (UnitConfig, convertExchangeAmount)
 import Data.Int (Int32)
 import Data.List (sort)
 import qualified Data.Map as M
@@ -37,8 +38,8 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> IO Database
-buildDatabaseWithMatrices activityMap flowDB unitDB = do
+buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> IO Database
+buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
 
     -- Step 1: Build UUID interning tables from Map keys
@@ -67,6 +68,15 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
 
         -- Build indexes (now using Vector)
         indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable flowDB
+
+        -- Build supplier reference unit lookup: ProcessId -> unit name of reference product
+        -- Used to convert exchange amounts to the supplier's unit for correct A-matrix coefficients
+        supplierRefUnits = V.map (\act ->
+            let refExs = [ex | ex <- exchanges act, exchangeIsReference ex, not (exchangeIsInput ex)]
+            in case refExs of
+                (ex:_) -> getUnitNameForExchange unitDB ex
+                [] -> ""
+            ) dbActivities
 
     -- Build activity index for matrix construction
     reportMatrixOperation "Building activity indexes"
@@ -110,10 +120,16 @@ buildDatabaseWithMatrices activityMap flowDB unitDB = do
                  in case producerIdx of
                         Just idx ->
                             let rawValue = exchangeAmount ex
+                                -- Convert exchange amount to supplier's reference product unit
+                                -- e.g., if exchange is 1934.5 kg but supplier produces in "ton",
+                                -- convert to 1.9345 ton for correct A-matrix coefficient
+                                exchangeUnit = getUnitNameForExchange unitDB ex
+                                supplierUnit = supplierRefUnits V.! fromIntegral idx
+                                convertedValue = convertExchangeAmount unitConfig exchangeUnit supplierUnit rawValue
                                 denom = if normalizationFactor > 1e-15
                                         then normalizationFactor
                                         else 1.0  -- Unreachable: normalizationFactor already falls back to 1.0
-                                value = rawValue / denom
+                                value = convertedValue / denom
                                 -- Exclude self-loops (internal consumption): idx == j
                                 -- Self-loops are accounted for in normalization factor but not exported as matrix entries
                                 -- This matches Ecoinvent's convention where internal losses affect normalization only
