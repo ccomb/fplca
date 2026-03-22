@@ -53,6 +53,7 @@ cache/
 # hidden files
 .*
 !.gitignore
+!.gitmodules
 !.python-version
 
 # debug stuff
