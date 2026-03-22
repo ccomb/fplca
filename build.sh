@@ -592,8 +592,9 @@ if [[ "$RUN_TESTS" == "true" ]]; then
         cabal test --enable-coverage --test-show-details=streaming
 
         log_info "Generating coverage report..."
-        TIX_FILE="$SCRIPT_DIR/acv-tests.tix"
-        if [[ -f "$TIX_FILE" ]]; then
+        # Find .tix file (cabal places it inside dist-newstyle)
+        TIX_FILE=$(find "$SCRIPT_DIR/dist-newstyle" -name "acv-tests.tix" -path "*/hpc/*" 2>/dev/null | head -1)
+        if [[ -n "$TIX_FILE" && -f "$TIX_FILE" ]]; then
             COVERAGE_DIR="$SCRIPT_DIR/coverage-report"
             rm -rf "$COVERAGE_DIR"
             mkdir -p "$COVERAGE_DIR"
@@ -606,6 +607,8 @@ if [[ "$RUN_TESTS" == "true" ]]; then
 
             if [[ -n "$HPC_FLAGS" ]]; then
                 hpc markup "$TIX_FILE" $HPC_FLAGS \
+                    --srcdir="$SCRIPT_DIR" \
+                    --srcdir="$SCRIPT_DIR/petsc-hs" \
                     --destdir="$COVERAGE_DIR" \
                     --fun-entry-count
                 hpc report "$TIX_FILE" $HPC_FLAGS

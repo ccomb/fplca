@@ -169,7 +169,6 @@ test-suite acv-tests
                      , http-types
                      , process
                      , uuid
-                     , vector
                      , filepath
                      , directory
                      , async

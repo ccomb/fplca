@@ -1,6 +1,8 @@
 cradle:
   cabal:
-    - path: "src/"
+    - path: "app/"
       component: "volca:exe:volca"
+    - path: "src/"
+      component: "volca:lib:volca"
     - path: "test/"
       component: "volca:test:acv-tests"
