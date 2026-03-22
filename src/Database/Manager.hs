@@ -672,7 +672,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
                     transformed <- applyTransforms transforms (toSimpleDatabase dbRaw)
                     dbRebuilt <- if null transforms
                         then pure dbRaw
-                        else buildDatabaseWithMatrices (sdbActivities transformed) (sdbFlows transformed) (sdbUnits transformed)
+                        else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbFlows transformed) (sdbUnits transformed)
 
                     -- Initialize runtime fields (synonym DB and flow name index)
                     let database = initializeRuntimeFields dbRebuilt synonymDB
@@ -794,7 +794,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                             reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                             let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                             linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                            !db <- buildDatabaseWithMatrices (sdbActivities linkedDb) flowDB unitDB
+                            !db <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
                             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
                             return $ Right db
                         else do
@@ -809,7 +809,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                                     reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                                     let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                                     linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                                    !db <- buildDatabaseWithMatrices (sdbActivities linkedDb) flowDB unitDB
+                                    !db <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
                                     Loader.saveCachedDatabaseWithMatrices dbName path db
                                     return $ Right db
                 FormatUnknown ->
@@ -837,7 +837,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                             case loadResult of
                                 Left err -> return $ Left err
                                 Right (simpleDb, stats) -> do
-                                    !db <- buildDatabaseWithMatrices
+                                    !db <- buildDatabaseWithMatrices unitConfig
                                         (sdbActivities simpleDb)
                                         (sdbFlows simpleDb)
                                         (sdbUnits simpleDb)
@@ -1520,7 +1520,8 @@ finalizeDatabase manager dbName = do
                 reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
 
                 -- Build the database with matrices
-                !db <- buildDatabaseWithMatrices
+                unitConfig <- getMergedUnitConfig manager
+                !db <- buildDatabaseWithMatrices unitConfig
                     (sdbActivities (sdSimpleDB staged))
                     (sdbFlows (sdSimpleDB staged))
                     (sdbUnits (sdSimpleDB staged))
