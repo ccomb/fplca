@@ -84,6 +84,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
+import Control.Concurrent.Async (mapConcurrently_)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesFileExist, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeExtension)
@@ -424,10 +425,10 @@ initDatabaseManager config noCache _configPath = do
             forM_ (zip [1::Int ..] levels) $ \(levelNum, levelNames) -> do
                 let levelConfigs = [configMap M.! name | name <- levelNames, M.member name configMap]
                 reportProgress Info $ "  Level " ++ show levelNum ++ ": loading " ++ show (length levelConfigs)
-                    ++ " database(s) sequentially (each uses all cores)"
+                    ++ " database(s) in parallel"
                 currentIndexedDbs <- readTVarIO indexedDbsVar
                 let otherIndexes = M.elems currentIndexedDbs
-                mapM_ (loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager) levelConfigs
+                mapConcurrently_ (loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager) levelConfigs
             loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
             reportProgress Info $ "Multi-database mode: " ++ show loadedCount ++ " database(s) loaded"
 
