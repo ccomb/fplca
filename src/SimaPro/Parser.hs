@@ -672,39 +672,36 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
         (_, locFromName) = extractLocation pbName
         location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
 
-        -- Convert avoided products (shared across all activities)
-        avoidedExchanges = map (productToExchange env False) pbAvoidedProducts
+        -- Convert all rows in one pass, collecting exchanges/flows/units together
+        avoidedTriples = map (productToExchange env False) pbAvoidedProducts
+        techTriples    = map (techRowToExchange env True) (pbMaterials ++ pbElectricity)
+        wasteTriples   = map (techRowToExchange env True) pbWasteToTreatment
+        bioTriples     = map (bioRowToExchange env True "resource") pbResources
+                      ++ map (bioRowToExchange env False "air") pbEmissionsAir
+                      ++ map (bioRowToExchange env False "water") pbEmissionsWater
+                      ++ map (bioRowToExchange env False "soil") pbEmissionsSoil
+                      ++ map (bioRowToExchange env False "waste") pbFinalWaste
 
-        -- Convert technosphere inputs (shared across all activities)
-        techExchanges = concatMap (techRowToExchange env True) (pbMaterials ++ pbElectricity)
-        wasteExchanges = concatMap (techRowToExchange env True) pbWasteToTreatment
+        -- Tech rows may have zero amounts (Maybe Exchange), others always have exchanges
+        techExchanges = [e | (Just e, _, _) <- techTriples ++ wasteTriples]
+        techFlows     = [f | (_, f, _) <- techTriples ++ wasteTriples]
+        techUnits     = [u | (_, _, u) <- techTriples ++ wasteTriples]
 
-        -- Convert biosphere exchanges (shared across all activities)
-        resourceExchanges = map (bioRowToExchange env True "resource") pbResources
-        airExchanges = map (bioRowToExchange env False "air") pbEmissionsAir
-        waterExchanges = map (bioRowToExchange env False "water") pbEmissionsWater
-        soilExchanges = map (bioRowToExchange env False "soil") pbEmissionsSoil
-        wasteFlowExchanges = map (bioRowToExchange env False "waste") pbFinalWaste
-
-        sharedExchanges = avoidedExchanges ++
-                          techExchanges ++ wasteExchanges ++
-                          resourceExchanges ++ airExchanges ++ waterExchanges ++
-                          soilExchanges ++ wasteFlowExchanges
-
-        -- Collect all flows and units (shared)
-        allFlows = collectFlows (pbProducts ++ pbAvoidedProducts)
-                                (pbMaterials ++ pbElectricity ++ pbWasteToTreatment)
-                                (pbResources ++ pbEmissionsAir ++ pbEmissionsWater ++
-                                 pbEmissionsSoil ++ pbFinalWaste)
-        allUnits = collectUnits (pbProducts ++ pbAvoidedProducts)
-                                (pbMaterials ++ pbElectricity ++ pbWasteToTreatment)
-                                (pbResources ++ pbEmissionsAir ++ pbEmissionsWater ++
-                                 pbEmissionsSoil ++ pbFinalWaste)
+        sharedExchanges = map (\(e,_,_) -> e) avoidedTriples
+                       ++ techExchanges
+                       ++ map (\(e,_,_) -> e) bioTriples
+        sharedFlows     = map (\(_,f,_) -> f) avoidedTriples
+                       ++ techFlows
+                       ++ map (\(_,f,_) -> f) bioTriples
+        sharedUnits     = S.toList . S.fromList
+                        $ map (\(_,_,u) -> unitName u) avoidedTriples
+                       ++ map unitName techUnits
+                       ++ map (\(_,_,u) -> unitName u) bioTriples
 
         -- Create one activity per product
         makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
         makeActivity prod =
-            let productExchange = productToExchange env True prod
+            let (productExchange, productFlow, productUnit) = productToExchange env True prod
                 allocFraction = resolveAmount env (prAllocRaw prod) (prAllocation prod) / 100.0
                 (cleanProductName, locFromProduct) = extractLocation (prName prod)
                 effectiveLoc = if T.null location then locFromProduct else location
@@ -722,6 +719,9 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
                     , activityParams = env
                     , activityParamExprs = exprMap
                     }
+                allFlows = productFlow : sharedFlows
+                allUnits = map (\name -> Unit (generateUnitUUID name) name name "")
+                               (S.toList . S.fromList $ prUnit prod : sharedUnits)
             in (activity, allFlows, allUnits)
 
     in map makeActivity pbProducts
@@ -731,33 +731,41 @@ scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex@TechnosphereExchange{} = ex { techAmount = techAmount ex * factor }
 scaleExchange factor ex@BiosphereExchange{} = ex { bioAmount = bioAmount ex * factor }
 
--- | Convert product row to exchange
-productToExchange :: M.Map Text Double -> Bool -> ProductRow -> Exchange
+-- | Convert product row to exchange, flow, and unit in one pass
+productToExchange :: M.Map Text Double -> Bool -> ProductRow -> (Exchange, Flow, Unit)
 productToExchange env isRef ProductRow{..} =
     let cleanName = fst (extractLocation prName)
         flowUUID = generateFlowUUID cleanName "" prUnit
         unitUUID = generateUnitUUID prUnit
         amount = resolveAmount env prAmountRaw prAmount
-    in TechnosphereExchange
-        { techFlowId = flowUUID
-        , techAmount = amount
-        , techUnitId = unitUUID
-        , techIsInput = False  -- Products are outputs
-        , techIsReference = isRef
-        , techActivityLinkId = UUID.nil
-        , techProcessLinkId = Nothing
-        , techLocation = ""
-        }
+        exchange = TechnosphereExchange
+            { techFlowId = flowUUID
+            , techAmount = amount
+            , techUnitId = unitUUID
+            , techIsInput = False
+            , techIsReference = isRef
+            , techActivityLinkId = UUID.nil
+            , techProcessLinkId = Nothing
+            , techLocation = ""
+            }
+        flow = Flow
+            { flowId = flowUUID, flowName = cleanName, flowCategory = prCategory
+            , flowSubcompartment = Nothing, flowUnitId = unitUUID
+            , flowType = Technosphere, flowSynonyms = M.empty
+            , flowCAS = Nothing, flowSubstanceId = Nothing
+            }
+        unit = Unit { unitId = unitUUID, unitName = prUnit, unitSymbol = prUnit, unitComment = "" }
+    in (exchange, flow, unit)
 
--- | Convert technosphere row to exchange
-techRowToExchange :: M.Map Text Double -> Bool -> TechExchangeRow -> [Exchange]
-techRowToExchange env isInput TechExchangeRow{..}
-    | resolvedAmount == 0 = []
-    | otherwise =
-        let (cleanName, location) = extractLocation terName
-            flowUUID = generateFlowUUID cleanName "" terUnit
-            unitUUID = generateUnitUUID terUnit
-        in [TechnosphereExchange
+-- | Convert technosphere row to exchange (if non-zero), flow, and unit.
+-- Always returns the flow/unit; exchange is Nothing for zero-amount rows.
+techRowToExchange :: M.Map Text Double -> Bool -> TechExchangeRow -> (Maybe Exchange, Flow, Unit)
+techRowToExchange env isInput TechExchangeRow{..} =
+    let (cleanName, location) = extractLocation terName
+        flowUUID = generateFlowUUID cleanName "" terUnit
+        unitUUID = generateUnitUUID terUnit
+        resolvedAmount = resolveAmount env terAmountRaw terAmount
+        exchange = if resolvedAmount == 0 then Nothing else Just TechnosphereExchange
             { techFlowId = flowUUID
             , techAmount = abs resolvedAmount
             , techUnitId = unitUUID
@@ -766,83 +774,37 @@ techRowToExchange env isInput TechExchangeRow{..}
             , techActivityLinkId = UUID.nil
             , techProcessLinkId = Nothing
             , techLocation = location
-            }]
-  where
-    resolvedAmount = resolveAmount env terAmountRaw terAmount
+            }
+        flow = Flow
+            { flowId = flowUUID, flowName = cleanName, flowCategory = ""
+            , flowSubcompartment = Nothing, flowUnitId = unitUUID
+            , flowType = Technosphere, flowSynonyms = M.empty
+            , flowCAS = Nothing, flowSubstanceId = Nothing
+            }
+        unit = Unit { unitId = unitUUID, unitName = terUnit, unitSymbol = terUnit, unitComment = "" }
+    in (exchange, flow, unit)
 
--- | Convert biosphere row to exchange
-bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> Exchange
+-- | Convert biosphere row to exchange, flow, and unit in one pass
+bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, Flow, Unit)
 bioRowToExchange env isInput _compartment BioExchangeRow{..} =
     let flowUUID = generateFlowUUID berName berCompartment berUnit
         unitUUID = generateUnitUUID berUnit
         amount = resolveAmount env berAmountRaw berAmount
-    in BiosphereExchange
-        { bioFlowId = flowUUID
-        , bioAmount = amount
-        , bioUnitId = unitUUID
-        , bioIsInput = isInput
-        , bioLocation = ""
-        }
-
--- | Collect flows from all exchange types
-collectFlows :: [ProductRow] -> [TechExchangeRow] -> [BioExchangeRow] -> [Flow]
-collectFlows products techs bios =
-    let productFlows = map productToFlow products
-        techFlows = map techToFlow techs
-        bioFlows = map bioToFlow bios
-    in productFlows ++ techFlows ++ bioFlows
-  where
-    productToFlow ProductRow{..} =
-        let cleanName = fst (extractLocation prName)
-        in Flow
-        { flowId = generateFlowUUID cleanName "" prUnit
-        , flowName = cleanName
-        , flowCategory = prCategory
-        , flowSubcompartment = Nothing
-        , flowUnitId = generateUnitUUID prUnit
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
-        }
-    techToFlow TechExchangeRow{..} =
-        let cleanName = fst (extractLocation terName)
-        in Flow
-        { flowId = generateFlowUUID cleanName "" terUnit
-        , flowName = cleanName
-        , flowCategory = ""
-        , flowSubcompartment = Nothing
-        , flowUnitId = generateUnitUUID terUnit
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
-        }
-    bioToFlow BioExchangeRow{..} = Flow
-        { flowId = generateFlowUUID berName berCompartment berUnit
-        , flowName = berName
-        , flowCategory = berCompartment
-        , flowSubcompartment = Nothing  -- SimaPro uses combined compartment string
-        , flowUnitId = generateUnitUUID berUnit
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
-        }
-
--- | Collect units from all exchange types
-collectUnits :: [ProductRow] -> [TechExchangeRow] -> [BioExchangeRow] -> [Unit]
-collectUnits products techs bios =
-    let allUnits = map prUnit products ++ map terUnit techs ++ map berUnit bios
-        uniqueUnits = S.toList $ S.fromList allUnits
-    in map toUnit uniqueUnits
-  where
-    toUnit name = Unit
-        { unitId = generateUnitUUID name
-        , unitName = name
-        , unitSymbol = name
-        , unitComment = ""
-        }
+        exchange = BiosphereExchange
+            { bioFlowId = flowUUID
+            , bioAmount = amount
+            , bioUnitId = unitUUID
+            , bioIsInput = isInput
+            , bioLocation = ""
+            }
+        flow = Flow
+            { flowId = flowUUID, flowName = berName, flowCategory = berCompartment
+            , flowSubcompartment = Nothing, flowUnitId = unitUUID
+            , flowType = Biosphere, flowSynonyms = M.empty
+            , flowCAS = Nothing, flowSubstanceId = Nothing
+            }
+        unit = Unit { unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = "" }
+    in (exchange, flow, unit)
 
 -- ============================================================================
 -- Encoding Conversion
