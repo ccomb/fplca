@@ -39,17 +39,17 @@ class Client:
     # -- Database management --
 
     def list_databases(self) -> list[dict]:
-        r = self._session.get(self._api_url("database"))
+        r = self._session.get(self._api_url("db"))
         r.raise_for_status()
         return r.json()["dlrDatabases"]
 
     def load_database(self, db_name: str) -> dict:
-        r = self._session.post(self._api_url(f"database/{db_name}/load"))
+        r = self._session.post(self._api_url(f"db/{db_name}/load"))
         r.raise_for_status()
         return r.json()
 
     def unload_database(self, db_name: str) -> dict:
-        r = self._session.post(self._api_url(f"database/{db_name}/unload"))
+        r = self._session.post(self._api_url(f"db/{db_name}/unload"))
         r.raise_for_status()
         return r.json()
 
@@ -60,6 +60,8 @@ class Client:
         name: str | None = None,
         geo: str | None = None,
         product: str | None = None,
+        classification: str | None = None,
+        classification_value: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Activity]:
@@ -72,9 +74,19 @@ class Client:
             params["geo"] = geo
         if product:
             params["product"] = product
+        if classification:
+            params["classification"] = classification
+        if classification_value:
+            params["classification-value"] = classification_value
         r = self._session.get(self._db_url("activities"), params=params)
         r.raise_for_status()
         return [Activity.from_json(a) for a in r.json()["srResults"]]
+
+    def get_classifications(self) -> list[dict]:
+        """List all classification systems and their values for the current database."""
+        r = self._session.get(self._db_url("classifications"))
+        r.raise_for_status()
+        return r.json()
 
     def search_flows(self, query: str | None = None, limit: int | None = None) -> list[dict]:
         params: dict = {}

@@ -11,6 +11,7 @@ module Models.Activity exposing
     , ActivityInfo
     , ActivityExchange
     , ExchangeType(..)
+    , ClassificationSystem
     , activityTreeDecoder
     , activityNodeDecoder
     , activityEdgeDecoder
@@ -21,6 +22,7 @@ module Models.Activity exposing
     , activitySummaryDecoder
     , searchResultsDecoder
     , activityInfoDecoder
+    , classificationSystemDecoder
     )
 
 import Dict exposing (Dict)
@@ -295,6 +297,24 @@ activityExchangeDecoder =
         |> required "ewuTargetProcessId" (Decode.nullable Decode.string)
         |> optional "ewuExchange" exchangeIsReferenceDecoder False
         |> optional "ewuExchange" exchangeIsInputDecoder False
+
+
+-- Classification system (from /api/v1/db/{db}/classifications endpoint)
+
+
+type alias ClassificationSystem =
+    { name : String
+    , values : List String
+    , activityCount : Int
+    }
+
+
+classificationSystemDecoder : Decoder ClassificationSystem
+classificationSystemDecoder =
+    Decode.succeed ClassificationSystem
+        |> required "csName" Decode.string
+        |> required "csValues" (Decode.list Decode.string)
+        |> required "csActivityCount" Decode.int
 
 
 exchangeTypeDecoder : Decoder ExchangeType

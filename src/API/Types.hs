@@ -530,7 +530,16 @@ data ExchangeDetail = ExchangeDetail
     }
     deriving (Generic)
 
+-- | Classification system with its values for browsing/filtering
+data ClassificationSystem = ClassificationSystem
+    { csName :: Text           -- e.g. "ISIC rev.4 ecoinvent", "CPC", "HS2017"
+    , csValues :: [Text]       -- Distinct values, sorted
+    , csActivityCount :: Int   -- How many activities have this system
+    }
+    deriving (Generic)
+
 -- JSON instances
+instance ToJSON ClassificationSystem
 instance (ToJSON a) => ToJSON (SearchResults a)
 instance ToJSON ActivitySummary
 instance ToJSON FlowSearchResult

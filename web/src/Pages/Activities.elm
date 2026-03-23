@@ -5,7 +5,8 @@ import Browser.Navigation as Nav
 import Effect exposing (Effect)
 import Html exposing (..)
 import Http
-import Models.Activity exposing (ActivitySummary, SearchResults, activitySummaryDecoder, searchResultsDecoder)
+import Json.Decode as Decode
+import Models.Activity exposing (ActivitySummary, ClassificationSystem, SearchResults, activitySummaryDecoder, classificationSystemDecoder, searchResultsDecoder)
 import Models.Database exposing (DatabaseList)
 import Route exposing (ActivityTab(..), Route(..))
 import Shared exposing (RemoteData(..))
@@ -21,6 +22,9 @@ type alias Model =
     { searchQuery : String
     , dbName : String
     , results : SearchState
+    , classificationSystems : Maybe (List ClassificationSystem)
+    , selectedSystem : Maybe String
+    , selectedValue : Maybe String
     }
 
 
@@ -36,6 +40,7 @@ type Msg
     = ActivitiesViewMsg ActivitiesView.Msg
     | SearchResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | MoreResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
+    | ClassificationsLoaded (Result Http.Error (List ClassificationSystem))
     | NewFlags Route.ActivitiesFlags
     | ScrollDone
     | RequestLoadDatabase
@@ -61,8 +66,14 @@ init shared flags =
         dbLoaded =
             Shared.isDatabaseLoaded shared flags.db
 
+        hasTextQuery =
+            not (String.isEmpty searchQuery)
+
+        hasClassFilter =
+            flags.classificationValue /= Nothing
+
         shouldSearch =
-            not (String.isEmpty searchQuery) && dbLoaded
+            (hasTextQuery || hasClassFilter) && dbLoaded
     in
     ( { searchQuery = searchQuery
       , dbName = flags.db
@@ -72,10 +83,18 @@ init shared flags =
 
             else
                 NotSearched
+      , classificationSystems = Nothing
+      , selectedSystem = flags.classification
+      , selectedValue = flags.classificationValue
       }
     , Effect.batch
         [ if shouldSearch then
-            Effect.fromCmd (searchActivities flags.db searchQuery)
+            Effect.fromCmd (searchActivities flags.db searchQuery flags.classification flags.classificationValue)
+
+          else
+            Effect.none
+        , if dbLoaded then
+            Effect.fromCmd (fetchClassifications flags.db)
 
           else
             Effect.none
@@ -106,22 +125,25 @@ update shared msg model =
                                     Just query
 
                             newRoute =
-                                ActivitiesRoute { db = dbName, name = queryName, limit = Just 20 }
+                                ActivitiesRoute { db = dbName, name = queryName, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+
+                            hasQuery =
+                                not (String.isEmpty query) || model.selectedValue /= Nothing
 
                             cmds =
-                                if String.isEmpty query then
+                                if not hasQuery then
                                     Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
 
                                 else
                                     Effect.batch
                                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                                        , Effect.fromCmd (searchActivities model.dbName query)
+                                        , Effect.fromCmd (searchActivities model.dbName query model.selectedSystem model.selectedValue)
                                         ]
                         in
                         ( { model
                             | searchQuery = query
                             , results =
-                                if String.isEmpty query then
+                                if not hasQuery then
                                     NotSearched
 
                                 else
@@ -148,7 +170,7 @@ update shared msg model =
                                     results.offset + results.limit
                             in
                             ( { model | results = LoadingMore results }
-                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery newOffset results.limit)
+                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery model.selectedSystem model.selectedValue newOffset results.limit)
                             )
 
                         _ ->
@@ -164,7 +186,7 @@ update shared msg model =
                                 Just model.searchQuery
 
                         shouldSearch =
-                            not (String.isEmpty model.searchQuery)
+                            not (String.isEmpty model.searchQuery) || model.selectedValue /= Nothing
                     in
                     ( { model
                         | dbName = dbName
@@ -174,11 +196,55 @@ update shared msg model =
 
                             else
                                 NotSearched
+                        , classificationSystems = Nothing
+                        , selectedSystem = Nothing
+                        , selectedValue = Nothing
                       }
                     , Effect.batch
-                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, limit = Just 20 })))
+                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
                         , if shouldSearch then
-                            Effect.fromCmd (searchActivities dbName model.searchQuery)
+                            Effect.fromCmd (searchActivities dbName model.searchQuery Nothing Nothing)
+
+                          else
+                            Effect.none
+                        , Effect.fromCmd (fetchClassifications dbName)
+                        ]
+                    )
+
+                ActivitiesView.SelectClassificationSystem system ->
+                    ( { model | selectedSystem = system, selectedValue = Nothing }
+                    , Effect.none
+                    )
+
+                ActivitiesView.SelectClassificationValue value ->
+                    let
+                        newRoute =
+                            ActivitiesRoute
+                                { db = model.dbName
+                                , name =
+                                    if String.isEmpty model.searchQuery then
+                                        Nothing
+
+                                    else
+                                        Just model.searchQuery
+                                , limit = Just 20
+                                , classification = model.selectedSystem
+                                , classificationValue = value
+                                }
+                    in
+                    ( { model
+                        | selectedValue = value
+                        , results =
+                            if value /= Nothing || not (String.isEmpty model.searchQuery) then
+                                Searching
+
+                            else
+                                NotSearched
+                      }
+                    , Effect.batch
+                        [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                        , if value /= Nothing || not (String.isEmpty model.searchQuery) then
+                            Effect.fromCmd (searchActivities model.dbName model.searchQuery model.selectedSystem value)
 
                           else
                             Effect.none
@@ -228,6 +294,14 @@ update shared msg model =
                 _ ->
                     ( model, Effect.none )
 
+        ClassificationsLoaded (Ok systems) ->
+            ( { model | classificationSystems = Just systems }
+            , Effect.none
+            )
+
+        ClassificationsLoaded (Err _) ->
+            ( model, Effect.none )
+
         ScrollDone ->
             ( model, Effect.none )
 
@@ -242,9 +316,18 @@ update shared msg model =
                 -- Re-init if DB just became available with a pending query
                 needsRetry =
                     model.results == NotSearched && not (String.isEmpty newQuery) && dbNowLoaded
+
+                classChanged =
+                    flags.classification /= model.selectedSystem || flags.classificationValue /= model.selectedValue
             in
-            if newQuery == model.searchQuery && not needsRetry then
-                ( model, Effect.fromCmd (Browser.Dom.focus "activity-search" |> Task.attempt (\_ -> ScrollDone)) )
+            if newQuery == model.searchQuery && not needsRetry && not classChanged then
+                ( model, Effect.none )
+
+            else if newQuery == model.searchQuery && not needsRetry then
+                -- Only classification changed — update state without stealing focus
+                ( { model | selectedSystem = flags.classification, selectedValue = flags.classificationValue }
+                , Effect.none
+                )
 
             else
                 init shared flags
@@ -313,6 +396,9 @@ view shared model =
                     loadingMore
                     error
                     maybeDatabaseList
+                    model.classificationSystems
+                    model.selectedSystem
+                    model.selectedValue
                 )
         }
 
@@ -321,16 +407,32 @@ view shared model =
 -- HTTP commands
 
 
-searchActivities : String -> String -> Cmd Msg
-searchActivities dbName query =
+searchActivities : String -> String -> Maybe String -> Maybe String -> Cmd Msg
+searchActivities dbName query classification classificationValue =
     Http.get
         { url =
             Url.Builder.absolute
                 [ "api", "v1", "db", dbName, "activities" ]
-                [ Url.Builder.string "name" query
-                , Url.Builder.int "limit" 20
-                ]
+                (List.filterMap identity
+                    [ if String.isEmpty query then
+                        Nothing
+
+                      else
+                        Just (Url.Builder.string "name" query)
+                    , Just (Url.Builder.int "limit" 20)
+                    , Maybe.map (Url.Builder.string "classification") classification
+                    , Maybe.map (Url.Builder.string "classification-value") classificationValue
+                    ]
+                )
         , expect = Http.expectJson SearchResultsLoaded (searchResultsDecoder activitySummaryDecoder)
+        }
+
+
+fetchClassifications : String -> Cmd Msg
+fetchClassifications dbName =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "v1", "db", dbName, "classifications" ] []
+        , expect = Http.expectJson ClassificationsLoaded (Decode.list classificationSystemDecoder)
         }
 
 
@@ -341,15 +443,23 @@ scrollToBottom containerId =
         |> Task.attempt (\_ -> ScrollDone)
 
 
-searchActivitiesWithOffset : String -> String -> Int -> Int -> Cmd Msg
-searchActivitiesWithOffset dbName query offset limit =
+searchActivitiesWithOffset : String -> String -> Maybe String -> Maybe String -> Int -> Int -> Cmd Msg
+searchActivitiesWithOffset dbName query classification classificationValue offset limit =
     Http.get
         { url =
             Url.Builder.absolute
                 [ "api", "v1", "db", dbName, "activities" ]
-                [ Url.Builder.string "name" query
-                , Url.Builder.int "limit" limit
-                , Url.Builder.int "offset" offset
-                ]
+                (List.filterMap identity
+                    [ if String.isEmpty query then
+                        Nothing
+
+                      else
+                        Just (Url.Builder.string "name" query)
+                    , Just (Url.Builder.int "limit" limit)
+                    , Just (Url.Builder.int "offset" offset)
+                    , Maybe.map (Url.Builder.string "classification") classification
+                    , Maybe.map (Url.Builder.string "classification-value") classificationValue
+                    ]
+                )
         , expect = Http.expectJson MoreResultsLoaded (searchResultsDecoder activitySummaryDecoder)
         }

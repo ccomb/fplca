@@ -11,7 +11,7 @@ import SharedSolver (SharedSolver, solveWithSharedSolver)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SubstitutionResult (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), VariantRequest (..), VariantResponse (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SubstitutionResult (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), VariantRequest (..), VariantResponse (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON)
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
@@ -670,12 +670,12 @@ searchFlows db (Just query) langParam limitParam offsetParam = do
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
 -- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
-searchActivities db nameParam geoParam productParam limitParam offsetParam = do
+searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
+searchActivities db nameParam geoParam productParam classParam classValueParam limitParam offsetParam = do
     startTime <- getCurrentTime
     let limit = maybe total id limitParam
         offset = maybe 0 (max 0) offsetParam
-        allResults = findActivitiesByFields db nameParam geoParam productParam
+        allResults = findActivitiesByFields db nameParam geoParam productParam classParam classValueParam
         total = length allResults
         pagedResults = take limit $ drop offset allResults
         hasMore = offset + limit < total
@@ -706,6 +706,18 @@ searchActivities db nameParam geoParam productParam limitParam offsetParam = do
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
     return $ Right $ toJSON $ SearchResults activityResults total offset limit hasMore searchTimeMs
+
+-- | List all classification systems and their distinct values for a database
+getClassifications :: Database -> [ClassificationSystem]
+getClassifications db =
+    let activities = V.toList (dbActivities db)
+        -- Collect all (system, value) pairs
+        allPairs = concatMap (M.toList . activityClassification) activities
+        -- Group by system: system -> [value]
+        bySystem = M.fromListWith (++) [(sys, [val]) | (sys, val) <- allPairs]
+    in [ ClassificationSystem sys (L.sort $ L.nub vals) (length vals)
+       | (sys, vals) <- L.sortOn fst (M.toList bySystem)
+       ]
 
 -- | Calculate extended metadata for an activity
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata

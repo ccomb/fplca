@@ -359,10 +359,10 @@ buildProductIndex activities processIdTable flowDb =
         , piByLocation = M.fromListWith (++) [(loc, [pid]) | (pid, _, _, loc) <- entries, not (T.null loc)]
         }
 
--- | Search activities by multiple fields (name, geography, product)
+-- | Search activities by multiple fields (name, geography, product, classification)
 -- Multi-word search: each word must match either name OR location (AND logic)
-findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
-findActivitiesByFields db nameParam geoParam productParam =
+findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Activity]
+findActivitiesByFields db nameParam geoParam productParam classParam classValueParam =
     let activities = V.toList (dbActivities db)
 
         -- Filter by name: split into words, each word must match name OR location
@@ -399,7 +399,26 @@ findActivitiesByFields db nameParam geoParam productParam =
                                                 )
                                                 (exchanges a)
                     ]
-     in productFiltered
+
+        -- Filter by classification if provided
+        classFiltered = case classValueParam of
+            Nothing -> productFiltered
+            Just val ->
+                let valLower = T.toLower val
+                in case classParam of
+                    -- Both system and value: match within specific system
+                    Just sys ->
+                        [ a | a <- productFiltered
+                        , case M.lookup sys (activityClassification a) of
+                            Just v -> T.isInfixOf valLower (T.toLower v)
+                            Nothing -> False
+                        ]
+                    -- Only value: match across all classification systems
+                    Nothing ->
+                        [ a | a <- productFiltered
+                        , any (T.isInfixOf valLower . T.toLower) (M.elems (activityClassification a))
+                        ]
+     in classFiltered
 
 -- | Search flows by synonym
 findFlowsBySynonym :: Database -> Text -> [Flow]

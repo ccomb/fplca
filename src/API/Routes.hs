@@ -22,7 +22,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityInfo (..), ActivitySummary (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SupplyChainResponse(..), VariantRequest(..), VariantResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), ClassificationSystem(..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SupplyChainResponse(..), VariantRequest(..), VariantResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -67,7 +67,8 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
                 :<|> "db" :> Get '[JSON] DatabaseListResponse
@@ -182,6 +183,7 @@ lcaServer dbManager maxTreeDepth password =
         :<|> getFlowCFMapping
         :<|> searchFlows
         :<|> searchActivitiesWithCount
+        :<|> getClassifications
         :<|> postLCIA
         :<|> DBHandlers.getDatabases dbManager
         :<|> DBHandlers.loadDatabaseHandler dbManager
@@ -714,17 +716,22 @@ lcaServer dbManager maxTreeDepth password =
         searchFlowsInternal db queryParam langParam limitParam offsetParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam limitParam offsetParam = do
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbName nameParam geoParam productParam classParam classValueParam limitParam offsetParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
-        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam limitParam offsetParam
+        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classParam classValueParam limitParam offsetParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right jsonValue -> case fromJSON jsonValue of
                 Success searchResults -> return searchResults
                 Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
+
+    getClassifications :: Text -> Handler [ClassificationSystem]
+    getClassifications dbName = do
+        (db, _) <- requireDatabaseByName dbManager dbName
+        return $ Service.getClassifications db
 
     -- LCIA computation
     postLCIA :: Text -> Text -> LCIARequest -> Handler Value

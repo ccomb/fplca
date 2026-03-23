@@ -218,6 +218,7 @@ executeSearchActivitiesCommand :: PluginRegistry -> OutputFormat -> Database -> 
 executeSearchActivitiesCommand registry fmt database opts = do
   searchResult <- Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
+         Nothing Nothing  -- classification filter (CLI doesn't expose yet)
          (searchLimit opts) (searchOffset opts)
   case searchResult of
     Left err -> reportServiceError err

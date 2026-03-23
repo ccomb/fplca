@@ -357,7 +357,7 @@ update msg model =
                                 Nothing ->
                                     case Route.routeToDatabase model.currentRoute of
                                         Just db ->
-                                            ActivitiesRoute { db = db, name = Nothing, limit = Just 20 }
+                                            ActivitiesRoute { db = db, name = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing }
 
                                         Nothing ->
                                             DatabasesRoute
