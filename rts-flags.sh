@@ -7,18 +7,18 @@ CORES=$(nproc 2>/dev/null || echo 4)
 RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
 RAM_MB=$((RAM_KB / 1024))
 
-# Heap: 25% of RAM, capped at 4G, minimum 512M
-HEAP_MB=$((RAM_MB / 4))
+# Heap: ~12% of RAM, capped at 4G, minimum 512M
+HEAP_MB=$((RAM_MB / 8))
 [ $HEAP_MB -gt 4096 ] && HEAP_MB=4096
 [ $HEAP_MB -lt 512 ] && HEAP_MB=512
 
-# Nursery: ~20MB per core, minimum 64M
-NURSERY_MB=$((CORES * 20))
+# Nursery: ~16MB per core, minimum 64M
+NURSERY_MB=$((CORES * 16))
 [ $NURSERY_MB -lt 64 ] && NURSERY_MB=64
 
-# Chunk size: nursery / 32, minimum 2m
+# Chunk size: nursery / 32, minimum 8m
 CHUNK_MB=$((NURSERY_MB / 32))
-[ $CHUNK_MB -lt 2 ] && CHUNK_MB=2
+[ $CHUNK_MB -lt 8 ] && CHUNK_MB=8
 
 RTS_FLAGS="+RTS -N -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -I30 -RTS"
 
