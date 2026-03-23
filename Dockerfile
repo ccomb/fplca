@@ -165,6 +165,8 @@ VOLUME /data
 COPY volca.docker.toml /app/volca.toml
 COPY data/ /app/data/
 
+COPY rts-flags.sh /app/rts-flags.sh
+
 EXPOSE 8080
 
-CMD ["volca", "+RTS", "-N4", "-H2G", "-A128M", "-n8m", "-qg0", "-c", "-I30", "-RTS", "--config", "/app/volca.toml", "server"]
+CMD ["sh", "-c", "eval $(/app/rts-flags.sh) && exec volca $RTS_FLAGS --config /app/volca.toml server"]
