@@ -52,6 +52,7 @@ cache/
 
 # hidden files
 .*
+!.gitattributes
 !.gitignore
 !.gitmodules
 !.python-version

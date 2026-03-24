@@ -376,45 +376,35 @@ fi
 log_success "Resources staged to target/release"
 
 # -----------------------------------------------------------------------------
-# Update tauri.conf.json version
-# -----------------------------------------------------------------------------
-
-log_info "Updating tauri.conf.json version to $VERSION..."
-
-TAURI_CONF="$SCRIPT_DIR/tauri.conf.json"
-TAURI_CONF_TMP="$SCRIPT_DIR/tauri.conf.json.tmp"
-
-sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$TAURI_CONF" > "$TAURI_CONF_TMP"
-mv "$TAURI_CONF_TMP" "$TAURI_CONF"
-
-log_success "Updated version in tauri.conf.json"
-echo ""
-
-# -----------------------------------------------------------------------------
 # Build Tauri app
 # -----------------------------------------------------------------------------
 
 cd "$SCRIPT_DIR"
 
+# Pass version override via --config so we don't modify tracked tauri.conf.json
+VERSION_CONFIG="{\"version\":\"$VERSION\"}"
+log_info "Building with version $VERSION"
+echo ""
+
 if [[ "$DEV_MODE" == "true" ]]; then
     log_info "Building Tauri app (development mode)..."
-    cargo tauri build --debug
+    cargo tauri build --debug --config "$VERSION_CONFIG"
 else
     log_info "Building Tauri app (release mode)..."
 
     # Platform-specific bundle types
     case "$OS" in
         linux)
-            cargo tauri build --bundles deb
+            cargo tauri build --bundles deb --config "$VERSION_CONFIG"
             ;;
         macos)
-            cargo tauri build --bundles dmg
+            cargo tauri build --bundles dmg --config "$VERSION_CONFIG"
             ;;
         windows)
-            cargo tauri build --bundles nsis
+            cargo tauri build --bundles nsis --config "$VERSION_CONFIG"
             ;;
         *)
-            cargo tauri build
+            cargo tauri build --config "$VERSION_CONFIG"
             ;;
     esac
 fi
