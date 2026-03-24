@@ -430,8 +430,13 @@ else
     PETSC_LIB_NAME="petsc"
 
     # Download/build PETSc if needed or forced
-    if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
-        if [[ "$FORCE_REBUILD" == "true" && -d "$PETSC_DIR" ]]; then
+    # Check for actual library, not just directory (a failed build leaves the dir but no libs)
+    PETSC_LIB_FILE="$PETSC_DIR/$PETSC_ARCH/lib/libpetsc.a"
+    if [[ "$FORCE_REBUILD" == "true" ]] || [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]] || [[ ! -f "$PETSC_LIB_FILE" ]]; then
+        if [[ -d "$PETSC_DIR/$PETSC_ARCH" && ! -f "$PETSC_LIB_FILE" ]]; then
+            log_warn "PETSc directory exists but libpetsc.a not found — rebuilding"
+            rm -rf "$PETSC_DIR" petsc-*.tar.gz petsc-[0-9]*
+        elif [[ "$FORCE_REBUILD" == "true" && -d "$PETSC_DIR" ]]; then
             log_info "Removing existing PETSc for rebuild..."
             rm -rf "$PETSC_DIR" petsc-*.tar.gz petsc-[0-9]*
         fi
