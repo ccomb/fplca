@@ -33,7 +33,7 @@ src/Version.hs
 # Local configuration
 cabal.project.local
 volca.local.toml
-/fplca.toml
+/volca.toml
 
 run*.sh
 
@@ -47,7 +47,7 @@ cache/
 !README.md
 !CHANGELOG.md
 
-# temporary python stuff (not pyfplca/)
+# temporary python stuff (not pyvolca/)
 /pyproject.toml
 
 # hidden files

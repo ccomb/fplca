@@ -104,7 +104,7 @@ import Text.Printf (printf)
 
 -- | Magic bytes to identify VoLCA cache files
 cacheMagic :: BS.ByteString
-cacheMagic = "FPLCACHE"
+cacheMagic = "VOLCACHE"
 
 -- | Merge two Flow records with the same UUID, combining their synonyms.
 -- When multiple .spold files reference the same biosphere flow, each may carry
@@ -982,7 +982,7 @@ Save Database with pre-computed matrices to cache.
 
 Serializes the complete Database including sparse matrices to enable
 ultra-fast startup (~0.5s load time). The cache file includes:
-- 8 bytes magic ("FPLCACHE")
+- 8 bytes magic ("VOLCACHE")
 - 8 bytes schema signature (auto-generated from type structure)
 - Zstd compressed Database binary
 
