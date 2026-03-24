@@ -20,7 +20,13 @@ NURSERY_MB=$((CORES * 16))
 CHUNK_MB=$((NURSERY_MB / 32))
 [ $CHUNK_MB -lt 8 ] && CHUNK_MB=8
 
-RTS_FLAGS="+RTS -N -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -I30 -RTS"
+# Max heap: 75% of RAM, capped at 24G, minimum 2G
+# Prevents OOM-killing the machine on large cold parses
+MAX_MB=$((RAM_MB * 3 / 4))
+[ $MAX_MB -gt 24576 ] && MAX_MB=24576
+[ $MAX_MB -lt 2048 ] && MAX_MB=2048
+
+RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -I30 -RTS"
 
 echo "RTS_FLAGS=\"$RTS_FLAGS\""
 
