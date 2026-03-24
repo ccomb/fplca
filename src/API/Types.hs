@@ -423,8 +423,9 @@ data VariantRequest = VariantRequest
 
 -- | A single supplier substitution
 data Substitution = Substitution
-    { subFrom :: Text  -- Original supplier ProcessId
-    , subTo :: Text    -- Replacement supplier ProcessId
+    { subFrom     :: Text  -- Original supplier ProcessId
+    , subTo       :: Text  -- Replacement supplier ProcessId
+    , subConsumer :: Text  -- Activity that consumes the original supplier
     }
     deriving (Generic)
 
@@ -439,8 +440,9 @@ data VariantResponse = VariantResponse
 
 -- | Result of a single substitution
 data SubstitutionResult = SubstitutionResult
-    { sbrFrom :: Text
-    , sbrTo :: Text
+    { sbrFrom        :: Text
+    , sbrTo          :: Text
+    , sbrConsumer    :: Text
     , sbrCoefficient :: Double  -- Exchange amount that was swapped
     }
     deriving (Generic)

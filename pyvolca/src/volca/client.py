@@ -149,14 +149,14 @@ class Client:
 
         Args:
             process_id: Base activity ProcessId
-            substitutions: List of {"from": old_supplier_pid, "to": new_supplier_pid}
+            substitutions: List of {"from": old_pid, "to": new_pid, "consumer": consumer_pid}
 
         Returns:
             Variant with modified supply chain
         """
         body = {
             "vrSubstitutions": [
-                {"subFrom": s["from"], "subTo": s["to"]}
+                {"subFrom": s["from"], "subTo": s["to"], "subConsumer": s["consumer"]}
                 for s in substitutions
             ]
         }

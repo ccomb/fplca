@@ -85,11 +85,12 @@ class SupplyChain:
 class SubstitutionResult:
     from_id: str
     to_id: str
+    consumer_id: str
     coefficient: float
 
     @classmethod
     def from_json(cls, d: dict) -> "SubstitutionResult":
-        return cls(from_id=d["sbrFrom"], to_id=d["sbrTo"], coefficient=d["sbrCoefficient"])
+        return cls(from_id=d["sbrFrom"], to_id=d["sbrTo"], consumer_id=d["sbrConsumer"], coefficient=d["sbrCoefficient"])
 
 
 @dataclass

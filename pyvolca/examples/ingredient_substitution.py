@@ -68,10 +68,7 @@ def main():
             )
             print("  Top 5 'at farm' ingredients:")
             for entry in chain.entries[:5]:
-                path_str = " → ".join(n.name for n in entry.path) if entry.path else ""
                 print(f"    {entry.quantity:.4f} {entry.unit} of {entry.name} ({entry.location})")
-                if path_str:
-                    print(f"      Path: {path_str}")
 
         # ── Phase 3: Substitute conventional → organic wheat ───────────
         print("\nPhase 3: Ingredient substitution (conventional → organic wheat)...")
@@ -96,11 +93,20 @@ def main():
         to_activity = org_fr[0]
         print(f"  To:   {to_activity.name} ({to_activity.location}) [{to_activity.process_id}]")
 
+        # Find which activity consumes the conventional wheat (from supply chain edges)
+        consumer_edges = [e for e in chain.edges if e.from_id == from_activity.process_id]
+        if not consumer_edges:
+            print(f"  ERROR: no consumer found for {from_activity.name} in supply chain edges")
+            return
+        consumer_id = consumer_edges[0].to_id
+        print(f"  Consumer: {consumer_id}")
+
         # Create variant via Sherman-Morrison rank-1 update
         variant = c.create_variant(
             flour.process_id,
-            [{"from": from_activity.process_id, "to": to_activity.process_id}],
+            [{"from": from_activity.process_id, "to": to_activity.process_id, "consumer": consumer_id}],
         )
+
         print(f"\n  Variant created: {len(variant.substitutions)} substitution(s)")
         print(f"  Modified supply chain: {variant.total_activities} activities")
 

@@ -1083,20 +1083,22 @@ createVariant db sharedSolver processIdText varReq = do
 
                     -- Apply substitutions sequentially (Sherman-Morrison-Woodbury)
                     let applySubstitution x sub = do
-                            case (resolveActivityAndProcessId db (subFrom sub),
-                                  resolveActivityAndProcessId db (subTo sub)) of
-                                (Left err, _) -> return $ Left err
-                                (_, Left err) -> return $ Left err
-                                (Right (oldPid, _), Right (newPid, _)) -> do
-                                    -- Find the exchange coefficient from the tech matrix
-                                    let coeff = findTechCoefficient db processId oldPid
+                            case ( resolveActivityAndProcessId db (subFrom sub)
+                                 , resolveActivityAndProcessId db (subTo sub)
+                                 , resolveActivityAndProcessId db (subConsumer sub)
+                                 ) of
+                                (Left err, _, _) -> return $ Left err
+                                (_, Left err, _) -> return $ Left err
+                                (_, _, Left err) -> return $ Left err
+                                (Right (oldPid, _), Right (newPid, _), Right (consumerPid, _)) -> do
+                                    let coeff = findTechCoefficient db consumerPid oldPid
                                     case coeff of
                                         Nothing -> return $ Left $ MatrixError $
-                                            "No technosphere link from " <> processIdToText db processId
+                                            "No technosphere link from " <> processIdToText db consumerPid
                                             <> " to supplier " <> subFrom sub
                                         Just a -> do
                                             smResult <- shermanMorrisonVariant db x
-                                                (fromIntegral processId)
+                                                (fromIntegral consumerPid)
                                                 (fromIntegral oldPid)
                                                 (fromIntegral newPid) a
                                             return $ case smResult of
@@ -1137,9 +1139,13 @@ createVariant db sharedSolver processIdText varReq = do
                                 subResults = [ SubstitutionResult
                                     { sbrFrom = subFrom s
                                     , sbrTo = subTo s
+                                    , sbrConsumer = subConsumer s
                                     , sbrCoefficient = maybe 0 id $
-                                        case resolveActivityAndProcessId db (subFrom s) of
-                                            Right (oldPid, _) -> findTechCoefficient db processId oldPid
+                                        case ( resolveActivityAndProcessId db (subFrom s)
+                                             , resolveActivityAndProcessId db (subConsumer s)
+                                             ) of
+                                            (Right (oldPid, _), Right (consPid, _)) ->
+                                                findTechCoefficient db consPid oldPid
                                             _ -> Nothing
                                     } | s <- subs ]
 
