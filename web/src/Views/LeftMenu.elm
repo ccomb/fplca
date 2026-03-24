@@ -1,8 +1,8 @@
 module Views.LeftMenu exposing (Msg(..), mapMsg, viewLeftMenu)
 
 import Char
-import Html exposing (Html, button, div, i, img, nav, p, span, text)
-import Html.Attributes exposing (class, classList, src, style)
+import Html exposing (Html, a, button, div, i, img, nav, p, span, text)
+import Html.Attributes exposing (class, classList, href, src, style)
 import Html.Events exposing (onClick, stopPropagationOn)
 import Json.Decode
 import Route exposing (ActivePage(..), ActivityTab(..))
@@ -27,8 +27,8 @@ mapMsg handlers msg =
             handlers.onCloseConsole
 
 
-viewLeftMenu : ActivePage -> String -> Maybe String -> Maybe String -> String -> String -> Bool -> Bool -> Html Msg
-viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version gitHash showConsole menuOpen =
+viewLeftMenu : ActivePage -> String -> Maybe String -> Maybe String -> String -> String -> Bool -> Bool -> Bool -> Html Msg
+viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityName version gitHash showConsole menuOpen isHosted =
     nav [ classList [ ( "left-menu", True ), ( "is-active", menuOpen ) ], style "display" "flex", style "flex-direction" "column", style "height" "100%" ]
         [ -- Top section (scrollable content)
           div [ style "flex" "1", style "overflow-y" "auto" ]
@@ -116,6 +116,23 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 [ i [ class "fas fa-terminal", style "font-size" "0.7rem" ] []
                 , span [] [ text "Console output" ]
                 ]
+            , if isHosted then
+                Html.a
+                    [ Html.Attributes.href "/account"
+                    , style "display" "inline-flex"
+                    , style "align-items" "center"
+                    , style "gap" "0.4rem"
+                    , style "color" "#888"
+                    , style "font-size" "0.8rem"
+                    , style "text-decoration" "none"
+                    , style "padding" "0.25rem 0"
+                    , style "margin-bottom" "0.5rem"
+                    ]
+                    [ i [ class "fas fa-cog", style "font-size" "0.7rem" ] []
+                    , span [] [ text "Manage instance" ]
+                    ]
+              else
+                text ""
             , div [ style "border-top" "1px solid #ddd", style "margin" "0.5rem 0" ] []
             , div []
                 [ img [ src "/static/volca.svg", style "height" "1.2rem" ] [] ]

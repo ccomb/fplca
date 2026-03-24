@@ -24,7 +24,7 @@ import CLI.Repl (runRepl)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Types
-import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..))
+import Config (loadConfig, Config(..), ServerConfig(..), DatabaseConfig(..), HostingConfig(..))
 import Database.Manager (initDatabaseManager, DatabaseManager(..))
 import Matrix (initializePetscForServer)
 import Network.HTTP.Client (newManager, defaultManagerSettings)
@@ -176,7 +176,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
       pure ()
 
   -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-  let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) staticDir desktopMode password
+  let baseApp = Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) staticDir desktopMode password (cfgHosting effectiveConfig)
       appWithIdleAndShutdown = idleTrackingMiddleware lastRequestRef
           $ shutdownEndpoint mainTid lastRequestRef idleActiveRef baseApp
       finalApp = case password of
@@ -206,8 +206,8 @@ overrideLoad dbNames dbConfig =
     dbConfig { dcLoad = dcName dbConfig `elem` dbNames }
 
 -- | Create a Wai application with DatabaseManager
-createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Application
-createServerApp dbManager maxTreeDepth staticDir desktopMode password req respond = do
+createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> Application
+createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig req respond = do
   let path = rawPathInfo req
       qs = rawQueryString req
       fullUrl = path <> qs
@@ -222,7 +222,7 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password req respon
     then handleLogStream req respond
     else if C8.pack "/api/" `BS.isPrefixOf` path
     then
-      serve lcaAPI (lcaServer dbManager maxTreeDepth password) req respond
+      serve lcaAPI (lcaServer dbManager maxTreeDepth password hostingConfig) req respond
     else if C8.pack "/static/" `BS.isPrefixOf` path
       then
         let strippedPath = BS.drop 7 path

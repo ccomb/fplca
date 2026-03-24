@@ -69,6 +69,7 @@ type alias Model =
     , loadError : Maybe String
     , authState : AuthState
     , activityStack : List ( String, String )
+    , isHosted : Bool
     }
 
 
@@ -98,6 +99,7 @@ type Msg
     | UpdateAuthCode String
     | SubmitAuthCode
     | AuthResult (Result Http.Error ())
+    | HostingLoaded (Result Http.Error Bool)
     | NoOp
 
 
@@ -122,8 +124,9 @@ init () key =
       , loadError = Nothing
       , authState = AuthChecking
       , activityStack = []
+      , isHosted = False
       }
-    , Cmd.batch [ loadDatabases, loadVersion ]
+    , Cmd.batch [ loadDatabases, loadVersion, loadHosting ]
     )
 
 
@@ -137,6 +140,18 @@ loadVersion =
                     (Json.Decode.field "version" Json.Decode.string)
                     (Json.Decode.field "gitHash" Json.Decode.string)
                     (Json.Decode.field "buildTarget" Json.Decode.string)
+                )
+        }
+
+
+loadHosting : Cmd Msg
+loadHosting =
+    Http.get
+        { url = "/api/v1/hosting"
+        , expect =
+            Http.expectJson HostingLoaded
+                (Json.Decode.field "max_uploads" Json.Decode.int
+                    |> Json.Decode.map (\_ -> True)
                 )
         }
 
@@ -395,6 +410,12 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        HostingLoaded (Ok isHosted) ->
+            ( { model | isHosted = isHosted }, Cmd.none )
+
+        HostingLoaded (Err _) ->
+            ( model, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )

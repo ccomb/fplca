@@ -22,7 +22,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityInfo (..), ActivitySummary (..), ClassificationSystem(..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SupplyChainResponse(..), VariantRequest(..), VariantResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), ClassificationSystem(..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SubstitutionRequest(..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -40,6 +40,8 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (intercalate)
 import Numeric (showFFloat)
+import qualified Config
+import qualified GHC.Stats
 import qualified Version
 
 -- | API type definition - RESTful design with focused endpoints
@@ -55,9 +57,12 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> Get '[JSON] SupplyChainResponse
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "variant" :> ReqBody '[JSON] VariantRequest :> Post '[JSON] VariantResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> Get '[JSON] LCIAResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia-batch" :> Capture "collection" Text :> Get '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia-batch" :> Capture "collection" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
@@ -114,6 +119,10 @@ type LCAAPI =
                 :<|> "auth" :> ReqBody '[JSON] LoginRequest :> Post '[JSON] (Headers '[Header "Set-Cookie" String] Value)
                 -- Version endpoint
                 :<|> "version" :> Get '[JSON] Value
+                -- Hosting config (for managed instances)
+                :<|> "hosting" :> Get '[JSON] Value
+                -- Runtime stats (memory usage)
+                :<|> "stats" :> Get '[JSON] Value
            )
 
 -- | Get database by name, throw 404 if not loaded
@@ -159,8 +168,8 @@ instance FromJSON LoginRequest where
 
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
-lcaServer :: DatabaseManager -> Int -> Maybe String -> Server LCAAPI
-lcaServer dbManager maxTreeDepth password =
+lcaServer :: DatabaseManager -> Int -> Maybe String -> Maybe Config.HostingConfig -> Server LCAAPI
+lcaServer dbManager maxTreeDepth password hostingConfig =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -170,9 +179,12 @@ lcaServer dbManager maxTreeDepth password =
         :<|> getActivityInventory
         :<|> getActivityGraph
         :<|> getActivitySupplyChain
-        :<|> postActivityVariant
         :<|> getActivityLCIA
+        :<|> postActivityLCIA
         :<|> getActivityLCIABatch
+        :<|> postActivityLCIABatch
+        :<|> postActivityInventory
+        :<|> postActivitySupplyChain
         :<|> getActivityAnalyze
         :<|> getFlowDetail
         :<|> getFlowActivities
@@ -223,6 +235,8 @@ lcaServer dbManager maxTreeDepth password =
         :<|> getLogsHandler
         :<|> postAuth
         :<|> getVersion
+        :<|> getHosting
+        :<|> getStats
   where
     getVersion :: Handler Value
     getVersion = return $ object
@@ -231,6 +245,36 @@ lcaServer dbManager maxTreeDepth password =
         , "gitTag" .= Version.gitTag
         , "buildTarget" .= Version.buildTarget
         ]
+
+    getHosting :: Handler Value
+    getHosting = return $ case hostingConfig of
+        Just hc -> object
+            [ "max_uploads" .= Config.hcMaxUploads hc
+            , "api_access" .= Config.hcApiAccess hc
+            , "upgrade_upload" .= Config.hcUpgradeUpload hc
+            , "upgrade_api" .= Config.hcUpgradeApi hc
+            , "upgrade_vm_size" .= Config.hcUpgradeVmSize hc
+            ]
+        Nothing -> object
+            [ "max_uploads" .= (-1 :: Int)
+            , "api_access" .= True
+            , "upgrade_upload" .= ("" :: Text)
+            , "upgrade_api" .= ("" :: Text)
+            , "upgrade_vm_size" .= ("" :: Text)
+            ]
+
+    getStats :: Handler Value
+    getStats = liftIO $ do
+        enabled <- GHC.Stats.getRTSStatsEnabled
+        if enabled then do
+            stats <- GHC.Stats.getRTSStats
+            return $ object
+                [ "memory_used_bytes" .= GHC.Stats.gcdetails_live_bytes (GHC.Stats.gc stats)
+                , "memory_allocated_bytes" .= GHC.Stats.allocated_bytes stats
+                , "gc_count" .= GHC.Stats.gcs stats
+                ]
+        else return $ object
+            [ "error" .= ("RTS stats not enabled. Run with +RTS -T to enable." :: Text) ]
 
     getLogsHandler :: Maybe Int -> Handler Value
     getLogsHandler sinceMaybe = do
@@ -353,18 +397,6 @@ lcaServer dbManager maxTreeDepth password =
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right supplyChain -> return supplyChain
 
-    -- Activity variant endpoint (Sherman-Morrison substitution)
-    postActivityVariant :: Text -> Text -> VariantRequest -> Handler VariantResponse
-    postActivityVariant dbName processId variantReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        result <- liftIO $ Service.createVariant db sharedSolver processId variantReq
-        case result of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left _ -> throwError err500{errBody = "Internal server error"}
-            Right variantResp -> return variantResp
-
     -- Activity LCIA endpoint (single method)
     getActivityLCIA :: Text -> Text -> Text -> Handler LCIAResult
     getActivityLCIA dbName processIdText methodIdText = do
@@ -378,6 +410,20 @@ lcaServer dbManager maxTreeDepth password =
                 inventory <- liftIO $ Matrix.computeInventoryMatrix db actProcessId
                 result <- liftIO $ computeCategoryResult db inventory method
                 liftIO $ logLCIAResult result method
+                return result
+
+    -- POST: LCIA with substitutions
+    postActivityLCIA :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
+    postActivityLCIA dbName processIdText methodIdText subReq = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        method <- loadMethodByUUID methodIdText
+        (processId, _) <- resolveOrThrow db processIdText
+        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
+        case scalingResult of
+            Left err -> throwServiceError err
+            Right scalingVec -> do
+                let inventory = Matrix.applyBiosphereMatrix db scalingVec
+                result <- liftIO $ computeCategoryResult db inventory method
                 return result
 
     -- Batch LCIA endpoint (all methods in a collection)
@@ -440,6 +486,75 @@ lcaServer dbManager maxTreeDepth password =
                     , lbrAvailableNWsets = map nwName nwSets
                     }
 
+    -- POST: Batch LCIA with substitutions
+    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
+    postActivityLCIABatch dbName processIdText collectionName subReq = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (processId, _) <- resolveOrThrow db processIdText
+        (methods, damageCats, nwSets) <- loadCollection collectionName
+        let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
+            mNW = case nwSets of { (nw:_) -> Just nw; [] -> Nothing }
+        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
+        case scalingResult of
+            Left err -> throwServiceError err
+            Right scalingVec -> do
+                let inventory = Matrix.applyBiosphereMatrix db scalingVec
+                rawResults <- liftIO $ mapM (computeCategoryResult db inventory) methods
+                let results = map (enrichWithNW dcLookup mNW) rawResults
+                    singleScore = case mNW of
+                        Just _ -> Just $ sum [s | r <- results, Just s <- [lrWeightedScore r]]
+                        Nothing -> Nothing
+                return LCIABatchResult
+                    { lbrResults = results
+                    , lbrSingleScore = singleScore
+                    , lbrSingleScoreUnit = if null nwSets then Nothing else Just "Pt"
+                    , lbrNormWeightSetName = nwName <$> mNW
+                    , lbrAvailableNWsets = map nwName nwSets
+                    }
+
+    -- POST: Inventory with substitutions
+    postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
+    postActivityInventory dbName processIdText subReq = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (processId, activity) <- resolveOrThrow db processIdText
+        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
+        case scalingResult of
+            Left err -> throwServiceError err
+            Right scalingVec -> do
+                let inventory = Matrix.applyBiosphereMatrix db scalingVec
+                    inventoryExport = Service.convertToInventoryExport db processId activity inventory
+                return inventoryExport
+
+    -- POST: Supply chain with substitutions
+    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> SubstitutionRequest -> Handler SupplyChainResponse
+    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam subReq = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (processId, _) <- resolveOrThrow db processIdText
+        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
+        case scalingResult of
+            Left err -> throwServiceError err
+            Right scalingVec -> do
+                let result = Service.buildSupplyChainFromScalingVector db processId scalingVec nameFilter limitParam minQuantityParam
+                return result
+
+    -- Helpers for POST endpoints with substitutions
+    resolveOrThrow :: Database -> Text -> Handler (ProcessId, Activity)
+    resolveOrThrow db processIdText =
+        case Service.resolveActivityAndProcessId db processIdText of
+            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Right (pid, act) ->
+                case Service.validateProcessIdInMatrixIndex db pid of
+                    Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+                    Right () -> return (pid, act)
+
+    throwServiceError :: Service.ServiceError -> Handler a
+    throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
+    throwServiceError (Service.InvalidProcessId msg) = throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+    throwServiceError (Service.MatrixError msg) = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+    throwServiceError _ = throwError err500{errBody = "Internal server error"}
+
     -- Log a single category result in the batch
     logBatchCategory :: Int -> LCIAResult -> IO ()
     logBatchCategory _invSize result = do
@@ -449,6 +564,14 @@ lcaServer dbManager maxTreeDepth password =
         reportProgress Info $ "  " <> T.unpack (lrMethodName result) <> ": "
             <> scoreTxt <> " " <> T.unpack (lrUnit result)
             <> " (" <> show mapped <> "/" <> show total <> " CFs mapped)"
+
+    -- Load a method collection by name
+    loadCollection :: Text -> Handler ([Method], [DamageCategory], [NormWeightSet])
+    loadCollection collectionName = do
+        loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
+        case M.lookup collectionName loadedCollections of
+            Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc)
+            Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
 
     -- Activity analysis endpoint (dispatches to registered analyzers)
     getActivityAnalyze :: Text -> Text -> Text -> Handler Value
@@ -505,7 +628,7 @@ lcaServer dbManager maxTreeDepth password =
                         mWeight = M.lookup dmgCat (nwWeighting nw)
                     in case (mNorm, mWeight) of
                         (Just n, Just w) ->
-                            let ns = lrScore result * n
+                            let ns = lrScore result / n
                             in (Just ns, Just (ns * w))
                         _ -> (Nothing, Nothing)
                 Nothing -> (Nothing, Nothing)

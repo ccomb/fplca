@@ -9,6 +9,7 @@ module Config
     , DatabaseConfig(..)
     , MethodConfig(..)
     , RefDataConfig(..)
+    , HostingConfig(..)
       -- * Loading
     , loadConfig
     , loadConfigFile
@@ -44,6 +45,16 @@ data Config = Config
     , cfgCompartmentMappings :: ![RefDataConfig]
     , cfgUnits               :: ![RefDataConfig]
     , cfgPlugins             :: ![PluginConfig]
+    , cfgHosting             :: !(Maybe HostingConfig)
+    } deriving (Show, Eq, Generic)
+
+-- | Hosting configuration for managed VoLCA instances
+data HostingConfig = HostingConfig
+    { hcMaxUploads   :: !Int      -- Max database uploads (-1 = unlimited, 0 = disabled)
+    , hcApiAccess    :: !Bool     -- Programmatic API access allowed
+    , hcUpgradeUpload :: !Text    -- Upgrade message when upload restricted
+    , hcUpgradeApi   :: !Text     -- Upgrade message when API restricted
+    , hcUpgradeVmSize :: !Text    -- Upgrade message when memory is high
     } deriving (Show, Eq, Generic)
 
 -- | Server configuration
@@ -105,6 +116,7 @@ defaultConfig = Config
     , cfgCompartmentMappings = []
     , cfgUnits = []
     , cfgPlugins = []
+    , cfgHosting = Nothing
     }
 
 -- TOML Decoders
@@ -118,6 +130,7 @@ instance DecodeTOML Config where
         cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
         cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
         cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
+        cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         pure Config{..}
 
 instance DecodeTOML ServerConfig where
@@ -159,6 +172,15 @@ instance DecodeTOML RefDataConfig where
         let rdIsAuto = False
         rdDescription <- getFieldOpt "description"
         pure RefDataConfig{..}
+
+instance DecodeTOML HostingConfig where
+    tomlDecoder = do
+        hcMaxUploads <- fromMaybe (-1) <$> getFieldOpt "max_uploads"
+        hcApiAccess <- fromMaybe True <$> getFieldOpt "api_access"
+        hcUpgradeUpload <- fromMaybe "" <$> getFieldOpt "upgrade_upload"
+        hcUpgradeApi <- fromMaybe "" <$> getFieldOpt "upgrade_api"
+        hcUpgradeVmSize <- fromMaybe "" <$> getFieldOpt "upgrade_vm_size"
+        pure HostingConfig{..}
 
 -- | Load configuration from a TOML file
 loadConfigFile :: FilePath -> IO (Either Text Config)

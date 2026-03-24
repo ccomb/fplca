@@ -221,6 +221,7 @@ viewLeftMenu shared =
             shared.gitHash
             showConsole
             shared.menuOpen
+            shared.isHosted
         )
 
 
