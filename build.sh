@@ -372,14 +372,9 @@ download_and_build_petsc() {
             log_warn "Install MS-MPI runtime from https://github.com/microsoft/Microsoft-MPI/releases"
         fi
         EXTRA_ARGS="--with-cc=/ucrt64/bin/mpicc.exe --with-fc=/ucrt64/bin/mpifort.exe"
+        # mpiexec path contains spaces — passed separately to preserve quoting
         if [[ -f "$MSMPI_BIN/mpiexec.exe" ]]; then
-            # Use 8.3 short path to avoid spaces (EXTRA_CONFIGURE_ARGS is word-split)
-            local MSMPI_BIN_SHORT
-            MSMPI_BIN_SHORT=$(cygpath -d "$MSMPI_BIN" 2>/dev/null | sed 's|\\|/|g')
-            if [[ -z "$MSMPI_BIN_SHORT" ]]; then
-                MSMPI_BIN_SHORT=$(cd "$MSMPI_BIN" 2>/dev/null && pwd || echo "$MSMPI_BIN")
-            fi
-            EXTRA_ARGS="$EXTRA_ARGS --with-mpiexec=$MSMPI_BIN_SHORT/mpiexec"
+            MPIEXEC_PATH="$MSMPI_BIN/mpiexec"
         fi
         log_info "Using MSYS2 msmpi package with MS-MPI runtime"
     fi
@@ -388,6 +383,7 @@ download_and_build_petsc() {
     PETSC_ARCH="$PETSC_ARCH" \
     PETSC_PLATFORM_OPTS="$(get_petsc_configure_platform)" \
     EXTRA_CONFIGURE_ARGS="$EXTRA_ARGS" \
+    PETSC_MPIEXEC="${MPIEXEC_PATH:-}" \
     PYTHON="$PYTHON" \
     ./build-petsc.sh
 

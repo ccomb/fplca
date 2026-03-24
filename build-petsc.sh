@@ -51,14 +51,21 @@ fi
 cd "$PETSC_DIR"
 echo "Configuring PETSc (optimized, with MUMPS direct solver)..."
 
-# shellcheck disable=SC2086
-$PYTHON ./configure \
-    $PETSC_CONFIGURE_COMMON \
-    $PETSC_PLATFORM_OPTS \
-    $EXTRA_CONFIGURE_ARGS \
-    COPTFLAGS="$PETSC_COPTFLAGS" \
-    FOPTFLAGS="$PETSC_FOPTFLAGS" \
+# Build configure args array (handles paths with spaces correctly)
+CONFIGURE_CMD=("$PYTHON" ./configure
+    $PETSC_CONFIGURE_COMMON
+    $PETSC_PLATFORM_OPTS
+    $EXTRA_CONFIGURE_ARGS
+    COPTFLAGS="$PETSC_COPTFLAGS"
+    FOPTFLAGS="$PETSC_FOPTFLAGS"
     PETSC_ARCH="$PETSC_ARCH"
+)
+# PETSC_MPIEXEC is passed separately to preserve paths with spaces
+if [[ -n "${PETSC_MPIEXEC:-}" ]]; then
+    CONFIGURE_CMD+=("--with-mpiexec=$PETSC_MPIEXEC")
+fi
+
+"${CONFIGURE_CMD[@]}"
 
 # Build
 echo "Building PETSc..."
