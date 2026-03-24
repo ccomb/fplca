@@ -62,9 +62,14 @@ echo "Web interface will be available at: http://localhost:$PORT/"
 echo "API will be available at: http://localhost:$PORT/api/v1/"
 echo ""
 
+# Compute RTS flags based on hardware
+eval "$("${SCRIPT_DIR}/rts-flags.sh")"
+echo "RTS flags: $RTS_FLAGS"
+echo ""
+
 # Run the server using the pre-built executable
 "$BINARY" \
-    +RTS -N -H4G -A512M -n16m -qg0 -c -I30 -RTS \
+    $RTS_FLAGS \
     --config "$CONFIG" \
 
 ################################
