@@ -46,10 +46,10 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
     let activityKeys = M.keys activityMap
         sortedKeys = sort activityKeys -- Ensure deterministic ordering
 
-        -- Build forward lookup: ProcessId (Int16) -> (UUID, UUID)
+        -- Build forward lookup: ProcessId (Int32) -> (UUID, UUID)
         dbProcessIdTable = V.fromList sortedKeys
 
-        -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int16)
+        -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int32)
         dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
 
         -- Build activity UUID index: UUID -> ProcessId (for O(1) lookups)

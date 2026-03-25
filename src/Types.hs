@@ -14,7 +14,7 @@ module Types (
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Store (Store(..), Size(..))
-import Data.Int (Int16, Int32)
+import Data.Int (Int32)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -42,10 +42,10 @@ instance Store UUID where
 -- This saves ~2-3GB of RAM by reducing memory footprint from ~100,000+ UUID instances
 -- NFData instance is provided by the uuid package; Store instance defined above
 
--- | Process identifier - compact Int16 index for efficient matrix operations
+-- | Process identifier - compact Int32 index for efficient matrix operations
 -- Maps to (activityUUID, productUUID) via Database.dbProcessIdTable
 -- Based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
-type ProcessId = Int16
+type ProcessId = Int32
 
 -- | Type de flux : Technosphère (échange entre activités) ou Biosphère (échange avec l'environnement)
 data FlowType = Technosphere | Biosphere
@@ -211,7 +211,7 @@ type UnitDB = M.Map UUID Unit
 -- This is converted to ActivityDB Vector during database construction
 type ActivityMap = M.Map (UUID, UUID) Activity
 
--- | Base de données des activités - Vector for direct indexing by ProcessId (Int16)
+-- | Base de données des activités - Vector for direct indexing by ProcessId (Int32)
 -- Each spold file (activity_uuid_product_uuid.spold) becomes a separate entry
 type ActivityDB = V.Vector Activity
 
@@ -358,7 +358,7 @@ emptyProductIndex = ProductIndex M.empty M.empty M.empty
 -- | Base de données complète avec index pour recherches efficaces
 data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
-      dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int16) → (activityUUID, productUUID)
+      dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int32) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
     , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
     , dbActivityProductsIndex :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
@@ -697,7 +697,7 @@ data CF = CF
     }
 
 -- JSON instances for API compatibility
--- Note: ProcessId is Int16, which already has ToJSON/FromJSON instances
+-- Note: ProcessId is Int32, which already has ToJSON/FromJSON instances
 instance ToJSON Exchange
 instance ToJSON FlowType
 
