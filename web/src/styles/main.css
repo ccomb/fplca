@@ -81,3 +81,27 @@ html, body {
     background-color: #00d1b2;
     color: #363636;
 }
+
+/* Collapsible Lab section */
+.lab-section summary::-webkit-details-marker,
+.lab-section summary::marker {
+    display: none;
+}
+
+.lab-section summary {
+    list-style: none;
+}
+
+.lab-section summary::before {
+    content: "\f054";
+    font-family: "Font Awesome 5 Free";
+    font-weight: 900;
+    font-size: 0.6rem;
+    margin-right: 0.4rem;
+    display: inline-block;
+    transition: transform 0.15s;
+}
+
+.lab-section[open] summary::before {
+    transform: rotate(90deg);
+}

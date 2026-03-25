@@ -1,8 +1,8 @@
 module Views.LeftMenu exposing (Msg(..), mapMsg, viewLeftMenu)
 
 import Char
-import Html exposing (Html, a, button, div, i, img, nav, p, span, text)
-import Html.Attributes exposing (class, classList, href, src, style)
+import Html exposing (Html, a, button, div, i, img, nav, node, p, span, text)
+import Html.Attributes exposing (attribute, class, classList, href, src, style)
 import Html.Events exposing (onClick, stopPropagationOn)
 import Json.Decode
 import Route exposing (ActivePage(..), ActivityTab(..))
@@ -78,13 +78,31 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                         , menuItem currentPage (ActivityActive Emissions) "fas fa-cloud" "Direct emissions" False
                         , menuItem currentPage (ActivityActive Resources) "fas fa-leaf" "Natural resources" False
                         , menuItem currentPage (ActivityActive Products) "fas fa-box" "Outgoing products" False
-                        , menuItem currentPage (ActivityActive Consumers) "fas fa-arrow-down" "Consumers" False
                         , menuItem currentPage (ActivityActive Inventory) "fas fa-list-ul" "Inventory" False
-                        , menuItem currentPage (ActivityActive Composition) "fas fa-cubes" "Composition" False
-                        , menuLabel "Lab"
-                        , menuItem currentPage (ActivityActive LCIA) "fas fa-chart-bar" "Impacts" True
-                        , menuItem currentPage (ActivityActive Tree) "fas fa-project-diagram" "Tree" True
-                        , menuItem currentPage (ActivityActive Graph) "fas fa-network-wired" "Graph" True
+                        , node "details"
+                            (class "lab-section"
+                                :: (if isLabTab currentPage then
+                                        [ attribute "open" "" ]
+
+                                    else
+                                        []
+                                   )
+                            )
+                            [ node "summary"
+                                [ class "menu-label has-text-grey-light"
+                                , style "padding" "0.5rem 1rem"
+                                , style "margin-top" "0.5rem"
+                                , style "font-size" "0.75rem"
+                                , style "text-transform" "uppercase"
+                                , style "cursor" "pointer"
+                                ]
+                                [ text "Lab" ]
+                            , menuItem currentPage (ActivityActive LCIA) "fas fa-chart-bar" "Impacts" True
+                            , menuItem currentPage (ActivityActive Tree) "fas fa-project-diagram" "Tree" True
+                            , menuItem currentPage (ActivityActive Graph) "fas fa-network-wired" "Graph" True
+                            , menuItem currentPage (ActivityActive Consumers) "fas fa-arrow-down" "Consumers" True
+                            , menuItem currentPage (ActivityActive Composition) "fas fa-cubes" "Composition" True
+                            ]
                         ]
 
                 Nothing ->
@@ -165,6 +183,16 @@ formatVersion version =
 
         Nothing ->
             version
+
+
+isLabTab : ActivePage -> Bool
+isLabTab page =
+    case page of
+        ActivityActive tab ->
+            List.member tab [ LCIA, Tree, Graph, Consumers, Composition ]
+
+        _ ->
+            False
 
 
 menuLabel : String -> Html Msg
