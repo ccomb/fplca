@@ -41,7 +41,7 @@ MAX_MB=$((RAM_MB * 3 / 4))
 [ $MAX_MB -gt 24576 ] && MAX_MB=24576
 [ $MAX_MB -lt 2048 ] && MAX_MB=2048
 
-RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -I30 -RTS"
+RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -I30 -RTS"
 
 echo "RTS_FLAGS=\"$RTS_FLAGS\""
 
