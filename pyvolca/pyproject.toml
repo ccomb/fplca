@@ -7,7 +7,6 @@ dependencies = ["requests>=2.28"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-ml = ["sentence-transformers>=2.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

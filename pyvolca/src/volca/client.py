@@ -52,6 +52,14 @@ class Client:
         c._session = self._session
         return c
 
+    # -- Server info --
+
+    def get_version(self) -> dict:
+        """Return server version info (version, gitHash, gitTag, buildTarget)."""
+        r = self._session.get(self._api_url("version"))
+        r.raise_for_status()
+        return r.json()
+
     # -- Database management --
 
     def list_databases(self) -> list[dict]:
