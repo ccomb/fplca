@@ -10,6 +10,7 @@ import Views.ActivityRow as ActivityRow
 
 type Msg
     = UpdateSearchQuery String
+    | UpdateProductQuery String
     | SelectActivity String
     | LoadMore
     | SelectDatabase String
@@ -17,14 +18,15 @@ type Msg
     | SelectClassificationValue (Maybe String)
 
 
-viewActivitiesPage : String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> Maybe String -> Maybe String -> Html Msg
-viewActivitiesPage currentDbName searchQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems selectedSystem selectedValue =
+viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> Maybe String -> Maybe String -> Html Msg
+viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems selectedSystem selectedValue =
     div [ class "activities-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
             , viewFiltersRow maybeDatabaseList currentDbName classificationSystems selectedSystem selectedValue
             , viewSearchInput searchQuery searchLoading
+            , viewProductInput productQuery
             , case error of
                 Just err ->
                     div [ class "notification is-danger" ]
@@ -52,6 +54,26 @@ viewSearchInput query isLoading =
                 []
             , span [ class "icon is-left" ]
                 [ Html.i [ class "fas fa-search" ] []
+                ]
+            ]
+        ]
+
+
+viewProductInput : String -> Html Msg
+viewProductInput productQuery =
+    div [ class "field", style "margin-bottom" "0.75rem" ]
+        [ div [ class "control has-icons-left" ]
+            [ input
+                [ id "product-search"
+                , class "input"
+                , type_ "text"
+                , placeholder "Filter by product..."
+                , value productQuery
+                , onInput UpdateProductQuery
+                ]
+                []
+            , span [ class "icon is-left" ]
+                [ Html.i [ class "fas fa-cube" ] []
                 ]
             ]
         ]

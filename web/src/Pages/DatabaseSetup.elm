@@ -90,7 +90,7 @@ update shared msg model =
 
                 DatabaseSetupView.GoToActivities ->
                     ( model
-                    , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (Route.ActivitiesRoute { db = model.dbName, name = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
+                    , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (Route.ActivitiesRoute { db = model.dbName, name = Nothing, product = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
                     )
 
                 DatabaseSetupView.GoToMapping ->

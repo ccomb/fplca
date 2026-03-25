@@ -21,6 +21,7 @@ import Views.DatabasesView as DatabasesView
 
 type alias Model =
     { searchQuery : String
+    , productQuery : String
     , dbName : String
     , results : SearchState
     , classificationSystems : Maybe (List ClassificationSystem)
@@ -66,19 +67,26 @@ init shared flags =
         searchQuery =
             Maybe.withDefault "" flags.name
 
+        productQuery =
+            Maybe.withDefault "" flags.product
+
         dbLoaded =
             Shared.isDatabaseLoaded shared flags.db
 
         hasTextQuery =
             not (String.isEmpty searchQuery)
 
+        hasProductQuery =
+            not (String.isEmpty productQuery)
+
         hasClassFilter =
             flags.classificationValue /= Nothing
 
         shouldSearch =
-            (hasTextQuery || hasClassFilter) && dbLoaded
+            (hasTextQuery || hasProductQuery || hasClassFilter) && dbLoaded
     in
     ( { searchQuery = searchQuery
+      , productQuery = productQuery
       , dbName = flags.db
       , results =
             if shouldSearch then
@@ -93,7 +101,7 @@ init shared flags =
       }
     , Effect.batch
         [ if shouldSearch then
-            Effect.fromCmd (searchActivities flags.db searchQuery flags.classification flags.classificationValue)
+            Effect.fromCmd (searchActivities flags.db searchQuery productQuery flags.classification flags.classificationValue)
 
           else
             Effect.none
@@ -121,6 +129,15 @@ update shared msg model =
                     , Effect.fromCmd (Process.sleep 100 |> Task.perform (\_ -> DebounceTick newCounter))
                     )
 
+                ActivitiesView.UpdateProductQuery query ->
+                    let
+                        newCounter =
+                            model.debounceCounter + 1
+                    in
+                    ( { model | productQuery = query, debounceCounter = newCounter }
+                    , Effect.fromCmd (Process.sleep 100 |> Task.perform (\_ -> DebounceTick newCounter))
+                    )
+
                 ActivitiesView.SelectActivity activityId ->
                     ( model
                     , Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivityRoute Upstream model.dbName activityId)))
@@ -134,7 +151,7 @@ update shared msg model =
                                     results.offset + results.limit
                             in
                             ( { model | results = LoadingMore results }
-                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery model.selectedSystem model.selectedValue newOffset results.limit)
+                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue newOffset results.limit)
                             )
 
                         _ ->
@@ -149,8 +166,15 @@ update shared msg model =
                             else
                                 Just model.searchQuery
 
+                        queryProduct =
+                            if String.isEmpty model.productQuery then
+                                Nothing
+
+                            else
+                                Just model.productQuery
+
                         shouldSearch =
-                            not (String.isEmpty model.searchQuery) || model.selectedValue /= Nothing
+                            not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || model.selectedValue /= Nothing
                     in
                     ( { model
                         | dbName = dbName
@@ -165,9 +189,9 @@ update shared msg model =
                         , selectedValue = Nothing
                       }
                     , Effect.batch
-                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
+                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, product = queryProduct, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
                         , if shouldSearch then
-                            Effect.fromCmd (searchActivities dbName model.searchQuery Nothing Nothing)
+                            Effect.fromCmd (searchActivities dbName model.searchQuery model.productQuery Nothing Nothing)
 
                           else
                             Effect.none
@@ -182,6 +206,13 @@ update shared msg model =
 
                 ActivitiesView.SelectClassificationValue value ->
                     let
+                        queryProduct =
+                            if String.isEmpty model.productQuery then
+                                Nothing
+
+                            else
+                                Just model.productQuery
+
                         newRoute =
                             ActivitiesRoute
                                 { db = model.dbName
@@ -191,15 +222,19 @@ update shared msg model =
 
                                     else
                                         Just model.searchQuery
+                                , product = queryProduct
                                 , limit = Just 20
                                 , classification = model.selectedSystem
                                 , classificationValue = value
                                 }
+
+                        hasQuery =
+                            value /= Nothing || not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery)
                     in
                     ( { model
                         | selectedValue = value
                         , results =
-                            if value /= Nothing || not (String.isEmpty model.searchQuery) then
+                            if hasQuery then
                                 Searching
 
                             else
@@ -207,8 +242,8 @@ update shared msg model =
                       }
                     , Effect.batch
                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                        , if value /= Nothing || not (String.isEmpty model.searchQuery) then
-                            Effect.fromCmd (searchActivities model.dbName model.searchQuery model.selectedSystem value)
+                        , if hasQuery then
+                            Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem value)
 
                           else
                             Effect.none
@@ -282,11 +317,18 @@ update shared msg model =
                         else
                             Just model.searchQuery
 
+                    queryProduct =
+                        if String.isEmpty model.productQuery then
+                            Nothing
+
+                        else
+                            Just model.productQuery
+
                     newRoute =
-                        ActivitiesRoute { db = model.dbName, name = queryName, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+                        ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
 
                     hasQuery =
-                        not (String.isEmpty model.searchQuery) || model.selectedValue /= Nothing
+                        not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || model.selectedValue /= Nothing
                 in
                 ( { model
                     | results =
@@ -302,7 +344,7 @@ update shared msg model =
                   else
                     Effect.batch
                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.selectedSystem model.selectedValue)
+                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue)
                         ]
                 )
 
@@ -311,20 +353,26 @@ update shared msg model =
                 newQuery =
                     Maybe.withDefault "" flags.name
 
+                newProduct =
+                    Maybe.withDefault "" flags.product
+
                 dbNowLoaded =
                     Shared.isDatabaseLoaded shared flags.db
 
+                hasQuery =
+                    not (String.isEmpty newQuery) || not (String.isEmpty newProduct)
+
                 -- Re-init if DB just became available with a pending query
                 needsRetry =
-                    model.results == NotSearched && not (String.isEmpty newQuery) && dbNowLoaded
+                    model.results == NotSearched && hasQuery && dbNowLoaded
 
                 classChanged =
                     flags.classification /= model.selectedSystem || flags.classificationValue /= model.selectedValue
             in
-            if newQuery == model.searchQuery && not needsRetry && not classChanged then
+            if newQuery == model.searchQuery && newProduct == model.productQuery && not needsRetry && not classChanged then
                 ( model, Effect.none )
 
-            else if newQuery == model.searchQuery && not needsRetry then
+            else if newQuery == model.searchQuery && newProduct == model.productQuery && not needsRetry then
                 -- Only classification changed — update state without stealing focus
                 ( { model | selectedSystem = flags.classification, selectedValue = flags.classificationValue }
                 , Effect.none
@@ -332,6 +380,60 @@ update shared msg model =
 
             else
                 init shared flags
+
+
+updateQuery : Shared.Model -> Model -> ( Model, Effect Shared.Msg Msg )
+updateQuery shared model =
+    if not (Shared.isDatabaseLoaded shared model.dbName) then
+        ( model, Effect.none )
+
+    else
+        let
+            queryName =
+                if String.isEmpty model.searchQuery then
+                    Nothing
+
+                else
+                    Just model.searchQuery
+
+            queryProduct =
+                if String.isEmpty model.productQuery then
+                    Nothing
+
+                else
+                    Just model.productQuery
+
+            hasQuery =
+                queryName /= Nothing || queryProduct /= Nothing || model.selectedValue /= Nothing
+
+            newRoute =
+                ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+
+            cmds =
+                if not hasQuery then
+                    Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+
+                else
+                    Effect.batch
+                        [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue)
+                        ]
+        in
+        ( { model
+            | results =
+                if not hasQuery then
+                    NotSearched
+
+                else
+                    case model.results of
+                        Results _ ->
+                            model.results
+
+                        _ ->
+                            Searching
+          }
+        , cmds
+        )
 
 
 view : Shared.Model -> Model -> View Msg
@@ -392,6 +494,7 @@ view shared model =
                 (ActivitiesView.viewActivitiesPage
                     model.dbName
                     model.searchQuery
+                    model.productQuery
                     searchResults
                     searchLoading
                     loadingMore
@@ -408,18 +511,15 @@ view shared model =
 -- HTTP commands
 
 
-searchActivities : String -> String -> Maybe String -> Maybe String -> Cmd Msg
-searchActivities dbName query classification classificationValue =
+searchActivities : String -> String -> String -> Maybe String -> Maybe String -> Cmd Msg
+searchActivities dbName query productQuery classification classificationValue =
     Http.get
         { url =
             Url.Builder.absolute
                 [ "api", "v1", "db", dbName, "activities" ]
                 (List.filterMap identity
-                    [ if String.isEmpty query then
-                        Nothing
-
-                      else
-                        Just (Url.Builder.string "name" query)
+                    [ if String.isEmpty query then Nothing else Just (Url.Builder.string "name" query)
+                    , if String.isEmpty productQuery then Nothing else Just (Url.Builder.string "product" productQuery)
                     , Just (Url.Builder.int "limit" 20)
                     , Maybe.map (Url.Builder.string "classification") classification
                     , Maybe.map (Url.Builder.string "classification-value") classificationValue
@@ -444,18 +544,15 @@ scrollToBottom containerId =
         |> Task.attempt (\_ -> ScrollDone)
 
 
-searchActivitiesWithOffset : String -> String -> Maybe String -> Maybe String -> Int -> Int -> Cmd Msg
-searchActivitiesWithOffset dbName query classification classificationValue offset limit =
+searchActivitiesWithOffset : String -> String -> String -> Maybe String -> Maybe String -> Int -> Int -> Cmd Msg
+searchActivitiesWithOffset dbName query productQuery classification classificationValue offset limit =
     Http.get
         { url =
             Url.Builder.absolute
                 [ "api", "v1", "db", dbName, "activities" ]
                 (List.filterMap identity
-                    [ if String.isEmpty query then
-                        Nothing
-
-                      else
-                        Just (Url.Builder.string "name" query)
+                    [ if String.isEmpty query then Nothing else Just (Url.Builder.string "name" query)
+                    , if String.isEmpty productQuery then Nothing else Just (Url.Builder.string "product" productQuery)
                     , Just (Url.Builder.int "limit" limit)
                     , Just (Url.Builder.int "offset" offset)
                     , Maybe.map (Url.Builder.string "classification") classification

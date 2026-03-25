@@ -64,7 +64,7 @@ type ActivityTab
 
 type Route
     = RootRoute
-    | ActivitiesRoute { db : String, name : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+    | ActivitiesRoute { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
     | ActivityRoute ActivityTab String String -- tab, db, processId
     | LCIARoute String String (Maybe String) -- db, processId, method collection
     | DatabasesRoute
@@ -189,11 +189,12 @@ withActivity db pid route =
 -- URL Parsing
 
 
-activitiesQueryParser : Query.Parser { name : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+activitiesQueryParser : Query.Parser { name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
 activitiesQueryParser =
-    Query.map2
-        (\base cls ->
+    Query.map3
+        (\base product cls ->
             { name = base.name
+            , product = product
             , limit = base.limit
             , classification = cls.classification
             , classificationValue = cls.classificationValue
@@ -203,6 +204,7 @@ activitiesQueryParser =
             (Query.string "name")
             (Query.int "limit")
         )
+        (Query.string "product")
         (Query.map2 (\cls clsVal -> { classification = cls, classificationValue = clsVal })
             (Query.string "classification")
             (Query.string "classification-value")
@@ -260,7 +262,7 @@ routeParser =
         , Parser.map FlowSynonymsRoute (Parser.s "flow-synonyms")
         , Parser.map CompartmentMappingsRoute (Parser.s "compartment-mappings")
         , Parser.map UnitsRoute (Parser.s "units")
-        , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, limit = query.limit, classification = query.classification, classificationValue = query.classificationValue })
+        , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, product = query.product, limit = query.limit, classification = query.classification, classificationValue = query.classificationValue })
             (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "upstream")
         , Parser.map (ActivityRoute Emissions) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "emissions")
@@ -333,10 +335,11 @@ routeToUrl route =
         RootRoute ->
             "/"
 
-        ActivitiesRoute { db, name, limit, classification, classificationValue } ->
+        ActivitiesRoute { db, name, product, limit, classification, classificationValue } ->
             "/db/" ++ db ++ "/activities"
                 ++ appendQuery
                     [ Maybe.map (Url.Builder.string "name") name
+                    , Maybe.map (Url.Builder.string "product") product
                     , Maybe.map (Url.Builder.int "limit") limit
                     , Maybe.map (Url.Builder.string "classification") classification
                     , Maybe.map (Url.Builder.string "classification-value") classificationValue
@@ -441,7 +444,7 @@ routeToDatabase route =
 
 
 type alias ActivitiesFlags =
-    { db : String, name : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+    { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
 
 
 type alias LCIAFlags =
@@ -681,7 +684,7 @@ matchDatabaseDetailAsActivities : Route -> Maybe ActivitiesFlags
 matchDatabaseDetailAsActivities route =
     case route of
         DatabaseDetailRoute dbName _ ->
-            Just { db = dbName, name = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing }
+            Just { db = dbName, name = Nothing, product = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing }
 
         _ ->
             Nothing
