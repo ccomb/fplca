@@ -161,9 +161,11 @@ WORKDIR /app
 ENV VOLCA_DATA_DIR=/data
 VOLUME /data
 
-# Copy runtime config (edit volca.docker.toml to add/remove databases)
-COPY volca.docker.toml /app/volca.toml
-COPY data/ /app/data/
+# Copy runtime config and data (staged by docker-build.sh)
+# When --config is passed to docker-build.sh, .docker-bundle/ contains the
+# custom config with bundled databases. Otherwise it contains the defaults.
+COPY .docker-bundle/volca.toml /app/volca.toml
+COPY .docker-bundle/data/ /app/data/
 
 COPY rts-flags.sh /app/rts-flags.sh
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

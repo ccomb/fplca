@@ -14,10 +14,11 @@
 #   cargo install tauri-cli --locked
 #
 # Usage:
-#   ./build-desktop.sh [--dev]
+#   ./build-desktop.sh [--dev] [--config /path/to/volca.toml]
 #
 # Options:
-#   --dev     Build for development (skips bundling)
+#   --dev                Build for development (skips bundling)
+#   --config FILE        Bundle databases from this config into the installer
 #
 # =============================================================================
 
@@ -46,14 +47,24 @@ OS=$(detect_os)
 
 # Parse arguments
 DEV_MODE=false
+CUSTOM_CONFIG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dev)
             DEV_MODE=true
             shift
             ;;
+        --config)
+            CUSTOM_CONFIG="$2"
+            if [[ -z "$CUSTOM_CONFIG" || ! -f "$CUSTOM_CONFIG" ]]; then
+                log_error "Config file not found: ${CUSTOM_CONFIG:-<empty>}"
+                exit 1
+            fi
+            shift 2
+            ;;
         *)
             log_error "Unknown option: $1"
+            echo "Usage: $0 [--dev] [--config /path/to/volca.toml]"
             exit 1
             ;;
     esac
@@ -162,9 +173,16 @@ else
 fi
 log_success "Copied volca binary"
 
-# Copy default config file for BYOL mode
-cp "$SCRIPT_DIR/volca.toml" "$RESOURCES_DIR/volca.toml"
-log_success "Copied default config"
+# Copy config file (and bundle databases if custom config provided)
+if [[ -n "$CUSTOM_CONFIG" ]]; then
+    log_info "Bundling databases from custom config: $CUSTOM_CONFIG"
+    mkdir -p "$RESOURCES_DIR/data"
+    bundle_databases_from_config "$CUSTOM_CONFIG" "$RESOURCES_DIR/data" "$RESOURCES_DIR/volca.toml"
+    log_success "Custom config with bundled databases"
+else
+    cp "$SCRIPT_DIR/volca.toml" "$RESOURCES_DIR/volca.toml"
+    log_success "Copied default config (BYOL mode)"
+fi
 
 # Copy web assets
 if [[ -d "$PROJECT_DIR/web/dist" ]]; then

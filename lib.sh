@@ -222,3 +222,83 @@ show_help() {
     sed -n '3,27p' "$script" | sed 's/^# //' | sed 's/^#//'
     exit 0
 }
+
+# Bundle databases referenced in a TOML config file.
+# Copies each database file to target_data_dir and rewrites paths in the config.
+# Also copies method files if present.
+#
+# Usage: bundle_databases_from_config config_file target_data_dir output_config
+bundle_databases_from_config() {
+    local config_file="$1"
+    local target_data_dir="$2"
+    local output_config="$3"
+
+    mkdir -p "$target_data_dir"
+
+    # Resolve paths relative to the config file's directory
+    local config_dir
+    config_dir="$(cd "$(dirname "$config_file")" && pwd)"
+
+    # Use awk to extract paths from [[databases]] and [[methods]] sections,
+    # then rewrite them to point to the bundled data/ directory.
+    # We track which TOML section we're in and grab the path field.
+    local paths
+    paths=$(awk '
+        /^\[\[databases\]\]/ { section = "databases"; next }
+        /^\[\[methods\]\]/   { section = "methods"; next }
+        /^\[\[/              { section = ""; next }
+        /^\[/                { section = ""; next }
+        section != "" && /^path\s*=/ {
+            # Extract the quoted path value
+            match($0, /"([^"]+)"/, m)
+            if (m[1] != "") print m[1]
+        }
+    ' "$config_file")
+
+    if [[ -z "$paths" ]]; then
+        log_warn "No database or method paths found in $config_file"
+        cp "$config_file" "$output_config"
+        return 0
+    fi
+
+    # Copy each referenced file and build sed substitutions
+    local sed_args=()
+    local count=0
+    while IFS= read -r db_path; do
+        [[ -z "$db_path" ]] && continue
+
+        # Resolve relative paths against config file directory
+        local abs_path
+        if [[ "$db_path" = /* ]]; then
+            abs_path="$db_path"
+        else
+            abs_path="$config_dir/$db_path"
+        fi
+
+        local basename
+        basename="$(basename "$abs_path")"
+
+        if [[ -f "$abs_path" ]]; then
+            cp "$abs_path" "$target_data_dir/$basename"
+            log_success "Bundled: $basename ($(du -h "$abs_path" | cut -f1))"
+            count=$((count + 1))
+        else
+            log_error "Database file not found: $abs_path"
+            return 1
+        fi
+
+        # Escape special characters in path for sed
+        local escaped_path
+        escaped_path=$(printf '%s\n' "$db_path" | sed 's/[&/\]/\\&/g')
+        sed_args+=(-e "s|\"${escaped_path}\"|\"data/${basename}\"|g")
+    done <<< "$paths"
+
+    # Rewrite paths in the config
+    if [[ ${#sed_args[@]} -gt 0 ]]; then
+        sed "${sed_args[@]}" "$config_file" > "$output_config"
+    else
+        cp "$config_file" "$output_config"
+    fi
+
+    log_success "Bundled $count database/method file(s)"
+}
