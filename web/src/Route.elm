@@ -34,6 +34,7 @@ module Route exposing
     , matchDatabaseDetailAsActivities
     , matchCompartmentMappings
     , matchUnits
+    , CompositionFlags
     , matchComposition
     , matchConsumers
     , matchHome
@@ -58,7 +59,6 @@ type ActivityTab
     | Inventory
     | Graph
     | LCIA
-    | Composition
     | Consumers
 
 
@@ -78,6 +78,7 @@ type Route
     | FlowSynonymsRoute
     | FlowSynonymDetailRoute String -- resource name
     | DatabaseMappingRoute String (Maybe String) -- dbName, ?method=methodId
+    | CompositionRoute CompositionFlags
     | CompartmentMappingsRoute
     | UnitsRoute
     | NotFoundRoute
@@ -99,6 +100,7 @@ type ActivePage
     | FlowMappingActive
     | DatabaseMappingActive
     | FlowSynonymsActive
+    | CompositionActive
     | CompartmentMappingsActive
     | UnitsActive
 
@@ -151,6 +153,9 @@ routeToActivePage route =
         DatabaseMappingRoute _ _ ->
             DatabaseMappingActive
 
+        CompositionRoute _ ->
+            CompositionActive
+
         CompartmentMappingsRoute ->
             CompartmentMappingsActive
 
@@ -172,6 +177,9 @@ withActivity db pid route =
 
         LCIARoute _ _ method ->
             LCIARoute db pid method
+
+        CompositionRoute flags ->
+            CompositionRoute { flags | db = db, processId = pid }
 
         _ ->
             ActivityRoute Upstream db pid
@@ -198,6 +206,40 @@ activitiesQueryParser =
         (Query.map2 (\cls clsVal -> { classification = cls, classificationValue = clsVal })
             (Query.string "classification")
             (Query.string "classification-value")
+        )
+
+
+compositionQueryParser : Query.Parser { name : Maybe String, location : Maybe String, classification : Maybe String, maxDepth : Maybe String, minQuantity : Maybe String, sort : Maybe String, order : Maybe String }
+compositionQueryParser =
+    Query.map2
+        (\filters sorting ->
+            { name = filters.name
+            , location = filters.location
+            , classification = filters.classification
+            , maxDepth = filters.maxDepth
+            , minQuantity = filters.minQuantity
+            , sort = sorting.sort
+            , order = sorting.order
+            }
+        )
+        (Query.map2
+            (\base extra -> { name = base.name, location = base.location, classification = extra.classification, maxDepth = extra.maxDepth, minQuantity = extra.minQuantity })
+            (Query.map2 (\name location -> { name = name, location = location })
+                (Query.string "name")
+                (Query.string "location")
+            )
+            (Query.map2
+                (\cls depths -> { classification = cls, maxDepth = depths.maxDepth, minQuantity = depths.minQuantity })
+                (Query.string "classification")
+                (Query.map2 (\md mq -> { maxDepth = md, minQuantity = mq })
+                    (Query.string "max-depth")
+                    (Query.string "min-quantity")
+                )
+            )
+        )
+        (Query.map2 (\s o -> { sort = s, order = o })
+            (Query.string "sort")
+            (Query.string "order")
         )
 
 
@@ -228,7 +270,8 @@ routeParser =
         , Parser.map (ActivityRoute Inventory) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "inventory")
         , Parser.map (ActivityRoute Graph) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "graph")
         , Parser.map LCIARoute (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "lcia" <?> Query.string "method")
-        , Parser.map (ActivityRoute Composition) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "composition")
+        , Parser.map (\db pid query -> CompositionRoute { db = db, processId = pid, name = query.name, location = query.location, classification = query.classification, maxDepth = query.maxDepth, minQuantity = query.minQuantity, sort = query.sort, order = query.order })
+            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "composition" <?> compositionQueryParser)
         , Parser.map (ActivityRoute Consumers) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "consumers")
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string)
         ]
@@ -266,9 +309,6 @@ activityTabSlug tab =
 
         LCIA ->
             "lcia"
-
-        Composition ->
-            "composition"
 
         Consumers ->
             "consumers"
@@ -346,6 +386,18 @@ routeToUrl route =
         FlowSynonymDetailRoute name ->
             "/flow-synonyms/" ++ name
 
+        CompositionRoute { db, processId, name, location, classification, maxDepth, minQuantity, sort, order } ->
+            "/db/" ++ db ++ "/activity/" ++ processId ++ "/composition"
+                ++ appendQuery
+                    [ Maybe.map (Url.Builder.string "name") name
+                    , Maybe.map (Url.Builder.string "location") location
+                    , Maybe.map (Url.Builder.string "classification") classification
+                    , Maybe.map (Url.Builder.string "max-depth") maxDepth
+                    , Maybe.map (Url.Builder.string "min-quantity") minQuantity
+                    , Maybe.map (Url.Builder.string "sort") sort
+                    , Maybe.map (Url.Builder.string "order") order
+                    ]
+
         CompartmentMappingsRoute ->
             "/compartment-mappings"
 
@@ -376,6 +428,9 @@ routeToDatabase route =
 
         DatabaseMappingRoute dbName _ ->
             Just dbName
+
+        CompositionRoute { db } ->
+            Just db
 
         _ ->
             Nothing
@@ -652,9 +707,18 @@ matchUnits route =
             Nothing
 
 
-matchComposition : Route -> Maybe ( String, String )
-matchComposition =
-    matchTab Composition
+type alias CompositionFlags =
+    { db : String, processId : String, name : Maybe String, location : Maybe String, classification : Maybe String, maxDepth : Maybe String, minQuantity : Maybe String, sort : Maybe String, order : Maybe String }
+
+
+matchComposition : Route -> Maybe CompositionFlags
+matchComposition route =
+    case route of
+        CompositionRoute flags ->
+            Just flags
+
+        _ ->
+            Nothing
 
 
 matchConsumers : Route -> Maybe ( String, String )

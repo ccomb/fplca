@@ -1,4 +1,4 @@
-module Api exposing (computeLCIABatch, loadActivityInfo, loadActivityTree, loadConsumers, loadFlowMapping, loadMethodCollections, loadMethodMapping, loadSupplyChain)
+module Api exposing (SupplyChainParams, computeLCIABatch, defaultSupplyChainParams, loadActivityInfo, loadActivityTree, loadConsumers, loadFlowMapping, loadMethodCollections, loadMethodMapping, loadSupplyChain)
 
 import Http
 import Json.Decode as Decode
@@ -56,10 +56,56 @@ loadFlowMapping toMsg dbName methodId =
         }
 
 
-loadSupplyChain : (Result Http.Error SupplyChainResponse -> msg) -> String -> String -> Cmd msg
-loadSupplyChain toMsg dbName activityId =
+type alias SupplyChainParams =
+    { name : String
+    , location : String
+    , classification : String
+    , maxDepth : String
+    , minQuantity : String
+    , limit : Int
+    , offset : Int
+    , sort : String
+    , order : String
+    }
+
+
+defaultSupplyChainParams : SupplyChainParams
+defaultSupplyChainParams =
+    { name = ""
+    , location = ""
+    , classification = ""
+    , maxDepth = ""
+    , minQuantity = ""
+    , limit = 50
+    , offset = 0
+    , sort = "depth"
+    , order = "asc"
+    }
+
+
+loadSupplyChain : (Result Http.Error SupplyChainResponse -> msg) -> String -> String -> SupplyChainParams -> Cmd msg
+loadSupplyChain toMsg dbName activityId params =
+    let
+        optParam key value =
+            if String.isEmpty value then
+                ""
+
+            else
+                "&" ++ key ++ "=" ++ value
+
+        queryString =
+            "?limit=" ++ String.fromInt params.limit
+                ++ "&offset=" ++ String.fromInt params.offset
+                ++ optParam "name" params.name
+                ++ optParam "location" params.location
+                ++ optParam "classification" params.classification
+                ++ optParam "max-depth" params.maxDepth
+                ++ optParam "min-quantity" params.minQuantity
+                ++ optParam "sort" params.sort
+                ++ optParam "order" params.order
+    in
     Http.get
-        { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/supply-chain?limit=1000"
+        { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/supply-chain" ++ queryString
         , expect = Http.expectJson toMsg supplyChainResponseDecoder
         }
 

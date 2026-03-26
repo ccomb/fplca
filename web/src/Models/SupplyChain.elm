@@ -6,6 +6,8 @@ module Models.SupplyChain exposing
 
 import Dict exposing (Dict)
 import Json.Decode as Decode exposing (Decoder)
+import Json.Decode.Pipeline exposing (required)
+import Models.Activity exposing (ActivitySummary, activitySummaryDecoder)
 
 
 type alias SupplyChainEntry =
@@ -16,6 +18,8 @@ type alias SupplyChainEntry =
     , unit : String
     , scalingFactor : Float
     , classifications : Dict String String
+    , depth : Int
+    , upstreamCount : Int
     }
 
 
@@ -23,24 +27,28 @@ type alias SupplyChainResponse =
     { totalActivities : Int
     , filteredActivities : Int
     , supplyChain : List SupplyChainEntry
+    , root : ActivitySummary
     }
 
 
 supplyChainResponseDecoder : Decoder SupplyChainResponse
 supplyChainResponseDecoder =
-    Decode.map3 SupplyChainResponse
-        (Decode.field "scrTotalActivities" Decode.int)
-        (Decode.field "scrFilteredActivities" Decode.int)
-        (Decode.field "scrSupplyChain" (Decode.list entryDecoder))
+    Decode.succeed SupplyChainResponse
+        |> required "scrTotalActivities" Decode.int
+        |> required "scrFilteredActivities" Decode.int
+        |> required "scrSupplyChain" (Decode.list entryDecoder)
+        |> required "scrRoot" activitySummaryDecoder
 
 
 entryDecoder : Decoder SupplyChainEntry
 entryDecoder =
-    Decode.map7 SupplyChainEntry
-        (Decode.field "sceProcessId" Decode.string)
-        (Decode.field "sceName" Decode.string)
-        (Decode.field "sceLocation" Decode.string)
-        (Decode.field "sceQuantity" Decode.float)
-        (Decode.field "sceUnit" Decode.string)
-        (Decode.field "sceScalingFactor" Decode.float)
-        (Decode.field "sceClassifications" (Decode.dict Decode.string))
+    Decode.succeed SupplyChainEntry
+        |> required "sceProcessId" Decode.string
+        |> required "sceName" Decode.string
+        |> required "sceLocation" Decode.string
+        |> required "sceQuantity" Decode.float
+        |> required "sceUnit" Decode.string
+        |> required "sceScalingFactor" Decode.float
+        |> required "sceClassifications" (Decode.dict Decode.string)
+        |> required "sceDepth" Decode.int
+        |> required "sceUpstreamCount" Decode.int

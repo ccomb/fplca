@@ -307,6 +307,9 @@ navigateToPage shared page =
         CompartmentMappingsActive ->
             Shared.NavigateTo CompartmentMappingsRoute
 
+        CompositionActive ->
+            Shared.NavigateTo (CompositionRoute { db = dbName, processId = currentActivityId, name = Nothing, location = Nothing, classification = Nothing, maxDepth = Nothing, minQuantity = Nothing, sort = Nothing, order = Nothing })
+
         UnitsActive ->
             Shared.NavigateTo UnitsRoute
 
@@ -319,6 +322,9 @@ routeToActivityId route =
 
         LCIARoute _ pid _ ->
             Just pid
+
+        CompositionRoute flags ->
+            Just flags.processId
 
         _ ->
             Nothing

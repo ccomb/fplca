@@ -10,6 +10,7 @@ import Models.Activity exposing (ActivitySummary, ClassificationSystem, SearchRe
 import Models.Database exposing (DatabaseList)
 import Route exposing (ActivityTab(..), Route(..))
 import Shared exposing (RemoteData(..))
+import Process
 import Spa.Page
 import Task
 import Url.Builder
@@ -25,6 +26,7 @@ type alias Model =
     , classificationSystems : Maybe (List ClassificationSystem)
     , selectedSystem : Maybe String
     , selectedValue : Maybe String
+    , debounceCounter : Int
     }
 
 
@@ -43,6 +45,7 @@ type Msg
     | ClassificationsLoaded (Result Http.Error (List ClassificationSystem))
     | NewFlags Route.ActivitiesFlags
     | ScrollDone
+    | DebounceTick Int
     | RequestLoadDatabase
 
 
@@ -86,6 +89,7 @@ init shared flags =
       , classificationSystems = Nothing
       , selectedSystem = flags.classification
       , selectedValue = flags.classificationValue
+      , debounceCounter = 0
       }
     , Effect.batch
         [ if shouldSearch then
@@ -109,53 +113,13 @@ update shared msg model =
         ActivitiesViewMsg viewMsg ->
             case viewMsg of
                 ActivitiesView.UpdateSearchQuery query ->
-                    if not (Shared.isDatabaseLoaded shared model.dbName) then
-                        ( { model | searchQuery = query }, Effect.none )
-
-                    else
-                        let
-                            dbName =
-                                model.dbName
-
-                            queryName =
-                                if String.isEmpty query then
-                                    Nothing
-
-                                else
-                                    Just query
-
-                            newRoute =
-                                ActivitiesRoute { db = dbName, name = queryName, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
-
-                            hasQuery =
-                                not (String.isEmpty query) || model.selectedValue /= Nothing
-
-                            cmds =
-                                if not hasQuery then
-                                    Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-
-                                else
-                                    Effect.batch
-                                        [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                                        , Effect.fromCmd (searchActivities model.dbName query model.selectedSystem model.selectedValue)
-                                        ]
-                        in
-                        ( { model
-                            | searchQuery = query
-                            , results =
-                                if not hasQuery then
-                                    NotSearched
-
-                                else
-                                    case model.results of
-                                        Results _ ->
-                                            model.results
-
-                                        _ ->
-                                            Searching
-                          }
-                        , cmds
-                        )
+                    let
+                        newCounter =
+                            model.debounceCounter + 1
+                    in
+                    ( { model | searchQuery = query, debounceCounter = newCounter }
+                    , Effect.fromCmd (Process.sleep 100 |> Task.perform (\_ -> DebounceTick newCounter))
+                    )
 
                 ActivitiesView.SelectActivity activityId ->
                     ( model
@@ -304,6 +268,43 @@ update shared msg model =
 
         ScrollDone ->
             ( model, Effect.none )
+
+        DebounceTick counter ->
+            if counter /= model.debounceCounter || not (Shared.isDatabaseLoaded shared model.dbName) then
+                ( model, Effect.none )
+
+            else
+                let
+                    queryName =
+                        if String.isEmpty model.searchQuery then
+                            Nothing
+
+                        else
+                            Just model.searchQuery
+
+                    newRoute =
+                        ActivitiesRoute { db = model.dbName, name = queryName, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+
+                    hasQuery =
+                        not (String.isEmpty model.searchQuery) || model.selectedValue /= Nothing
+                in
+                ( { model
+                    | results =
+                        if not hasQuery then
+                            NotSearched
+
+                        else
+                            Searching
+                  }
+                , if not hasQuery then
+                    Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+
+                  else
+                    Effect.batch
+                        [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.selectedSystem model.selectedValue)
+                        ]
+                )
 
         NewFlags flags ->
             let

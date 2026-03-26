@@ -19,6 +19,7 @@ import Data.Int (Int32)
 import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import Data.Sequence (Seq(..), (|>))
 import Data.Text (Text)
@@ -979,8 +980,9 @@ getFlowActivities db flowIdText = do
 -- Returns all upstream activities with their scaling factors and subgraph edges.
 getSupplyChain :: Database -> SharedSolver -> Text -> Maybe Text -> Maybe Int -> Maybe Double
               -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text
+              -> Maybe Text -> Maybe Text
               -> IO (Either ServiceError SupplyChainResponse)
-getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter = do
+getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam = do
     case resolveActivityAndProcessId db processIdText of
         Left err -> return $ Left err
         Right (processId, _rootActivity) -> do
@@ -990,7 +992,7 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                     let activityIndex = dbActivityIndex db
                         demandVec = buildDemandVectorFromIndex activityIndex processId
                     supplyVec <- solveWithSharedSolver sharedSolver demandVec
-                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter
+                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam
 
 -- | Pure function: build a SupplyChainResponse from a scaling vector.
 -- Used by both GET (normal) and POST (with substitutions) supply-chain endpoints.
@@ -998,8 +1000,9 @@ buildSupplyChainFromScalingVector
     :: Database -> ProcessId -> U.Vector Double
     -> Maybe Text -> Maybe Int -> Maybe Double
     -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text
+    -> Maybe Text -> Maybe Text
     -> SupplyChainResponse
-buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter =
+buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam =
     let supplyList = toList supplyVec
         minQ = maybe 0 id minQuantityParam
         limit = maybe 100 id limitParam
@@ -1040,8 +1043,18 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
             , matchesFilters activity pid
             ]
 
-        sorted = take limit . drop offset $
-            L.sortBy (\(_, a, _) (_, b, _) -> compare (abs b) (abs a)) filtered
+        -- Server-side sorting: sort field + order (asc/desc)
+        isDesc = orderParam == Just "desc"
+        comparator = case sortParam of
+            Just "name"      -> \(_, _, a) (_, _, b) -> compare (activityName a) (activityName b)
+            Just "location"  -> \(_, _, a) (_, _, b) -> compare (activityLocation a) (activityLocation b)
+            Just "unit"      -> \(_, _, a) (_, _, b) -> compare (activityUnit a) (activityUnit b)
+            Just "depth"     -> \(p1, _, _) (p2, _, _) -> compare (IM.findWithDefault (-1) (fromIntegral p1) depthMap) (IM.findWithDefault (-1) (fromIntegral p2) depthMap)
+            Just "consumers" -> \(p1, _, _) (p2, _, _) -> compare (IM.findWithDefault 0 (fromIntegral p1) consumerCounts) (IM.findWithDefault 0 (fromIntegral p2) consumerCounts)
+            Just "amount"    -> \(_, a, _) (_, b, _) -> compare (abs a) (abs b)
+            _                -> \(_, a, _) (_, b, _) -> compare (abs b) (abs a)  -- default: amount desc
+        appliedComparator = if isDesc then \a b -> comparator b a else comparator
+        sorted = take limit . drop offset $ L.sortBy appliedComparator filtered
 
         allIndices = S.fromList (processId : map fst allEntries)
         edges = [ SupplyChainEdge
@@ -1053,6 +1066,15 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
                 , S.member (fromIntegral col) allIndices
                 ]
 
+        -- Fan-in: for each supplier, count how many distinct consumers use it within the active set
+        activeSet = IS.fromList (fromIntegral processId : [fromIntegral pid | (pid, _) <- allEntries])
+        consumerCounts = IM.fromListWith (+)
+            [ (fromIntegral row :: Int, 1 :: Int)
+            | SparseTriple row col _val <- U.toList (dbTechnosphereTriples db)
+            , IS.member (fromIntegral row) activeSet
+            , IS.member (fromIntegral col) activeSet
+            ]
+
         mkEntry (pid, scalingFactor, activity) =
             SupplyChainEntry
                 { sceProcessId = processIdToText db pid
@@ -1063,6 +1085,7 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
                 , sceScalingFactor = scalingFactor
                 , sceClassifications = activityClassification activity
                 , sceDepth = IM.findWithDefault (-1) (fromIntegral pid) depthMap
+                , sceUpstreamCount = IM.findWithDefault 0 (fromIntegral pid) consumerCounts
                 }
 
         rootSummary = ActivitySummary

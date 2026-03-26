@@ -101,7 +101,7 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                             , menuItem currentPage (ActivityActive Tree) "fas fa-project-diagram" "Tree" True
                             , menuItem currentPage (ActivityActive Graph) "fas fa-network-wired" "Graph" True
                             , menuItem currentPage (ActivityActive Consumers) "fas fa-arrow-down" "Consumers" True
-                            , menuItem currentPage (ActivityActive Composition) "fas fa-cubes" "Composition" True
+                            , menuItem currentPage CompositionActive "fas fa-cubes" "Composition" True
                             ]
                         ]
 
@@ -189,7 +189,10 @@ isLabTab : ActivePage -> Bool
 isLabTab page =
     case page of
         ActivityActive tab ->
-            List.member tab [ LCIA, Tree, Graph, Consumers, Composition ]
+            List.member tab [ LCIA, Tree, Graph, Consumers ]
+
+        CompositionActive ->
+            True
 
         _ ->
             False

@@ -405,6 +405,7 @@ data SupplyChainEntry = SupplyChainEntry
     , sceScalingFactor :: Double   -- raw value from scaling vector
     , sceClassifications :: M.Map Text Text  -- Classifications (ISIC, CPC, Category, etc.)
     , sceDepth :: Int              -- shortest path distance from root (BFS)
+    , sceUpstreamCount :: Int      -- number of unique upstream activities reachable from this one
     }
     deriving (Generic)
 
