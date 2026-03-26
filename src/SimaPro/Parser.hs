@@ -785,11 +785,16 @@ techRowToExchange env isInput TechExchangeRow{..} =
     in (exchange, flow, unit)
 
 -- | Convert biosphere row to exchange, flow, and unit in one pass
+-- The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
+-- and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
 bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, Flow, Unit)
-bioRowToExchange env isInput _compartment BioExchangeRow{..} =
-    let flowUUID = generateFlowUUID berName berCompartment berUnit
+bioRowToExchange env isInput compartment BioExchangeRow{..} =
+    let category = if T.null berCompartment then compartment
+                   else compartment <> "/" <> berCompartment
+        flowUUID = generateFlowUUID berName category berUnit
         unitUUID = generateUnitUUID berUnit
         amount = resolveAmount env berAmountRaw berAmount
+        subcomp = if T.null berCompartment then Nothing else Just berCompartment
         exchange = BiosphereExchange
             { bioFlowId = flowUUID
             , bioAmount = amount
@@ -798,8 +803,8 @@ bioRowToExchange env isInput _compartment BioExchangeRow{..} =
             , bioLocation = ""
             }
         flow = Flow
-            { flowId = flowUUID, flowName = berName, flowCategory = berCompartment
-            , flowSubcompartment = Nothing, flowUnitId = unitUUID
+            { flowId = flowUUID, flowName = berName, flowCategory = category
+            , flowSubcompartment = subcomp, flowUnitId = unitUUID
             , flowType = Biosphere, flowSynonyms = M.empty
             , flowCAS = Nothing, flowSubstanceId = Nothing
             }

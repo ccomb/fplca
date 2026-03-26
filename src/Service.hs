@@ -178,11 +178,12 @@ convertToInventoryExport db processId rootActivity inventory =
 
 -- | Determine if a flow represents resource extraction based on flow category
 -- Since B matrix now stores all flows as positive (Ecoinvent convention), we use category instead of sign
--- Resource extractions have category starting with "natural resource" (e.g., "natural resource/in ground", "natural resource/in water")
+-- EcoSpold2: "natural resource/in ground", SimaPro: "resource/in ground"
 isResourceExtraction :: Flow -> Double -> Bool
 isResourceExtraction flow _ =
-    flowType flow == Biosphere &&
-    ("natural resource" `T.isPrefixOf` T.toLower (flowCategory flow))
+    let cat = T.toLower (flowCategory flow)
+    in flowType flow == Biosphere &&
+       ("natural resource" `T.isPrefixOf` cat || "resource" `T.isPrefixOf` cat)
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> IO (Either ServiceError Value)
