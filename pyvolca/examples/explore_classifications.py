@@ -1,12 +1,14 @@
-"""Explore classification values in Agribalyse.
+"""Explore classification values in a database.
 
 Dumps all distinct classification keys/values to understand how to distinguish
 raw ingredients (at farm) from processed ingredients (at plant).
 
 Usage:
     python -m examples.explore_classifications
+    python -m examples.explore_classifications --db ecoinvent-3.9.1
 """
 
+import argparse
 import sys
 from collections import Counter
 from pathlib import Path
@@ -17,7 +19,12 @@ from volca import Client
 
 
 def main():
-    c = Client(base_url="http://localhost:8080", db="agribalyse-3.2")
+    parser = argparse.ArgumentParser(description="Explore classification values")
+    parser.add_argument("--url", default="http://localhost:8080", help="VoLCA server URL")
+    parser.add_argument("--db", default="agribalyse-3.2", help="Database name")
+    args = parser.parse_args()
+
+    c = Client(base_url=args.url, db=args.db)
 
     # ── Step 1: Get all activities ────────────────────────────────────
     print("Fetching all activities...")

@@ -12,8 +12,10 @@ Workflow:
 
 Usage:
     python -m examples.raw_ingredient_substitution
+    python -m examples.raw_ingredient_substitution --url http://localhost:8081 --db agribalyse-3.2
 """
 
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -71,7 +73,13 @@ def find_consumer_id(client: Client, product_id: str, supplier_id: str) -> str |
 
 
 def main():
-    client = Client(base_url="http://localhost:8080", db="agribalyse-3.2")
+    parser = argparse.ArgumentParser(description="Bulk raw-ingredient substitution")
+    parser.add_argument("--url", default="http://localhost:8080", help="VoLCA server URL")
+    parser.add_argument("--db", default="agribalyse-3.2", help="Database name")
+    parser.add_argument("--password", default="", help="Server password")
+    args = parser.parse_args()
+
+    client = Client(base_url=args.url, db=args.db, password=args.password)
 
     # ── Step 1: Resolve substitution pairs ────────────────────────────
     print("Step 1: Resolving substitution table...")
