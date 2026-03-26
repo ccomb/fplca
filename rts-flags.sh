@@ -36,10 +36,8 @@ NURSERY_MB=$((CORES * 16))
 CHUNK_MB=$((NURSERY_MB / 32))
 [ $CHUNK_MB -lt 8 ] && CHUNK_MB=8
 
-# Max heap: 75% of RAM, capped at 16G, minimum 2G
-# Multiple large databases (ecoinvent + agribalyse) can need 8-12GB during loading
+# Max heap: 75% of RAM, minimum 2G
 MAX_MB=$((RAM_MB * 3 / 4))
-[ $MAX_MB -gt 16384 ] && MAX_MB=16384
 [ $MAX_MB -lt 2048 ] && MAX_MB=2048
 
 RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -I30 -RTS"
