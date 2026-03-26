@@ -21,7 +21,7 @@ spec = do
             supplyVec <- computeScalingVector db rootProcessId
 
             let response = buildSupplyChainFromScalingVector db rootProcessId supplyVec
-                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
                 entries = scrSupplyChain response
 
             -- With rootRefAmount = 1, sceQuantity must equal sceScalingFactor exactly
@@ -38,7 +38,7 @@ spec = do
             supplyVec <- computeScalingVector db rootProcessId
 
             let response = buildSupplyChainFromScalingVector db rootProcessId supplyVec
-                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
                 entries = scrSupplyChain response
 
             -- All entries should have depth > 0 (root is excluded from supply chain)
@@ -53,10 +53,10 @@ spec = do
 
             -- No depth filter: should get Y (depth 1) and Z (depth 2)
             let noFilter = buildSupplyChainFromScalingVector db rootProcessId supplyVec
-                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+                    Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False
             scrFilteredActivities noFilter `shouldSatisfy` (>= 2)
 
             -- Depth 1: should only get Y (direct supplier)
             let depth1 = buildSupplyChainFromScalingVector db rootProcessId supplyVec
-                    Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing
+                    Nothing Nothing Nothing Nothing (Just 1) Nothing Nothing Nothing Nothing False
             scrFilteredActivities depth1 `shouldSatisfy` (< scrFilteredActivities noFilter)

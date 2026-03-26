@@ -978,9 +978,9 @@ getFlowActivities db flowIdText = do
 -- Returns all upstream activities with their scaling factors and subgraph edges.
 getSupplyChain :: Database -> SharedSolver -> Text -> Maybe Text -> Maybe Int -> Maybe Double
               -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text
-              -> Maybe Text -> Maybe Text
+              -> Maybe Text -> Maybe Text -> Bool
               -> IO (Either ServiceError SupplyChainResponse)
-getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam = do
+getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam includeEdges = do
     case resolveActivityAndProcessId db processIdText of
         Left err -> return $ Left err
         Right (processId, _rootActivity) -> do
@@ -990,7 +990,7 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                     let activityIndex = dbActivityIndex db
                         demandVec = buildDemandVectorFromIndex activityIndex processId
                     supplyVec <- solveWithSharedSolver sharedSolver demandVec
-                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam
+                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam includeEdges
 
 -- | Pure function: build a SupplyChainResponse from a scaling vector.
 -- Used by both GET (normal) and POST (with substitutions) supply-chain endpoints.
@@ -999,30 +999,40 @@ buildSupplyChainFromScalingVector
     -> Maybe Text -> Maybe Int -> Maybe Double
     -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text
     -> Maybe Text -> Maybe Text
+    -> Bool  -- ^ include edges (expensive: extra pass over technosphere triples)
     -> SupplyChainResponse
-buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam =
-    let supplyList = toList supplyVec
-        minQ = maybe 0 id minQuantityParam
-        limit = maybe 100 id limitParam
-        offset = maybe 0 id offsetParam
+buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter sortParam orderParam includeEdges =
+    let minQ = fromMaybe 0 minQuantityParam
+        limit = fromMaybe 100 limitParam
+        offset = fromMaybe 0 offsetParam
         rootActivity = dbActivities db V.! fromIntegral processId
         rootRefAmount = getReferenceProductAmount rootActivity
+        n = U.length supplyVec
 
-        -- BFS depth computation from root on technosphere adjacency
-        -- Build adjacency: consumer (column) -> [supplier (row)]
-        adjacency = U.foldl' (\acc (SparseTriple row col _val) ->
-            IM.insertWith (++) (fromIntegral col) [fromIntegral row] acc
-            ) IM.empty (dbTechnosphereTriples db)
+        -- Collect active entries directly from the unboxed vector (no toList)
+        allEntries =
+            [ (fromIntegral i :: ProcessId, supplyVec U.! i)
+            | i <- [0 .. n - 1]
+            , let v = supplyVec U.! i
+            , abs v > minQ
+            , fromIntegral i /= processId
+            ]
+
+        -- Single pass over technosphere triples: build adjacency + consumer counts
+        activeSet = IS.fromList (fromIntegral processId : [fromIntegral pid | (pid, _) <- allEntries])
+        (!adjacency, !consumerCounts) = U.foldl' accumulate (IM.empty, IM.empty) (dbTechnosphereTriples db)
+          where
+            accumulate (!adj, !counts) (SparseTriple row col _val) =
+                let r = fromIntegral row
+                    c = fromIntegral col
+                    adj' = IM.insertWith (++) c [r] adj
+                    counts' = if IS.member r activeSet && IS.member c activeSet
+                              then IM.insertWith (+) r (1 :: Int) counts
+                              else counts
+                in (adj', counts')
 
         -- BFS from root, returning IntMap ProcessId -> depth
         depthMap = bfsDepth (fromIntegral processId) adjacency
-
-        allEntries =
-            [ (fromIntegral idx :: ProcessId, val)
-            | (idx, val) <- zip [(0 :: Int)..] supplyList
-            , abs val > minQ
-            , fromIntegral idx /= (processId :: ProcessId)
-            ]
 
         textMatches pat txt = T.toCaseFold pat `T.isInfixOf` T.toCaseFold txt
 
@@ -1054,25 +1064,6 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
         appliedComparator = if isDesc then \a b -> comparator b a else comparator
         sorted = take limit . drop offset $ L.sortBy appliedComparator filtered
 
-        allIndices = S.fromList (processId : map fst allEntries)
-        edges = [ SupplyChainEdge
-                    (processIdToText db (fromIntegral row))
-                    (processIdToText db (fromIntegral col))
-                    val
-                | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
-                , S.member (fromIntegral row) allIndices
-                , S.member (fromIntegral col) allIndices
-                ]
-
-        -- Fan-in: for each supplier, count how many distinct consumers use it within the active set
-        activeSet = IS.fromList (fromIntegral processId : [fromIntegral pid | (pid, _) <- allEntries])
-        consumerCounts = IM.fromListWith (+)
-            [ (fromIntegral row :: Int, 1 :: Int)
-            | SparseTriple row col _val <- U.toList (dbTechnosphereTriples db)
-            , IS.member (fromIntegral row) activeSet
-            , IS.member (fromIntegral col) activeSet
-            ]
-
         mkEntry (pid, scalingFactor, activity) =
             SupplyChainEntry
                 { sceProcessId = processIdToText db pid
@@ -1090,11 +1081,21 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
             { prsId = processIdToText db processId
             , prsName = activityName rootActivity
             , prsLocation = activityLocation rootActivity
-            , prsProduct = maybe (activityName rootActivity) id
+            , prsProduct = fromMaybe (activityName rootActivity)
                 (getReferenceProductName (dbFlows db) rootActivity)
             , prsProductAmount = rootRefAmount
             , prsProductUnit = activityUnit rootActivity
             }
+
+        -- Edges: only computed when requested (graph views), skipped for composition
+        allIndices = S.fromList (processId : map fst allEntries)
+        edges = if includeEdges
+            then U.foldl' (\acc (SparseTriple row col val) ->
+                    if S.member (fromIntegral row) allIndices && S.member (fromIntegral col) allIndices
+                    then SupplyChainEdge (processIdToText db (fromIntegral row)) (processIdToText db (fromIntegral col)) val : acc
+                    else acc
+                 ) [] (dbTechnosphereTriples db)
+            else []
 
     in SupplyChainResponse
         { scrRoot = rootSummary
