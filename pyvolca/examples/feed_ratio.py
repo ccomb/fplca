@@ -84,19 +84,23 @@ def main():
     parser.add_argument("--password", default="", help="Server password")
     parser.add_argument("--prefix", default=None,
                         help="Classification filter (e.g. 'Animal feed')")
+    parser.add_argument("--name", default=None, help="Product search query (non-interactive)")
     args = parser.parse_args()
 
     c = Client(base_url=args.url, db=args.db, password=args.password)
 
     # Step 1: Find a product
-    query = input("Search for a product: ").strip()
+    query = args.name or input("Search for a product: ").strip()
     products = c.search_activities(name=query, limit=20)
     if not products:
         print(f"No activities found for '{query}'")
         return
 
     print(f"\nFound {len(products)} activities:")
-    idx = select_from_list(products, "Select product", lambda p: f"{p.name} ({p.location})")
+    if args.name:
+        idx = 0
+    else:
+        idx = select_from_list(products, "Select product", lambda p: f"{p.name} ({p.location})")
     product = products[idx]
     print(f"\nAnalyzing: {product.name}")
 
@@ -117,7 +121,7 @@ def main():
 
     # Step 4: Let user filter categories
     filter_text = args.prefix or ""
-    if not args.prefix:
+    if not args.prefix and not args.name:
         filter_text = input("\nFilter categories (or Enter for all): ").strip()
         if filter_text:
             lower = filter_text.lower()
