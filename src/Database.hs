@@ -90,8 +90,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
     reportMatrixOperation "Building technosphere matrix triplets"
     let buildTechTriple normalizationFactor j consumerActivity _consumerPid ex
             | not (isTechnosphereExchange ex) = ([], [])
-            | not (exchangeIsInput ex) = ([], [])
-            | exchangeIsReference ex && not (exchangeIsInput ex) = ([], [])
+            | exchangeIsReference ex = ([], [])  -- reference product is on the diagonal
             | otherwise =
                 let producerResult = case exchangeProcessLinkId ex of
                         Just pid -> (Just pid, [])
@@ -130,7 +129,9 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                                 denom = if normalizationFactor > 1e-15
                                         then normalizationFactor
                                         else 1.0  -- Unreachable: normalizationFactor already falls back to 1.0
-                                value = convertedValue / denom
+                                -- Inputs are positive (demand), co-product outputs are negative (avoided demand)
+                                sign = if exchangeIsInput ex then 1 else -1
+                                value = sign * convertedValue / denom
                                 -- Exclude self-loops (internal consumption): idx == j
                                 -- Self-loops are accounted for in normalization factor but not exported as matrix entries
                                 -- This matches Ecoinvent's convention where internal losses affect normalization only

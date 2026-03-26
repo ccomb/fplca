@@ -489,7 +489,7 @@ Returns (fixed exchange, UnlinkedSummary)
 -}
 fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
-    | isInp -- All technosphere inputs (no location check!)
+    | isInp || not isRef -- Inputs + co-product outputs (avoided production credits)
         =
         case M.lookup fid flowDb of
             Just flow ->
