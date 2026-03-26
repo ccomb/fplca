@@ -1,0 +1,79 @@
+module Numerical.MUMPS.Solver
+    ( mumpsCreate
+    , mumpsAnalyze
+    , mumpsFactorize
+    , mumpsSolve
+    , mumpsDestroy
+    , mumpsAnalyzeAndFactorize
+    , withMUMPSSolver
+    ) where
+
+import Control.Exception (bracket, throwIO)
+import Foreign.C.Types (CInt(..), CDouble(..))
+import Foreign.Marshal.Array (withArray, allocaArray)
+import Foreign.Ptr (nullPtr)
+import Foreign.Storable (peekElemOff)
+import qualified Data.Vector.Storable as VS
+
+import Numerical.MUMPS.FFI
+import Numerical.MUMPS.Types
+
+-- | Create a MUMPS solver from COO triplets (0-indexed row/col).
+mumpsCreate :: Int -> Int -> [Int] -> [Int] -> [Double] -> IO MUMPSSolver
+mumpsCreate n nnz rows cols vals = do
+    let cRows = map fromIntegral rows :: [CInt]
+        cCols = map fromIntegral cols :: [CInt]
+        cVals = map realToFrac   vals :: [CDouble]
+    ptr <- withArray cRows $ \pRows ->
+           withArray cCols $ \pCols ->
+           withArray cVals $ \pVals ->
+               c_mumps_create (fromIntegral n) (fromIntegral nnz) pRows pCols pVals
+    if ptr == nullPtr
+        then throwIO $ userError "MUMPS: allocation failed"
+        else do
+            err <- c_mumps_get_error ptr
+            if err < 0
+                then do c_mumps_destroy ptr
+                        throwIO $ userError $ "MUMPS init failed: INFOG(1) = " ++ show err
+                else return $ MUMPSSolver ptr n
+
+-- | Run symbolic analysis phase.
+mumpsAnalyze :: MUMPSSolver -> IO ()
+mumpsAnalyze s = do
+    rc <- c_mumps_analyze (solverPtr s)
+    checkError "analyze" rc
+
+-- | Run numerical factorization phase.
+mumpsFactorize :: MUMPSSolver -> IO ()
+mumpsFactorize s = do
+    rc <- c_mumps_factorize (solverPtr s)
+    checkError "factorize" rc
+
+-- | Solve Ax = b. Takes RHS vector, returns solution vector.
+-- Can be called repeatedly after factorization with different RHS.
+mumpsSolve :: MUMPSSolver -> VS.Vector Double -> IO (VS.Vector Double)
+mumpsSolve s rhs = do
+    let n = solverSize s
+    VS.unsafeWith (VS.map realToFrac rhs :: VS.Vector CDouble) $ \pRhs ->
+        allocaArray n $ \pSol -> do
+            rc <- c_mumps_solve (solverPtr s) pRhs pSol
+            checkError "solve" rc
+            VS.generateM n $ \i -> realToFrac <$> peekElemOff pSol i
+
+-- | Destroy the solver and release all memory.
+mumpsDestroy :: MUMPSSolver -> IO ()
+mumpsDestroy = c_mumps_destroy . solverPtr
+
+-- | Convenience: analyze + factorize in one call.
+mumpsAnalyzeAndFactorize :: MUMPSSolver -> IO ()
+mumpsAnalyzeAndFactorize s = mumpsAnalyze s >> mumpsFactorize s
+
+-- | Bracket-style: create, use, destroy.
+withMUMPSSolver :: Int -> Int -> [Int] -> [Int] -> [Double] -> (MUMPSSolver -> IO a) -> IO a
+withMUMPSSolver n nnz rows cols vals =
+    bracket (mumpsCreate n nnz rows cols vals) mumpsDestroy
+
+checkError :: String -> CInt -> IO ()
+checkError phase rc
+    | rc < 0    = throwIO $ userError $ "MUMPS " ++ phase ++ " failed: INFOG(1) = " ++ show rc
+    | otherwise = return ()

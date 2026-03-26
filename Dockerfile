@@ -1,33 +1,8 @@
-# Stage 1: Build PETSc from source (static libraries)
-# Configuration is centralized in petsc.env and versions.env
-FROM debian:bookworm-slim AS petsc-builder
-
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    gfortran \
-    python3 \
-    wget \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /opt
-
-# Copy build scripts and configuration
-COPY versions.env petsc.env build-petsc.sh /tmp/
-
-# Download and build PETSc using shared script
-ENV PETSC_DIR=/opt/petsc
-ENV PETSC_ARCH=arch-linux-c-opt
-RUN cd /opt && set -a && . /tmp/versions.env && . /tmp/petsc.env && set +a && \
-    PETSC_DIR=/opt/petsc \
-    PETSC_PLATFORM_OPTS="$PETSC_CONFIGURE_DOCKER" \
-    /tmp/build-petsc.sh
-
-# Stage 2: Build Haskell application
+# Stage 1: Build Haskell application
 # Build from volca directory: docker build -t volca .
 FROM debian:bookworm AS haskell-builder
 
-# Install system dependencies (no ghc/cabal - we use ghcup)
+# Install system dependencies including MUMPS_SEQ
 RUN apt-get update && apt-get install -y \
     curl \
     libgmp-dev \
@@ -42,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     libnuma-dev \
     libncurses-dev \
     unzip \
+    libmumps-seq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy versions.env for GHC version
@@ -58,43 +34,18 @@ RUN . /tmp/versions.env && \
     BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
     sh
 
-# Install c2hs via cabal
-RUN cabal update && cabal install c2hs --install-method=copy --installdir=/usr/local/bin
-
-# Copy PETSc from builder (no SLEPc)
-COPY --from=petsc-builder /opt/petsc /opt/petsc
-
-ENV PETSC_DIR=/opt/petsc
-ENV PETSC_ARCH=arch-linux-c-opt
-ENV LD_LIBRARY_PATH=/opt/petsc/${PETSC_ARCH}/lib
-
 WORKDIR /build
-
-# Clone petsc-hs from GitHub (same as build.sh does)
-# ADD fetches the branch ref from GitHub API - cache is invalidated when commit SHA changes
-ADD https://api.github.com/repos/ccomb/petsc-hs/git/refs/heads/master /tmp/petsc-hs-version
-RUN git clone https://github.com/ccomb/petsc-hs.git /build/petsc-hs
-
-# Generate and process c2hs files for petsc-hs
-# 1. Generate TypesC2HsGen.chs from GenerateC2Hs.hs (outputs to stdout)
-# 2. Run c2hs to generate TypesC2HsGen.hs from the .chs file
-RUN cd /build/petsc-hs/src/Numerical/PETSc/Internal/C2HsGen && \
-    runhaskell GenerateC2Hs.hs > TypesC2HsGen.chs && \
-    c2hs -C -I/opt/petsc/include \
-         -C -I/opt/petsc/${PETSC_ARCH}/include \
-         TypesC2HsGen.chs
 
 # Copy ONLY dependency specification files first (for layer caching)
 COPY volca.cabal /build/volca/
+COPY mumps-hs/ /build/mumps-hs/
 COPY gen-cabal-config.sh /build/volca/
 
-# Set up cabal.project with petsc-hs as local package
-# Docker uses dynamic linking (PETSc/MPI libs copied to runtime image)
-RUN echo "packages: ./volca ./petsc-hs" > /build/cabal.project \
+# Set up cabal.project with mumps-hs as local package
+RUN echo "packages: ./volca ./mumps-hs" > /build/cabal.project \
     && echo "allow-newer: true" >> /build/cabal.project \
-    && PETSC_LIB_DIR="/opt/petsc/${PETSC_ARCH}/lib" \
-    PETSC_INCLUDE_DIR="/opt/petsc/include" \
-    PETSC_ARCH_INCLUDE_DIR="/opt/petsc/${PETSC_ARCH}/include" \
+    && MUMPS_LIB_DIR="/usr/lib/x86_64-linux-gnu" \
+    MUMPS_INCLUDE_DIR="/usr/include" \
     LINK_MODE="dynamic" \
     OUTPUT_DIR="/build" \
     /build/volca/gen-cabal-config.sh
@@ -121,12 +72,13 @@ RUN cd /build/volca/web && npm install && ./build.sh
 RUN mkdir -p /build/output \
     && cp $(cd /build && cabal list-bin exe:volca) /build/output/volca
 
-# Stage 3: Runtime image (slim — no PETSc libs needed, statically linked)
+# Stage 2: Runtime image
 FROM debian:bookworm-slim
 ARG GIT_HASH=unknown
 LABEL org.opencontainers.image.revision="${GIT_HASH}"
 
 RUN apt-get update && apt-get install -y \
+    libmumps-seq-5.7 \
     libgfortran5 \
     libgomp1 \
     libgmp10 \
@@ -142,18 +94,9 @@ RUN apt-get update && apt-get install -y \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# Copy PETSc runtime libraries (shared linking)
-COPY --from=petsc-builder /opt/petsc/arch-linux-c-opt/lib /opt/petsc/lib
-
 # Copy application
 COPY --from=haskell-builder /build/output/volca /usr/local/bin/volca
 COPY --from=haskell-builder /build/volca/web/dist /app/web/dist
-
-ENV LD_LIBRARY_PATH=/opt/petsc/lib
-
-# PETSC_OPTIONS: MUMPS direct solver settings
-# -malloc_hbw false is Docker-specific (no high-bandwidth memory)
-ENV PETSC_OPTIONS="-pc_type lu -pc_factor_mat_solver_type mumps -mat_mumps_icntl_14 80 -mat_mumps_icntl_24 1 -malloc_hbw false -no_signal_handler"
 
 WORKDIR /app
 
@@ -162,8 +105,6 @@ ENV VOLCA_DATA_DIR=/data
 VOLUME /data
 
 # Copy runtime config and data (staged by docker-build.sh)
-# When --config is passed to docker-build.sh, .docker-bundle/ contains the
-# custom config with bundled databases. Otherwise it contains the defaults.
 COPY .docker-bundle/volca.toml /app/volca.toml
 COPY .docker-bundle/data/ /app/data/
 

@@ -62,7 +62,7 @@ data ProgressLevel
     | Warning   -- ^ Warning messages
     | Cache     -- ^ Cache operations
     | Matrix    -- ^ Matrix construction operations
-    | Solver    -- ^ PETSc solver operations
+    | Solver    -- ^ Matrix solver operations
     | Error     -- ^ Error messages
     deriving (Eq, Show)
 
@@ -159,7 +159,7 @@ reportCacheOperation = reportProgress Cache
 reportMatrixOperation :: String -> IO ()
 reportMatrixOperation = reportProgress Matrix
 
--- | Report PETSc solver operations
+-- | Report matrix solver operations
 reportSolverOperation :: String -> IO ()
 reportSolverOperation = reportProgress Solver
 

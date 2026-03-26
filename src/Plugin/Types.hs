@@ -10,7 +10,7 @@
 --                           [Search] (orthogonal)
 -- @
 --
--- The core computation (matrix solve via PETSc) is NOT a plugin.
+-- The core computation (matrix solve via MUMPS) is NOT a plugin.
 -- Everything around it is pluggable via records of functions (Handle Pattern).
 module Plugin.Types
     ( -- * Backend

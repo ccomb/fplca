@@ -2,10 +2,10 @@
 
 {-|
 Module      : SharedSolver
-Description : Shared PETSc solver with lazy factorization and thread synchronization
+Description : Shared MUMPS solver with lazy factorization and thread synchronization
 
-Implements lazy factorization: the PETSc KSP is not built at startup, but
-on the first solve request. This eliminates ~3s × N databases of startup
+Implements lazy factorization: the MUMPS solver is not built at startup, but
+on the first solve request. This eliminates ~3s x N databases of startup
 latency while keeping sub-second solves after the first query.
 -}
 
@@ -34,7 +34,7 @@ data SharedSolver = SharedSolver
     , solverFactorizationVar :: MVar (Maybe MatrixFactorization) -- ^ Lazy: Nothing until first solve
     , solverTechTriples :: [(Int, Int, Double)]             -- ^ Technosphere matrix data
     , solverActivityCount :: Int                            -- ^ Number of activities
-    , solverDbName :: Text                                  -- ^ Database name (for PETSc cache key)
+    , solverDbName :: Text                                  -- ^ Database name (for solver cache key)
     }
 
 -- | Create a shared solver. No factorization happens here — deferred to first solve.

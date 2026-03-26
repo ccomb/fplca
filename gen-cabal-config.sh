@@ -1,74 +1,45 @@
 #!/bin/bash
-# Generate cabal.project.local for building volca with PETSc.
+# Generate cabal.project.local for building volca with MUMPS_SEQ.
 # Shared between build.sh and Dockerfile.
 #
-# Required env vars:
-#   PETSC_LIB_DIR         Path to PETSc libraries
-#   PETSC_INCLUDE_DIR     Path to PETSc headers
-#
 # Optional env vars:
-#   PETSC_ARCH_INCLUDE_DIR  Path to arch-specific PETSc headers (non-system builds)
-#   LINK_MODE               "dynamic" (default), "static", "system", "windows"
+#   MUMPS_LIB_DIR           Path to MUMPS libraries (default: system)
+#   MUMPS_INCLUDE_DIR       Path to MUMPS headers (default: /usr/include)
+#   LINK_MODE               "dynamic" (default), "static", "windows"
 #   OUTPUT_DIR              Where to write cabal.project.local (default: current dir)
 #
 # Output: writes cabal.project.local in OUTPUT_DIR
 
 set -e
 
-: "${PETSC_LIB_DIR:?PETSC_LIB_DIR is required}"
-: "${PETSC_INCLUDE_DIR:?PETSC_INCLUDE_DIR is required}"
+MUMPS_LIB_DIR="${MUMPS_LIB_DIR:-/usr/lib/x86_64-linux-gnu}"
+MUMPS_INCLUDE_DIR="${MUMPS_INCLUDE_DIR:-/usr/include}"
 LINK_MODE="${LINK_MODE:-dynamic}"
 OUTPUT="${OUTPUT_DIR:-.}/cabal.project.local"
 
 case "$LINK_MODE" in
-    system)
-        # Debian/Ubuntu system packages: shared linking with petsc_real + system MPI
-        cat > "$OUTPUT" << EOF
-optimization: 2
-split-sections: True
-
-extra-lib-dirs: $PETSC_LIB_DIR
-extra-include-dirs: $PETSC_INCLUDE_DIR
-
--- System packages use petsc_real library name and system MPI
-package petsc-hs
-  ghc-options: -optl-lpetsc_real -optl-lmpi
-
-package volca
-  ghc-options: -optl-lpetsc_real -optl-lmpi
-EOF
-        ;;
-
     dynamic)
-        # Shared linking: PETSc/MPI as shared libs (Docker, dev builds)
+        # Shared linking (Linux, macOS, Docker, dev builds)
         cat > "$OUTPUT" << EOF
 optimization: 2
 
-extra-lib-dirs: $PETSC_LIB_DIR
-extra-include-dirs: $PETSC_INCLUDE_DIR
-                  , ${PETSC_ARCH_INCLUDE_DIR:-$PETSC_INCLUDE_DIR}
-
-package petsc-hs
-  ghc-options: -optl-L$PETSC_LIB_DIR -optl-lmpi
-
-package volca
-  ghc-options: -optl-L$PETSC_LIB_DIR -optl-lmpi
+extra-lib-dirs: $MUMPS_LIB_DIR
+extra-include-dirs: $MUMPS_INCLUDE_DIR
 EOF
         ;;
 
     static)
-        # Static linking: embed PETSc/MUMPS/MPI, keep gfortran/libc dynamic
-        STATIC_LINK_FLAGS="-optl-L$PETSC_LIB_DIR -optl-Wl,-Bstatic -optl-Wl,--start-group -optl-lpetsc -optl-ldmumps -optl-lmumps_common -optl-lpord -optl-lscalapack -optl-lfblas -optl-lflapack -optl-lmpifort -optl-lmpi -optl-Wl,--end-group -optl-Wl,-Bdynamic -optl-lgfortran -optl-lquadmath -optl-lpthread -optl-lm -optl-ldl -optl-lrt"
+        # Static linking: embed MUMPS/BLAS/LAPACK, keep gfortran/libc dynamic
+        STATIC_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-Wl,-Bstatic -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-Wl,--end-group -optl-Wl,-Bdynamic -optl-llapack -optl-lblas -optl-lgfortran -optl-lquadmath -optl-lpthread -optl-lm -optl-ldl"
         cat > "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 
-extra-lib-dirs: $PETSC_LIB_DIR
-extra-include-dirs: $PETSC_INCLUDE_DIR
-                  , ${PETSC_ARCH_INCLUDE_DIR:-$PETSC_INCLUDE_DIR}
+extra-lib-dirs: $MUMPS_LIB_DIR
+extra-include-dirs: $MUMPS_INCLUDE_DIR
 
-package petsc-hs
-  extra-lib-dirs: $PETSC_LIB_DIR
+package mumps-hs
+  extra-lib-dirs: $MUMPS_LIB_DIR
   ghc-options: $STATIC_LINK_FLAGS
 
 package volca
@@ -77,23 +48,19 @@ EOF
         ;;
 
     windows)
-        # Windows/MSYS2: complex linker flags for MinGW + OpenBLAS + MS-MPI
+        # Windows/MSYS2: MinGW + OpenBLAS
         : "${MSYS2_LIB_DIR:?MSYS2_LIB_DIR is required for windows mode}"
         : "${GCC_LIB_DIR:?GCC_LIB_DIR is required for windows mode}"
-        : "${MPI_INCLUDE_DIR:?MPI_INCLUDE_DIR is required for windows mode}"
         cat > "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 
-extra-lib-dirs: $PETSC_LIB_DIR
+extra-lib-dirs: $MUMPS_LIB_DIR
               , $MSYS2_LIB_DIR
-extra-include-dirs: $PETSC_INCLUDE_DIR
-                  , ${PETSC_ARCH_INCLUDE_DIR:-$PETSC_INCLUDE_DIR}
-                  , $MPI_INCLUDE_DIR
+extra-include-dirs: $MUMPS_INCLUDE_DIR
 
--- Link MinGW runtime libs and OpenBLAS needed by PETSc (built with UCRT64)
 package volca
-  ghc-options: -optl-Wl,--allow-multiple-definition -optl-L$GCC_LIB_DIR -optl-L$MSYS2_LIB_DIR -optl-L$PETSC_LIB_DIR -optl-lscalapack -optl-ldmumps -optl-lmumps_common -optl-lpord -optl-l:libmsmpi.dll.a -optl-lopenblas -optl-lgfortran -optl-lgcc -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
+  ghc-options: -optl-Wl,--allow-multiple-definition -optl-L$GCC_LIB_DIR -optl-L$MSYS2_LIB_DIR -optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran -optl-lgcc -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
 EOF
         ;;
 

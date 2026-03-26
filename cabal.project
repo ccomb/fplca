@@ -1,4 +1,4 @@
 packages: .
-          ./petsc-hs
+          ./mumps-hs
 
 allow-newer: true

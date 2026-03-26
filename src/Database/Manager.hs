@@ -98,7 +98,7 @@ import Plugin.Config (buildRegistry)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
-import Matrix (clearCachedKspSolver)
+import Matrix (clearCachedSolver)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Progress (reportProgress, reportProgressWithTiming, reportError, ProgressLevel(..))
 import Database (buildDatabaseWithMatrices)
@@ -1061,8 +1061,8 @@ unloadDatabase manager dbName = do
                 modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
                 modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
 
-            -- Clear the cached KSP solver to release PETSc memory
-            clearCachedKspSolver dbName
+            -- Clear the cached MUMPS solver to release memory
+            clearCachedSolver dbName
 
             -- Force garbage collection to release memory
             performGC
@@ -1413,7 +1413,7 @@ restageLoadedDatabase manager dbName ld = do
     atomically $ do
         modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
         modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
-    clearCachedKspSolver dbName
+    clearCachedSolver dbName
     return staged
 
 -- | Get or create staged database (re-stages loaded DBs on the fly)

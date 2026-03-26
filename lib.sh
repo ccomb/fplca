@@ -43,62 +43,6 @@ detect_os() {
     esac
 }
 
-# PETSC_ARCH detection based on OS and debug flag
-# Usage: detect_petsc_arch [debug]
-# Args:
-#   debug: "true" for debug build, anything else for optimized
-detect_petsc_arch() {
-    local os
-    os=$(detect_os)
-    local debug="${1:-false}"
-
-    # Windows uses a different naming convention
-    if [[ "$os" == "windows" ]]; then
-        if [[ "$debug" == "true" ]]; then
-            echo "arch-msys2-c-debug"
-        else
-            echo "arch-msys2-c-opt"
-        fi
-    else
-        if [[ "$debug" == "true" ]]; then
-            echo "arch-${os}-c-debug"
-        else
-            echo "arch-${os}-c-opt"
-        fi
-    fi
-}
-
-# Auto-detect existing PETSC_ARCH from built directories
-# Usage: detect_existing_petsc_arch PETSC_DIR
-detect_existing_petsc_arch() {
-    local petsc_dir="$1"
-    local os
-    os=$(detect_os)
-
-    # For Windows, check msys2 arch first
-    if [[ "$os" == "windows" ]]; then
-        if [[ -d "$petsc_dir/arch-msys2-c-opt" ]]; then
-            echo "arch-msys2-c-opt"
-            return 0
-        elif [[ -d "$petsc_dir/arch-msys2-c-debug" ]]; then
-            echo "arch-msys2-c-debug"
-            return 0
-        fi
-    fi
-
-    # Standard detection for Linux/macOS
-    if [[ -d "$petsc_dir/arch-${os}-c-opt" ]]; then
-        echo "arch-${os}-c-opt"
-        return 0
-    elif [[ -d "$petsc_dir/arch-${os}-c-debug" ]]; then
-        echo "arch-${os}-c-debug"
-        return 0
-    fi
-
-    # Not found - return default
-    detect_petsc_arch false
-}
-
 # Version detection from git tag or cabal file
 # Usage: get_version [cabal_file]
 get_version() {

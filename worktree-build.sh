@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fast build for git worktrees.
-# Reuses PETSc and petsc-hs from the main repo via symlinks,
-# skipping the ~20min PETSc build and dependency checks.
+# Reuses mumps-hs from the main repo via symlink,
+# skipping dependency checks.
 #
 # Usage (from a worktree):
 #   ./worktree-build.sh [--test] [--clean]
@@ -28,18 +28,11 @@ done
 # Find main repo via git worktree list
 VOLCA_MAIN="${VOLCA_MAIN:-$(git worktree list --porcelain | head -1 | sed 's/^worktree //')}"
 
-# Validate main repo has built PETSc and petsc-hs
-for dep in petsc petsc-hs; do
-    [[ -d "$VOLCA_MAIN/$dep" ]] || { log_error "$dep not found at $VOLCA_MAIN/$dep — build the main repo first"; exit 1; }
-done
-
-PETSC_ARCH=$(detect_existing_petsc_arch "$VOLCA_MAIN/petsc")
-[[ -f "$VOLCA_MAIN/petsc/$PETSC_ARCH/lib/libpetsc.a" ]] || { log_error "PETSc not built at $VOLCA_MAIN/petsc/$PETSC_ARCH"; exit 1; }
+# Validate main repo has mumps-hs
+[[ -d "$VOLCA_MAIN/mumps-hs" ]] || { log_error "mumps-hs not found at $VOLCA_MAIN/mumps-hs — build the main repo first"; exit 1; }
 
 # Symlink shared deps (idempotent)
-# petsc-hs is a gitlink (submodule without .gitmodules), so git creates
-# an empty directory in worktrees — remove it before symlinking.
-for dep in petsc petsc-hs; do
+for dep in mumps-hs; do
     if [[ -d "$SCRIPT_DIR/$dep" && ! -L "$SCRIPT_DIR/$dep" ]]; then
         rmdir "$SCRIPT_DIR/$dep" 2>/dev/null || true
     fi
@@ -55,15 +48,12 @@ fi
 OS=$(detect_os)
 BUILD_TARGET="$OS" "$SCRIPT_DIR/gen-version.sh"
 
-PETSC_DIR="$(readlink -f "$SCRIPT_DIR/petsc")"
-PETSC_LIB_DIR="$PETSC_DIR/$PETSC_ARCH/lib" \
-PETSC_INCLUDE_DIR="$PETSC_DIR/include" \
-PETSC_ARCH_INCLUDE_DIR="$PETSC_DIR/$PETSC_ARCH/include" \
-LINK_MODE="static" \
+MUMPS_LIB_DIR="/usr/lib/x86_64-linux-gnu" \
+MUMPS_INCLUDE_DIR="/usr/include" \
+LINK_MODE="dynamic" \
 "$SCRIPT_DIR/gen-cabal-config.sh"
 
 # Build
-export LD_LIBRARY_PATH="$PETSC_DIR/$PETSC_ARCH/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cabal build -j
 
 if [[ "$RUN_TESTS" == "true" ]]; then
