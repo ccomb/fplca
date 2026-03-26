@@ -91,6 +91,7 @@ init shared flags =
             , offset = 0
             , sort = Maybe.withDefault "depth" flags.sort
             , order = Maybe.withDefault "asc" flags.order
+            , includeEdges = False
             }
 
         model =

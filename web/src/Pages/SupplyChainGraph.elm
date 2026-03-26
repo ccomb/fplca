@@ -60,7 +60,7 @@ init shared ( db, activityId ) =
             [ let
                 params = Api.defaultSupplyChainParams
               in
-              Effect.fromCmd (Api.loadSupplyChain DataLoaded db activityId { params | limit = 50 })
+              Effect.fromCmd (Api.loadSupplyChain DataLoaded db activityId { params | limit = 50, includeEdges = True })
             , case Dict.get activityId shared.cachedTrees of
                 Nothing ->
                     Effect.fromCmd (Api.loadActivityTree TreeLoaded db activityId)

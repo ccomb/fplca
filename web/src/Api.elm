@@ -69,6 +69,7 @@ type alias SupplyChainParams =
     , offset : Int
     , sort : String
     , order : String
+    , includeEdges : Bool
     }
 
 
@@ -83,6 +84,7 @@ defaultSupplyChainParams =
     , offset = 0
     , sort = "depth"
     , order = "asc"
+    , includeEdges = False
     }
 
 
@@ -106,6 +108,7 @@ loadSupplyChain toMsg dbName activityId params =
                 ++ optParam "min-quantity" params.minQuantity
                 ++ optParam "sort" params.sort
                 ++ optParam "order" params.order
+                ++ (if params.includeEdges then "&include-edges=true" else "")
     in
     Http.get
         { url = "/api/v1/db/" ++ dbName ++ "/activity/" ++ activityId ++ "/supply-chain" ++ queryString

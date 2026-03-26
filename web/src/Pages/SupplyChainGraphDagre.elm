@@ -70,7 +70,7 @@ init shared ( db, activityId ) =
         , let
             params = Api.defaultSupplyChainParams
           in
-          Effect.fromCmd (Api.loadSupplyChain DataLoaded db activityId { params | minQuantity = "1.0" })
+          Effect.fromCmd (Api.loadSupplyChain DataLoaded db activityId { params | minQuantity = "1.0", includeEdges = True })
         )
 
 
@@ -109,7 +109,7 @@ update shared msg model =
             , let
                 params = Api.defaultSupplyChainParams
               in
-              Effect.fromCmd (Api.loadSupplyChain DataLoaded model.dbName model.activityId { params | minQuantity = String.fromFloat cutoff })
+              Effect.fromCmd (Api.loadSupplyChain DataLoaded model.dbName model.activityId { params | minQuantity = String.fromFloat cutoff, includeEdges = True })
             )
 
         RequestLoadDatabase ->
