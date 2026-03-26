@@ -25,8 +25,7 @@ viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLo
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
             , viewFiltersRow maybeDatabaseList currentDbName classificationSystems selectedSystem selectedValue
-            , viewSearchInput searchQuery searchLoading
-            , viewProductInput productQuery
+            , viewSearchInputs searchQuery productQuery searchLoading
             , case error of
                 Just err ->
                     div [ class "notification is-danger" ]
@@ -39,13 +38,13 @@ viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLo
         ]
 
 
-viewSearchInput : String -> Bool -> Html Msg
-viewSearchInput query isLoading =
-    div [ class "field", style "margin-bottom" "0.75rem" ]
+viewSearchInputs : String -> String -> Bool -> Html Msg
+viewSearchInputs query productQuery isLoading =
+    div [ class "field is-grouped", style "margin-bottom" "0.75rem" ]
         [ div [ class "control has-icons-left is-expanded", class (if isLoading then "is-loading" else "") ]
             [ input
                 [ id "activity-search"
-                , class "input is-large"
+                , class "input"
                 , type_ "text"
                 , placeholder "Search activities by name..."
                 , value query
@@ -56,13 +55,7 @@ viewSearchInput query isLoading =
                 [ Html.i [ class "fas fa-search" ] []
                 ]
             ]
-        ]
-
-
-viewProductInput : String -> Html Msg
-viewProductInput productQuery =
-    div [ class "field", style "margin-bottom" "0.75rem" ]
-        [ div [ class "control has-icons-left" ]
+        , div [ class "control has-icons-left is-expanded" ]
             [ input
                 [ id "product-search"
                 , class "input"

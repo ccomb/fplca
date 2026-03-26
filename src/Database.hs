@@ -374,18 +374,21 @@ findActivitiesByFields db nameParam geoParam productParam classParam classValueP
         resolveIds :: IS.IntSet -> [(ProcessId, Activity)]
         resolveIds ids = [ (fromIntegral i, actVec V.! i) | i <- IS.toList ids, i < V.length actVec ]
 
+        -- Multi-word AND match: all words must appear in at least one of the given text fields
+        allWordsMatch :: Text -> (Activity -> [Text]) -> Activity -> Bool
+        allWordsMatch query getFields a =
+            let searchWords = filter (not . T.null) $ T.words (T.toLower query)
+                fields = map T.toLower (getFields a)
+             in all (\w -> any (T.isInfixOf w) fields) searchWords
+
         -- Filter by name using search index (intersect word sets, then verify substring)
         nameFiltered = case nameParam of
             Nothing -> [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)]
             Just name
                 | M.null idx ->
                     -- Fallback: no search index (shouldn't happen in normal operation)
-                    let searchWords = filter (not . T.null) $ T.words (T.toLower name)
-                        matchesAllWords a =
-                            let nl = T.toLower (activityName a)
-                                ll = T.toLower (activityLocation a)
-                             in all (\w -> T.isInfixOf w nl || T.isInfixOf w ll) searchWords
-                     in [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec), matchesAllWords a]
+                    [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)
+                    , allWordsMatch name (\a' -> [activityName a', activityLocation a']) a]
                 | otherwise ->
                     let searchWords = filter (not . T.null) $ T.words (T.toLower name)
                         -- For each word, find candidate ProcessIds from the index
@@ -395,12 +398,7 @@ findActivitiesByFields db nameParam geoParam productParam classParam classValueP
                         candidates = case map wordCandidates searchWords of
                             [] -> IS.fromList [0 .. V.length actVec - 1]
                             (first:rest) -> foldl IS.intersection first rest
-                        -- Verify substring match (index gives word-level matches, user may search partial words)
-                        matchesAllWords a =
-                            let nl = T.toLower (activityName a)
-                                ll = T.toLower (activityLocation a)
-                             in all (\w -> T.isInfixOf w nl || T.isInfixOf w ll) searchWords
-                     in filter (matchesAllWords . snd) (resolveIds candidates)
+                     in filter (\(_, a') -> allWordsMatch name (\a'' -> [activityName a'', activityLocation a'']) a') (resolveIds candidates)
 
         -- Filter by geography if provided (substring match)
         geoFiltered = case geoParam of
@@ -409,21 +407,18 @@ findActivitiesByFields db nameParam geoParam productParam classParam classValueP
                 let geoLower = T.toLower geo
                  in [(pid, a) | (pid, a) <- nameFiltered, T.isInfixOf geoLower (T.toLower (activityLocation a))]
 
-        -- Filter by product if provided (substring match)
+        -- Filter by product if provided (multi-word AND match on reference product name)
         productFiltered = case productParam of
             Nothing -> geoFiltered
             Just prod ->
-                let productLower = T.toLower prod
-                 in [ (pid, a) | (pid, a) <- geoFiltered, any
-                                                ( \ex ->
-                                                    exchangeIsReference ex
-                                                        && not (exchangeIsInput ex)
-                                                        && case M.lookup (exchangeFlowId ex) (dbFlows db) of
-                                                            Just flow -> T.isInfixOf productLower (T.toLower (flowName flow))
-                                                            Nothing -> False
-                                                )
-                                                (exchanges a)
-                    ]
+                let getProductNames a' =
+                        [ flowName flow
+                        | ex <- exchanges a'
+                        , exchangeIsReference ex
+                        , not (exchangeIsInput ex)
+                        , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+                        ]
+                 in [(pid, a) | (pid, a) <- geoFiltered, allWordsMatch prod getProductNames a]
 
         -- Filter by classification if provided
         classFiltered = case classValueParam of
