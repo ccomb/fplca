@@ -33,6 +33,7 @@ import GHC.Generics (Generic)
 import TOML (DecodeTOML(..), getField, getFieldOpt, getFieldOptWith, getArrayOf, decodeFile)
 import Control.Monad (when, forM_)
 import System.Directory (doesFileExist)
+import System.FilePath (takeFileName)
 import Database.Upload (DatabaseFormat(..))
 import Plugin.Config (PluginConfig)
 
@@ -165,8 +166,8 @@ instance DecodeTOML MethodConfig where
 
 instance DecodeTOML RefDataConfig where
     tomlDecoder = do
-        rdName <- getField "name"
         rdPath <- getField "path"
+        rdName <- fromMaybe (T.pack (takeFileName rdPath)) <$> getFieldOpt "name"
         rdActive <- fromMaybe True <$> getFieldOpt "active"
         let rdIsUploaded = False  -- TOML entries are not uploaded
         let rdIsAuto = False
