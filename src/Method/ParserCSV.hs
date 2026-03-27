@@ -100,6 +100,7 @@ mkMethod methodology catName impactName unit colIdx rows delim =
                         , mcfValue       = v
                         , mcfCompartment = parseCSVCompartment comp
                         , mcfCAS         = Nothing
+                        , mcfUnit        = unit
                         }
                     | row <- rows
                     , let cells = splitRow delim row

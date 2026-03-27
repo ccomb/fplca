@@ -35,8 +35,9 @@ import qualified Data.Text as T
 import Data.UUID (UUID)
 
 import Matrix (Inventory)
-import Types (Database(..), Flow(..), FlowDB)
+import Types (Database(..), Flow(..), FlowDB, Unit(..), UnitDB)
 import Method.Types
+import UnitConversion (UnitConfig, convertUnit)
 import Plugin.Types (MapperHandle(..), MapContext(..), MapQuery(..), MapResult(..))
 import SynonymDB
 
@@ -200,11 +201,20 @@ computeMappingStats mappings = MappingStats
 --   3. Falls back to (name, medium) for CF entries with unspecified subcompartment.
 -- This implements SimaPro's fallback behavior: "Air;(unspecified)" CFs apply to
 -- any air emission that lacks a more specific CF, without aggregating across media.
-computeLCIAScore :: FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
-computeLCIAScore flowDB inventory mappings =
+-- Unit conversion is applied when the inventory flow's unit differs from the CF's unit.
+computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
+computeLCIAScore unitConfig unitDB flowDB inventory mappings =
     sum [ scoreFlow fid qty | (fid, qty) <- M.toList inventory, qty /= 0 ]
   where
-    scoreFlow fid qty = qty * fromMaybe 0 (lookupCF fid)
+    scoreFlow fid qty = case lookupCF fid of
+        Nothing -> 0
+        Just (cfVal, cfUnit) ->
+            let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
+                converted = if flowUnit == cfUnit || T.null cfUnit then qty
+                            else case convertUnit unitConfig flowUnit cfUnit qty of
+                                Just c  -> c
+                                Nothing -> qty  -- fallback: assume same unit
+            in converted * cfVal
 
     lookupCF fid = case M.lookup fid uuidCF of
         Just cfv -> Just cfv
@@ -215,34 +225,30 @@ computeLCIAScore flowDB inventory mappings =
                     baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
                     subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
                     exact   = M.lookup (name, baseMed, subcomp) exactCF
-                    isLongTerm = "long-term" `T.isInfixOf` subcomp
                 in case exact of
                     Just _  -> exact
-                    Nothing -> if isLongTerm then Nothing
-                               else M.lookup (name, baseMed) fallbackCF
+                    Nothing -> M.lookup (name, baseMed) fallbackCF
 
-    -- UUID-matched CFs: exact flow_id → CF_value
+    -- UUID-matched CFs: exact flow_id → (CF_value, CF_unit)
     uuidCF = M.fromList
-        [ (flowId flow, mcfValue cf)
+        [ (flowId flow, (mcfValue cf, mcfUnit cf))
         | (cf, Just (flow, ByUUID)) <- mappings ]
 
-    -- Exact CFs for specific subcompartments: (name, medium, subcomp) → max CF
-    exactCF = M.fromListWith max
-        [ ((nameKey cf mflow, normalizeMedium medium, subcomp), mcfValue cf)
+    -- Exact CFs for specific subcompartments: (name, medium, subcomp) → max (CF, unit)
+    exactCF = M.fromListWith (\a b -> if fst a >= fst b then a else b)
+        [ ((nameKey cf mflow, normalizeMedium medium, subcomp), (mcfValue cf, mcfUnit cf))
         | (cf, mflow) <- mappings
         , Just (Compartment medium subcomp _) <- [mcfCompartment cf]
         , not (T.null subcomp) ]
 
-    -- Fallback CFs for unspecified subcompartment: (name, medium) → max CF
-    fallbackCF = M.fromListWith max
-        [ ((nameKey cf mflow, normalizeMedium medium), mcfValue cf)
+    -- Fallback CFs for unspecified subcompartment: (name, medium) → max (CF, unit)
+    fallbackCF = M.fromListWith (\a b -> if fst a >= fst b then a else b)
+        [ ((nameKey cf mflow, normalizeMedium medium), (mcfValue cf, mcfUnit cf))
         | (cf, mflow) <- mappings
         , Just (Compartment medium subcomp _) <- [mcfCompartment cf]
         , T.null subcomp ]
 
-    -- Use matched flow's name only for name/synonym matches (prevents CAS geographic
-    -- variant contamination: "Ammonia, DE" CAS-matched to "Ammonia" DB flow must not
-    -- override the "Ammonia" CF entry with the geographic variant's higher value)
+    -- Use matched flow's name only for name/synonym matches
     nameKey cf mflow = normalizeName $ case mflow of
         Just (flow, ByName)    -> flowName flow
         Just (flow, BySynonym) -> flowName flow

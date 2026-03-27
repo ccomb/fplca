@@ -614,9 +614,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig =
     computeCategoryResult :: Database -> Inventory -> Method -> IO LCIAResult
     computeCategoryResult db inventory method = do
         let mappers = prMappers (dmPlugins dbManager)
+        unitCfg <- getMergedUnitConfig dbManager
         mappings <- mapMethodToFlows mappers db method
         let stats = computeMappingStats mappings
-            score = computeLCIAScore (dbFlows db) inventory mappings
+            score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
             unmappedNames = take 50 [mcfFlowName cf | (cf, Nothing) <- mappings]
         pure LCIAResult
             { lrMethodId = methodId method

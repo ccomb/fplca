@@ -12,6 +12,7 @@ import qualified Data.UUID as UUID
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
+import UnitConversion (defaultUnitConfig)
 import Method.Parser
 import Method.ParserCSV (parseMethodCSVBytes)
 import Method.ParserSimaPro (parseSimaProMethodCSVBytes, isSimaProMethodCSV)
@@ -245,28 +246,28 @@ spec = do
                     -- Inventory: CO2 = 10 kg, CH4 = 2 kg
                     inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
                     -- Method: CO2 CF = 1.0, CH4 CF = 28.0
-                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing
-                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing "kg"
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing "kg"
                     co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
                     ch4Flow = mkTestFlow ch4Uuid "Methane"
                     mappings = [ (co2CF, Just (co2Flow, ByUUID))
                                , (ch4CF, Just (ch4Flow, ByUUID))
                                ]
                 -- Score = 10*1 + 2*28 = 10 + 56 = 66
-                computeLCIAScore M.empty inventory mappings `shouldBe` 66.0
+                computeLCIAScore defaultUnitConfig M.empty M.empty inventory mappings `shouldBe` 66.0
 
             it "ignores unmapped flows" $ do
                 let co2Uuid = UUID.fromWords 1 2 3 4
                     ch4Uuid = UUID.fromWords 5 6 7 8
                     inventory = M.fromList [(co2Uuid, 10.0), (ch4Uuid, 2.0)]
-                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing
-                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing
+                    co2CF = MethodCF co2Uuid "Carbon dioxide" Output 1.0 Nothing Nothing "kg"
+                    ch4CF = MethodCF ch4Uuid "Methane" Output 28.0 Nothing Nothing "kg"
                     co2Flow = mkTestFlow co2Uuid "Carbon dioxide"
                     mappings = [ (co2CF, Just (co2Flow, ByUUID))
                                , (ch4CF, Nothing)  -- CH4 not mapped
                                ]
                 -- Score = 10*1 = 10 (CH4 ignored because not mapped)
-                computeLCIAScore M.empty inventory mappings `shouldBe` 10.0
+                computeLCIAScore defaultUnitConfig M.empty M.empty inventory mappings `shouldBe` 10.0
 
             it "returns 0 for flows not in inventory" $ do
                 let co2Uuid = UUID.fromWords 1 2 3 4
@@ -274,25 +275,25 @@ spec = do
                     -- Inventory has only CO2
                     inventory = M.fromList [(co2Uuid, 10.0)]
                     -- Method has N2O that's not in inventory
-                    n2oCF = MethodCF n2oUuid "Dinitrogen monoxide" Output 265.0 Nothing Nothing
+                    n2oCF = MethodCF n2oUuid "Dinitrogen monoxide" Output 265.0 Nothing Nothing "kg"
                     n2oFlow = mkTestFlow n2oUuid "Dinitrogen monoxide"
                     mappings = [ (n2oCF, Just (n2oFlow, ByName)) ]
                 -- Score = 0 (N2O not in inventory)
-                computeLCIAScore M.empty inventory mappings `shouldBe` 0.0
+                computeLCIAScore defaultUnitConfig M.empty M.empty inventory mappings `shouldBe` 0.0
 
             it "handles negative inventory values (resource extraction)" $ do
                 let oilUuid = UUID.fromWords 11 12 13 14
                     -- Resource extraction has negative sign in inventory
                     inventory = M.fromList [(oilUuid, -5.0)]
-                    oilCF = MethodCF oilUuid "Crude oil" Input 42.0 Nothing Nothing
+                    oilCF = MethodCF oilUuid "Crude oil" Input 42.0 Nothing Nothing "MJ"
                     oilFlow = mkTestFlow oilUuid "Crude oil"
                     mappings = [ (oilCF, Just (oilFlow, ByUUID)) ]
                 -- Score = -5 * 42 = -210 (negative = resource depletion)
-                computeLCIAScore M.empty inventory mappings `shouldBe` (-210.0)
+                computeLCIAScore defaultUnitConfig M.empty M.empty inventory mappings `shouldBe` (-210.0)
 
             it "returns 0 for empty mappings" $ do
                 let inventory = M.fromList [(UUID.fromWords 1 2 3 4, 100.0)]
-                computeLCIAScore M.empty inventory [] `shouldBe` 0.0
+                computeLCIAScore defaultUnitConfig M.empty M.empty inventory [] `shouldBe` 0.0
 
     describe "SimaPro Method CSV Parser" $ do
         it "detects SimaPro method CSV format" $ do

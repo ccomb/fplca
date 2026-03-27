@@ -426,9 +426,10 @@ callComputeLCIA dbManager rid args = do
                                         Right (processId, _) -> do
                                             inventory <- computeInventoryMatrix db processId
                                             let mappers = prMappers (dmPlugins dbManager)
+                                            unitCfg <- DM.getMergedUnitConfig dbManager
                                             mappings <- mapMethodToFlows mappers db method
                                             let stats = computeMappingStats mappings
-                                                score = computeLCIAScore (dbFlows db) inventory mappings
+                                                score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                                             return $ toolSuccessJson rid $ object
                                                 [ "method"        .= methodName method
                                                 , "category"      .= methodCategory method

@@ -26,6 +26,7 @@ testCF = MethodCF
     , mcfValue      = 1.0
     , mcfCAS        = Just "124-38-9"
     , mcfCompartment = Nothing
+    , mcfUnit       = "kg"
     }
 
 spec :: Spec

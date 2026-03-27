@@ -145,6 +145,7 @@ closeTag state tagName
                 , mcfValue = parseDoubleSafe (psCurrentValue state)
                 , mcfCompartment = extractCompartmentFromDesc (psCurrentFlowName state)
                 , mcfCAS = Nothing  -- enriched in buildMethod from flow XMLs
+                , mcfUnit = psUnit state
                 }
         in state { psPath = dropPath
                  , psInFactor = False

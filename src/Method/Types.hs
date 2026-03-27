@@ -64,6 +64,7 @@ data MethodCF = MethodCF
     , mcfValue       :: !Double              -- ^ Characterization factor value
     , mcfCompartment :: !(Maybe Compartment) -- ^ Compartment from ILCD flow XML
     , mcfCAS         :: !(Maybe Text)        -- ^ CAS number (normalized, no leading zeros)
+    , mcfUnit        :: !Text                -- ^ CF reference unit (e.g., "kg", "kBq")
     } deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
 
 -- | An LCIA characterization method (loaded from ILCD XML)

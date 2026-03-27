@@ -35,6 +35,7 @@ module Plugin.Builtin
     ) where
 
 import Data.Aeson (encode, toJSON)
+import qualified UnitConversion
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -154,7 +155,7 @@ lciaAnalyzer = AnalyzeHandle
             mappings <- Mapping.mapMethodFlows defaultMappers mapCtx m
             pure $ toJSON $ M.fromList
                 [ ("method" :: String, toJSON (show m))
-                , ("score",  toJSON (Mapping.computeLCIAScore (dbFlows db) inv mappings))
+                , ("score",  toJSON (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (dbUnits db) (dbFlows db) inv mappings))
                 ]
             ) methods
         pure $ toJSON scores
@@ -289,7 +290,7 @@ hotspotAnalyzer = AnalyzeHandle
         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx method
         let contributions = mapMaybe (flowContribution inv) mappings
             sorted = take topN $ sortOn (\(_,_,c) -> negate (abs c)) contributions
-            total = Mapping.computeLCIAScore (dbFlows db) inv mappings
+            total = Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (dbUnits db) (dbFlows db) inv mappings
         pure $ toJSON $ M.fromList
             [ ("method" :: String, toJSON (methodName method))
             , ("unit", toJSON (methodUnit method))

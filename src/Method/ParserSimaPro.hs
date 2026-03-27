@@ -147,7 +147,7 @@ step cfg methodologyName st line = case psPhase st of
         | otherwise ->
             let fields = splitCSV (spDelimiter cfg) line
             in case fields of
-                (comp:sub:name:cas:cfVal:_unit:_) ->
+                (comp:sub:name:cas:cfVal:cfUnit:_) ->
                     let !cf = MethodCF
                             { mcfFlowRef     = makeFlowUUID name comp sub
                             , mcfFlowName    = decodeBS (BS8.strip name)
@@ -155,6 +155,7 @@ step cfg methodologyName st line = case psPhase st of
                             , mcfValue       = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                             , mcfCompartment = mkCompartment comp sub
                             , mcfCAS         = normalizeCAS (decodeBS (BS8.strip cas))
+                            , mcfUnit        = decodeBS (BS8.strip cfUnit)
                             }
                     in st { psFactors = cf : psFactors st }
                 _ -> st
