@@ -40,57 +40,41 @@ import System.Directory (doesFileExist, getModificationTime)
 import SynonymDB.Types (SynonymDB(..), emptySynonymDB)
 
 -- | Build a SynonymDB from CSV content (two columns: name1, name2).
--- Each row declares two names as synonyms. Groups are built via
--- transitive closure (Union-Find). Groups > 100 names are skipped.
+-- Each row declares two names as direct synonyms. No transitive closure:
+-- if A↔B and B↔C, looking up A returns {A,B} but NOT C.
+-- This prevents chain pollution (e.g., sulfate→gypsum→calcium→calcite→carbonate→lithium carbonate).
 buildFromCSV :: BL.ByteString -> Either String SynonymDB
 buildFromCSV csvData =
     case decode HasHeader csvData of
         Left err -> Left $ "CSV parse error: " <> err
         Right rows -> Right $ buildFromPairs (V.toList (rows :: V.Vector (Text, Text)))
 
--- | Build SynonymDB directly from pairs (avoids CSV round-trip)
+-- | Build SynonymDB from direct pairs (no transitive closure).
+-- Each pair (A, B) creates a group containing both A and B.
+-- If A appears in multiple pairs, all its direct partners are in one group.
+-- But partners' partners are NOT included (no transitivity).
 buildFromPairs :: [(Text, Text)] -> SynonymDB
 buildFromPairs pairs =
-    let uf = foldl addPair M.empty pairs
-        originals = foldl collectOriginals M.empty pairs
-        allNorm = M.keys uf
-        resolved = M.fromList [(n, findRoot uf n) | n <- allNorm]
-        groups = M.fromListWith (++) [(root, [lookupOriginal originals name]) | (name, root) <- M.toList resolved]
-        validGroups = filter ((<= 100) . length . snd) (zip [0..] (M.elems groups))
-        nameToId = M.fromList [(normalizeName name, gid) | (gid, names) <- validGroups, name <- names]
-        idToNames = M.fromList [(gid, names) | (gid, names) <- validGroups]
+    let -- Collect direct neighbors for each name (star topology, not transitive)
+        directNeighbors = foldl addPair M.empty pairs
+        -- Filter: reject names with too many direct synonyms (overly generic terms)
+        maxDirectSynonyms = 5
+        validNeighbors = M.filter ((<= maxDirectSynonyms) . length) directNeighbors
+        -- Build groups: each name's group = itself + its direct neighbors
+        allNames = M.keys validNeighbors
+        numberedGroups = zip [0..] [ name : M.findWithDefault [] name validNeighbors | name <- allNames ]
+        nameToId = M.fromList [ (name, gid) | (gid, members) <- numberedGroups, name <- members ]
+        idToNames = M.fromList [ (gid, members) | (gid, members) <- numberedGroups ]
     in SynonymDB nameToId idToNames
   where
-    addPair :: M.Map Text Text -> (Text, Text) -> M.Map Text Text
-    addPair uf (raw1, raw2) =
+    addPair :: M.Map Text [Text] -> (Text, Text) -> M.Map Text [Text]
+    addPair acc (raw1, raw2) =
         let n1 = normalizeName raw1
             n2 = normalizeName raw2
-        in if T.null n1 || T.null n2 || n1 == n2
-           then uf
-           else union uf n1 n2
-
-    collectOriginals :: M.Map Text Text -> (Text, Text) -> M.Map Text Text
-    collectOriginals acc (raw1, raw2) =
-        M.insertWith (\_ old -> old) (normalizeName raw1) (T.strip raw1) $
-        M.insertWith (\_ old -> old) (normalizeName raw2) (T.strip raw2) acc
-
-    lookupOriginal :: M.Map Text Text -> Text -> Text
-    lookupOriginal originals norm = M.findWithDefault norm norm originals
-
-    findRoot :: M.Map Text Text -> Text -> Text
-    findRoot uf name = case M.lookup name uf of
-        Nothing -> name
-        Just parent | parent == name -> name
-                    | otherwise -> findRoot uf parent
-
-    union :: M.Map Text Text -> Text -> Text -> M.Map Text Text
-    union uf a b =
-        let rootA = findRoot uf a
-            rootB = findRoot uf b
-            uf1 = M.insertWith (\_ old -> old) a a uf
-            uf2 = M.insertWith (\_ old -> old) b b uf1
-        in if rootA == rootB then uf2
-           else M.insert rootB rootA uf2
+            o1 = T.strip raw1
+            o2 = T.strip raw2
+        in if T.null n1 || T.null n2 || n1 == n2 then acc
+           else M.insertWith (++) n1 [o2] $ M.insertWith (++) n2 [o1] acc
 
 -- | Load a SynonymDB from a CSV file, using a binary cache for speed.
 --   On first load: parse CSV → build SynonymDB → save .cache.zst
