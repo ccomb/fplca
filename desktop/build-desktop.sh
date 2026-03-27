@@ -4,9 +4,8 @@
 # VoLCA Desktop Build Script
 # =============================================================================
 # Builds the desktop application using Tauri, bundling:
-# - volca Haskell backend
+# - volca Haskell backend (statically linked, self-contained)
 # - Elm frontend
-# - PETSc libraries
 #
 # Works on Linux, macOS, and Windows (via MSYS2).
 #
@@ -34,12 +33,6 @@ if [[ -f "$PROJECT_DIR/lib.sh" ]]; then
 else
     echo "ERROR: lib.sh not found"
     exit 1
-fi
-
-# Source PETSc configuration
-if [[ -f "$PROJECT_DIR/petsc.env" ]]; then
-    # shellcheck source=../petsc.env
-    source "$PROJECT_DIR/petsc.env"
 fi
 
 # Detect OS
@@ -106,35 +99,11 @@ log_info "Building version: $VERSION"
 echo ""
 
 # -----------------------------------------------------------------------------
-# Detect PETSc paths
-# -----------------------------------------------------------------------------
-
-# Find PETSc directory
-PETSC_DIR="${PETSC_DIR:-$PROJECT_DIR/petsc}"
-
-# Auto-detect PETSC_ARCH
-if [[ -z "$PETSC_ARCH" ]]; then
-    PETSC_ARCH=$(detect_existing_petsc_arch "$PETSC_DIR")
-fi
-
-if [[ ! -d "$PETSC_DIR/$PETSC_ARCH" ]]; then
-    log_error "Could not find PETSc architecture directory: $PETSC_DIR/$PETSC_ARCH"
-    log_error "Please build PETSc first with ../build.sh"
-    exit 1
-fi
-
-log_info "Using PETSc: $PETSC_DIR/$PETSC_ARCH"
-echo ""
-
-# -----------------------------------------------------------------------------
 # Build backend and frontend
 # -----------------------------------------------------------------------------
 
 log_info "Building volca backend and frontend..."
 cd "$PROJECT_DIR"
-
-# Touch source files to ensure cabal detects changes
-touch src/Main.hs src/LCA/CLI/Types.hs src/LCA/CLI/Parser.hs 2>/dev/null || true
 
 ./build.sh
 
@@ -150,11 +119,6 @@ log_info "Staging resources..."
 RESOURCES_DIR="$SCRIPT_DIR/resources"
 rm -rf "$RESOURCES_DIR"
 mkdir -p "$RESOURCES_DIR/web"
-
-# Create lib directory for Linux/macOS
-if [[ "$OS" != "windows" ]]; then
-    mkdir -p "$RESOURCES_DIR/lib"
-fi
 
 # Copy volca binary
 VOLCA_BIN=$(cd "$PROJECT_DIR" && cabal list-bin volca 2>/dev/null)
@@ -201,59 +165,6 @@ if [[ -d "$PROJECT_DIR/data" ]]; then
     log_success "Copied reference data"
 else
     log_warn "No data/ directory found - reference data will not be available"
-fi
-
-# Copy PETSc libraries
-log_info "Copying PETSc libraries..."
-
-PETSC_LIB_DIR="$PETSC_DIR/$PETSC_ARCH/lib"
-
-if [[ "$OS" == "windows" ]]; then
-    # On Windows, DLLs must be next to the executable
-    for lib_dir in "$PETSC_LIB_DIR"; do
-        if [[ -d "$lib_dir" ]]; then
-            find "$lib_dir" -maxdepth 1 -name "*.dll" -exec cp {} "$RESOURCES_DIR/" \; 2>/dev/null || true
-        fi
-    done
-
-    # Copy OpenBLAS and MinGW runtime DLLs
-    MSYS2_BIN="/ucrt64/bin"
-    if [[ -d "$MSYS2_BIN" ]]; then
-        for dll in $WINDOWS_RUNTIME_DLLS; do
-            src="$MSYS2_BIN/$dll"
-            if [[ -f "$src" ]]; then
-                cp "$src" "$RESOURCES_DIR/"
-            else
-                log_warn "DLL not found: $src"
-            fi
-        done
-    fi
-
-    DLL_COUNT=$(find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" | wc -l)
-    log_success "Copied $DLL_COUNT DLLs"
-
-    # Download MS-MPI redistributable installer (embedded in NSIS installer)
-    MSMPI_SETUP="$RESOURCES_DIR/msmpisetup.exe"
-    MSMPI_URL="https://download.microsoft.com/download/7/2/7/72731ebb-b63c-4170-ade7-836966263a8f/msmpisetup.exe"
-    if [[ ! -f "$MSMPI_SETUP" ]]; then
-        log_info "Downloading MS-MPI redistributable..."
-        curl -fSL -o "$MSMPI_SETUP" "$MSMPI_URL"
-        log_success "Downloaded msmpisetup.exe ($(du -h "$MSMPI_SETUP" | cut -f1))"
-    else
-        log_success "MS-MPI redistributable already present"
-    fi
-else
-    # On Linux/macOS, copy .so files
-    for lib_dir in "$PETSC_LIB_DIR"; do
-        if [[ -d "$lib_dir" ]]; then
-            find "$lib_dir" -maxdepth 1 -name "*.so*" -type f -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
-            find "$lib_dir" -maxdepth 1 -name "*.so*" -type l -exec cp -L {} "$RESOURCES_DIR/lib/" \; 2>/dev/null || true
-        fi
-    done
-
-    LIB_COUNT=$(find "$RESOURCES_DIR/lib" -name "*.so*" 2>/dev/null | wc -l)
-    LIB_SIZE=$(du -sh "$RESOURCES_DIR/lib" 2>/dev/null | cut -f1)
-    log_success "Copied $LIB_COUNT libraries ($LIB_SIZE)"
 fi
 
 # -----------------------------------------------------------------------------
@@ -372,15 +283,9 @@ mkdir -p "$TARGET_DIR/web"
 if [[ "$OS" == "windows" ]]; then
     cp "$RESOURCES_DIR/volca.exe" "$TARGET_DIR/"
     cp "$RESOURCES_DIR/volca" "$TARGET_DIR/"
-    # Copy DLLs to same directory
-    find "$RESOURCES_DIR" -maxdepth 1 -name "*.dll" -exec cp {} "$TARGET_DIR/" \; 2>/dev/null || true
-    # Copy 7z binary if present
     cp "$RESOURCES_DIR/7z.exe" "$TARGET_DIR/" 2>/dev/null || true
 else
-    mkdir -p "$TARGET_DIR/lib"
     cp "$RESOURCES_DIR/volca" "$TARGET_DIR/"
-    cp -r "$RESOURCES_DIR/lib/"* "$TARGET_DIR/lib/" 2>/dev/null || true
-    # Copy 7z binary if present
     cp "$RESOURCES_DIR/7zz" "$TARGET_DIR/" 2>/dev/null || true
     cp "$RESOURCES_DIR/7z" "$TARGET_DIR/" 2>/dev/null || true
 fi
