@@ -87,7 +87,7 @@ import qualified Data.Vector.Unboxed as U
 import Control.Concurrent.Async (mapConcurrently_)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesFileExist, doesDirectoryExist, listDirectory, removeFile, removeDirectoryRecursive)
-import System.FilePath (isAbsolute, takeDirectory, takeExtension, dropExtension, (</>))
+import System.FilePath (isAbsolute, normalise, takeDirectory, takeExtension, dropExtension, (</>))
 import Data.Char (toLower)
 import Data.List (isPrefixOf, nub, sortOn)
 import Data.Ord (Down(..))
@@ -344,7 +344,7 @@ initDatabaseManager :: Config -> Bool -> Maybe FilePath -> IO DatabaseManager
 initDatabaseManager config noCache configPath = do
     -- Resolve relative paths against the config file's directory
     let configDir = maybe "." takeDirectory configPath
-        resolveRelative p = if isAbsolute p then p else configDir </> p
+        resolveRelative p = normalise $ if isAbsolute p then p else configDir </> p
 
     -- Get configured databases and detect their format
     configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
@@ -2006,7 +2006,7 @@ discoverUploadedRefData baseDir = do
                 return $ Just RefDataConfig
                     { rdName = name
                     , rdPath = csvPath
-                    , rdActive = isAuto  -- Auto-extracted synonyms are always active
+                    , rdActive = not isAuto  -- Auto-extracted synonyms inactive by default (noisy); curated data/flows.csv preferred
                     , rdIsUploaded = True
                     , rdIsAuto = isAuto
                     , rdDescription = Nothing
@@ -2045,7 +2045,7 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             let rd = RefDataConfig
                     { rdName = slug
                     , rdPath = path
-                    , rdActive = True
+                    , rdActive = False  -- auto-extracted synonyms inactive by default (noisy, use curated data/flows.csv)
                     , rdIsUploaded = True
                     , rdIsAuto = True
                     , rdDescription = Just description

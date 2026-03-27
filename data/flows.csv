@@ -25,6 +25,20 @@ name1,name2
 "(RS)-α-cyano-3-phenoxybenzyl N-(2-chloro-α,α,α-trifluoro-p-tolyl)-D-valinate",tau-Fluvalinate
 (S)-α-cyano-3-phenoxybenzyl (S)-2-(4-chlorophenyl)-3-methylbutyrate,Esfenvalerate
 "1,1,1-Trichlorethan","Ethane, 1,1,1-trichloro-, HCFC-140"
+"1,1,1-Trichloroethane","Ethane, 1,1,1-trichloro-, HCFC-140"
+Bromochlorodifluoromethane,"Methane, bromochlorodifluoro-, Halon 1211"
+Bromotrifluoromethane,"Methane, bromotrifluoro-, Halon 1301"
+Bromomethane,"Methane, bromo-, Halon 1001"
+Halothane,"Methane, bromo-chloro-trifluoro-, Halothane"
+Dichlorodifluoromethane,"Methane, dichlorodifluoro-, CFC-12"
+Trichlorofluoromethane,"Methane, trichlorofluoro-, CFC-11"
+Tetrachloromethane,"Methane, tetrachloro-, CFC-10"
+Chlorodifluoromethane,"Methane, chlorodifluoro-, HCFC-22"
+Dichlorofluoromethane,"Methane, dichlorofluoro-, HCFC-21"
+Chloromethane,"Methane, monochloro-, R-40"
+Dibromomethane,"Methane, dibromo-"
+Dibromofluoromethane,"Methane, bromodifluoro-, Halon 1201"
+Dibromodifluoromethane,"Methane, dibromodifluoro-, Halon 1202"
 "1,1,2-Trichlorethan","Ethane, 1,1,2-trichloro-"
 "1,1-bis-(chlorophenyl)-2,2,2-trichloroethanol",Dicofol
 "1,1-dimethylpiperidinium chloride",Mepiquat chloride
