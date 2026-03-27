@@ -236,12 +236,32 @@ else
     fi
 fi
 
-# Linux fallback: build MUMPS from source
-if [[ "$MUMPS_FOUND" != "true" ]] && [[ "$OS" == "linux" ]]; then
+# Linux/Windows fallback: build MUMPS from source
+if [[ "$MUMPS_FOUND" != "true" ]] && [[ "$OS" == "linux" || "$OS" == "windows" ]]; then
     log_info "MUMPS not found; building ${MUMPS_VERSION} from source (this may take a few minutes)..."
+    if [[ "$OS" == "windows" ]]; then
+        # Ensure Fortran compiler is present (build tool, not the library we're compiling)
+        if ! command -v gfortran &>/dev/null; then
+            log_info "gfortran not found, installing via pacman..."
+            pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc-fortran
+        fi
+        # Detect available BLAS; install OpenBLAS if nothing is found
+        if [[ -f "/ucrt64/lib/libopenblas.a" ]]; then
+            BLAS_FLAGS="-lopenblas"
+        elif [[ -f "/ucrt64/lib/liblapack.a" ]] && [[ -f "/ucrt64/lib/libblas.a" ]]; then
+            BLAS_FLAGS="-llapack -lblas"
+        else
+            log_info "No BLAS library found, installing OpenBLAS via pacman..."
+            pacman -S --noconfirm mingw-w64-ucrt-x86_64-openblas
+            BLAS_FLAGS="-lopenblas"
+        fi
+    else
+        BLAS_FLAGS="-llapack -lblas"
+    fi
     MUMPS_VERSION="$MUMPS_VERSION" \
     OUTPUT_DIR="$LOCAL_MUMPS_DIR" \
     BUILD_DIR="$SCRIPT_DIR/deps/build" \
+    BLAS_LIBS="$BLAS_FLAGS" \
     "$SCRIPT_DIR/build-mumps.sh"
     MUMPS_FOUND=true
     MUMPS_BUILT_LOCALLY=true
