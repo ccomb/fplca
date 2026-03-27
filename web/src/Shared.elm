@@ -97,6 +97,7 @@ type Msg
     | ClearProgress
     | VersionLoaded (Result Http.Error { version : String, gitHash : String, buildTarget : String })
     | UpdateAuthCode String
+    | LoadUrl String
     | SubmitAuthCode
     | AuthResult (Result Http.Error ())
     | HostingLoaded (Result Http.Error Bool)
@@ -161,6 +162,9 @@ update msg model =
             ( model
             , Nav.pushUrl model.key (Route.routeToUrl route)
             )
+
+        LoadUrl url ->
+            ( model, Nav.load url )
 
         RouteChanged route ->
             ( { model

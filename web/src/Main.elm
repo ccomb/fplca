@@ -213,6 +213,7 @@ viewLeftMenu shared =
         (\leftMenuMsg ->
             LeftMenu.mapMsg
                 { onNavigate = \page -> Spa.mapSharedMsg (navigateToPage shared page)
+                , onNavigateExternal = \url -> Spa.mapSharedMsg (Shared.LoadUrl url)
                 , onToggleConsole = Spa.mapSharedMsg Shared.ToggleConsole
                 , onCloseConsole = Spa.mapSharedMsg Shared.CloseConsole
                 }

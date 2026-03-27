@@ -2,7 +2,7 @@ module Views.LeftMenu exposing (Msg(..), mapMsg, viewLeftMenu)
 
 import Char
 import Html exposing (Html, a, button, div, i, img, nav, node, p, span, text)
-import Html.Attributes exposing (attribute, class, classList, href, src, style)
+import Html.Attributes exposing (attribute, class, classList, src, style)
 import Html.Events exposing (onClick, stopPropagationOn)
 import Json.Decode
 import Route exposing (ActivePage(..), ActivityTab(..))
@@ -10,15 +10,19 @@ import Route exposing (ActivePage(..), ActivityTab(..))
 
 type Msg
     = NavigateTo ActivePage
+    | NavigateExternal String
     | ToggleConsole
     | CloseConsole
 
 
-mapMsg : { onNavigate : ActivePage -> msg, onToggleConsole : msg, onCloseConsole : msg } -> Msg -> msg
+mapMsg : { onNavigate : ActivePage -> msg, onNavigateExternal : String -> msg, onToggleConsole : msg, onCloseConsole : msg } -> Msg -> msg
 mapMsg handlers msg =
     case msg of
         NavigateTo page ->
             handlers.onNavigate page
+
+        NavigateExternal url ->
+            handlers.onNavigateExternal url
 
         ToggleConsole ->
             handlers.onToggleConsole
@@ -141,13 +145,14 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 ]
             , if isHosted then
                 Html.a
-                    [ Html.Attributes.href "/account"
+                    [ onClick (NavigateExternal "/account")
                     , style "display" "inline-flex"
                     , style "align-items" "center"
                     , style "gap" "0.4rem"
                     , style "color" "#888"
                     , style "font-size" "0.8rem"
                     , style "text-decoration" "none"
+                    , style "cursor" "pointer"
                     , style "padding" "0.25rem 0"
                     , style "margin-bottom" "0.5rem"
                     ]
