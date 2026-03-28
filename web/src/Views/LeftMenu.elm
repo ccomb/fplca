@@ -135,7 +135,9 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
                 , style "font-family" "inherit"
                 , style "padding" "0.25rem 0"
                 , style "margin-bottom" "0.5rem"
-                , style "display" "inline-flex"
+                , style "display" "flex"
+                , style "width" "100%"
+                , style "justify-content" "center"
                 , style "align-items" "center"
                 , style "gap" "0.4rem"
                 , stopPropagationOn "click" (Json.Decode.succeed ( ToggleConsole, True ))
@@ -146,7 +148,9 @@ viewLeftMenu currentPage currentActivityId currentDatabaseName currentActivityNa
             , if isHosted then
                 Html.a
                     [ onClick (NavigateExternal "/account")
-                    , style "display" "inline-flex"
+                    , style "display" "flex"
+                    , style "width" "100%"
+                    , style "justify-content" "center"
                     , style "align-items" "center"
                     , style "gap" "0.4rem"
                     , style "color" "#888"
