@@ -437,7 +437,7 @@ echo ""
 if [[ -d "$SCRIPT_DIR/web" ]]; then
     log_info "Building frontend..."
     cd "$SCRIPT_DIR/web"
-    if [[ ! -d "node_modules" ]]; then
+    if [[ ! -f "node_modules/.bin/elm" ]]; then
         npm install --silent
     fi
     ./build.sh
