@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | MCP (Model Context Protocol) server endpoint.
--- Exposes VoLCA's LCA capabilities as MCP tools over HTTP (JSON-RPC 2.0).
--- Single POST /mcp endpoint handles initialize, tools/list, tools/call.
+-- Implements Streamable HTTP transport (MCP spec 2025-03-26).
+-- POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
+-- GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 module API.MCP (mcpApp) where
 
 import Control.Concurrent.STM (readTVarIO)
@@ -18,10 +19,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
-import Network.HTTP.Types (status200, status202, hContentType)
+import Network.HTTP.Types (status200, status202, status405, hContentType)
 import Network.URI (escapeURIString, isUnreserved)
 import System.Random (randomIO)
-import Network.Wai (Application, responseLBS, strictRequestBody)
+import Network.Wai (Application, responseLBS, strictRequestBody, requestMethod)
+import qualified Data.ByteString as BS
 
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), getDatabase)
 import qualified Database.Manager as DM
@@ -38,7 +40,7 @@ import Types (Database(..), Activity(..), activityName, activityLocation, flowNa
 import API.Types (InventoryExport(..), InventoryFlowDetail(..))
 import UnitConversion (defaultUnitConfig)
 import Network.Wai (requestHeaders)
-import Network.HTTP.Types.Header (hHost)
+import Network.HTTP.Types.Header (hHost, hAccept)
 import Numeric (showFFloat)
 
 -- ---------------------------------------------------------------------------
@@ -104,23 +106,54 @@ mcpApp dbManager = do
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState { mcpSessionId = sessionId }
     return $ \req respond -> do
-        body <- strictRequestBody req
-        let hostHeader = fromMaybe "localhost" $ lookup hHost (requestHeaders req)
-            baseUrl = "http://" <> TE.decodeUtf8 hostHeader
-        case eitherDecode body of
-            Left err ->
-                respond $ jsonResponse $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
-            Right rpcReq -> do
-                st <- readIORef stateRef
-                resp <- handleRpc dbManager baseUrl st rpcReq
-                case resp of
-                    Nothing -> respond $ responseLBS status202 [(hContentType, "application/json")] ""
-                    Just val -> respond $ jsonResponse val
+        let method      = requestMethod req
+            hdrs        = requestHeaders req
+            hostHeader  = fromMaybe "localhost" $ lookup hHost hdrs
+            baseUrl     = "http://" <> TE.decodeUtf8 hostHeader
+            acceptHdr   = fromMaybe "" $ lookup hAccept hdrs
+            wantsSse    = "text/event-stream" `BS.isInfixOf` acceptHdr
+        st <- readIORef stateRef
+        case method of
+            -- GET: open SSE stream for server-initiated messages.
+            -- VoLCA is stateless so we return an empty stream immediately.
+            "GET" -> respond $ responseLBS status200
+                [ (hContentType, "text/event-stream; charset=utf-8")
+                , ("Cache-Control", "no-cache")
+                , ("Connection", "keep-alive")
+                , ("Mcp-Session-Id", TE.encodeUtf8 (mcpSessionId st))
+                ] ""
+            "POST" -> do
+                body <- strictRequestBody req
+                case eitherDecode body of
+                    Left err ->
+                        respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
+                    Right rpcReq -> do
+                        resp <- handleRpc dbManager baseUrl st rpcReq
+                        case resp of
+                            Nothing ->
+                                respond $ responseLBS status202
+                                    [ (hContentType, "application/json")
+                                    , ("Mcp-Session-Id", TE.encodeUtf8 (mcpSessionId st))
+                                    ] ""
+                            Just val ->
+                                if wantsSse
+                                then respond $ sseResponse (mcpSessionId st) val
+                                else respond $ jsonResponse (mcpSessionId st) val
+            _ -> respond $ responseLBS status405 [(hContentType, "application/json")] $
+                    encode $ rpcError Null (-32700) "Method not allowed"
   where
-    jsonResponse v = responseLBS status200
+    jsonResponse sid v = responseLBS status200
         [ (hContentType, "application/json")
         , ("X-Content-Type-Options", "nosniff")
+        , ("Mcp-Session-Id", TE.encodeUtf8 sid)
         ] (encode v)
+    -- SSE format: each JSON-RPC message is one SSE event
+    sseResponse sid v = responseLBS status200
+        [ (hContentType, "text/event-stream; charset=utf-8")
+        , ("Cache-Control", "no-cache")
+        , ("Connection", "keep-alive")
+        , ("Mcp-Session-Id", TE.encodeUtf8 sid)
+        ] ("event: message\ndata: " <> encode v <> "\n\n")
 
 -- ---------------------------------------------------------------------------
 -- RPC dispatch
@@ -144,7 +177,7 @@ handleRpc dbManager baseUrl _st req = case rpcMethod req of
 
 handleInitialize :: RpcRequest -> IO Value
 handleInitialize req = return $ rpcResult (fromMaybe Null $ rpcId req) $ object
-    [ "protocolVersion" .= ("2025-11-25" :: Text)
+    [ "protocolVersion" .= ("2025-03-26" :: Text)
     , "capabilities"    .= object [ "tools" .= object [] ]
     , "serverInfo"      .= object
         [ "name"    .= ("volca" :: Text)
