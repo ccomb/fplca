@@ -53,7 +53,7 @@ module Route exposing
     , withActivity
     )
 
-import Url exposing (Url)
+import Url exposing (Url, percentDecode)
 import Url.Builder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser, oneOf, string, top)
 import Url.Parser.Query as Query
@@ -368,16 +368,16 @@ routeParser =
         , Parser.map (\db query -> FlowSearchRoute { db = db, q = query.q, limit = query.limit, offset = query.offset })
             (Parser.s "db" </> string </> Parser.s "flows" <?> flowSearchQueryParser)
         , Parser.map (\db pid col view -> LCIARoute db pid (Just col) view)
-            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "lcia" </> string
+            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "lcia" </> decodedString
                 <?> Query.string "view")
         , Parser.map (\db pid -> LCIARoute db pid Nothing Nothing)
             (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "lcia")
         , Parser.map (\db pid col mid -> FlowHotspotRoute db pid (Just col) (Just mid))
-            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "flow-hotspot" </> string </> string)
+            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "flow-hotspot" </> decodedString </> string)
         , Parser.map (\db pid -> FlowHotspotRoute db pid Nothing Nothing)
             (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "flow-hotspot")
         , Parser.map (\db pid col mid -> ProcessHotspotRoute db pid (Just col) (Just mid))
-            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "process-hotspot" </> string </> string)
+            (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "process-hotspot" </> decodedString </> string)
         , Parser.map (\db pid -> ProcessHotspotRoute db pid Nothing Nothing)
             (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "process-hotspot")
         , Parser.map (\db pid query -> CompositionRoute { db = db, processId = pid, name = query.name, location = query.location, classification = query.classification, maxDepth = query.maxDepth, minQuantity = query.minQuantity, sort = query.sort, order = query.order })
@@ -385,6 +385,14 @@ routeParser =
         , Parser.map (ActivityRoute Consumers) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "consumers")
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string)
         ]
+
+
+-- | Like `string` but percent-decodes the captured path segment.
+-- Url.Parser.string returns raw encoded segments (e.g. "Foo%20Bar"),
+-- so collection/method names with spaces need explicit decoding.
+decodedString : Parser (String -> a) a
+decodedString =
+    Parser.custom "DECODED_STRING" percentDecode
 
 
 toRoute : Url -> Route

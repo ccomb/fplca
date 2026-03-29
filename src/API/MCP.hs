@@ -19,6 +19,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Network.HTTP.Types (status200, status202, hContentType)
+import Network.URI (escapeURIString, isUnreserved)
 import System.Random (randomIO)
 import Network.Wai (Application, responseLBS, strictRequestBody)
 
@@ -92,6 +93,10 @@ toolSuccessJson rid val = rpcResult rid $ object
 newtype McpState = McpState
     { mcpSessionId :: Text
     }
+
+-- | Percent-encode a Text value for use as a URL path segment.
+encodeSegment :: Text -> Text
+encodeSegment = T.pack . escapeURIString isUnreserved . T.unpack
 
 mcpApp :: DatabaseManager -> IO Application
 mcpApp dbManager = do
@@ -460,7 +465,7 @@ callComputeLCIA dbManager baseUrl rid args = do
                                                 functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
                                                 contribs = L.sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
                                                 topFlows = take topN contribs
-                                                webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/lcia/" <> colName <> "/" <> UUID.toText uuid
+                                                webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/lcia/" <> encodeSegment colName <> "/" <> UUID.toText uuid
                                             return $ toolSuccessJson rid $ object
                                                 [ "method"          .= methodName method
                                                 , "category"        .= methodCategory method
@@ -556,7 +561,7 @@ callAnalyzeFlowHotspots dbManager baseUrl rid args =
                                     let db      = ldDatabase ld
                                         lim     = fromMaybe 20 (intArg "limit" args)
                                         mappers = prMappers (dmPlugins dbManager)
-                                        webUrl  = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/flow-hotspot/" <> colName <> "/" <> methodIdText
+                                        webUrl  = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/flow-hotspot/" <> encodeSegment colName <> "/" <> methodIdText
                                     unitCfg  <- DM.getMergedUnitConfig dbManager
                                     scalingVec <- computeScalingVector db processId
                                     let inventory = applyBiosphereMatrix db scalingVec
@@ -616,7 +621,7 @@ callAnalyzeProcessHotspots dbManager baseUrl rid args =
                                                     Just act -> let (pn, _, _) = Service.getReferenceProductInfo (dbFlows db) (dbUnits db) act in pn
                                                     Nothing  -> ""
                                                 pidText' = processIdToText db pid
-                                                procWebUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText' <> "/process-hotspot/" <> colName <> "/" <> methodIdText
+                                                procWebUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText' <> "/process-hotspot/" <> encodeSegment colName <> "/" <> methodIdText
                                             in object
                                                 [ "process_id"    .= pidText'
                                                 , "activity_name" .= actName
