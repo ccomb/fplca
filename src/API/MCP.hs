@@ -399,7 +399,7 @@ callSearchActivities rid args (db, _) = do
         geo     = textArg "geo" args
         product' = textArg "product" args
         limit   = intArg "limit" args
-    result <- Service.searchActivities db name geo product' Nothing Nothing (limit <|> Just 20) Nothing
+    result <- Service.searchActivities db name geo product' [] (limit <|> Just 20) Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val

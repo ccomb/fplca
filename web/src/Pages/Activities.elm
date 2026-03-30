@@ -25,8 +25,9 @@ type alias Model =
     , dbName : String
     , results : SearchState
     , classificationSystems : Maybe (List ClassificationSystem)
-    , selectedSystem : Maybe String
-    , selectedValue : Maybe String
+    , activeFilters : List ( String, String )
+    , pendingSystem : Maybe String
+    , pendingValue : String
     , debounceCounter : Int
     }
 
@@ -80,7 +81,7 @@ init shared flags =
             not (String.isEmpty productQuery)
 
         hasClassFilter =
-            flags.classificationValue /= Nothing
+            not (List.isEmpty flags.classifications)
 
         shouldSearch =
             (hasTextQuery || hasProductQuery || hasClassFilter) && dbLoaded
@@ -95,13 +96,14 @@ init shared flags =
             else
                 NotSearched
       , classificationSystems = Nothing
-      , selectedSystem = flags.classification
-      , selectedValue = flags.classificationValue
+      , activeFilters = flags.classifications
+      , pendingSystem = Nothing
+      , pendingValue = ""
       , debounceCounter = 0
       }
     , Effect.batch
         [ if shouldSearch then
-            Effect.fromCmd (searchActivities flags.db searchQuery productQuery flags.classification flags.classificationValue)
+            Effect.fromCmd (searchActivities flags.db searchQuery productQuery flags.classifications)
 
           else
             Effect.none
@@ -151,7 +153,7 @@ update shared msg model =
                                     results.offset + results.limit
                             in
                             ( { model | results = LoadingMore results }
-                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue newOffset results.limit)
+                            , Effect.fromCmd (searchActivitiesWithOffset model.dbName model.searchQuery model.productQuery model.activeFilters newOffset results.limit)
                             )
 
                         _ ->
@@ -174,7 +176,7 @@ update shared msg model =
                                 Just model.productQuery
 
                         shouldSearch =
-                            not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || model.selectedValue /= Nothing
+                            not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || not (List.isEmpty model.activeFilters)
                     in
                     ( { model
                         | dbName = dbName
@@ -185,13 +187,14 @@ update shared msg model =
                             else
                                 NotSearched
                         , classificationSystems = Nothing
-                        , selectedSystem = Nothing
-                        , selectedValue = Nothing
+                        , activeFilters = []
+                        , pendingSystem = Nothing
+                        , pendingValue = ""
                       }
                     , Effect.batch
-                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, product = queryProduct, limit = Just 20, classification = Nothing, classificationValue = Nothing })))
+                        [ Effect.fromCmd (Nav.pushUrl shared.key (Route.routeToUrl (ActivitiesRoute { db = dbName, name = queryName, product = queryProduct, limit = Just 20, classifications = [] })))
                         , if shouldSearch then
-                            Effect.fromCmd (searchActivities dbName model.searchQuery model.productQuery Nothing Nothing)
+                            Effect.fromCmd (searchActivities dbName model.searchQuery model.productQuery [])
 
                           else
                             Effect.none
@@ -200,50 +203,66 @@ update shared msg model =
                     )
 
                 ActivitiesView.SelectClassificationSystem system ->
+                    ( { model | pendingSystem = system, pendingValue = "" }
+                    , Effect.none
+                    )
+
+                ActivitiesView.UpdatePendingValue val ->
+                    ( { model | pendingValue = val }
+                    , Effect.none
+                    )
+
+                ActivitiesView.CommitFilter ->
+                    case model.pendingSystem of
+                        Nothing ->
+                            ( model, Effect.none )
+
+                        Just sys ->
+                            if String.isEmpty model.pendingValue then
+                                ( model, Effect.none )
+
+                            else
+                                let
+                                    newFilters =
+                                        model.activeFilters ++ [ ( sys, model.pendingValue ) ]
+
+                                    newRoute =
+                                        ActivitiesRoute
+                                            { db = model.dbName
+                                            , name = if String.isEmpty model.searchQuery then Nothing else Just model.searchQuery
+                                            , product = if String.isEmpty model.productQuery then Nothing else Just model.productQuery
+                                            , limit = Just 20
+                                            , classifications = newFilters
+                                            }
+                                in
+                                ( { model | activeFilters = newFilters, pendingSystem = Nothing, pendingValue = "", results = Searching }
+                                , Effect.batch
+                                    [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
+                                    , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery newFilters)
+                                    ]
+                                )
+
+                ActivitiesView.RemoveFilter i ->
                     let
+                        newFilters =
+                            List.indexedMap Tuple.pair model.activeFilters
+                                |> List.filter (\( idx, _ ) -> idx /= i)
+                                |> List.map Tuple.second
+
                         newRoute =
                             ActivitiesRoute
                                 { db = model.dbName
                                 , name = if String.isEmpty model.searchQuery then Nothing else Just model.searchQuery
                                 , product = if String.isEmpty model.productQuery then Nothing else Just model.productQuery
                                 , limit = Just 20
-                                , classification = system
-                                , classificationValue = Nothing
-                                }
-                    in
-                    ( { model | selectedSystem = system, selectedValue = Nothing }
-                    , Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                    )
-
-                ActivitiesView.SelectClassificationValue value ->
-                    let
-                        queryProduct =
-                            if String.isEmpty model.productQuery then
-                                Nothing
-
-                            else
-                                Just model.productQuery
-
-                        newRoute =
-                            ActivitiesRoute
-                                { db = model.dbName
-                                , name =
-                                    if String.isEmpty model.searchQuery then
-                                        Nothing
-
-                                    else
-                                        Just model.searchQuery
-                                , product = queryProduct
-                                , limit = Just 20
-                                , classification = model.selectedSystem
-                                , classificationValue = value
+                                , classifications = newFilters
                                 }
 
                         hasQuery =
-                            value /= Nothing || not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery)
+                            not (List.isEmpty newFilters) || not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery)
                     in
                     ( { model
-                        | selectedValue = value
+                        | activeFilters = newFilters
                         , results =
                             if hasQuery then
                                 Searching
@@ -254,7 +273,7 @@ update shared msg model =
                     , Effect.batch
                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
                         , if hasQuery then
-                            Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem value)
+                            Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery newFilters)
 
                           else
                             Effect.none
@@ -336,10 +355,10 @@ update shared msg model =
                             Just model.productQuery
 
                     newRoute =
-                        ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+                        ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classifications = model.activeFilters }
 
                     hasQuery =
-                        not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || model.selectedValue /= Nothing
+                        not (String.isEmpty model.searchQuery) || not (String.isEmpty model.productQuery) || not (List.isEmpty model.activeFilters)
                 in
                 ( { model
                     | results =
@@ -355,7 +374,7 @@ update shared msg model =
                   else
                     Effect.batch
                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue)
+                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.activeFilters)
                         ]
                 )
 
@@ -378,7 +397,7 @@ update shared msg model =
                     model.results == NotSearched && hasQuery && dbNowLoaded
 
                 classChanged =
-                    flags.classification /= model.selectedSystem || flags.classificationValue /= model.selectedValue
+                    flags.classifications /= model.activeFilters
             in
             if newQuery == model.searchQuery && newProduct == model.productQuery && not needsRetry && not classChanged then
                 ( model
@@ -390,7 +409,7 @@ update shared msg model =
 
             else if newQuery == model.searchQuery && newProduct == model.productQuery && not needsRetry then
                 -- Only classification changed — update state without stealing focus
-                ( { model | selectedSystem = flags.classification, selectedValue = flags.classificationValue }
+                ( { model | activeFilters = flags.classifications, pendingSystem = Nothing, pendingValue = "" }
                 , Effect.none
                 )
 
@@ -420,10 +439,10 @@ updateQuery shared model =
                     Just model.productQuery
 
             hasQuery =
-                queryName /= Nothing || queryProduct /= Nothing || model.selectedValue /= Nothing
+                queryName /= Nothing || queryProduct /= Nothing || not (List.isEmpty model.activeFilters)
 
             newRoute =
-                ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classification = model.selectedSystem, classificationValue = model.selectedValue }
+                ActivitiesRoute { db = model.dbName, name = queryName, product = queryProduct, limit = Just 20, classifications = model.activeFilters }
 
             cmds =
                 if not hasQuery then
@@ -432,7 +451,7 @@ updateQuery shared model =
                 else
                     Effect.batch
                         [ Effect.fromCmd (Nav.replaceUrl shared.key (Route.routeToUrl newRoute))
-                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.selectedSystem model.selectedValue)
+                        , Effect.fromCmd (searchActivities model.dbName model.searchQuery model.productQuery model.activeFilters)
                         ]
         in
         ( { model
@@ -517,8 +536,9 @@ view shared model =
                     error
                     maybeDatabaseList
                     model.classificationSystems
-                    model.selectedSystem
-                    model.selectedValue
+                    model.activeFilters
+                    model.pendingSystem
+                    model.pendingValue
                 )
         }
 
@@ -527,8 +547,8 @@ view shared model =
 -- HTTP commands
 
 
-searchActivities : String -> String -> String -> Maybe String -> Maybe String -> Cmd Msg
-searchActivities dbName query productQuery classification classificationValue =
+searchActivities : String -> String -> String -> List ( String, String ) -> Cmd Msg
+searchActivities dbName query productQuery classFilters =
     Http.get
         { url =
             Url.Builder.absolute
@@ -537,9 +557,14 @@ searchActivities dbName query productQuery classification classificationValue =
                     [ if String.isEmpty query then Nothing else Just (Url.Builder.string "name" query)
                     , if String.isEmpty productQuery then Nothing else Just (Url.Builder.string "product" productQuery)
                     , Just (Url.Builder.int "limit" 20)
-                    , Maybe.map (Url.Builder.string "classification") classification
-                    , Maybe.map (Url.Builder.string "classification-value") classificationValue
                     ]
+                    ++ List.concatMap
+                        (\( sys, val ) ->
+                            [ Url.Builder.string "classification" sys
+                            , Url.Builder.string "classification-value" val
+                            ]
+                        )
+                        classFilters
                 )
         , expect = Http.expectJson SearchResultsLoaded (searchResultsDecoder activitySummaryDecoder)
         }
@@ -560,8 +585,8 @@ scrollToBottom containerId =
         |> Task.attempt (\_ -> ScrollDone)
 
 
-searchActivitiesWithOffset : String -> String -> String -> Maybe String -> Maybe String -> Int -> Int -> Cmd Msg
-searchActivitiesWithOffset dbName query productQuery classification classificationValue offset limit =
+searchActivitiesWithOffset : String -> String -> String -> List ( String, String ) -> Int -> Int -> Cmd Msg
+searchActivitiesWithOffset dbName query productQuery classFilters offset limit =
     Http.get
         { url =
             Url.Builder.absolute
@@ -571,9 +596,14 @@ searchActivitiesWithOffset dbName query productQuery classification classificati
                     , if String.isEmpty productQuery then Nothing else Just (Url.Builder.string "product" productQuery)
                     , Just (Url.Builder.int "limit" limit)
                     , Just (Url.Builder.int "offset" offset)
-                    , Maybe.map (Url.Builder.string "classification") classification
-                    , Maybe.map (Url.Builder.string "classification-value") classificationValue
                     ]
+                    ++ List.concatMap
+                        (\( sys, val ) ->
+                            [ Url.Builder.string "classification" sys
+                            , Url.Builder.string "classification-value" val
+                            ]
+                        )
+                        classFilters
                 )
         , expect = Http.expectJson MoreResultsLoaded (searchResultsDecoder activitySummaryDecoder)
         }

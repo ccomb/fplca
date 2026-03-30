@@ -370,8 +370,8 @@ buildProductIndex activities processIdTable flowDb =
 -- Multi-word search: each word must match either name OR location (AND logic)
 -- Returns (ProcessId, Activity) pairs so callers don't need to re-scan for ProcessId.
 -- Uses word-token index when available for O(matches) instead of O(total) name search.
-findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(ProcessId, Activity)]
-findActivitiesByFields db nameParam geoParam productParam classParam classValueParam =
+findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)] -> [(ProcessId, Activity)]
+findActivitiesByFields db nameParam geoParam productParam classFilters =
     let actVec = dbActivities db
         idx = dbSearchIndex db
 
@@ -439,22 +439,16 @@ findActivitiesByFields db nameParam geoParam productParam classParam classValueP
                         filtered = IS.intersection candidates geoSet
                      in filter (\(_, a') -> allWordsMatch prod getProductNames a') (resolveIds filtered)
 
-        -- Filter by classification if provided
-        classFiltered = case classValueParam of
-            Nothing -> productFiltered
-            Just val ->
-                let valLower = T.toLower val
-                in case classParam of
-                    Just sys ->
-                        [ (pid, a) | (pid, a) <- productFiltered
-                        , case M.lookup sys (activityClassification a) of
-                            Just v -> T.isInfixOf valLower (T.toLower v)
-                            Nothing -> False
-                        ]
-                    Nothing ->
-                        [ (pid, a) | (pid, a) <- productFiltered
-                        , any (T.isInfixOf valLower . T.toLower) (M.elems (activityClassification a))
-                        ]
+        -- Filter by classification: group by system (OR within same system, AND across systems)
+        classFiltered =
+            let groups = M.fromListWith (++) [(sys, [val]) | (sys, val) <- classFilters]
+                applyGroup acc (sys, vals) =
+                    [ (pid, a) | (pid, a) <- acc
+                    , case M.lookup sys (activityClassification a) of
+                        Just v  -> any (\q -> T.isInfixOf (T.toLower q) (T.toLower v)) vals
+                        Nothing -> False
+                    ]
+            in foldl applyGroup productFiltered (M.toList groups)
      in classFiltered
 
 -- | Search flows by synonym

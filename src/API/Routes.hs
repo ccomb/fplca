@@ -76,7 +76,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
@@ -938,12 +938,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig =
         searchFlowsInternal db queryParam langParam limitParam offsetParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam classParam classValueParam limitParam offsetParam = do
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues limitParam offsetParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
-        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classParam classValueParam limitParam offsetParam
+        let classFilters = zip classSystems classValues
+        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right jsonValue -> case fromJSON jsonValue of

@@ -15,16 +15,18 @@ type Msg
     | LoadMore
     | SelectDatabase String
     | SelectClassificationSystem (Maybe String)
-    | SelectClassificationValue (Maybe String)
+    | UpdatePendingValue String
+    | CommitFilter
+    | RemoveFilter Int
 
 
-viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> Maybe String -> Maybe String -> Html Msg
-viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems selectedSystem selectedValue =
+viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems activeFilters pendingSystem pendingValue =
     div [ class "activities-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems selectedSystem selectedValue
+            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems activeFilters pendingSystem pendingValue
             , viewSearchInputs searchQuery productQuery searchLoading
             , case error of
                 Just err ->
@@ -72,8 +74,8 @@ viewSearchInputs query productQuery isLoading =
         ]
 
 
-viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> Maybe String -> Maybe String -> Html Msg
-viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selectedValue =
+viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendingSystem pendingValue =
     let
         dbDropdown =
             case maybeDatabaseList of
@@ -93,6 +95,23 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selec
                             ]
                         ]
                     ]
+
+        chips =
+            List.indexedMap
+                (\i ( sys, val ) ->
+                    div [ class "control" ]
+                        [ div [ class "tags has-addons" ]
+                            [ span [ class "tag is-info is-medium" ] [ text (sys ++ ": " ++ val) ]
+                            , span
+                                [ class "tag is-delete is-medium"
+                                , style "cursor" "pointer"
+                                , onClick (RemoveFilter i)
+                                ]
+                                []
+                            ]
+                        ]
+                )
+                activeFilters
 
         classDropdown =
             case maybeSystems of
@@ -116,12 +135,12 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selec
                                                 SelectClassificationSystem (Just val)
                                         )
                                     ]
-                                    (option [ value "", selected (selectedSystem == Nothing) ] [ text "Classification..." ]
+                                    (option [ value "", selected (pendingSystem == Nothing) ] [ text "Classification..." ]
                                         :: List.map
                                             (\sys ->
                                                 option
                                                     [ value sys.name
-                                                    , selected (selectedSystem == Just sys.name)
+                                                    , selected (pendingSystem == Just sys.name)
                                                     ]
                                                     [ text (sys.name ++ " (" ++ String.fromInt sys.activityCount ++ ")") ]
                                             )
@@ -132,7 +151,7 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selec
                         ]
 
         valueInput =
-            case ( maybeSystems, selectedSystem ) of
+            case ( maybeSystems, pendingSystem ) of
                 ( Just _, Just sys ) ->
                     let
                         currentValues =
@@ -151,16 +170,9 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selec
                             [ class "input"
                             , type_ "text"
                             , placeholder "Filter by classification value..."
-                            , value (Maybe.withDefault "" selectedValue)
+                            , value pendingValue
                             , list datalistId
-                            , onInput
-                                (\val ->
-                                    if String.isEmpty val then
-                                        SelectClassificationValue Nothing
-
-                                    else
-                                        SelectClassificationValue (Just val)
-                                )
+                            , onInput UpdatePendingValue
                             ]
                             []
                         , Html.node "datalist"
@@ -172,25 +184,29 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems selectedSystem selec
                 _ ->
                     []
 
-        clearButton =
-            case selectedValue of
+        addButton =
+            case pendingSystem of
                 Just _ ->
-                    [ div [ class "control" ]
-                        [ button
-                            [ class "button is-light"
-                            , onClick (SelectClassificationValue Nothing)
-                            ]
-                            [ span [ class "icon" ] [ Html.i [ class "fas fa-times" ] [] ]
-                            , span [] [ text "Clear" ]
+                    if String.isEmpty pendingValue then
+                        []
+
+                    else
+                        [ div [ class "control" ]
+                            [ button
+                                [ class "button is-info"
+                                , onClick CommitFilter
+                                ]
+                                [ span [ class "icon" ] [ Html.i [ class "fas fa-plus" ] [] ]
+                                , span [] [ text "Add" ]
+                                ]
                             ]
                         ]
-                    ]
 
                 Nothing ->
                     []
 
         allControls =
-            dbDropdown ++ classDropdown ++ valueInput ++ clearButton
+            dbDropdown ++ chips ++ classDropdown ++ valueInput ++ addButton
     in
     if List.isEmpty allControls then
         text ""

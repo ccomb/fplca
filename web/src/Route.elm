@@ -79,7 +79,7 @@ type ActivityTab
 
 type Route
     = RootRoute
-    | ActivitiesRoute { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+    | ActivitiesRoute { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classifications : List ( String, String ) }
     | ActivityRoute ActivityTab String String -- tab, db, processId
     | LCIARoute String String (Maybe String) (Maybe String) -- db, processId, method collection, view mode
     | DatabasesRoute
@@ -271,15 +271,14 @@ withActivity db pid route =
 -- URL Parsing
 
 
-activitiesQueryParser : Query.Parser { name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+activitiesQueryParser : Query.Parser { name : Maybe String, product : Maybe String, limit : Maybe Int, classifications : List ( String, String ) }
 activitiesQueryParser =
     Query.map3
         (\base product cls ->
             { name = base.name
             , product = product
             , limit = base.limit
-            , classification = cls.classification
-            , classificationValue = cls.classificationValue
+            , classifications = cls
             }
         )
         (Query.map2 (\name limit -> { name = name, limit = limit })
@@ -287,9 +286,9 @@ activitiesQueryParser =
             (Query.int "limit")
         )
         (Query.string "product")
-        (Query.map2 (\cls clsVal -> { classification = cls, classificationValue = clsVal })
-            (Query.string "classification")
-            (Query.string "classification-value")
+        (Query.map2 (\systems values -> List.map2 Tuple.pair systems values)
+            (Query.custom "classification" identity)
+            (Query.custom "classification-value" identity)
         )
 
 
@@ -356,7 +355,7 @@ routeParser =
         , Parser.map FlowSynonymsRoute (Parser.s "flow-synonyms")
         , Parser.map CompartmentMappingsRoute (Parser.s "compartment-mappings")
         , Parser.map UnitsRoute (Parser.s "units")
-        , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, product = query.product, limit = query.limit, classification = query.classification, classificationValue = query.classificationValue })
+        , Parser.map (\db query -> ActivitiesRoute { db = db, name = query.name, product = query.product, limit = query.limit, classifications = query.classifications })
             (Parser.s "db" </> string </> Parser.s "activities" <?> activitiesQueryParser)
         , Parser.map (ActivityRoute Upstream) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "upstream")
         , Parser.map (ActivityRoute Emissions) (Parser.s "db" </> string </> Parser.s "activity" </> string </> Parser.s "emissions")
@@ -473,15 +472,25 @@ routeToUrl route =
         RootRoute ->
             "/"
 
-        ActivitiesRoute { db, name, product, limit, classification, classificationValue } ->
-            "/db/" ++ db ++ "/activities"
-                ++ appendQuery
+        ActivitiesRoute { db, name, product, limit, classifications } ->
+            let
+                clsParams =
+                    List.concatMap
+                        (\( sys, val ) ->
+                            [ Url.Builder.string "classification" sys
+                            , Url.Builder.string "classification-value" val
+                            ]
+                        )
+                        classifications
+            in
+            Url.Builder.absolute [ "db", db, "activities" ]
+                (List.filterMap identity
                     [ Maybe.map (Url.Builder.string "name") name
                     , Maybe.map (Url.Builder.string "product") product
                     , Maybe.map (Url.Builder.int "limit") limit
-                    , Maybe.map (Url.Builder.string "classification") classification
-                    , Maybe.map (Url.Builder.string "classification-value") classificationValue
                     ]
+                    ++ clsParams
+                )
 
         ActivityRoute tab db processId ->
             "/db/" ++ db ++ "/activity/" ++ processId ++ "/" ++ activityTabSlug tab
@@ -650,7 +659,7 @@ routeToDatabase route =
 
 
 type alias ActivitiesFlags =
-    { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classification : Maybe String, classificationValue : Maybe String }
+    { db : String, name : Maybe String, product : Maybe String, limit : Maybe Int, classifications : List ( String, String ) }
 
 
 type alias LCIAFlags =
@@ -1913,7 +1922,7 @@ matchDatabaseDetailAsActivities : Route -> Maybe ActivitiesFlags
 matchDatabaseDetailAsActivities route =
     case route of
         DatabaseDetailRoute dbName _ ->
-            Just { db = dbName, name = Nothing, product = Nothing, limit = Just 20, classification = Nothing, classificationValue = Nothing }
+            Just { db = dbName, name = Nothing, product = Nothing, limit = Just 20, classifications = [] }
 
         RootRoute ->
             Nothing

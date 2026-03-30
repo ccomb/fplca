@@ -677,10 +677,10 @@ searchFlows db (Just query) langParam limitParam offsetParam = do
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
 -- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
-searchActivities db nameParam geoParam productParam classParam classValueParam limitParam offsetParam = do
+searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)] -> Maybe Int -> Maybe Int -> IO (Either ServiceError Value)
+searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam = do
     startTime <- getCurrentTime
-    let allResults = findActivitiesByFields db nameParam geoParam productParam classParam classValueParam
+    let allResults = findActivitiesByFields db nameParam geoParam productParam classFilters
         offset = maybe 0 (max 0) offsetParam
         dropped = drop offset allResults
         -- Take limit+1 to detect hasMore without forcing the full list
