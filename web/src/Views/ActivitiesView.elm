@@ -21,15 +21,16 @@ type Msg
     | CommitWithValue String String
     | RemoveFilter String
     | ApplyPreset String
+    | SetInputFocused Bool
 
 
-viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems classificationPresets activeFilters pendingSystem pendingValue =
+viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Bool -> Html Msg
+viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems classificationPresets activeFilters pendingSystem pendingValue inputFocused =
     div [ class "activities-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems classificationPresets activeFilters pendingSystem pendingValue
+            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems classificationPresets activeFilters pendingSystem pendingValue inputFocused
             , viewSearchInputs searchQuery productQuery searchLoading
             , case error of
                 Just err ->
@@ -77,8 +78,8 @@ viewSearchInputs query productQuery isLoading =
         ]
 
 
-viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPresets activeFilters pendingSystem pendingValue =
+viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Bool -> Html Msg
+viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPresets activeFilters pendingSystem pendingValue inputFocused =
     let
         dbDropdown =
             case maybeDatabaseList of
@@ -258,12 +259,12 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPreset
 
                         filteredValues =
                             if String.isEmpty pendingValue then
-                                []
+                                currentValues
                             else
                                 List.filter (\v -> String.contains (String.toLower pendingValue) (String.toLower v)) currentValues
 
                         suggestionsDropdown =
-                            if List.isEmpty filteredValues then
+                            if not inputFocused || List.isEmpty filteredValues then
                                 text ""
                             else
                                 div
@@ -283,7 +284,7 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPreset
                                             div
                                                 [ class "dropdown-item"
                                                 , style "cursor" "pointer"
-                                                , onClick (CommitWithValue sys v)
+                                                , Html.Events.onMouseDown (CommitWithValue sys v)
                                                 ]
                                                 [ text v ]
                                         )
@@ -299,6 +300,8 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPreset
                                 , value pendingValue
                                 , onInput UpdatePendingValue
                                 , on "keydown" (Decode.andThen (\key -> if key == "Enter" then Decode.succeed CommitFilter else Decode.fail "not enter") (Decode.field "key" Decode.string))
+                                , Html.Events.onFocus (SetInputFocused True)
+                                , Html.Events.onBlur (SetInputFocused False)
                                 ]
                                 []
                             , suggestionsDropdown

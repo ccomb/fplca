@@ -29,6 +29,7 @@ type alias Model =
     , activeFilters : List ( String, String )
     , pendingSystem : Maybe String
     , pendingValue : String
+    , pendingInputFocused : Bool
     , debounceCounter : Int
     }
 
@@ -85,6 +86,7 @@ init shared flags =
       , activeFilters = flags.classifications
       , pendingSystem = Nothing
       , pendingValue = ""
+      , pendingInputFocused = False
       , debounceCounter = 0
       }
     , Effect.batch
@@ -306,6 +308,9 @@ update shared msg model =
                         ]
                     )
 
+                ActivitiesView.SetInputFocused focused ->
+                    ( { model | pendingInputFocused = focused }, Effect.none )
+
         RequestLoadDatabase ->
             ( model
             , Effect.fromShared (Shared.LoadDatabase model.dbName)
@@ -523,6 +528,7 @@ view shared model =
                     model.activeFilters
                     model.pendingSystem
                     model.pendingValue
+                    model.pendingInputFocused
                 )
         }
 
