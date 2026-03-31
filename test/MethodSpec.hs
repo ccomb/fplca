@@ -238,6 +238,24 @@ spec = do
                     methodUnit gwp `shouldBe` "kg CO2 eq."
                     methodMethodology gwp `shouldBe` Just "Test Method"
 
+        it "parses 2-row header with Windows CRLF line endings" $ do
+            let lf   = BS.readFile "test/data/method.csv"
+                crlf = fmap toCRLF lf
+            csv <- crlf
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    length methods `shouldBe` 3
+                    methodName (head methods) `shouldBe` "global warming (GWP100)"
+
+        it "parses 3-row header with Windows CRLF line endings" $ do
+            csv <- toCRLF <$> BS.readFile "test/data/method_with_categories.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    length methods `shouldBe` 3
+                    methodCategory (head methods) `shouldBe` "Climate change"
+
     describe "LCIA Score Computation" $ do
         describe "computeLCIAScore" $ do
             it "computes score as sum of inventory * CF for mapped flows" $ do
@@ -435,6 +453,10 @@ spec = do
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
+
+-- | Convert LF line endings to CRLF (simulates Windows-created files).
+toCRLF :: BS.ByteString -> BS.ByteString
+toCRLF = BL.toStrict . BL.intercalate "\r\n" . BL.split 0x0A . BL.fromStrict
 
 -- Helper to create a test Flow
 mkTestFlow :: UUID.UUID -> T.Text -> Flow

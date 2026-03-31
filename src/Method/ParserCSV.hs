@@ -48,7 +48,7 @@ parseMethodCSV path = do
 -- | Pure parser, exported for testing.
 parseMethodCSVBytes :: BS.ByteString -> Either String [Method]
 parseMethodCSVBytes bytes =
-    let allLines  = BC.lines bytes
+    let allLines  = map stripCR $ BC.lines bytes
         (comments, dataLines) = span (\l -> BC.isPrefixOf "#" l || BS.null l) allLines
         methodology = extractMethodology comments
     in case splitHeaderFromData dataLines of
@@ -65,18 +65,21 @@ parseMethodCSVBytes bytes =
 splitHeaderFromData :: [BS.ByteString] -> Maybe ([Text], [Text], [Text], [BS.ByteString], Word8)
 splitHeaderFromData dataLines =
     case break isLabelRow dataLines of
-        (headerRows, _labelRow : rows)
-            | [nameRow, unitRow] <- headerRows ->
-                let !delim = detectDelimiter nameRow
-                    names = drop 2 $ splitRow delim nameRow
-                    units = drop 2 $ splitRow delim unitRow
-                in Just (names, names, units, rows, delim)  -- categories = names
-            | [catRow, nameRow, unitRow] <- headerRows ->
-                let !delim = detectDelimiter catRow
-                    cats  = drop 2 $ splitRow delim catRow
-                    names = drop 2 $ splitRow delim nameRow
-                    units = drop 2 $ splitRow delim unitRow
-                in Just (cats, names, units, rows, delim)
+        (headerRows, _labelRow : rows) ->
+            let nonBlank = filter (not . BS.null) headerRows
+            in case nonBlank of
+                [nameRow, unitRow] ->
+                    let !delim = detectDelimiter nameRow
+                        names = drop 2 $ splitRow delim nameRow
+                        units = drop 2 $ splitRow delim unitRow
+                    in Just (names, names, units, rows, delim)  -- categories = names
+                [catRow, nameRow, unitRow] ->
+                    let !delim = detectDelimiter catRow
+                        cats  = drop 2 $ splitRow delim catRow
+                        names = drop 2 $ splitRow delim nameRow
+                        units = drop 2 $ splitRow delim unitRow
+                    in Just (cats, names, units, rows, delim)
+                _ -> Nothing
         _ -> Nothing
 
 -- | Detect the label row: first cell is a variation of "substance".
@@ -169,6 +172,12 @@ parseDouble :: Text -> Maybe Double
 parseDouble t = case TR.double t of
     Right (v, _) -> Just v
     Left _       -> Nothing
+
+-- | Strip trailing carriage return (Windows CRLF line endings).
+stripCR :: BS.ByteString -> BS.ByteString
+stripCR bs
+    | not (BS.null bs) && BS.last bs == 0x0D = BS.init bs
+    | otherwise = bs
 
 -- | Convert Text to bytes for UUID5 key generation.
 bsKey :: Text -> [Word8]
