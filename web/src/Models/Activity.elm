@@ -23,6 +23,8 @@ module Models.Activity exposing
     , searchResultsDecoder
     , activityInfoDecoder
     , classificationSystemDecoder
+    , FilterPreset
+    , filterPresetDecoder
     )
 
 import Dict exposing (Dict)
@@ -315,6 +317,32 @@ classificationSystemDecoder =
         |> required "csName" Decode.string
         |> required "csValues" (Decode.list Decode.string)
         |> required "csActivityCount" Decode.int
+
+
+-- Filter preset (from /api/v1/filter-presets endpoint)
+
+
+type alias FilterPreset =
+    { name : String
+    , label : String
+    , description : Maybe String
+    , filters : List ( String, String )
+    }
+
+
+filterPresetDecoder : Decoder FilterPreset
+filterPresetDecoder =
+    Decode.succeed FilterPreset
+        |> required "fpiName" Decode.string
+        |> required "fpiLabel" Decode.string
+        |> required "fpiDescription" (Decode.nullable Decode.string)
+        |> required "fpiFilters"
+            (Decode.list
+                (Decode.map2 Tuple.pair
+                    (Decode.field "feiSystem" Decode.string)
+                    (Decode.field "feiValue" Decode.string)
+                )
+            )
 
 
 exchangeTypeDecoder : Decoder ExchangeType

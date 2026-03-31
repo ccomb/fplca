@@ -1,10 +1,10 @@
 module Views.ActivitiesView exposing (viewActivitiesPage, Msg(..))
 
-import Html exposing (Html, button, div, input, option, select, table, tbody, text, th, thead, tr, h2, p, span)
-import Html.Attributes exposing (class, disabled, id, placeholder, selected, style, type_, value)
+import Html exposing (Html, button, div, input, node, option, select, table, tbody, text, th, thead, tr, h2, p, span)
+import Html.Attributes exposing (attribute, class, disabled, id, list, placeholder, selected, style, type_, value)
 import Html.Events exposing (onInput, onClick, on)
 import Json.Decode as Decode
-import Models.Activity exposing (ActivitySummary, ClassificationSystem, SearchResults)
+import Models.Activity exposing (ActivitySummary, ClassificationSystem, FilterPreset, SearchResults)
 import Models.Database exposing (DatabaseList, DatabaseLoadStatus(..), DatabaseStatus)
 import Views.ActivityRow as ActivityRow
 
@@ -20,15 +20,16 @@ type Msg
     | CommitFilter
     | CommitWithValue String String
     | RemoveFilter String
+    | ApplyPreset String
 
 
-viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems activeFilters pendingSystem pendingValue =
+viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List FilterPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems filterPresets activeFilters pendingSystem pendingValue =
     div [ class "activities-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems activeFilters pendingSystem pendingValue
+            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems filterPresets activeFilters pendingSystem pendingValue
             , viewSearchInputs searchQuery productQuery searchLoading
             , case error of
                 Just err ->
@@ -76,8 +77,8 @@ viewSearchInputs query productQuery isLoading =
         ]
 
 
-viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendingSystem pendingValue =
+viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List FilterPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets activeFilters pendingSystem pendingValue =
     let
         dbDropdown =
             case maybeDatabaseList of
@@ -98,21 +99,75 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendin
                         ]
                     ]
 
+        chipSep =
+            span
+                [ style "background-color" "#d0d0d0"
+                , style "width" "1px"
+                , style "align-self" "stretch"
+                , style "flex-shrink" "0"
+                ]
+                []
+
+        chipOrSep =
+            span
+                [ style "background-color" "#f8f8f8"
+                , style "align-self" "stretch"
+                , style "display" "inline-flex"
+                , style "align-items" "center"
+                , style "padding" "0 0.5em"
+                , style "color" "#555"
+                ]
+                [ text "OR" ]
+
         chips =
             activeFilters
                 |> groupBySystem
                 |> List.map
                     (\( sys, vals ) ->
                         div [ class "control" ]
-                            [ div [ class "tags has-addons" ]
-                                [ span [ class "tag is-info is-large" ]
-                                    [ text (sys ++ ": " ++ String.join " OR " vals) ]
+                            [ div
+                                [ style "display" "inline-flex"
+                                , style "align-items" "stretch"
+                                , style "border" "1px solid #dbdbdb"
+                                , style "border-radius" "4px"
+                                , style "overflow" "hidden"
+                                , style "font-size" "inherit"
+                                , style "font-family" "inherit"
+                                , style "height" "2.5em"
+                                , style "background-color" "white"
+                                ]
+                                [ span
+                                    [ style "background-color" "#f0f0f0"
+                                    , style "display" "inline-flex"
+                                    , style "align-items" "center"
+                                    , style "padding" "0 0.75em"
+                                    , style "white-space" "nowrap"
+                                    , style "color" "#363636"
+                                    ]
+                                    [ text sys ]
+                                , chipSep
                                 , span
-                                    [ class "tag is-delete is-large"
+                                    [ style "background-color" "white"
+                                    , style "display" "inline-flex"
+                                    , style "align-items" "center"
+                                    , style "color" "#363636"
+                                    ]
+                                    (List.intersperse chipOrSep
+                                        (List.map (\v -> span [ style "padding" "0 0.75em", style "white-space" "nowrap" ] [ text v ]) vals)
+                                    )
+                                , chipSep
+                                , span
+                                    [ style "background-color" "#f0f0f0"
+                                    , style "display" "inline-flex"
+                                    , style "align-items" "center"
+                                    , style "padding" "0 0.75em"
                                     , style "cursor" "pointer"
+                                    , style "color" "#363636"
+                                    , style "font-size" "1.1em"
+                                    , style "line-height" "1"
                                     , onClick (RemoveFilter sys)
                                     ]
-                                    []
+                                    [ text "×" ]
                                 ]
                             ]
                     )
@@ -135,12 +190,15 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendin
                                             if val == "" then
                                                 SelectClassificationSystem Nothing
 
+                                            else if String.startsWith "preset:" val then
+                                                ApplyPreset (String.dropLeft 7 val)
+
                                             else
                                                 SelectClassificationSystem (Just val)
                                         )
                                     ]
-                                    (option [ value "", selected (pendingSystem == Nothing) ] [ text "Classification..." ]
-                                        :: List.map
+                                    ([ option [ value "", selected (pendingSystem == Nothing) ] [ text "Classification..." ] ]
+                                        ++ List.map
                                             (\sys ->
                                                 option
                                                     [ value sys.name
@@ -149,6 +207,21 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendin
                                                     [ text (sys.name ++ " (" ++ String.fromInt sys.activityCount ++ ")") ]
                                             )
                                             systems
+                                        ++ (if List.isEmpty filterPresets then
+                                                []
+
+                                            else
+                                                [ node "optgroup"
+                                                    [ attribute "label" "Presets" ]
+                                                    (List.map
+                                                        (\p ->
+                                                            option [ value ("preset:" ++ p.name) ]
+                                                                [ text ("→ " ++ p.label) ]
+                                                        )
+                                                        filterPresets
+                                                    )
+                                                ]
+                                           )
                                     )
                                 ]
                             ]
