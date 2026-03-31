@@ -12,7 +12,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 - **Normalize and weight** LCIA results with Raw / Normalized / Weighted view toggle; compute a single-score in Pt when normalization-weighting data is available
 - **Map** method characterization factors to database flows with a 4-step cascade (UUID → CAS → name → synonym) and coverage statistics
 - **Link** databases across nomenclatures (e.g., a sector database referencing Agribalyse)
-- **Upload** databases and method collections via the web UI, without touching config files
+- **Upload** databases and method collections via the API, without touching config files
 
 ---
 
@@ -21,12 +21,12 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 - **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
-- **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config or UI
+- **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config
 - **Normalization and weighting**: Batch LCIA computes normalized and weighted scores per category and a single aggregated score (Pt) when NW data is present in the method collection
-- **Flow mapping engine**: 4-step matching cascade (UUID → CAS → name → synonym) with per-strategy coverage statistics and inspection UI
-- **Activity classifications**: ISIC, CPC, and category fields parsed from EcoSpold1/2 and ILCD, with a Composition page showing supply chain breakdown by classification
+- **Flow mapping engine**: 4-step matching cascade (UUID → CAS → name → synonym) with per-strategy coverage statistics
+- **Activity classifications**: ISIC, CPC, and category fields parsed from EcoSpold1/2 and ILCD
 - **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
-- **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via UI, or toggled independently
+- **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via the API, or toggled independently
 - **Fast cache**: Per-database cache with automatic schema-based invalidation; large databases load in ~45s cold, ~2-3s cached
 - **Optional access control**: Single-code login with cookie-based session
 
@@ -37,7 +37,6 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 ### Web Server
 
 ```bash
-# Build (requires PETSc — see Building section)
 ./build.sh
 
 # Start the server
@@ -124,7 +123,7 @@ path = "data/units.csv"
 active = true
 ```
 
-The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies. Reference data sections (`flow-synonyms`, `compartment-mappings`, `units`) can also be uploaded and toggled at runtime via the web UI.
+The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies.
 
 ---
 
@@ -399,7 +398,7 @@ Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
 ### Docker
 
 ```bash
-docker build -t volca .
+docker build -f docker/Dockerfile -t volca .
 docker run -p 8080:8080 -v /path/to/data:/data volca
 ```
 
