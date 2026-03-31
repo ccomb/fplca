@@ -18,7 +18,7 @@ type Msg
     | SelectClassificationSystem (Maybe String)
     | UpdatePendingValue String
     | CommitFilter
-    | RemoveFilter Int
+    | RemoveFilter String
 
 
 viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ( String, String ) -> Maybe String -> String -> Html Msg
@@ -98,21 +98,23 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems activeFilters pendin
                     ]
 
         chips =
-            List.indexedMap
-                (\i ( sys, val ) ->
-                    div [ class "control" ]
-                        [ div [ class "tags has-addons" ]
-                            [ span [ class "tag is-info is-large" ] [ text (sys ++ ": " ++ val) ]
-                            , span
-                                [ class "tag is-delete is-large"
-                                , style "cursor" "pointer"
-                                , onClick (RemoveFilter i)
+            activeFilters
+                |> groupBySystem
+                |> List.map
+                    (\( sys, vals ) ->
+                        div [ class "control" ]
+                            [ div [ class "tags has-addons" ]
+                                [ span [ class "tag is-info is-large" ]
+                                    [ text (sys ++ ": " ++ String.join " OR " vals) ]
+                                , span
+                                    [ class "tag is-delete is-large"
+                                    , style "cursor" "pointer"
+                                    , onClick (RemoveFilter sys)
+                                    ]
+                                    []
                                 ]
-                                []
                             ]
-                        ]
-                )
-                activeFilters
+                    )
 
         classDropdown =
             case maybeSystems of
@@ -279,6 +281,30 @@ viewActivityRow activity =
         , location = activity.location
         , onNavigate = SelectActivity
         }
+
+
+-- Group [(sys, val)] into [(sys, [val])] preserving first-seen system order
+groupBySystem : List ( String, String ) -> List ( String, List String )
+groupBySystem pairs =
+    List.foldl
+        (\( sys, val ) acc ->
+            case List.filter (\( s, _ ) -> s == sys) acc of
+                [] ->
+                    acc ++ [ ( sys, [ val ] ) ]
+
+                _ ->
+                    List.map
+                        (\( s, vs ) ->
+                            if s == sys then
+                                ( s, vs ++ [ val ] )
+
+                            else
+                                ( s, vs )
+                        )
+                        acc
+        )
+        []
+        pairs
 
 
 viewDatabaseOption : String -> DatabaseStatus -> Html Msg

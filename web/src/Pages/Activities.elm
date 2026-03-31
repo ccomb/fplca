@@ -253,12 +253,10 @@ update shared msg model =
                                     ]
                                 )
 
-                ActivitiesView.RemoveFilter i ->
+                ActivitiesView.RemoveFilter sys ->
                     let
                         newFilters =
-                            List.indexedMap Tuple.pair model.activeFilters
-                                |> List.filter (\( idx, _ ) -> idx /= i)
-                                |> List.map Tuple.second
+                            List.filter (\( s, _ ) -> s /= sys) model.activeFilters
 
                         newModel =
                             { model | activeFilters = newFilters }
