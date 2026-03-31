@@ -1,5 +1,5 @@
 # Stage 1: Build Haskell application
-# Build from volca directory: docker build -t volca .
+# Build from volca directory: docker build -f docker/Dockerfile -t volca .
 FROM debian:bookworm AS haskell-builder
 
 # Install system dependencies
@@ -139,8 +139,8 @@ path = "data/units.csv"
 active = true
 EOF
 
-COPY rts-flags.sh /app/rts-flags.sh
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY docker/rts-flags.sh /app/rts-flags.sh
+COPY docker/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 EXPOSE 8080
 
