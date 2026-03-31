@@ -116,7 +116,7 @@ import qualified Data.Text.IO as TIO
 import qualified SimaPro.Parser as SimaPro
 import API.Types (DepLoadResult(..))
 import qualified Method.Parser
-import Method.ParserCSV (parseMethodCSV)
+import Method.ParserCSV (parseMethodCSVBytes)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import qualified Method.FlowResolver as FlowResolver
 import Method.FlowResolver (ILCDFlowInfo)
@@ -1637,10 +1637,10 @@ loadMethodCollectionFromConfig mc = do
                         Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
                     -- Split CSV files into SimaPro method exports and tabular CSVs
                     csvParsed <- forM csvFiles $ \f -> do
-                        bytes <- BS.readFile (dir </> f)
+                        bytes <- stripBOM <$> BS.readFile (dir </> f)
                         if isSimaProMethodCSV bytes
                             then return $ fmap Left (parseSimaProMethodCSVBytes bytes)
-                            else fmap (fmap Right) (parseMethodCSV (dir </> f))
+                            else return $ fmap Right (parseMethodCSVBytes bytes)
                     let (xmlErrs, xmlMethods) = partitionEithers xmlResults
                         (csvErrs, csvOks) = partitionEithers csvParsed
                         -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method]
@@ -1669,6 +1669,12 @@ loadMethodCollectionFromConfig mc = do
     partitionEithers = foldr f ([], [])
       where f (Left  a) (ls, rs) = (a:ls, rs)
             f (Right b) (ls, rs) = (ls, b:rs)
+
+-- | Strip UTF-8 BOM if present (common in Windows-created CSV files).
+stripBOM :: BS.ByteString -> BS.ByteString
+stripBOM bs
+    | BS.isPrefixOf "\xEF\xBB\xBF" bs = BS.drop 3 bs
+    | otherwise = bs
 
 -- | List all method collections with their status
 listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]

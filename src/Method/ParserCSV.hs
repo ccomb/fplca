@@ -48,7 +48,7 @@ parseMethodCSV path = do
 -- | Pure parser, exported for testing.
 parseMethodCSVBytes :: BS.ByteString -> Either String [Method]
 parseMethodCSVBytes bytes =
-    let allLines  = map stripCR $ BC.lines bytes
+    let allLines  = map stripCR $ BC.lines (stripBOM bytes)
         (comments, dataLines) = span (\l -> BC.isPrefixOf "#" l || BS.null l) allLines
         methodology = extractMethodology comments
     in case splitHeaderFromData dataLines of
@@ -177,6 +177,12 @@ parseDouble t = case TR.double t of
 stripCR :: BS.ByteString -> BS.ByteString
 stripCR bs
     | not (BS.null bs) && BS.last bs == 0x0D = BS.init bs
+    | otherwise = bs
+
+-- | Strip UTF-8 BOM if present (common in Windows-created CSV files).
+stripBOM :: BS.ByteString -> BS.ByteString
+stripBOM bs
+    | BS.isPrefixOf "\xEF\xBB\xBF" bs = BS.drop 3 bs
     | otherwise = bs
 
 -- | Convert Text to bytes for UUID5 key generation.

@@ -256,6 +256,26 @@ spec = do
                     length methods `shouldBe` 3
                     methodCategory (head methods) `shouldBe` "Climate change"
 
+        it "parses 2-row header with UTF-8 BOM" $ do
+            csv <- withBOM <$> BS.readFile "test/data/method.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> length methods `shouldBe` 3
+
+        it "parses 3-row header with UTF-8 BOM" $ do
+            csv <- withBOM <$> BS.readFile "test/data/method_with_categories.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    length methods `shouldBe` 3
+                    methodCategory (head methods) `shouldBe` "Climate change"
+
+        it "parses with both BOM and CRLF" $ do
+            csv <- withBOM . toCRLF <$> BS.readFile "test/data/method_with_categories.csv"
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> length methods `shouldBe` 3
+
     describe "LCIA Score Computation" $ do
         describe "computeLCIAScore" $ do
             it "computes score as sum of inventory * CF for mapped flows" $ do
@@ -317,6 +337,18 @@ spec = do
         it "detects SimaPro method CSV format" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"
             isSimaProMethodCSV csv `shouldBe` True
+
+        it "detects French locale SimaPro method CSV ({méthodes})" $ do
+            let csv = "{SimaPro 9.4.0.2}\r\n{m\xe9thodes}\r\n{Date: 27/04/2023}\r\n"
+            isSimaProMethodCSV csv `shouldBe` True
+
+        it "detects German/Dutch locale SimaPro method CSV ({methoden})" $ do
+            let csv = "{SimaPro 9.4.0.2}\r\n{methoden}\r\n{Date: 27/04/2023}\r\n"
+            isSimaProMethodCSV csv `shouldBe` True
+
+        it "does not detect SimaPro process database as method" $ do
+            let csv = "{SimaPro 9.4.0.2}\r\n{processes}\r\n{Date: 27/04/2023}\r\n"
+            isSimaProMethodCSV csv `shouldBe` False
 
         it "does not detect tabular CSV as SimaPro format" $ do
             csv <- BS.readFile "test/data/method.csv"
@@ -457,6 +489,10 @@ isLeft _ = False
 -- | Convert LF line endings to CRLF (simulates Windows-created files).
 toCRLF :: BS.ByteString -> BS.ByteString
 toCRLF = BL.toStrict . BL.intercalate "\r\n" . BL.split 0x0A . BL.fromStrict
+
+-- | Prepend UTF-8 BOM (simulates files saved by Excel/Notepad on Windows).
+withBOM :: BS.ByteString -> BS.ByteString
+withBOM = BS.append "\xEF\xBB\xBF"
 
 -- Helper to create a test Flow
 mkTestFlow :: UUID.UUID -> T.Text -> Flow
