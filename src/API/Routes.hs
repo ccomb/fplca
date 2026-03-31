@@ -23,7 +23,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityInfo (..), ActivitySummary (..), ClassificationSystem(..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry(..), FlowDetail (..), FlowHotspotResult(..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), ProcessContribution(..), ProcessHotspotResult(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SubstitutionRequest(..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), ClassificationSystem(..), ExchangeDetail (..), ClassificationEntryInfo(..), ClassificationPresetInfo(..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry(..), FlowDetail (..), FlowHotspotResult(..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIARequest (..), LCIAResult (..), LCIABatchResult(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), ProcessContribution(..), ProcessHotspotResult(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SubstitutionRequest(..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -127,6 +127,8 @@ type LCAAPI =
                 :<|> "hosting" :> Get '[JSON] Value
                 -- Runtime stats (memory usage)
                 :<|> "stats" :> Get '[JSON] Value
+                -- Classification presets (from TOML config)
+                :<|> "classification-presets" :> Get '[JSON] [ClassificationPresetInfo]
            )
 
 -- | Get database by name, throw 404 if not loaded
@@ -172,8 +174,8 @@ instance FromJSON LoginRequest where
 
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
-lcaServer :: DatabaseManager -> Int -> Maybe String -> Maybe Config.HostingConfig -> Server LCAAPI
-lcaServer dbManager maxTreeDepth password hostingConfig =
+lcaServer :: DatabaseManager -> Int -> Maybe String -> Maybe Config.HostingConfig -> [Config.ClassificationPreset] -> Server LCAAPI
+lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
@@ -244,6 +246,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig =
         :<|> getVersion
         :<|> getHosting
         :<|> getStats
+        :<|> getClassificationPresets
   where
     getVersion :: Handler Value
     getVersion = return $ object
@@ -284,6 +287,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig =
                 ]
         else return $ object
             [ "error" .= ("RTS stats not enabled. Run with +RTS -T to enable." :: Text) ]
+
+    getClassificationPresets :: Handler [ClassificationPresetInfo]
+    getClassificationPresets = return $ map toInfo classificationPresets
+      where
+        toInfo p = ClassificationPresetInfo
+            { cpiName        = Config.cpName p
+            , cpiLabel       = Config.cpLabel p
+            , cpiDescription = Config.cpDescription p
+            , cpiFilters     = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e)) (Config.cpFilters p)
+            }
 
     getLogsHandler :: Maybe Int -> Handler Value
     getLogsHandler sinceMaybe = do

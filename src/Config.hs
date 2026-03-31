@@ -10,6 +10,8 @@ module Config
     , MethodConfig(..)
     , RefDataConfig(..)
     , HostingConfig(..)
+    , ClassificationPreset(..)
+    , ClassificationEntry(..)
       -- * Loading
     , loadConfig
     , loadConfigFile
@@ -37,6 +39,20 @@ import System.FilePath (takeFileName)
 import Database.Upload (DatabaseFormat(..))
 import Plugin.Config (PluginConfig)
 
+-- | A single classification filter entry (system + value)
+data ClassificationEntry = ClassificationEntry
+    { ceSystem :: !Text
+    , ceValue  :: !Text
+    } deriving (Show, Eq, Generic)
+
+-- | A named preset that pre-populates the classification filter
+data ClassificationPreset = ClassificationPreset
+    { cpName        :: !Text
+    , cpLabel       :: !Text          -- defaults to cpName if absent in TOML
+    , cpDescription :: !(Maybe Text)
+    , cpFilters     :: ![ClassificationEntry]
+    } deriving (Show, Eq, Generic)
+
 -- | Main configuration type
 data Config = Config
     { cfgServer              :: !ServerConfig
@@ -48,6 +64,7 @@ data Config = Config
     , cfgPlugins             :: ![PluginConfig]
     , cfgHosting             :: !(Maybe HostingConfig)
     , cfgGeographies         :: !(Maybe FilePath)    -- Path to geographies CSV (code,display_name,parents)
+    , cfgClassificationPresets       :: ![ClassificationPreset]
     } deriving (Show, Eq, Generic)
 
 -- | Hosting configuration for managed VoLCA instances
@@ -120,6 +137,7 @@ defaultConfig = Config
     , cfgPlugins = []
     , cfgHosting = Nothing
     , cfgGeographies = Nothing
+    , cfgClassificationPresets = []
     }
 
 -- TOML Decoders
@@ -135,6 +153,7 @@ instance DecodeTOML Config where
         cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
         cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         cfgGeographies <- getFieldOpt "geographies"
+        cfgClassificationPresets <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "classification-presets"
         pure Config{..}
 
 instance DecodeTOML ServerConfig where
@@ -185,6 +204,20 @@ instance DecodeTOML HostingConfig where
         hcUpgradeApi <- fromMaybe "" <$> getFieldOpt "upgrade_api"
         hcUpgradeVmSize <- fromMaybe "" <$> getFieldOpt "upgrade_vm_size"
         pure HostingConfig{..}
+
+instance DecodeTOML ClassificationEntry where
+    tomlDecoder = do
+        ceSystem <- getField "system"
+        ceValue  <- getField "value"
+        pure ClassificationEntry{..}
+
+instance DecodeTOML ClassificationPreset where
+    tomlDecoder = do
+        cpName        <- getField "name"
+        cpLabel       <- fromMaybe cpName <$> getFieldOpt "label"
+        cpDescription <- getFieldOpt "description"
+        cpFilters     <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "filters"
+        pure ClassificationPreset{..}
 
 -- | Load configuration from a TOML file
 loadConfigFile :: FilePath -> IO (Either Text Config)

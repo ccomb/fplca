@@ -554,6 +554,20 @@ data ExchangeDetail = ExchangeDetail
     }
     deriving (Generic)
 
+-- | A single filter entry returned in a preset
+data ClassificationEntryInfo = ClassificationEntryInfo
+    { ceiSystem :: !Text
+    , ceiValue  :: !Text
+    } deriving (Show, Eq, Generic)
+
+-- | A named filter preset (from TOML config)
+data ClassificationPresetInfo = ClassificationPresetInfo
+    { cpiName        :: !Text
+    , cpiLabel       :: !Text
+    , cpiDescription :: !(Maybe Text)
+    , cpiFilters     :: ![ClassificationEntryInfo]
+    } deriving (Show, Eq, Generic)
+
 -- | Classification system with its values for browsing/filtering
 data ClassificationSystem = ClassificationSystem
     { csName :: Text           -- e.g. "ISIC rev.4 ecoinvent", "CPC", "HS2017"
@@ -563,6 +577,8 @@ data ClassificationSystem = ClassificationSystem
     deriving (Generic)
 
 -- JSON instances
+instance ToJSON ClassificationEntryInfo
+instance ToJSON ClassificationPresetInfo
 instance ToJSON ClassificationSystem
 instance (ToJSON a) => ToJSON (SearchResults a)
 instance ToJSON ActivitySummary

@@ -23,8 +23,8 @@ module Models.Activity exposing
     , searchResultsDecoder
     , activityInfoDecoder
     , classificationSystemDecoder
-    , FilterPreset
-    , filterPresetDecoder
+    , ClassificationPreset
+    , classificationPresetDecoder
     )
 
 import Dict exposing (Dict)
@@ -319,10 +319,10 @@ classificationSystemDecoder =
         |> required "csActivityCount" Decode.int
 
 
--- Filter preset (from /api/v1/filter-presets endpoint)
+-- Classification preset (from /api/v1/classification-presets endpoint)
 
 
-type alias FilterPreset =
+type alias ClassificationPreset =
     { name : String
     , label : String
     , description : Maybe String
@@ -330,17 +330,17 @@ type alias FilterPreset =
     }
 
 
-filterPresetDecoder : Decoder FilterPreset
-filterPresetDecoder =
-    Decode.succeed FilterPreset
-        |> required "fpiName" Decode.string
-        |> required "fpiLabel" Decode.string
-        |> required "fpiDescription" (Decode.nullable Decode.string)
-        |> required "fpiFilters"
+classificationPresetDecoder : Decoder ClassificationPreset
+classificationPresetDecoder =
+    Decode.succeed ClassificationPreset
+        |> required "cpiName" Decode.string
+        |> required "cpiLabel" Decode.string
+        |> required "cpiDescription" (Decode.nullable Decode.string)
+        |> required "cpiFilters"
             (Decode.list
                 (Decode.map2 Tuple.pair
-                    (Decode.field "feiSystem" Decode.string)
-                    (Decode.field "feiValue" Decode.string)
+                    (Decode.field "ceiSystem" Decode.string)
+                    (Decode.field "ceiValue" Decode.string)
                 )
             )
 

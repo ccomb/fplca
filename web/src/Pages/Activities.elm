@@ -6,7 +6,7 @@ import Effect exposing (Effect)
 import Html exposing (..)
 import Http
 import Json.Decode as Decode
-import Models.Activity exposing (ActivitySummary, ClassificationSystem, FilterPreset, SearchResults, activitySummaryDecoder, classificationSystemDecoder, filterPresetDecoder, searchResultsDecoder)
+import Models.Activity exposing (ActivitySummary, ClassificationSystem, ClassificationPreset, SearchResults, activitySummaryDecoder, classificationSystemDecoder, classificationPresetDecoder, searchResultsDecoder)
 import Models.Database exposing (DatabaseList)
 import Route exposing (ActivityTab(..), Route(..))
 import Shared exposing (RemoteData(..))
@@ -25,7 +25,7 @@ type alias Model =
     , dbName : String
     , results : SearchState
     , classificationSystems : Maybe (List ClassificationSystem)
-    , filterPresets : List FilterPreset
+    , classificationPresets : List ClassificationPreset
     , activeFilters : List ( String, String )
     , pendingSystem : Maybe String
     , pendingValue : String
@@ -46,7 +46,7 @@ type Msg
     | SearchResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | MoreResultsLoaded (Result Http.Error (SearchResults ActivitySummary))
     | ClassificationsLoaded (Result Http.Error (List ClassificationSystem))
-    | FilterPresetsLoaded (Result Http.Error (List FilterPreset))
+    | ClassificationPresetsLoaded (Result Http.Error (List ClassificationPreset))
     | NewFlags Route.ActivitiesFlags
     | ScrollDone
     | DebounceTick Int
@@ -81,7 +81,7 @@ init shared flags =
       , dbName = flags.db
       , results = if dbLoaded then Searching else NotSearched
       , classificationSystems = Nothing
-      , filterPresets = []
+      , classificationPresets = []
       , activeFilters = flags.classifications
       , pendingSystem = Nothing
       , pendingValue = ""
@@ -96,7 +96,7 @@ init shared flags =
 
           else
             Effect.none
-        , Effect.fromCmd fetchFilterPresets
+        , Effect.fromCmd fetchClassificationPresets
         , Effect.fromCmd (Browser.Dom.focus "activity-search" |> Task.attempt (\_ -> ScrollDone))
         ]
     )
@@ -240,7 +240,7 @@ update shared msg model =
                                 )
 
                 ActivitiesView.ApplyPreset presetName ->
-                    case List.filter (\p -> p.name == presetName) model.filterPresets of
+                    case List.filter (\p -> p.name == presetName) model.classificationPresets of
                         (preset :: _) ->
                             let
                                 newFilters =
@@ -358,10 +358,10 @@ update shared msg model =
         ClassificationsLoaded (Err _) ->
             ( model, Effect.none )
 
-        FilterPresetsLoaded (Ok presets) ->
-            ( { model | filterPresets = presets }, Effect.none )
+        ClassificationPresetsLoaded (Ok presets) ->
+            ( { model | classificationPresets = presets }, Effect.none )
 
-        FilterPresetsLoaded (Err _) ->
+        ClassificationPresetsLoaded (Err _) ->
             ( model, Effect.none )
 
         ScrollDone ->
@@ -519,7 +519,7 @@ view shared model =
                     error
                     maybeDatabaseList
                     model.classificationSystems
-                    model.filterPresets
+                    model.classificationPresets
                     model.activeFilters
                     model.pendingSystem
                     model.pendingValue
@@ -577,11 +577,11 @@ fetchClassifications dbName =
         }
 
 
-fetchFilterPresets : Cmd Msg
-fetchFilterPresets =
+fetchClassificationPresets : Cmd Msg
+fetchClassificationPresets =
     Http.get
-        { url = Url.Builder.absolute [ "api", "v1", "filter-presets" ] []
-        , expect = Http.expectJson FilterPresetsLoaded (Decode.list filterPresetDecoder)
+        { url = Url.Builder.absolute [ "api", "v1", "classification-presets" ] []
+        , expect = Http.expectJson ClassificationPresetsLoaded (Decode.list classificationPresetDecoder)
         }
 
 
