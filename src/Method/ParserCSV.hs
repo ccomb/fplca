@@ -21,8 +21,7 @@
 --
 -- One CSV file → multiple 'Method' values (one per column).
 module Method.ParserCSV
-    ( parseMethodCSV
-    , parseMethodCSVBytes
+    ( parseMethodCSVBytes
     ) where
 
 import qualified Data.ByteString as BS
@@ -39,11 +38,6 @@ import Data.Word (Word8)
 
 import Method.Types
 
--- | Parse a CSV method file, producing one 'Method' per impact category column.
-parseMethodCSV :: FilePath -> IO (Either String [Method])
-parseMethodCSV path = do
-    bytes <- BS.readFile path
-    return $ parseMethodCSVBytes bytes
 
 -- | Pure parser, exported for testing.
 parseMethodCSVBytes :: BS.ByteString -> Either String [Method]
