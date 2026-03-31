@@ -415,13 +415,18 @@ cabal build -j
             STRIPPED_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
             log_info "After strip: $STRIPPED_SIZE"
 
-            # UPX compression
-            log_info "Compressing with UPX..."
-            if upx -1 "$VOLCA_BIN_PATH"; then
-                FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
-                log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped) -> $FINAL_SIZE (compressed)"
+            # UPX compression (Linux/macOS only — Windows Defender flags UPX binaries
+            # as malicious, causing "Error opening file for writing" during NSIS install)
+            if [[ "$OS" != "windows" ]]; then
+                log_info "Compressing with UPX..."
+                if upx -1 "$VOLCA_BIN_PATH"; then
+                    FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
+                    log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped) -> $FINAL_SIZE (compressed)"
+                else
+                    log_warn "UPX compression failed — using stripped binary ($STRIPPED_SIZE)"
+                fi
             else
-                log_warn "UPX compression failed — using stripped binary ($STRIPPED_SIZE)"
+                log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped, no UPX on Windows)"
             fi
         fi
     fi
