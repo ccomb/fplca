@@ -133,7 +133,9 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                 , style "overflow" "hidden"
                                 , style "font-size" "inherit"
                                 , style "font-family" "inherit"
-                                , style "height" "2.5em"
+                                , style "min-height" "2.5em"
+                                , style "height" "auto"
+                                , style "max-width" "min(700px, calc(100vw - 220px))"
                                 , style "background-color" "white"
                                 ]
                                 [ span
@@ -141,19 +143,33 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                     , style "display" "inline-flex"
                                     , style "align-items" "center"
                                     , style "padding" "0 0.75em"
-                                    , style "white-space" "nowrap"
                                     , style "color" "#363636"
                                     ]
                                     [ text sys ]
                                 , chipSep
                                 , span
                                     [ style "background-color" "white"
-                                    , style "display" "inline-flex"
-                                    , style "align-items" "center"
+                                    , style "display" "flex"
+                                    , style "flex-direction" "column"
+                                    , style "justify-content" "center"
+                                    , style "flex" "1"
+                                    , style "min-width" "0"
                                     , style "color" "#363636"
                                     ]
-                                    (List.intersperse chipOrSep
-                                        (List.map (\v -> span [ style "padding" "0 0.75em", style "white-space" "nowrap" ] [ text v ]) vals)
+                                    (case vals of
+                                        [] ->
+                                            []
+
+                                        first :: rest ->
+                                            span [ style "padding" "0.4em 0.75em", style "word-break" "break-all" ] [ text first ]
+                                                :: List.map
+                                                    (\v ->
+                                                        span [ style "display" "flex", style "align-items" "flex-start" ]
+                                                            [ chipOrSep
+                                                            , span [ style "padding" "0.4em 0.75em", style "word-break" "break-all", style "flex" "1", style "min-width" "0" ] [ text v ]
+                                                            ]
+                                                    )
+                                                    rest
                                     )
                                 , chipSep
                                 , span
