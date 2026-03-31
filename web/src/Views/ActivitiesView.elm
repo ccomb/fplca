@@ -4,7 +4,7 @@ import Html exposing (Html, button, div, input, node, option, select, table, tbo
 import Html.Attributes exposing (attribute, class, disabled, id, list, placeholder, selected, style, type_, value)
 import Html.Events exposing (onInput, onClick, on)
 import Json.Decode as Decode
-import Models.Activity exposing (ActivitySummary, ClassificationSystem, FilterPreset, SearchResults)
+import Models.Activity exposing (ActivitySummary, ClassificationSystem, ClassificationPreset, SearchResults)
 import Models.Database exposing (DatabaseList, DatabaseLoadStatus(..), DatabaseStatus)
 import Views.ActivityRow as ActivityRow
 
@@ -23,13 +23,13 @@ type Msg
     | ApplyPreset String
 
 
-viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List FilterPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems filterPresets activeFilters pendingSystem pendingValue =
+viewActivitiesPage : String -> String -> String -> Maybe (SearchResults ActivitySummary) -> Bool -> Bool -> Maybe String -> Maybe DatabaseList -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewActivitiesPage currentDbName searchQuery productQuery searchResults searchLoading loadingMore error maybeDatabaseList classificationSystems classificationPresets activeFilters pendingSystem pendingValue =
     div [ class "activities-page" ]
         [ div [ class "box" ]
             [ h2 [ class "title is-3" ] [ text "Search Activities" ]
             , p [ class "subtitle" ] [ text "Find activities by name and view their environmental inventory" ]
-            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems filterPresets activeFilters pendingSystem pendingValue
+            , viewFiltersRow maybeDatabaseList currentDbName classificationSystems classificationPresets activeFilters pendingSystem pendingValue
             , viewSearchInputs searchQuery productQuery searchLoading
             , case error of
                 Just err ->
@@ -77,8 +77,8 @@ viewSearchInputs query productQuery isLoading =
         ]
 
 
-viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List FilterPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
-viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets activeFilters pendingSystem pendingValue =
+viewFiltersRow : Maybe DatabaseList -> String -> Maybe (List ClassificationSystem) -> List ClassificationPreset -> List ( String, String ) -> Maybe String -> String -> Html Msg
+viewFiltersRow maybeDatabaseList currentDbName maybeSystems classificationPresets activeFilters pendingSystem pendingValue =
     let
         dbDropdown =
             case maybeDatabaseList of
@@ -150,8 +150,9 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                 , span
                                     [ style "background-color" "white"
                                     , style "display" "flex"
-                                    , style "flex-direction" "column"
-                                    , style "justify-content" "center"
+                                    , style "flex-wrap" "wrap"
+                                    , style "align-items" "center"
+                                    , style "align-content" "center"
                                     , style "flex" "1"
                                     , style "min-width" "0"
                                     , style "color" "#363636"
@@ -161,12 +162,12 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                             []
 
                                         first :: rest ->
-                                            span [ style "padding" "0.4em 0.75em", style "word-break" "break-all" ] [ text first ]
+                                            span [ style "padding" "0.4em 0.75em", style "overflow-wrap" "anywhere", style "min-width" "0" ] [ text first ]
                                                 :: List.map
                                                     (\v ->
-                                                        span [ style "display" "flex", style "align-items" "flex-start" ]
+                                                        span [ style "display" "inline-flex", style "align-items" "center", style "min-width" "0" ]
                                                             [ chipOrSep
-                                                            , span [ style "padding" "0.4em 0.75em", style "word-break" "break-all", style "flex" "1", style "min-width" "0" ] [ text v ]
+                                                            , span [ style "padding" "0.4em 0.75em", style "overflow-wrap" "anywhere", style "min-width" "0" ] [ text v ]
                                                             ]
                                                     )
                                                     rest
@@ -223,7 +224,7 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                                     [ text (sys.name ++ " (" ++ String.fromInt sys.activityCount ++ ")") ]
                                             )
                                             systems
-                                        ++ (if List.isEmpty filterPresets then
+                                        ++ (if List.isEmpty classificationPresets then
                                                 []
 
                                             else
@@ -234,7 +235,7 @@ viewFiltersRow maybeDatabaseList currentDbName maybeSystems filterPresets active
                                                             option [ value ("preset:" ++ p.name) ]
                                                                 [ text ("→ " ++ p.label) ]
                                                         )
-                                                        filterPresets
+                                                        classificationPresets
                                                     )
                                                 ]
                                            )
