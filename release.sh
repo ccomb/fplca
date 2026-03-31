@@ -3,7 +3,7 @@
 # volca release script
 # =============================================================================
 # Creates a release by:
-#   1. Setting the release version in volca.cabal and tauri.conf.json
+#   1. Setting the release version in volca.cabal
 #   2. Committing and tagging
 #   3. Bumping to the next -dev version
 #   4. Pushing everything
@@ -19,7 +19,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CABAL_FILE="$SCRIPT_DIR/volca.cabal"
-TAURI_CONF="$SCRIPT_DIR/desktop/tauri.conf.json"
 
 DRY_RUN=false
 
@@ -72,8 +71,8 @@ fi
 TAG="v$VERSION"
 
 # Check preconditions
-if [[ -n "$(git status --porcelain -- "$CABAL_FILE" "$TAURI_CONF")" ]]; then
-    echo "Error: $CABAL_FILE or $TAURI_CONF have uncommitted changes"
+if [[ -n "$(git status --porcelain -- "$CABAL_FILE")" ]]; then
+    echo "Error: $CABAL_FILE has uncommitted changes"
     exit 1
 fi
 
@@ -104,17 +103,16 @@ fi
 set_version() {
     local ver="$1"
     sed -i "s/^version:.*$/version:             $ver/" "$CABAL_FILE"
-    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$ver\"/" "$TAURI_CONF"
 }
 
 set_version "$VERSION"
-git add "$CABAL_FILE" "$TAURI_CONF"
+git add "$CABAL_FILE"
 git commit -m "Release $TAG"
 git tag "$TAG"
 
 # --- Bump to next dev version ---
 set_version "${NEXT_VERSION}-dev"
-git add "$CABAL_FILE" "$TAURI_CONF"
+git add "$CABAL_FILE"
 git commit -m "Bump version to ${NEXT_VERSION}-dev"
 
 # --- Push ---

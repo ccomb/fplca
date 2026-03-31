@@ -16,8 +16,6 @@
 #   --test              Run tests after building
 #   --coverage          Run tests with coverage and generate HTML report (implies --test)
 #   --static            Build a statically-linked binary
-#   --desktop           Build desktop application (Tauri bundle, release)
-#   --desktop-dev       Build desktop application (debug, no LTO — faster)
 #
 # Examples:
 #   ./build.sh                      # Build
@@ -65,7 +63,6 @@ OS=$(detect_os)
 FORCE_REBUILD=false
 RUN_TESTS=false
 CLEAN_BUILD=false
-BUILD_DESKTOP=false
 COVERAGE=false
 STATIC_BUILD=false
 
@@ -97,15 +94,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --static)
             STATIC_BUILD=true
-            shift
-            ;;
-        --desktop)
-            BUILD_DESKTOP=true
-            shift
-            ;;
-        --desktop-dev)
-            BUILD_DESKTOP=true
-            DESKTOP_DEV=true
             shift
             ;;
         *)
@@ -173,15 +161,6 @@ if ! check_command "upx"; then
         log_warn "Install UPX with: sudo apt install upx-ucl  (or: sudo pacman -S upx)"
     fi
 fi
-
-# Node.js (needed for frontend build)
-if ! check_command "npm"; then
-    MISSING_DEPS=true
-    log_warn "Install Node.js: https://nodejs.org/"
-fi
-
-# Rust (needed for desktop build)
-check_command "rustc"
 
 # Required C libraries (needed by Haskell zlib package)
 if [[ "$OS" != "windows" ]]; then
@@ -281,13 +260,6 @@ if [[ "$MUMPS_FOUND" != "true" ]]; then
     fi
 fi
 
-# Elm (installed via npm in web/ directory)
-if command -v elm &>/dev/null; then
-    log_success "elm found: $(command -v elm)"
-else
-    log_info "elm will be installed via npm in web/"
-fi
-
 if [[ "$MISSING_DEPS" == "true" ]]; then
     log_error "Missing required dependencies. Please install them and try again."
     echo ""
@@ -301,13 +273,13 @@ if [[ "$MISSING_DEPS" == "true" ]]; then
         echo ""
     else
         echo "On Debian/Ubuntu:"
-        echo "  sudo apt install build-essential python3 curl zlib1g-dev libmumps-seq-dev nodejs npm"
+        echo "  sudo apt install build-essential python3 curl zlib1g-dev libmumps-seq-dev"
         echo ""
         echo "On Fedora:"
-        echo "  sudo dnf install gcc gcc-c++ make python3 curl zlib-devel MUMPS-devel nodejs npm"
+        echo "  sudo dnf install gcc gcc-c++ make python3 curl zlib-devel MUMPS-devel"
         echo ""
         echo "On Arch Linux:"
-        echo "  sudo pacman -S base-devel python curl zlib mumps nodejs npm"
+        echo "  sudo pacman -S base-devel python curl zlib mumps"
         echo ""
     fi
     echo "For Haskell toolchain:"
@@ -324,26 +296,6 @@ log_info "Checking tool versions..."
 # Check GHC version
 GHC_ACTUAL=$(ghc --numeric-version)
 check_version "GHC" "$GHC_ACTUAL" "$GHC_VERSION"
-
-# Check Node version
-if command -v node &> /dev/null; then
-    NODE_ACTUAL=$(node --version | sed 's/^v//')
-    check_version_major "Node.js" "$NODE_ACTUAL" "$NODE_VERSION"
-fi
-
-# Check Rust version (optional, for desktop build)
-if command -v rustc &> /dev/null; then
-    RUST_ACTUAL=$(rustc --version | awk '{print $2}')
-    check_version "Rust" "$RUST_ACTUAL" "$RUST_VERSION"
-fi
-
-# Check Elm version (optional, installed via npm if missing)
-if command -v elm &> /dev/null; then
-    ELM_ACTUAL=$(elm --version 2>/dev/null || echo "unknown")
-    if [[ "$ELM_ACTUAL" != "unknown" ]]; then
-        check_version "Elm" "$ELM_ACTUAL" "$ELM_VERSION"
-    fi
-fi
 
 echo ""
 
@@ -436,21 +388,6 @@ log_success "volca built successfully"
 echo ""
 
 # -----------------------------------------------------------------------------
-# Build frontend
-# -----------------------------------------------------------------------------
-
-if [[ -d "$SCRIPT_DIR/web" ]]; then
-    log_info "Building frontend..."
-    cd "$SCRIPT_DIR/web"
-    if [[ ! -f "node_modules/.bin/elm" ]]; then
-        npm install --silent
-    fi
-    ./build.sh
-    log_success "Frontend built successfully"
-    echo ""
-fi
-
-# -----------------------------------------------------------------------------
 # Run tests
 # -----------------------------------------------------------------------------
 
@@ -494,22 +431,6 @@ if [[ "$RUN_TESTS" == "true" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Build desktop application (if requested)
-# -----------------------------------------------------------------------------
-
-if [[ "$BUILD_DESKTOP" == "true" ]]; then
-    log_info "Building desktop application..."
-    cd "$SCRIPT_DIR/desktop"
-    if [[ "$DESKTOP_DEV" == "true" ]]; then
-        ./build-desktop.sh --dev
-    else
-        ./build-desktop.sh
-    fi
-    log_success "Desktop application built"
-    echo ""
-fi
-
-# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 
@@ -540,13 +461,3 @@ if [[ -n "$VOLCA_BIN" ]]; then
     echo ""
 fi
 
-# Show desktop build instructions if not already built
-if [[ "$BUILD_DESKTOP" != "true" ]]; then
-    echo "To build the desktop application:"
-    echo ""
-    echo "  ./build.sh --desktop"
-    echo ""
-    echo "Or manually:"
-    echo "  cd desktop && ./build-desktop.sh"
-    echo ""
-fi

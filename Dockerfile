@@ -9,8 +9,6 @@ RUN apt-get update && apt-get install -y \
     zlib1g-dev \
     libzstd-dev \
     pkg-config \
-    nodejs \
-    npm \
     git \
     build-essential \
     gfortran \
@@ -76,9 +74,6 @@ RUN cd /build/volca && GIT_HASH="$GIT_HASH" GIT_TAG="$GIT_TAG" ./gen-version.sh
 # Build volca (only recompiles app code, deps already cached)
 RUN cd /build && cabal build volca
 
-# Build Elm frontend (uses local npm packages)
-RUN cd /build/volca/web && npm install && ./build.sh
-
 # Find and copy the executable
 RUN mkdir -p /build/output \
     && cp $(cd /build && cabal list-bin exe:volca) /build/output/volca \
@@ -110,7 +105,6 @@ ENV LC_ALL=en_US.UTF-8
 
 # Copy application
 COPY --from=haskell-builder /build/output/volca /usr/local/bin/volca
-COPY --from=haskell-builder /build/volca/web/dist /app/web/dist
 
 WORKDIR /app
 
