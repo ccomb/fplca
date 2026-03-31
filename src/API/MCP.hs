@@ -39,7 +39,7 @@ import qualified Data.List as L
 import Data.Maybe (mapMaybe)
 import qualified Service
 import Types (Database(..), Activity(..), Indexes(..), activityName, activityLocation, flowName, flowId, processIdToText)
-import API.Types (InventoryExport(..), InventoryFlowDetail(..))
+import API.Types (InventoryExport(..), InventoryFlowDetail(..), ClassificationSystem(..))
 import UnitConversion (defaultUnitConfig)
 import Network.Wai (requestHeaders)
 import Network.HTTP.Types.Header (hHost, hAccept)
@@ -205,13 +205,15 @@ toolDefinitions :: [Value]
 toolDefinitions =
     [ mkTool "list_databases" "List all loaded LCA databases"
         (props [] [])
-    , mkTool "search_activities" "Search for activities (processes) by name, geography, or product. Returns a paginated list of matching activities with their process IDs."
+    , mkTool "search_activities" "Search for activities (processes) by name, geography, product, or classification. Returns a paginated list of matching activities with their process IDs."
         (props
             [ ("database", "string", "Database name")
             , ("name", "string", "Name substring to search for")
             ]
             [ ("geo", "string", "Geography/location filter (e.g. 'FR', 'DE', 'GLO')")
             , ("product", "string", "Product name filter")
+            , ("classification", "string", "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems.")
+            , ("classification_value", "string", "Value within the classification system to match (substring, case-insensitive)")
             , ("limit", "integer", "Max results (default 20)")
             ])
     , mkTool "search_flows" "Search for biosphere flows (emissions, resources) by name"
@@ -286,6 +288,12 @@ toolDefinitions =
         (props
             [ ("database", "string", "Database name")
             ] [])
+    , mkTool "list_classifications" "List classification systems in a database. Without 'system': returns system names and activity counts only (lightweight). With 'system': returns all values for that system. Add 'filter' to narrow values by substring."
+        (props
+            [ ("database", "string", "Database name") ]
+            [ ("system", "string", "Classification system name to inspect (e.g. 'ISIC rev.4 ecoinvent'). If omitted, returns only system names and counts.")
+            , ("filter", "string", "Substring filter applied to values when a system is specified (case-insensitive).")
+            ])
     ]
 
 mkTool :: Text -> Text -> Value -> Value
@@ -342,6 +350,7 @@ callTool dbManager baseUrl rid name args = case name of
     "get_contributing_flows"   -> callGetContributingFlows dbManager baseUrl rid args
     "get_contributing_processes" -> callGetContributingProcesses dbManager baseUrl rid args
     "list_geographies"         -> callListGeographies dbManager rid args
+    "list_classifications"     -> withDb dbManager rid args $ callListClassifications rid args
     _                          -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -399,13 +408,34 @@ callSearchActivities rid args (db, _) = do
         geo     = textArg "geo" args
         product' = textArg "product" args
         limit   = intArg "limit" args
-    result <- Service.searchActivities db name geo product' [] (limit <|> Just 20) Nothing
+        classFilters = case (textArg "classification" args, textArg "classification_value" args) of
+            (Just sys, Just val) -> [(sys, val)]
+            _                   -> []
+    result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val
   where
     Nothing <|> b = b
     a       <|> _ = a
+
+callListClassifications :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callListClassifications rid args (db, _) =
+    let systems = Service.getClassifications db
+        mSystem = textArg "system" args
+        mFilter = textArg "filter" args
+    in return $ toolSuccessJson rid $ case mSystem of
+        Nothing ->
+            toJSON [ object ["name" .= csName s, "activityCount" .= csActivityCount s]
+                   | s <- systems ]
+        Just sys ->
+            case L.find (\s -> T.toLower (csName s) == T.toLower sys) systems of
+                Nothing -> object ["error" .= ("Classification system not found: " <> sys)]
+                Just s  ->
+                    let vals = case mFilter of
+                            Nothing -> csValues s
+                            Just f  -> L.filter (T.isInfixOf (T.toLower f) . T.toLower) (csValues s)
+                    in object ["name" .= csName s, "activityCount" .= csActivityCount s, "values" .= vals]
 
 callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) = do
