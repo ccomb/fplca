@@ -27,18 +27,12 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 - **Activity classifications**: ISIC, CPC, and category fields parsed from EcoSpold1/2 and ILCD, with a Composition page showing supply chain breakdown by classification
 - **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
 - **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via UI, or toggled independently
-- **Web interface**: Multi-page Elm app with search, tree view, graph view, inventory, LCIA, method management, composition, and reference data pages
-- **Desktop application**: Native Windows/Linux app — no installation or configuration needed
 - **Fast cache**: Per-database cache with automatic schema-based invalidation; large databases load in ~45s cold, ~2-3s cached
 - **Optional access control**: Single-code login with cookie-based session
 
 ---
 
 ## Getting Started
-
-### Desktop Application (Recommended)
-
-Download and run the installer for Windows or Linux from the releases page. The desktop app bundles the complete engine and opens a browser-based UI automatically.
 
 ### Web Server
 
@@ -134,26 +128,6 @@ The `depends` field ensures dependency databases load first and their flows are 
 
 ---
 
-## Web Interface
-
-| Page | What it shows |
-|------|--------------|
-| Activities | Searchable list with name, geography, and product filters |
-| Tree | Hierarchical upstream dependency view |
-| Graph | Force-directed network with configurable cutoff |
-| Inventory | Environmental flows split into Emissions and Resources |
-| LCIA | Impact scores per category with method picker; Raw / Normalized / Weighted toggle; single-score footer when NW data is available |
-| Composition | Supply chain breakdown by activity classification (ISIC/CPC/category) |
-| Methods | Load, unload, upload, and inspect ILCD and SimaPro method collections |
-| Flow Mapping | Per-method CF coverage: matched by UUID/CAS/name/synonym, unmapped list |
-| Databases | Load, unload, upload, and configure cross-database links |
-| Database Setup | Data path picker, dependency editor, linking diagnostics |
-| Flow Synonyms | Manage synonym sets; browse groups, download auto-extracted pairs |
-| Compartment Mappings | Manage compartment name mappings |
-| Units | Manage unit definitions for dimensional analysis |
-
----
-
 ## REST API
 
 All per-database resources are scoped under `/api/v1/db/{name}/`:
@@ -196,6 +170,15 @@ POST   /api/v1/auth                                           Login (returns ses
 ```
 
 The `lcia-batch` response includes per-category `normalizedScore` and `weightedScore` fields (when normalization-weighting data is present in the method collection), plus a `singleScore` sum in Pt.
+
+### OpenAPI spec
+
+The full OpenAPI 3.0 specification is served at runtime:
+
+- **`GET /api/v1/openapi.json`** — machine-readable spec (for code generation, tooling)
+- **`GET /api/v1/docs`** — Swagger UI (interactive browser)
+
+Use these to build your own frontend, generate a typed client, or explore the API interactively.
 
 ---
 
@@ -381,24 +364,23 @@ Install the MUMPS sparse solver and other dependencies, then build:
 
 ```bash
 # Debian/Ubuntu
-sudo apt install build-essential python3 curl zlib1g-dev libmumps-seq-dev nodejs npm
+sudo apt install build-essential python3 curl zlib1g-dev libmumps-seq-dev
 
 # macOS
-brew install gcc python3 curl node mumps
+brew install gcc python3 curl mumps
 
 # Fedora
-sudo dnf install gcc gcc-c++ make python3 curl zlib-devel MUMPS-devel nodejs npm
+sudo dnf install gcc gcc-c++ make python3 curl zlib-devel MUMPS-devel
 
 # Arch Linux
-sudo pacman -S base-devel python curl zlib mumps nodejs npm
+sudo pacman -S base-devel python curl zlib mumps
 ```
 
 Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
 
 ```bash
-./build.sh              # Build backend + frontend
+./build.sh              # Build
 ./build.sh --test       # Build and run tests
-./build.sh --desktop    # Build desktop application
 ```
 
 ### Windows (MSYS2)
@@ -412,7 +394,6 @@ Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
 4. Run:
    ```bash
    ./build.sh            # Same script as Linux/macOS
-   ./build.sh --desktop  # Builds Windows installer (.exe)
    ```
 
 ### Docker
@@ -452,4 +433,4 @@ Tests cover matrix construction (sign convention), inventory calculation (golden
 
 ## License
 
-GNU Affero General Public License 3.0 or later — see LICENSE for details.
+Apache License 2.0 — see LICENSE for details.
