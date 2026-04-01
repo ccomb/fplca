@@ -89,6 +89,7 @@ import Database.Manager
     )
 import API.Types
     ( ActivateResponse(..)
+    , BinaryContent(..)
     , LoadDatabaseResponse(..)
     , DatabaseListResponse(..)
     , DatabaseStatusAPI(..)
@@ -474,7 +475,7 @@ getFlowSynonymGroupsHandler mgr name = do
         Left err -> throwError $ err404 { errBody = BSL.fromStrict $ T.encodeUtf8 err }
         Right groups -> return $ SynonymGroupsResponse groups
 
-downloadRefDataHandler :: RefDataKind -> DatabaseManager -> Text -> Handler (Headers '[Header "Content-Disposition" Text] BSL.ByteString)
+downloadRefDataHandler :: RefDataKind -> DatabaseManager -> Text -> Handler (Headers '[Header "Content-Disposition" Text] BinaryContent)
 downloadRefDataHandler kind mgr name = do
     let tvar = case kind of
             FlowSynonyms        -> dmAvailableFlowSyns mgr
@@ -491,4 +492,4 @@ downloadRefDataHandler kind mgr name = do
                 else do
                     content <- liftIO $ BSL.readFile csvPath
                     let disposition = "attachment; filename=\"" <> name <> ".csv\""
-                    return $ addHeader disposition content
+                    return $ addHeader disposition (BinaryContent content)

@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -6,10 +7,12 @@ module API.Types where
 
 import Types (Exchange, Flow, UUID, Unit)
 import Data.Aeson
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import GHC.Generics
+import Servant.API.ContentTypes (MimeRender(..), OctetStream)
 
 -- | Search response combining results and count
 data SearchResults a = SearchResults
@@ -662,3 +665,9 @@ instance ToJSON SynonymGroupsResponse
 instance FromJSON RefDataListResponse
 instance FromJSON RefDataStatusAPI
 instance FromJSON SynonymGroupsResponse
+
+-- openapi3 cannot derive ToSchema for BSL.ByteString directly
+newtype BinaryContent = BinaryContent BSL.ByteString
+
+instance MimeRender OctetStream BinaryContent where
+    mimeRender _ (BinaryContent bs) = bs

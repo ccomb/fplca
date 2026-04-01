@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 -- | OpenAPI 3.0 specification for the volca REST API.
@@ -10,20 +9,17 @@ module API.OpenApi (volcaOpenApi) where
 
 import API.Routes (LCAAPI, LoginRequest)
 import API.Types
-import Database.Manager (DatabaseSetupInfo, MissingSupplier, DependencySuggestion)
+import Control.Lens ((&), (?~))
+import Data.Aeson (Value)
 import Data.OpenApi
 import Data.Proxy (Proxy (..))
-import Data.UUID (UUID)
+import Database.Manager (DatabaseSetupInfo, MissingSupplier, DependencySuggestion)
 import Servant.OpenApi (toOpenApi)
 import Types (Exchange, Flow, FlowType, Unit)
 
--- | UUID represented as a string with uuid format
-instance ToSchema UUID where
-    declareNamedSchema _ =
-        pure $ NamedSchema (Just "UUID") $
-            mempty
-                & type_ ?~ OpenApiString
-                & format ?~ "uuid"
+-- Aeson Value: used for untyped JSON endpoints (logs, version, stats, hosting)
+instance ToSchema Value where
+    declareNamedSchema _ = pure $ NamedSchema (Just "JsonValue") mempty
 
 -- Domain types
 instance ToSchema FlowType
@@ -99,6 +95,11 @@ instance ToSchema ActivityMetadata
 instance ToSchema ActivityLinks
 instance ToSchema ActivityStats
 instance ToSchema FlowDetail
+instance ToSchema ClassificationEntryInfo
+instance ToSchema ClassificationPresetInfo
+instance ToSchema BinaryContent where
+    declareNamedSchema _ = pure $ NamedSchema (Just "OctetStream") $
+        mempty & type_ ?~ OpenApiString & format ?~ "binary"
 
 -- | The complete OpenAPI 3.0 specification, derived from the Servant API type.
 volcaOpenApi :: OpenApi
