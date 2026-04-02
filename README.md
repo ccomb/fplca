@@ -34,20 +34,18 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 
 ## Performance
 
-All figures measured on Ecoinvent 3.12 (26 533 activities) on a 2018 laptop (Intel Core i7-7600U, 2 cores / 4 threads).
+All figures measured on Ecoinvent 3.12 (26 533 activities) on a 4-core machine.
 
-| Phase | Time |
-|-------|------|
-| Cold startup — parse 26 533 .spold files from disk | ~47 s |
-| Hot startup — load binary cache (`.bin.zst`) | ~3.4 s |
-| First inventory or impact after hot start¹ | ~7.3 s |
-| Single inventory / impact score (warm) | ~80 ms |
-| Batch of 200 computations | ~19 s total (~95 ms each) |
-| Impact score for a modified supply chain² | ~7 s |
+| Phase | Cold start | Hot start |
+|---|---|---|
+| Startup (read all 26 533 EcoSpold files from disk) | ~50 s | — |
+| Hot startup — load from cache | — | ~3.7 s |
+| First computation after startup (inventory, impact score)¹ | ~90 ms | ~8.5 s |
+| Next computations (inventory, impact score) | ~85 ms | ~85 ms |
+| Batch of 200 computations | ~19 s total (10/sec) | ~19 s total (10/sec) |
+| Computation of a modified process (upstream process substitution) | ~120 ms | ~110 ms |
 
-¹ The LU factorisation of the full technosphere matrix is deferred to the first computation request and then cached for the lifetime of the server. Subsequent requests across the entire database reuse the same decomposition.
-
-² Measured after hot start with the matrix already factorised (same warm conditions as the single-score row). Substituting one process in a supply chain and recomputing the full impact score takes the same time as a regular computation — no re-factorisation is needed.
+¹ The matrix factorisation is deferred to the first computation and cached for the lifetime of the server. All subsequent requests reuse it.
 
 ---
 
