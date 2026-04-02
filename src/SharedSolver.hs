@@ -17,7 +17,8 @@ module SharedSolver (
     createSharedSolver,
 
     -- * Concurrent solving
-    solveWithSharedSolver
+    solveWithSharedSolver,
+    getFactorization
 ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar, readMVar, modifyMVar)
@@ -74,3 +75,7 @@ solveWithSharedSolver solver demandVector = do
                     Just result -> return result
                     Nothing ->
                         solveSparseLinearSystem (solverTechTriples solver) (solverActivityCount solver) demandVector
+
+-- | Read the cached factorization without solving. Returns Nothing until the first solve.
+getFactorization :: SharedSolver -> IO (Maybe MatrixFactorization)
+getFactorization solver = readMVar (solverFactorizationVar solver)

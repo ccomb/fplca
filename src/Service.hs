@@ -7,7 +7,7 @@ import CLI.Types (DebugMatricesOptions (..))
 import qualified Progress
 import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
 import qualified Matrix.Export as MatrixExport
-import SharedSolver (SharedSolver, solveWithSharedSolver)
+import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
@@ -1141,9 +1141,11 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
     originalX <- solveWithSharedSolver sharedSolver demandVec
     case subs of
         [] -> return $ Right originalX
-        _  -> foldSubstitutions originalX subs applySubstitution
+        _  -> do
+            mFact <- getFactorization sharedSolver
+            foldSubstitutions originalX subs (applySubstitution mFact)
   where
-    applySubstitution x sub =
+    applySubstitution mFact x sub =
         case ( resolveActivityAndProcessId db (subFrom sub)
              , resolveActivityAndProcessId db (subTo sub)
              , resolveActivityAndProcessId db (subConsumer sub)
@@ -1157,7 +1159,7 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
                         "No technosphere link from " <> processIdToText db consumerPid
                         <> " to supplier " <> subFrom sub
                     Just a -> do
-                        smResult <- shermanMorrisonVariant db x
+                        smResult <- shermanMorrisonVariant db mFact x
                             (fromIntegral consumerPid)
                             (fromIntegral oldPid)
                             (fromIntegral newPid) a

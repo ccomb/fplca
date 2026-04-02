@@ -296,19 +296,20 @@ Returns Left if the update is singular (|1 + v^T*z| < epsilon).
 -}
 shermanMorrisonVariant
     :: Database
+    -> Maybe MatrixFactorization  -- ^ Cached factorization from SharedSolver (Nothing = full re-solve)
     -> Vector              -- ^ Original scaling vector x
     -> Int                 -- ^ Activity being modified (row = consumer index)
     -> Int                 -- ^ Old supplier index (to remove)
     -> Int                 -- ^ New supplier index (to add)
     -> Double              -- ^ Exchange coefficient a (amount consumed)
     -> IO (Either T.Text Vector)  -- ^ Variant scaling vector x'
-shermanMorrisonVariant db x row oldSup newSup coeff = do
+shermanMorrisonVariant db mFact x row oldSup newSup coeff = do
     let n = U.length x
         u = fromList [if i == oldSup then coeff
                       else if i == newSup then -coeff
                       else 0.0
                      | i <- [0 .. n - 1]]
-    z <- case dbCachedFactorization db of
+    z <- case mFact of
         Just f  -> solveSparseLinearSystemWithFactorization f u
         Nothing -> do
             let techTriples = dbTechnosphereTriples db
