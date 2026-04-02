@@ -84,6 +84,7 @@ library
                      , servant-multipart
                      , servant-openapi3
                      , openapi3
+                     , lens
                      , warp
                      , aeson
                      , aeson-pretty

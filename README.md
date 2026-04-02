@@ -47,7 +47,7 @@ All figures measured on Ecoinvent 3.12 (26 533 activities) on a 2018 laptop (Int
 
 ¹ The LU factorisation of the full technosphere matrix is deferred to the first computation request and then cached for the lifetime of the server. Subsequent requests across the entire database reuse the same decomposition.
 
-² Substituting one process in a supply chain and recomputing the full impact score takes the same time as a regular computation. No re-factorisation is needed.
+² Measured after hot start with the matrix already factorised (same warm conditions as the single-score row). Substituting one process in a supply chain and recomputing the full impact score takes the same time as a regular computation — no re-factorisation is needed.
 
 ---
 

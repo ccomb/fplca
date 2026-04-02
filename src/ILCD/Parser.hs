@@ -318,11 +318,11 @@ parseProcessXML bytes =
         | isElement tag "location" && psInExchange s =
             s { psExLocation = accum s, psTextAccum = [] }
         | isElement tag "class" && psInClass s =
-            let txt = accum s
+            let classVal = accum s
                 key = psPendingClassName s
                 existing = M.findWithDefault "" key (psClassifications s)
-                val = if T.null existing then txt else existing <> "/" <> txt
-            in s { psClassifications = if T.null txt then psClassifications s
+                val = if T.null existing then classVal else existing <> "/" <> classVal
+            in s { psClassifications = if T.null classVal then psClassifications s
                                        else M.insert key val (psClassifications s)
                  , psInClass = False, psTextAccum = [] }
         | isElement tag "classification" =

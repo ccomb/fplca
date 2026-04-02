@@ -706,7 +706,7 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
         -- Create one activity per product
         makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
         makeActivity prod =
-            let (productExchange, productFlow, productUnit) = productToExchange env True prod
+            let (productExchange, productFlow, _) = productToExchange env True prod
                 allocFraction = resolveAmount env (prAllocRaw prod) (prAllocation prod) / 100.0
                 (cleanProductName, locFromProduct) = extractLocation (prName prod)
                 effectiveLoc = if T.null location then locFromProduct else location
