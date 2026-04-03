@@ -81,6 +81,28 @@ name = "Default units"
 path = "data/units.csv"
 active = true
 
+# ── Classification Presets ───────────────────────────────────────────
+#
+# Named filter shortcuts that appear as options in the Activities page
+# classification dropdown. Each preset applies one or more (system, value)
+# filters when selected.
+#
+# Fields:
+#   name          (required) Internal identifier (used in URLs)
+#   label         (required) Display label shown in the dropdown
+#   description              Optional tooltip / documentation string
+#   filters                  List of { system, value } classification pairs
+#                            AND across different systems, OR within same system
+
+[[classification-presets]]
+name = "transformed"
+label = "Transformed ingredients (at plant)"
+description = "All downstream food processing steps and agri-transformations. Matches Agricultural\\Food\\* (distribution, packaging, preparation, retail, recipes, cheese production) and *\\Transformation (animal feed, plant oils, etc.)"
+filters = [
+    { system = "Category", value = "Agricultural\\Food" },
+    { system = "Category", value = "Transformation" },
+]
+
 # ── Plugins ──────────────────────────────────────────────────────────
 #
 # Extend VoLCA with external plugins (executables that speak JSON on stdin/stdout).
