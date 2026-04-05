@@ -1,0 +1,197 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module CrossLinkingSpec (spec) where
+
+import Test.Hspec
+import Database.CrossLinking
+import SynonymDB (emptySynonymDB)
+import UnitConversion (defaultUnitConfig)
+import Database.Loader (loadDatabase)
+import qualified Data.Map.Strict as M
+
+spec :: Spec
+spec = do
+
+    -- -----------------------------------------------------------------------
+    -- normalizeText
+    -- -----------------------------------------------------------------------
+    describe "normalizeText" $ do
+
+        it "lowercases and strips whitespace" $
+            normalizeText "  Wheat Production  " `shouldBe` "wheat production"
+
+        it "is idempotent" $
+            normalizeText (normalizeText "Foo Bar") `shouldBe` normalizeText "Foo Bar"
+
+        it "normalizes en-dash to hyphen" $
+            normalizeText "bio\x2013gas" `shouldBe` "bio-gas"
+
+        it "normalizes soft hyphen to ASCII hyphen" $
+            normalizeText "bio\x00ADgas" `shouldBe` "bio-gas"
+
+    -- -----------------------------------------------------------------------
+    -- stripTrailingDBTag
+    -- -----------------------------------------------------------------------
+    describe "stripTrailingDBTag" $ do
+
+        it "strips '(WFLDB)' suffix" $
+            stripTrailingDBTag "wheat (WFLDB)" `shouldBe` Just "wheat"
+
+        it "strips '(AGRIBALYSE)' suffix" $
+            stripTrailingDBTag "tomato (AGRIBALYSE)" `shouldBe` Just "tomato"
+
+        it "returns Nothing when no tag present" $
+            stripTrailingDBTag "wheat" `shouldBe` Nothing
+
+        it "returns Nothing for lowercase content" $
+            stripTrailingDBTag "wheat (organic)" `shouldBe` Nothing
+
+        it "returns Nothing for empty string" $
+            stripTrailingDBTag "" `shouldBe` Nothing
+
+    -- -----------------------------------------------------------------------
+    -- stripTrailingLocationSuffix
+    -- -----------------------------------------------------------------------
+    describe "stripTrailingLocationSuffix" $ do
+
+        it "strips '/CA U' suffix" $
+            stripTrailingLocationSuffix "wheat (WFLDB)/CA U" `shouldBe` Just "wheat (WFLDB)"
+
+        it "strips '/GLO S' suffix" $
+            stripTrailingLocationSuffix "electricity/GLO S" `shouldBe` Just "electricity"
+
+        it "returns Nothing when no slash present" $
+            stripTrailingLocationSuffix "wheat" `shouldBe` Nothing
+
+        it "returns Nothing when suffix has wrong format" $
+            stripTrailingLocationSuffix "a/b/c" `shouldBe` Nothing
+
+    -- -----------------------------------------------------------------------
+    -- extractProductPrefixes
+    -- -----------------------------------------------------------------------
+    describe "extractProductPrefixes" $ do
+
+        it "splits on '//' separator" $
+            extractProductPrefixes "wheat//[GLO] wheat production" `shouldContain` ["wheat"]
+
+        it "splits on ' {' separator" $
+            extractProductPrefixes "electricity {FR}" `shouldContain` ["electricity"]
+
+        it "strips DB tag" $
+            extractProductPrefixes "wheat (WFLDB)" `shouldContain` ["wheat"]
+
+        it "returns empty list for plain name with no separator" $
+            extractProductPrefixes "wheat" `shouldBe` []
+
+    -- -----------------------------------------------------------------------
+    -- extractBracketedLocation
+    -- -----------------------------------------------------------------------
+    describe "extractBracketedLocation" $ do
+
+        it "extracts from curly braces {FR}" $
+            extractBracketedLocation "electricity {FR}" `shouldBe` "FR"
+
+        it "extracts from square brackets [GLO]" $
+            extractBracketedLocation "wheat [GLO] production" `shouldBe` "GLO"
+
+        it "ignores chemical notation [thio]" $
+            extractBracketedLocation "compound [thio]" `shouldBe` ""
+
+        it "returns empty string when no brackets" $
+            extractBracketedLocation "plain name" `shouldBe` ""
+
+    -- -----------------------------------------------------------------------
+    -- isSubregionOf
+    -- -----------------------------------------------------------------------
+    describe "isSubregionOf" $ do
+
+        it "FR is a subregion of RER" $
+            isSubregionOf locationHierarchy "FR" "RER" `shouldBe` True
+
+        it "FR is a subregion of GLO" $
+            isSubregionOf locationHierarchy "FR" "GLO" `shouldBe` True
+
+        it "GLO is not a subregion of FR" $
+            isSubregionOf locationHierarchy "GLO" "FR" `shouldBe` False
+
+        it "unknown location has no parents" $
+            isSubregionOf locationHierarchy "XX" "GLO" `shouldBe` False
+
+    -- -----------------------------------------------------------------------
+    -- matchLocation
+    -- -----------------------------------------------------------------------
+    describe "matchLocation" $ do
+
+        it "exact match scores 30" $
+            matchLocation locationHierarchy "FR" "FR" `shouldBe` 30
+
+        it "FR consumer, RER supplier scores 20 (widening)" $
+            matchLocation locationHierarchy "FR" "RER" `shouldBe` 20
+
+        it "FR consumer, GLO supplier scores 20 (widening via subregion)" $
+            matchLocation locationHierarchy "FR" "GLO" `shouldBe` 20
+
+        it "unknown location, GLO supplier scores 10 (global fallback)" $
+            matchLocation locationHierarchy "XX" "GLO" `shouldBe` 10
+
+        it "unknown location, RoW supplier scores 10 (global fallback)" $
+            matchLocation locationHierarchy "XX" "RoW" `shouldBe` 10
+
+        it "narrowing (GLO consumer, FR supplier) scores 0" $
+            matchLocation locationHierarchy "GLO" "FR" `shouldBe` 0
+
+        it "unrelated locations score 5" $
+            matchLocation locationHierarchy "FR" "CN" `shouldBe` 5
+
+    -- -----------------------------------------------------------------------
+    -- matchProductName
+    -- -----------------------------------------------------------------------
+    describe "matchProductName" $ do
+
+        it "exact match (case-insensitive) scores 50" $
+            matchProductName emptySynonymDB "Wheat" "wheat" `shouldBe` 50
+
+        it "no match scores 0" $
+            matchProductName emptySynonymDB "wheat" "steel" `shouldBe` 0
+
+    -- -----------------------------------------------------------------------
+    -- findSupplierInIndexedDBs — integration using SAMPLE.min3
+    -- -----------------------------------------------------------------------
+    describe "findSupplierInIndexedDBs (SAMPLE.min3)" $ do
+
+        it "finds 'product Y' by name and GLO location" $ do
+            idb <- loadMin3IndexedDB
+            let ctx = LinkingContext
+                        { lcIndexedDatabases  = [idb]
+                        , lcSynonymDB         = emptySynonymDB
+                        , lcUnitConfig        = defaultUnitConfig
+                        , lcThreshold         = defaultLinkingThreshold
+                        , lcLocationHierarchy = locationHierarchy
+                        }
+            case findSupplierInIndexedDBs ctx "product Y" "GLO" "kg" of
+                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBNotLinked reason          -> expectationFailure $ "Expected link but got: " ++ show reason
+
+        it "returns NoNameMatch for an unknown product" $ do
+            idb <- loadMin3IndexedDB
+            let ctx = LinkingContext
+                        { lcIndexedDatabases  = [idb]
+                        , lcSynonymDB         = emptySynonymDB
+                        , lcUnitConfig        = defaultUnitConfig
+                        , lcThreshold         = defaultLinkingThreshold
+                        , lcLocationHierarchy = locationHierarchy
+                        }
+            case findSupplierInIndexedDBs ctx "no such product" "GLO" "kg" of
+                CrossDBNotLinked _ -> return ()
+                CrossDBLinked {}   -> expectationFailure "Expected CrossDBNotLinked"
+
+-- ---------------------------------------------------------------------------
+-- Helper: load SAMPLE.min3 as IndexedDatabase
+-- ---------------------------------------------------------------------------
+
+loadMin3IndexedDB :: IO IndexedDatabase
+loadMin3IndexedDB = do
+    result <- loadDatabase "test-data/SAMPLE.min3"
+    case result of
+        Left err -> error $ "Failed to load SAMPLE.min3: " ++ show err
+        Right simpleDb -> return $ buildIndexedDatabase "SAMPLE.min3" emptySynonymDB simpleDb

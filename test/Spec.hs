@@ -19,6 +19,8 @@ import qualified SupplyChainSpec
 import qualified HotspotSpec
 import qualified TreeSpec
 import qualified ServiceSpec
+import qualified CrossLinkingSpec
+import qualified SharedSolverSpec
 
 main :: IO ()
 main = hspec $ do
@@ -37,3 +39,5 @@ main = hspec $ do
         describe "Hotspot Analysis" HotspotSpec.spec
         describe "Loop-Aware Tree" TreeSpec.spec
         describe "Service Layer" ServiceSpec.spec
+        describe "Cross-Database Linking" CrossLinkingSpec.spec
+        describe "Shared Solver" SharedSolverSpec.spec
