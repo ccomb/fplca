@@ -136,13 +136,13 @@ span.spaces    { background: white }
 <span class="lineno">  117 </span>
 <span class="lineno">  118 </span>-- | Magic bytes to identify VoLCA cache files
 <span class="lineno">  119 </span>cacheMagic :: BS.ByteString
-<span class="lineno">  120 </span><span class="decl"><span class="nottickedoff">cacheMagic = &quot;VOLCACHE&quot;</span></span>
+<span class="lineno">  120 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">cacheMagic = &quot;VOLCACHE&quot;</span></span>
 <span class="lineno">  121 </span>
 <span class="lineno">  122 </span>-- | Merge two Flow records with the same UUID, combining their synonyms.
 <span class="lineno">  123 </span>-- When multiple .spold files reference the same biosphere flow, each may carry
 <span class="lineno">  124 </span>-- different synonyms. M.fromListWith mergeFlows ensures no synonym is lost.
 <span class="lineno">  125 </span>mergeFlows :: Flow -&gt; Flow -&gt; Flow
-<span class="lineno">  126 </span><span class="decl"><span class="istickedoff">mergeFlows a b = a { flowSynonyms = M.unionWith S.union (flowSynonyms a) (flowSynonyms b) }</span></span>
+<span class="lineno">  126 </span><span class="funcount">-- entered 176 times</span><span class="decl"><span class="istickedoff">mergeFlows a b = a { flowSynonyms = M.unionWith S.union (flowSynonyms a) (flowSynonyms b) }</span></span>
 <span class="lineno">  127 </span>
 <span class="lineno">  128 </span>{- |
 <span class="lineno">  129 </span>Schema signature automatically derived from the Database type structure.
@@ -156,7 +156,7 @@ span.spaces    { background: white }
 <span class="lineno">  137 </span>If it doesn't match, the cache is automatically invalidated and rebuilt.
 <span class="lineno">  138 </span>-}
 <span class="lineno">  139 </span>schemaSignature :: Word64
-<span class="lineno">  140 </span><span class="decl"><span class="nottickedoff">schemaSignature =</span>
+<span class="lineno">  140 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">schemaSignature =</span>
 <span class="lineno">  141 </span><span class="spaces">    </span><span class="nottickedoff">let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))</span>
 <span class="lineno">  142 </span><span class="spaces">     </span><span class="nottickedoff">in hi `xor` lo `xor` 4</span></span>
 <span class="lineno">  143 </span>
@@ -165,24 +165,24 @@ span.spaces    { background: white }
 <span class="lineno">  146 </span>Uses the same namespace as Parser.hs to ensure consistency.
 <span class="lineno">  147 </span>-}
 <span class="lineno">  148 </span>testDataNamespace :: UUID.UUID
-<span class="lineno">  149 </span><span class="decl"><span class="istickedoff">testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 &quot;acvengine.test&quot;)</span></span>
+<span class="lineno">  149 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 &quot;acvengine.test&quot;)</span></span>
 <span class="lineno">  150 </span>
 <span class="lineno">  151 </span>parseUUID :: T.Text -&gt; UUID.UUID
-<span class="lineno">  152 </span><span class="decl"><span class="istickedoff">parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)</span></span>
+<span class="lineno">  152 </span><span class="funcount">-- entered 471 times</span><span class="decl"><span class="istickedoff">parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)</span></span>
 <span class="lineno">  153 </span>
 <span class="lineno">  154 </span>-- | Namespace for EcoSpold1 UUID generation
 <span class="lineno">  155 </span>ecospold1Namespace :: UUID.UUID
-<span class="lineno">  156 </span><span class="decl"><span class="istickedoff">ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 &quot;ecospold1.ecoinvent.org&quot;)</span></span>
+<span class="lineno">  156 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 &quot;ecospold1.ecoinvent.org&quot;)</span></span>
 <span class="lineno">  157 </span>
 <span class="lineno">  158 </span>-- | Generate activity UUID from activity name and location (for EcoSpold1)
 <span class="lineno">  159 </span>generateActivityUUIDFromActivity :: Activity -&gt; UUID.UUID
-<span class="lineno">  160 </span><span class="decl"><span class="istickedoff">generateActivityUUIDFromActivity act =</span>
+<span class="lineno">  160 </span><span class="funcount">-- entered 7 times</span><span class="decl"><span class="istickedoff">generateActivityUUIDFromActivity act =</span>
 <span class="lineno">  161 </span><span class="spaces">    </span><span class="istickedoff">let key = activityName act &lt;&gt; &quot;:&quot; &lt;&gt; activityLocation act</span>
 <span class="lineno">  162 </span><span class="spaces">     </span><span class="istickedoff">in UUID5.generateNamed ecospold1Namespace (BS.unpack $ T.encodeUtf8 key)</span></span>
 <span class="lineno">  163 </span>
 <span class="lineno">  164 </span>-- | Get reference product UUID from activity exchanges
 <span class="lineno">  165 </span>getReferenceProductUUID :: Activity -&gt; UUID.UUID
-<span class="lineno">  166 </span><span class="decl"><span class="istickedoff">getReferenceProductUUID act =</span>
+<span class="lineno">  166 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">getReferenceProductUUID act =</span>
 <span class="lineno">  167 </span><span class="spaces">    </span><span class="istickedoff">case filter exchangeIsReference (exchanges act) of</span>
 <span class="lineno">  168 </span><span class="spaces">        </span><span class="istickedoff">(ref : _) -&gt; exchangeFlowId ref</span>
 <span class="lineno">  169 </span><span class="spaces">        </span><span class="istickedoff">[] -&gt; UUID.nil</span></span> -- No reference product found
@@ -206,25 +206,25 @@ span.spaces    { background: white }
 <span class="lineno">  187 </span>
 <span class="lineno">  188 </span>-- | Information about an unlinked technosphere exchange
 <span class="lineno">  189 </span>data UnlinkedExchange = UnlinkedExchange
-<span class="lineno">  190 </span>    { <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ueFlowName</span></span></span> :: !T.Text
-<span class="lineno">  191 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ueLocation</span></span></span> :: !T.Text
-<span class="lineno">  192 </span>    } deriving (<span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Ord</span></span></span></span></span></span></span></span></span></span></span></span></span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>)
+<span class="lineno">  190 </span>    { <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ueFlowName</span></span></span> :: !T.Text
+<span class="lineno">  191 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ueLocation</span></span></span> :: !T.Text
+<span class="lineno">  192 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Ord</span></span></span></span></span></span></span></span></span></span></span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>)
 <span class="lineno">  193 </span>
 <span class="lineno">  194 </span>-- | Summary of unlinked exchanges grouped by consumer activity
 <span class="lineno">  195 </span>data UnlinkedSummary = UnlinkedSummary
-<span class="lineno">  196 </span>    { <span class="istickedoff"><span class="decl"><span class="istickedoff">usActivities</span></span></span> :: !(M.Map T.Text [UnlinkedExchange])  -- consumer name → list of unlinked exchanges
-<span class="lineno">  197 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">usTotalLinks</span></span></span> :: !Int
-<span class="lineno">  198 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">usFoundLinks</span></span></span> :: !Int
-<span class="lineno">  199 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">usMissingLinks</span></span></span> :: !Int
-<span class="lineno">  200 </span>    } deriving (<span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>)
+<span class="lineno">  196 </span>    { <span class="istickedoff"><span class="funcount">-- entered 11 times</span><span class="decl"><span class="istickedoff">usActivities</span></span></span> :: !(M.Map T.Text [UnlinkedExchange])  -- consumer name → list of unlinked exchanges
+<span class="lineno">  197 </span>    , <span class="istickedoff"><span class="funcount">-- entered 12 times</span><span class="decl"><span class="istickedoff">usTotalLinks</span></span></span> :: !Int
+<span class="lineno">  198 </span>    , <span class="istickedoff"><span class="funcount">-- entered 10 times</span><span class="decl"><span class="istickedoff">usFoundLinks</span></span></span> :: !Int
+<span class="lineno">  199 </span>    , <span class="istickedoff"><span class="funcount">-- entered 12 times</span><span class="decl"><span class="istickedoff">usMissingLinks</span></span></span> :: !Int
+<span class="lineno">  200 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>)
 <span class="lineno">  201 </span>
 <span class="lineno">  202 </span>-- | Empty unlinked summary
 <span class="lineno">  203 </span>emptyUnlinkedSummary :: UnlinkedSummary
-<span class="lineno">  204 </span><span class="decl"><span class="istickedoff">emptyUnlinkedSummary = UnlinkedSummary M.empty 0 0 0</span></span>
+<span class="lineno">  204 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">emptyUnlinkedSummary = UnlinkedSummary M.empty 0 0 0</span></span>
 <span class="lineno">  205 </span>
 <span class="lineno">  206 </span>-- | Merge two unlinked summaries
 <span class="lineno">  207 </span>mergeUnlinkedSummaries :: UnlinkedSummary -&gt; UnlinkedSummary -&gt; UnlinkedSummary
-<span class="lineno">  208 </span><span class="decl"><span class="istickedoff">mergeUnlinkedSummaries s1 s2 = UnlinkedSummary</span>
+<span class="lineno">  208 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">mergeUnlinkedSummaries s1 s2 = UnlinkedSummary</span>
 <span class="lineno">  209 </span><span class="spaces">    </span><span class="istickedoff">{ usActivities = M.unionWith <span class="nottickedoff">(++)</span> (usActivities s1) (usActivities s2)</span>
 <span class="lineno">  210 </span><span class="spaces">    </span><span class="istickedoff">, usTotalLinks = usTotalLinks s1 + usTotalLinks s2</span>
 <span class="lineno">  211 </span><span class="spaces">    </span><span class="istickedoff">, usFoundLinks = usFoundLinks s1 + usFoundLinks s2</span>
@@ -233,7 +233,7 @@ span.spaces    { background: white }
 <span class="lineno">  214 </span>
 <span class="lineno">  215 </span>-- | Report grouped summary of unlinked exchanges
 <span class="lineno">  216 </span>reportUnlinkedSummary :: UnlinkedSummary -&gt; IO ()
-<span class="lineno">  217 </span><span class="decl"><span class="istickedoff">reportUnlinkedSummary summary</span>
+<span class="lineno">  217 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">reportUnlinkedSummary summary</span>
 <span class="lineno">  218 </span><span class="spaces">    </span><span class="istickedoff">| <span class="tickonlytrue">M.null (usActivities summary)</span> = return <span class="nottickedoff">()</span>  -- Nothing to report</span>
 <span class="lineno">  219 </span><span class="spaces">    </span><span class="istickedoff">| <span class="nottickedoff">otherwise</span> = <span class="nottickedoff">do</span></span>
 <span class="lineno">  220 </span><span class="spaces">        </span><span class="istickedoff"><span class="nottickedoff">let activities = usActivities summary</span></span>
@@ -268,13 +268,13 @@ span.spaces    { background: white }
 <span class="lineno">  249 </span>
 <span class="lineno">  250 </span>-- | Normalize text for matching: lowercase, strip whitespace, normalize Unicode
 <span class="lineno">  251 </span>normalizeText :: T.Text -&gt; T.Text
-<span class="lineno">  252 </span><span class="decl"><span class="istickedoff">normalizeText = T.toLower . T.strip . normalizeUnicode</span></span>
+<span class="lineno">  252 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">normalizeText = T.toLower . T.strip . normalizeUnicode</span></span>
 <span class="lineno">  253 </span>
 <span class="lineno">  254 </span>{- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
 <span class="lineno">  255 </span>For each activity, we index it by its reference product name + activity location
 <span class="lineno">  256 </span>-}
 <span class="lineno">  257 </span>buildSupplierIndex :: ActivityMap -&gt; FlowDB -&gt; SupplierIndex
-<span class="lineno">  258 </span><span class="decl"><span class="istickedoff">buildSupplierIndex activities flowDb =</span>
+<span class="lineno">  258 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">buildSupplierIndex activities flowDb =</span>
 <span class="lineno">  259 </span><span class="spaces">    </span><span class="istickedoff">M.fromList</span>
 <span class="lineno">  260 </span><span class="spaces">        </span><span class="istickedoff">[ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))</span>
 <span class="lineno">  261 </span><span class="spaces">        </span><span class="istickedoff">| ((actUUID, prodUUID), act) &lt;- M.toList activities</span>
@@ -288,7 +288,7 @@ span.spaces    { background: white }
 <span class="lineno">  269 </span>Exact names take priority via M.union.
 <span class="lineno">  270 </span>-}
 <span class="lineno">  271 </span>buildSupplierIndexByName :: ActivityMap -&gt; FlowDB -&gt; NameOnlyIndex
-<span class="lineno">  272 </span><span class="decl"><span class="istickedoff">buildSupplierIndexByName activities flowDb =</span>
+<span class="lineno">  272 </span><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">buildSupplierIndexByName activities flowDb =</span>
 <span class="lineno">  273 </span><span class="spaces">    </span><span class="istickedoff">let entries =</span>
 <span class="lineno">  274 </span><span class="spaces">            </span><span class="istickedoff">[ (flowName flow, (actUUID, prodUUID))</span>
 <span class="lineno">  275 </span><span class="spaces">            </span><span class="istickedoff">| ((actUUID, prodUUID), act) &lt;- M.toList activities</span>
@@ -310,7 +310,7 @@ span.spaces    { background: white }
 <span class="lineno">  291 </span>Maps normalizedProductName → (activityUUID, productUUID, activityLocation)
 <span class="lineno">  292 </span>-}
 <span class="lineno">  293 </span>buildSupplierIndexByNameWithLocation :: ActivityMap -&gt; FlowDB -&gt; SupplierByNameWithLocation
-<span class="lineno">  294 </span><span class="decl"><span class="istickedoff">buildSupplierIndexByNameWithLocation activities flowDb =</span>
+<span class="lineno">  294 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">buildSupplierIndexByNameWithLocation activities flowDb =</span>
 <span class="lineno">  295 </span><span class="spaces">    </span><span class="istickedoff">M.fromList</span>
 <span class="lineno">  296 </span><span class="spaces">        </span><span class="istickedoff">[ (normalizeText (flowName flow), <span class="nottickedoff">(actUUID, prodUUID, activityLocation act)</span>)</span>
 <span class="lineno">  297 </span><span class="spaces">        </span><span class="istickedoff">| ((actUUID, prodUUID), act) &lt;- M.toList activities</span>
@@ -325,7 +325,7 @@ span.spaces    { background: white }
 <span class="lineno">  306 </span>Location aliases map wrongLocation → correctLocation (e.g., &quot;ENTSO&quot; → &quot;ENTSO-E&quot;)
 <span class="lineno">  307 </span>-}
 <span class="lineno">  308 </span>fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -&gt; DatasetNumberIndex -&gt; M.Map UUID.UUID Int -&gt; SimpleDatabase -&gt; IO SimpleDatabase
-<span class="lineno">  309 </span><span class="decl"><span class="istickedoff">fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do</span>
+<span class="lineno">  309 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do</span>
 <span class="lineno">  310 </span><span class="spaces">    </span><span class="istickedoff">-- Build supplier index</span>
 <span class="lineno">  311 </span><span class="spaces">    </span><span class="istickedoff">let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)</span>
 <span class="lineno">  312 </span><span class="spaces">    </span><span class="istickedoff">-- Build name-only index with location for exchanges missing location attribute</span>
@@ -356,7 +356,7 @@ span.spaces    { background: white }
 <span class="lineno">  337 </span>
 <span class="lineno">  338 </span>-- | Fix all activities and return statistics with unlinked summary
 <span class="lineno">  339 </span>fixAllActivities :: M.Map T.Text T.Text -&gt; SupplierIndex -&gt; SupplierByNameWithLocation -&gt; DatasetNumberIndex -&gt; M.Map UUID.UUID Int -&gt; FlowDB -&gt; ActivityMap -&gt; (ActivityMap, UnlinkedSummary)
-<span class="lineno">  340 </span><span class="decl"><span class="istickedoff">fixAllActivities locationAliases idx nameIdx dsIndex supplierLinks flowDb activities =</span>
+<span class="lineno">  340 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">fixAllActivities locationAliases idx nameIdx dsIndex supplierLinks flowDb activities =</span>
 <span class="lineno">  341 </span><span class="spaces">    </span><span class="istickedoff">let results = M.map (fixActivityExchanges <span class="nottickedoff">locationAliases</span> <span class="nottickedoff">idx</span> <span class="nottickedoff">nameIdx</span> <span class="nottickedoff">dsIndex</span> <span class="nottickedoff">supplierLinks</span> <span class="nottickedoff">flowDb</span>) activities</span>
 <span class="lineno">  342 </span><span class="spaces">        </span><span class="istickedoff">summaries = map snd $ M.elems results</span>
 <span class="lineno">  343 </span><span class="spaces">        </span><span class="istickedoff">combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries</span>
@@ -365,7 +365,7 @@ span.spaces    { background: white }
 <span class="lineno">  346 </span>
 <span class="lineno">  347 </span>-- | Fix activity exchanges and return (fixed activity, UnlinkedSummary)
 <span class="lineno">  348 </span>fixActivityExchanges :: M.Map T.Text T.Text -&gt; SupplierIndex -&gt; SupplierByNameWithLocation -&gt; DatasetNumberIndex -&gt; M.Map UUID.UUID Int -&gt; FlowDB -&gt; Activity -&gt; (Activity, UnlinkedSummary)
-<span class="lineno">  349 </span><span class="decl"><span class="istickedoff">fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb act =</span>
+<span class="lineno">  349 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb act =</span>
 <span class="lineno">  350 </span><span class="spaces">    </span><span class="istickedoff">let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink <span class="nottickedoff">locationAliases</span> <span class="nottickedoff">idx</span> <span class="nottickedoff">nameIdx</span> <span class="nottickedoff">dsIndex</span> <span class="nottickedoff">supplierLinks</span> <span class="nottickedoff">flowDb</span> <span class="nottickedoff">(activityName act)</span>) (exchanges act)</span>
 <span class="lineno">  351 </span><span class="spaces">        </span><span class="istickedoff">combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries</span>
 <span class="lineno">  352 </span><span class="spaces">     </span><span class="istickedoff">in (act{exchanges = fixedExchanges}, combinedSummary)</span></span>
@@ -376,7 +376,7 @@ span.spaces    { background: white }
 <span class="lineno">  357 </span>Returns (fixed exchange, UnlinkedSummary)
 <span class="lineno">  358 </span>-}
 <span class="lineno">  359 </span>fixExchangeLink :: M.Map T.Text T.Text -&gt; SupplierIndex -&gt; SupplierByNameWithLocation -&gt; DatasetNumberIndex -&gt; M.Map UUID.UUID Int -&gt; FlowDB -&gt; T.Text -&gt; Exchange -&gt; (Exchange, UnlinkedSummary)
-<span class="lineno">  360 </span><span class="decl"><span class="istickedoff">fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)</span>
+<span class="lineno">  360 </span><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)</span>
 <span class="lineno">  361 </span><span class="spaces">    </span><span class="istickedoff">| <span class="tickonlyfalse">isInp</span> =</span>
 <span class="lineno">  362 </span><span class="spaces">        </span><span class="istickedoff"><span class="nottickedoff">let linked actUUID prodUUID = (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)</span></span>
 <span class="lineno">  363 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">unlinked flow lookupLoc =</span></span>
@@ -430,13 +430,13 @@ span.spaces    { background: white }
 <span class="lineno">  411 </span>Used when no cache exists or caching is disabled.
 <span class="lineno">  412 </span>-}
 <span class="lineno">  413 </span>loadDatabase :: FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  414 </span><span class="decl"><span class="istickedoff">loadDatabase = loadDatabaseWithLocationAliases M.empty</span></span>
+<span class="lineno">  414 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">loadDatabase = loadDatabaseWithLocationAliases M.empty</span></span>
 <span class="lineno">  415 </span>
 <span class="lineno">  416 </span>{- | Load all EcoSpold files with location aliases
 <span class="lineno">  417 </span>Location aliases map wrongLocation → correctLocation (e.g., &quot;ENTSO&quot; → &quot;ENTSO-E&quot;)
 <span class="lineno">  418 </span>-}
 <span class="lineno">  419 </span>loadDatabaseWithLocationAliases :: M.Map T.Text T.Text -&gt; FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  420 </span><span class="decl"><span class="istickedoff">loadDatabaseWithLocationAliases locationAliases path = do</span>
+<span class="lineno">  420 </span><span class="funcount">-- entered 77 times</span><span class="decl"><span class="istickedoff">loadDatabaseWithLocationAliases locationAliases path = do</span>
 <span class="lineno">  421 </span><span class="spaces">    </span><span class="istickedoff">-- Check if path is a file (SimaPro CSV) or directory (EcoSpold)</span>
 <span class="lineno">  422 </span><span class="spaces">    </span><span class="istickedoff">isFile &lt;- doesFileExist path</span>
 <span class="lineno">  423 </span><span class="spaces">    </span><span class="istickedoff">isDir &lt;- doesDirectoryExist path</span>
@@ -456,7 +456,7 @@ span.spaces    { background: white }
 <span class="lineno">  437 </span>
 <span class="lineno">  438 </span>-- | Load SimaPro CSV file
 <span class="lineno">  439 </span>loadSimaProCSV :: FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  440 </span><span class="decl"><span class="nottickedoff">loadSimaProCSV csvPath = do</span>
+<span class="lineno">  440 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadSimaProCSV csvPath = do</span>
 <span class="lineno">  441 </span><span class="spaces">    </span><span class="nottickedoff">(activities, flowDB, unitDB) &lt;- SimaPro.parseSimaProCSV csvPath</span>
 <span class="lineno">  442 </span><span class="spaces"></span><span class="nottickedoff"></span>
 <span class="lineno">  443 </span><span class="spaces">    </span><span class="nottickedoff">if null activities</span>
@@ -480,7 +480,7 @@ span.spaces    { background: white }
 <span class="lineno">  461 </span>Uses name-only matching (no location required) for SimaPro technosphere inputs
 <span class="lineno">  462 </span>-}
 <span class="lineno">  463 </span>fixSimaProActivityLinks :: SimpleDatabase -&gt; IO SimpleDatabase
-<span class="lineno">  464 </span><span class="decl"><span class="nottickedoff">fixSimaProActivityLinks db = do</span>
+<span class="lineno">  464 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fixSimaProActivityLinks db = do</span>
 <span class="lineno">  465 </span><span class="spaces">    </span><span class="nottickedoff">let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbFlows db)</span>
 <span class="lineno">  466 </span><span class="spaces">    </span><span class="nottickedoff">reportProgress Info $ printf &quot;Built name-only supplier index with %d entries for SimaPro linking&quot; (M.size nameIndex)</span>
 <span class="lineno">  467 </span><span class="spaces"></span><span class="nottickedoff"></span>
@@ -502,7 +502,7 @@ span.spaces    { background: white }
 <span class="lineno">  483 </span>
 <span class="lineno">  484 </span>-- | Fix all activities using name-only matching
 <span class="lineno">  485 </span>fixAllActivitiesByName :: NameOnlyIndex -&gt; FlowDB -&gt; ActivityMap -&gt; (ActivityMap, UnlinkedSummary)
-<span class="lineno">  486 </span><span class="decl"><span class="nottickedoff">fixAllActivitiesByName idx flowDb activities =</span>
+<span class="lineno">  486 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fixAllActivitiesByName idx flowDb activities =</span>
 <span class="lineno">  487 </span><span class="spaces">    </span><span class="nottickedoff">let results = M.map (\act -&gt; fixActivityExchangesByName idx flowDb act) activities</span>
 <span class="lineno">  488 </span><span class="spaces">        </span><span class="nottickedoff">summaries = map snd $ M.elems results</span>
 <span class="lineno">  489 </span><span class="spaces">        </span><span class="nottickedoff">combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries</span>
@@ -511,7 +511,7 @@ span.spaces    { background: white }
 <span class="lineno">  492 </span>
 <span class="lineno">  493 </span>-- | Fix activity exchanges using name-only matching
 <span class="lineno">  494 </span>fixActivityExchangesByName :: NameOnlyIndex -&gt; FlowDB -&gt; Activity -&gt; (Activity, UnlinkedSummary)
-<span class="lineno">  495 </span><span class="decl"><span class="nottickedoff">fixActivityExchangesByName idx flowDb act =</span>
+<span class="lineno">  495 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fixActivityExchangesByName idx flowDb act =</span>
 <span class="lineno">  496 </span><span class="spaces">    </span><span class="nottickedoff">let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx flowDb (activityName act)) (exchanges act)</span>
 <span class="lineno">  497 </span><span class="spaces">        </span><span class="nottickedoff">combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries</span>
 <span class="lineno">  498 </span><span class="spaces">     </span><span class="nottickedoff">in (act{exchanges = fixedExchanges}, combinedSummary)</span></span>
@@ -520,7 +520,7 @@ span.spaces    { background: white }
 <span class="lineno">  501 </span>Returns (fixed exchange, UnlinkedSummary)
 <span class="lineno">  502 </span>-}
 <span class="lineno">  503 </span>fixExchangeLinkByName :: NameOnlyIndex -&gt; FlowDB -&gt; T.Text -&gt; Exchange -&gt; (Exchange, UnlinkedSummary)
-<span class="lineno">  504 </span><span class="decl"><span class="istickedoff">fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)</span>
+<span class="lineno">  504 </span><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">fixExchangeLinkByName idx flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)</span>
 <span class="lineno">  505 </span><span class="spaces">    </span><span class="istickedoff">| isInp || not isRef -- Inputs + co-product outputs (avoided production credits)</span>
 <span class="lineno">  506 </span><span class="spaces">        </span><span class="istickedoff">=</span>
 <span class="lineno">  507 </span><span class="spaces">        </span><span class="istickedoff">case M.lookup fid flowDb of</span>
@@ -553,7 +553,7 @@ span.spaces    { background: white }
 <span class="lineno">  534 </span>
 <span class="lineno">  535 </span>-- | Load EcoSpold files from directory
 <span class="lineno">  536 </span>loadEcoSpoldDirectory :: M.Map T.Text T.Text -&gt; FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  537 </span><span class="decl"><span class="istickedoff">loadEcoSpoldDirectory locationAliases dir = do</span>
+<span class="lineno">  537 </span><span class="funcount">-- entered 77 times</span><span class="decl"><span class="istickedoff">loadEcoSpoldDirectory locationAliases dir = do</span>
 <span class="lineno">  538 </span><span class="spaces">    </span><span class="istickedoff">reportProgress Info &quot;Scanning directory for EcoSpold files&quot;</span>
 <span class="lineno">  539 </span><span class="spaces">    </span><span class="istickedoff">files &lt;- listDirectory dir</span>
 <span class="lineno">  540 </span><span class="spaces">    </span><span class="istickedoff">-- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files</span>
@@ -719,7 +719,7 @@ span.spaces    { background: white }
 <span class="lineno">  700 </span>-- | Load a single EcoSpold1 file containing multiple datasets
 <span class="lineno">  701 </span>-- This handles files where &lt;ecoSpold&gt; contains multiple &lt;dataset&gt; elements
 <span class="lineno">  702 </span>loadSingleEcoSpold1File :: M.Map T.Text T.Text -&gt; FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  703 </span><span class="decl"><span class="istickedoff">loadSingleEcoSpold1File locationAliases filepath = do</span>
+<span class="lineno">  703 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">loadSingleEcoSpold1File locationAliases filepath = do</span>
 <span class="lineno">  704 </span><span class="spaces">    </span><span class="istickedoff">reportProgress Info &quot;Parsing multi-dataset EcoSpold1 file...&quot;</span>
 <span class="lineno">  705 </span><span class="spaces">    </span><span class="istickedoff">results &lt;- streamParseAllDatasetsFromFile1 filepath</span>
 <span class="lineno">  706 </span><span class="spaces">    </span><span class="istickedoff">reportProgress Info $ &quot;Parsed &quot; ++ show (length results) ++ &quot; datasets from file&quot;</span>
@@ -766,7 +766,7 @@ span.spaces    { background: white }
 <span class="lineno">  747 </span>the cache file, not by the filename.
 <span class="lineno">  748 </span>-}
 <span class="lineno">  749 </span>generateMatrixCacheFilename :: T.Text -&gt; FilePath -&gt; IO FilePath
-<span class="lineno">  750 </span><span class="decl"><span class="nottickedoff">generateMatrixCacheFilename dbName _dataPath = do</span>
+<span class="lineno">  750 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">generateMatrixCacheFilename dbName _dataPath = do</span>
 <span class="lineno">  751 </span><span class="spaces">    </span><span class="nottickedoff">let cacheFilename = &quot;volca.cache.&quot; ++ T.unpack dbName ++ &quot;.bin&quot;</span>
 <span class="lineno">  752 </span><span class="spaces">    </span><span class="nottickedoff">base &lt;- getDataDir</span>
 <span class="lineno">  753 </span><span class="spaces">    </span><span class="nottickedoff">let cacheDir = base &lt;/&gt; &quot;cache&quot;</span>
@@ -783,7 +783,7 @@ span.spaces    { background: white }
 <span class="lineno">  764 </span>Returns True if cache file appears valid, False otherwise.
 <span class="lineno">  765 </span>-}
 <span class="lineno">  766 </span>validateCacheFile :: FilePath -&gt; IO Bool
-<span class="lineno">  767 </span><span class="decl"><span class="nottickedoff">validateCacheFile cacheFile = do</span>
+<span class="lineno">  767 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">validateCacheFile cacheFile = do</span>
 <span class="lineno">  768 </span><span class="spaces">    </span><span class="nottickedoff">exists &lt;- doesFileExist cacheFile</span>
 <span class="lineno">  769 </span><span class="spaces">    </span><span class="nottickedoff">if not exists</span>
 <span class="lineno">  770 </span><span class="spaces">        </span><span class="nottickedoff">then return False</span>
@@ -810,7 +810,7 @@ span.spaces    { background: white }
 <span class="lineno">  791 </span>Returns Nothing if no matrix cache exists.
 <span class="lineno">  792 </span>-}
 <span class="lineno">  793 </span>loadCachedDatabaseWithMatrices :: T.Text -&gt; FilePath -&gt; IO (Maybe Database)
-<span class="lineno">  794 </span><span class="decl"><span class="nottickedoff">loadCachedDatabaseWithMatrices dbName dataDir = do</span>
+<span class="lineno">  794 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadCachedDatabaseWithMatrices dbName dataDir = do</span>
 <span class="lineno">  795 </span><span class="spaces">    </span><span class="nottickedoff">cacheFile &lt;- generateMatrixCacheFilename dbName dataDir</span>
 <span class="lineno">  796 </span><span class="spaces">    </span><span class="nottickedoff">let zstdFile = cacheFile ++ &quot;.zst&quot;</span>
 <span class="lineno">  797 </span><span class="spaces"></span><span class="nottickedoff"></span>
@@ -893,7 +893,7 @@ span.spaces    { background: white }
 <span class="lineno">  874 </span>Returns Nothing if the file cannot be loaded.
 <span class="lineno">  875 </span>-}
 <span class="lineno">  876 </span>loadDatabaseFromCacheFile :: FilePath -&gt; IO (Maybe Database)
-<span class="lineno">  877 </span><span class="decl"><span class="nottickedoff">loadDatabaseFromCacheFile cacheFile = do</span>
+<span class="lineno">  877 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadDatabaseFromCacheFile cacheFile = do</span>
 <span class="lineno">  878 </span><span class="spaces">    </span><span class="nottickedoff">let ext = takeExtension cacheFile</span>
 <span class="lineno">  879 </span><span class="spaces">    </span><span class="nottickedoff">let isCompressed = ext == &quot;.zst&quot;</span>
 <span class="lineno">  880 </span><span class="spaces"></span><span class="nottickedoff"></span>
@@ -910,7 +910,7 @@ span.spaces    { background: white }
 <span class="lineno">  891 </span>
 <span class="lineno">  892 </span>-- | Load compressed (.bin.zst) cache file with header validation
 <span class="lineno">  893 </span>loadCompressedCacheFile :: FilePath -&gt; IO (Maybe Database)
-<span class="lineno">  894 </span><span class="decl"><span class="nottickedoff">loadCompressedCacheFile zstdFile = do</span>
+<span class="lineno">  894 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadCompressedCacheFile zstdFile = do</span>
 <span class="lineno">  895 </span><span class="spaces">    </span><span class="nottickedoff">reportCacheInfo zstdFile</span>
 <span class="lineno">  896 </span><span class="spaces">    </span><span class="nottickedoff">catch</span>
 <span class="lineno">  897 </span><span class="spaces">        </span><span class="nottickedoff">( withProgressTiming Cache &quot;Matrix cache load with zstd decompression&quot; $ do</span>
@@ -967,7 +967,7 @@ span.spaces    { background: white }
 <span class="lineno">  948 </span>
 <span class="lineno">  949 </span>-- | Load uncompressed (.bin) cache file
 <span class="lineno">  950 </span>loadUncompressedCacheFile :: FilePath -&gt; IO (Maybe Database)
-<span class="lineno">  951 </span><span class="decl"><span class="nottickedoff">loadUncompressedCacheFile cacheFile = do</span>
+<span class="lineno">  951 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadUncompressedCacheFile cacheFile = do</span>
 <span class="lineno">  952 </span><span class="spaces">    </span><span class="nottickedoff">-- Validate cache file before attempting to decode</span>
 <span class="lineno">  953 </span><span class="spaces">    </span><span class="nottickedoff">isValid &lt;- validateCacheFile cacheFile</span>
 <span class="lineno">  954 </span><span class="spaces">    </span><span class="nottickedoff">if not isValid</span>
@@ -1007,7 +1007,7 @@ span.spaces    { background: white }
 <span class="lineno">  988 </span>Should be called after matrix construction is complete.
 <span class="lineno">  989 </span>-}
 <span class="lineno">  990 </span>saveCachedDatabaseWithMatrices :: T.Text -&gt; FilePath -&gt; Database -&gt; IO ()
-<span class="lineno">  991 </span><span class="decl"><span class="nottickedoff">saveCachedDatabaseWithMatrices dbName dataDir db = do</span>
+<span class="lineno">  991 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">saveCachedDatabaseWithMatrices dbName dataDir db = do</span>
 <span class="lineno">  992 </span><span class="spaces">    </span><span class="nottickedoff">cacheFile &lt;- generateMatrixCacheFilename dbName dataDir</span>
 <span class="lineno">  993 </span><span class="spaces">    </span><span class="nottickedoff">let zstdFile = cacheFile ++ &quot;.zst&quot;</span>
 <span class="lineno">  994 </span><span class="spaces">    </span><span class="nottickedoff">reportCacheOperation $ &quot;Saving Database with matrices to compressed cache: &quot; ++ zstdFile</span>
@@ -1058,7 +1058,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1039 </span>    -&gt; M.Map T.Text [T.Text]      -- ^ Location hierarchy (empty = use built-in)
 <span class="lineno"> 1040 </span>    -&gt; FilePath                   -- ^ Path to load from
 <span class="lineno"> 1041 </span>    -&gt; IO (Either T.Text (SimpleDatabase, CrossDBLinkingStats))
-<span class="lineno"> 1042 </span><span class="decl"><span class="nottickedoff">loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier path = do</span>
+<span class="lineno"> 1042 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier path = do</span>
 <span class="lineno"> 1043 </span><span class="spaces">    </span><span class="nottickedoff">result &lt;- loadDatabaseWithLocationAliases locationAliases path</span>
 <span class="lineno"> 1044 </span><span class="spaces">    </span><span class="nottickedoff">case result of</span>
 <span class="lineno"> 1045 </span><span class="spaces">        </span><span class="nottickedoff">Left err -&gt; return $ Left err</span>
@@ -1111,7 +1111,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1092 </span>    -&gt; M.Map T.Text [T.Text]        -- ^ Location hierarchy (code → parent codes)
 <span class="lineno"> 1093 </span>    -&gt; SimpleDatabase               -- ^ Database to fix
 <span class="lineno"> 1094 </span>    -&gt; IO (SimpleDatabase, CrossDBLinkingStats)
-<span class="lineno"> 1095 </span><span class="decl"><span class="nottickedoff">fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier db = do</span>
+<span class="lineno"> 1095 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier db = do</span>
 <span class="lineno"> 1096 </span><span class="spaces">    </span><span class="nottickedoff">-- Count unlinked exchanges before</span>
 <span class="lineno"> 1097 </span><span class="spaces">    </span><span class="nottickedoff">let unlinkedBefore = countUnlinkedExchanges db</span>
 <span class="lineno"> 1098 </span><span class="spaces">        </span><span class="nottickedoff">!totalInputs = countTotalTechInputs db</span>
@@ -1157,7 +1157,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1138 </span>
 <span class="lineno"> 1139 </span>-- | Collect unlinked product names from a database (for databases without cross-DB linking)
 <span class="lineno"> 1140 </span>collectUnlinkedProductNames :: SimpleDatabase -&gt; M.Map T.Text Int
-<span class="lineno"> 1141 </span><span class="decl"><span class="istickedoff">collectUnlinkedProductNames db =</span>
+<span class="lineno"> 1141 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">collectUnlinkedProductNames db =</span>
 <span class="lineno"> 1142 </span><span class="spaces">    </span><span class="istickedoff">M.fromListWith <span class="nottickedoff">(+)</span></span>
 <span class="lineno"> 1143 </span><span class="spaces">        </span><span class="istickedoff">[ <span class="nottickedoff">(flowName flow, 1)</span></span>
 <span class="lineno"> 1144 </span><span class="spaces">        </span><span class="istickedoff">| act &lt;- M.elems (sdbActivities db)</span>
@@ -1168,7 +1168,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1149 </span>
 <span class="lineno"> 1150 </span>-- | Count unlinked technosphere exchanges in a database
 <span class="lineno"> 1151 </span>countUnlinkedExchanges :: SimpleDatabase -&gt; Int
-<span class="lineno"> 1152 </span><span class="decl"><span class="istickedoff">countUnlinkedExchanges db =</span>
+<span class="lineno"> 1152 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">countUnlinkedExchanges db =</span>
 <span class="lineno"> 1153 </span><span class="spaces">    </span><span class="istickedoff">sum [ <span class="nottickedoff">1</span></span>
 <span class="lineno"> 1154 </span><span class="spaces">        </span><span class="istickedoff">| act &lt;- M.elems (sdbActivities db)</span>
 <span class="lineno"> 1155 </span><span class="spaces">        </span><span class="istickedoff">, ex &lt;- exchanges act</span>
@@ -1182,7 +1182,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1163 </span>
 <span class="lineno"> 1164 </span>-- | Count total technosphere input exchanges in a database
 <span class="lineno"> 1165 </span>countTotalTechInputs :: SimpleDatabase -&gt; Int
-<span class="lineno"> 1166 </span><span class="decl"><span class="istickedoff">countTotalTechInputs db =</span>
+<span class="lineno"> 1166 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">countTotalTechInputs db =</span>
 <span class="lineno"> 1167 </span><span class="spaces">    </span><span class="istickedoff">sum [ 1</span>
 <span class="lineno"> 1168 </span><span class="spaces">        </span><span class="istickedoff">| act &lt;- M.elems (sdbActivities db)</span>
 <span class="lineno"> 1169 </span><span class="spaces">        </span><span class="istickedoff">, ex &lt;- exchanges act</span>
@@ -1201,7 +1201,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1182 </span>    -&gt; UnitDB
 <span class="lineno"> 1183 </span>    -&gt; ActivityMap
 <span class="lineno"> 1184 </span>    -&gt; CrossDBLinkingStats
-<span class="lineno"> 1185 </span><span class="decl"><span class="nottickedoff">findAllCrossDBLinks ctx flowDb unitDb activities =</span>
+<span class="lineno"> 1185 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">findAllCrossDBLinks ctx flowDb unitDb activities =</span>
 <span class="lineno"> 1186 </span><span class="spaces">    </span><span class="nottickedoff">let results = M.mapWithKey (findActivityCrossDBLinks ctx flowDb unitDb) activities</span>
 <span class="lineno"> 1187 </span><span class="spaces">    </span><span class="nottickedoff">in foldr mergeCrossDBStats emptyCrossDBLinkingStats (M.elems results)</span></span>
 <span class="lineno"> 1188 </span>
@@ -1213,7 +1213,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1194 </span>    -&gt; (UUID.UUID, UUID.UUID)    -- ^ Consumer activity key (actUUID, prodUUID)
 <span class="lineno"> 1195 </span>    -&gt; Activity
 <span class="lineno"> 1196 </span>    -&gt; CrossDBLinkingStats
-<span class="lineno"> 1197 </span><span class="decl"><span class="nottickedoff">findActivityCrossDBLinks ctx flowDb unitDb (consumerActUUID, consumerProdUUID) act =</span>
+<span class="lineno"> 1197 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">findActivityCrossDBLinks ctx flowDb unitDb (consumerActUUID, consumerProdUUID) act =</span>
 <span class="lineno"> 1198 </span><span class="spaces">    </span><span class="nottickedoff">let stats = map (findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)</span>
 <span class="lineno"> 1199 </span><span class="spaces">    </span><span class="nottickedoff">in foldr mergeCrossDBStats emptyCrossDBLinkingStats stats</span></span>
 <span class="lineno"> 1200 </span>
@@ -1233,7 +1233,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1214 </span>    -&gt; UUID.UUID                 -- ^ Consumer product UUID
 <span class="lineno"> 1215 </span>    -&gt; Exchange
 <span class="lineno"> 1216 </span>    -&gt; CrossDBLinkingStats
-<span class="lineno"> 1217 </span><span class="decl"><span class="nottickedoff">findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (TechnosphereExchange fid amt _uid isInp _isRef linkId _procLink loc)</span>
+<span class="lineno"> 1217 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (TechnosphereExchange fid amt _uid isInp _isRef linkId _procLink loc)</span>
 <span class="lineno"> 1218 </span><span class="spaces">    </span><span class="nottickedoff">| isInp &amp;&amp; linkId == UUID.nil = -- Unlinked technosphere input</span>
 <span class="lineno"> 1219 </span><span class="spaces">        </span><span class="nottickedoff">case M.lookup fid flowDb of</span>
 <span class="lineno"> 1220 </span><span class="spaces">            </span><span class="nottickedoff">Nothing -&gt;</span>
@@ -1268,7 +1268,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1249 </span>
 <span class="lineno"> 1250 </span>-- | Report cross-database linking statistics
 <span class="lineno"> 1251 </span>reportCrossDBLinkingStats :: Int -&gt; CrossDBLinkingStats -&gt; IO ()
-<span class="lineno"> 1252 </span><span class="decl"><span class="nottickedoff">reportCrossDBLinkingStats nActivities stats = do</span>
+<span class="lineno"> 1252 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">reportCrossDBLinkingStats nActivities stats = do</span>
 <span class="lineno"> 1253 </span><span class="spaces">    </span><span class="nottickedoff">let !nInputs = cdlTotalInputs stats</span>
 <span class="lineno"> 1254 </span><span class="spaces">        </span><span class="nottickedoff">!nCrossDB = crossDBLinksCount stats</span>
 <span class="lineno"> 1255 </span><span class="spaces">        </span><span class="nottickedoff">!nUnresolved = unresolvedCount stats</span>
@@ -1322,7 +1322,7 @@ span.spaces    { background: white }
 <span class="lineno"> 1303 </span><span class="spaces">                </span><span class="nottickedoff">printf &quot;  - %s: %s → %s&quot; (T.unpack prod) (T.unpack requested) (T.unpack actual)</span></span>
 <span class="lineno"> 1304 </span>
 <span class="lineno"> 1305 </span>showBlocker :: LinkBlocker -&gt; String
-<span class="lineno"> 1306 </span><span class="decl"><span class="nottickedoff">showBlocker NoNameMatch = &quot;Not found&quot;</span>
+<span class="lineno"> 1306 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">showBlocker NoNameMatch = &quot;Not found&quot;</span>
 <span class="lineno"> 1307 </span><span class="spaces"></span><span class="nottickedoff">showBlocker (UnitIncompatible q s) = printf &quot;Unit: %s vs %s&quot; (T.unpack q) (T.unpack s)</span>
 <span class="lineno"> 1308 </span><span class="spaces"></span><span class="nottickedoff">showBlocker (LocationUnavailable loc) = printf &quot;Location: %s&quot; (T.unpack loc)</span></span>
 

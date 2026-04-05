@@ -61,10 +61,10 @@ span.spaces    { background: white }
 <span class="lineno">   42 </span>    | PTValidator
 <span class="lineno">   43 </span>    | PTAnalyzer
 <span class="lineno">   44 </span>    | PTReporter
-<span class="lineno">   45 </span>    deriving (<span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>)
+<span class="lineno">   45 </span>    deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>)
 <span class="lineno">   46 </span>
 <span class="lineno">   47 </span>instance DecodeTOML PluginType where
-<span class="lineno">   48 </span>    <span class="decl"><span class="nottickedoff">tomlDecoder = do</span>
+<span class="lineno">   48 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">tomlDecoder = do</span>
 <span class="lineno">   49 </span><span class="spaces">        </span><span class="nottickedoff">t &lt;- tomlDecoder :: Decoder Text</span>
 <span class="lineno">   50 </span><span class="spaces">        </span><span class="nottickedoff">case T.toLower t of</span>
 <span class="lineno">   51 </span><span class="spaces">            </span><span class="nottickedoff">&quot;importer&quot;  -&gt; pure PTImporter</span>
@@ -79,18 +79,18 @@ span.spaces    { background: white }
 <span class="lineno">   60 </span>
 <span class="lineno">   61 </span>-- | A single @[[plugin]]@ TOML entry
 <span class="lineno">   62 </span>data PluginConfig = PluginConfig
-<span class="lineno">   63 </span>    { <span class="istickedoff"><span class="decl"><span class="istickedoff">pcName</span></span></span>     :: !Text
-<span class="lineno">   64 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcType</span></span></span>     :: !PluginType
-<span class="lineno">   65 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcPath</span></span></span>     :: !(Maybe FilePath)    -- Nothing for built-in overrides
-<span class="lineno">   66 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcEnabled</span></span></span>  :: !Bool
-<span class="lineno">   67 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcPriority</span></span></span> :: !(Maybe Int)
-<span class="lineno">   68 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcFormatId</span></span></span> :: !(Maybe Text)        -- For exporter/reporter
-<span class="lineno">   69 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcPhase</span></span></span>    :: !(Maybe Text)        -- For validator: &quot;pre-compute&quot; or &quot;post-compute&quot;
-<span class="lineno">   70 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">pcMimeType</span></span></span> :: !(Maybe Text)        -- For reporter
-<span class="lineno">   71 </span>    } deriving (<span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>)
+<span class="lineno">   63 </span>    { <span class="istickedoff"><span class="funcount">-- entered 33 times</span><span class="decl"><span class="istickedoff">pcName</span></span></span>     :: !Text
+<span class="lineno">   64 </span>    , <span class="istickedoff"><span class="funcount">-- entered 26 times</span><span class="decl"><span class="istickedoff">pcType</span></span></span>     :: !PluginType
+<span class="lineno">   65 </span>    , <span class="istickedoff"><span class="funcount">-- entered 20 times</span><span class="decl"><span class="istickedoff">pcPath</span></span></span>     :: !(Maybe FilePath)    -- Nothing for built-in overrides
+<span class="lineno">   66 </span>    , <span class="istickedoff"><span class="funcount">-- entered 26 times</span><span class="decl"><span class="istickedoff">pcEnabled</span></span></span>  :: !Bool
+<span class="lineno">   67 </span>    , <span class="istickedoff"><span class="funcount">-- entered 11 times</span><span class="decl"><span class="istickedoff">pcPriority</span></span></span> :: !(Maybe Int)
+<span class="lineno">   68 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">pcFormatId</span></span></span> :: !(Maybe Text)        -- For exporter/reporter
+<span class="lineno">   69 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">pcPhase</span></span></span>    :: !(Maybe Text)        -- For validator: &quot;pre-compute&quot; or &quot;post-compute&quot;
+<span class="lineno">   70 </span>    , <span class="istickedoff"><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">pcMimeType</span></span></span> :: !(Maybe Text)        -- For reporter
+<span class="lineno">   71 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>)
 <span class="lineno">   72 </span>
 <span class="lineno">   73 </span>instance DecodeTOML PluginConfig where
-<span class="lineno">   74 </span>    <span class="decl"><span class="nottickedoff">tomlDecoder = do</span>
+<span class="lineno">   74 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">tomlDecoder = do</span>
 <span class="lineno">   75 </span><span class="spaces">        </span><span class="nottickedoff">pcName     &lt;- getField &quot;name&quot;</span>
 <span class="lineno">   76 </span><span class="spaces">        </span><span class="nottickedoff">pcType     &lt;- getField &quot;type&quot;</span>
 <span class="lineno">   77 </span><span class="spaces">        </span><span class="nottickedoff">pcPath     &lt;- getFieldOpt &quot;path&quot;</span>
@@ -111,7 +111,7 @@ span.spaces    { background: white }
 <span class="lineno">   92 </span>--    - If has a path: add as external plugin
 <span class="lineno">   93 </span>-- 3. Sort priority-based lists
 <span class="lineno">   94 </span>buildRegistry :: [PluginConfig] -&gt; PluginRegistry
-<span class="lineno">   95 </span><span class="decl"><span class="istickedoff">buildRegistry configs =</span>
+<span class="lineno">   95 </span><span class="funcount">-- entered 27 times</span><span class="decl"><span class="istickedoff">buildRegistry configs =</span>
 <span class="lineno">   96 </span><span class="spaces">    </span><span class="istickedoff">let base = defaultRegistry</span>
 <span class="lineno">   97 </span><span class="spaces">        </span><span class="istickedoff">-- Process each config entry</span>
 <span class="lineno">   98 </span><span class="spaces">        </span><span class="istickedoff">registry = foldl applyConfig base configs</span>
@@ -122,7 +122,7 @@ span.spaces    { background: white }
 <span class="lineno">  103 </span><span class="spaces">        </span><span class="istickedoff">}</span></span>
 <span class="lineno">  104 </span>
 <span class="lineno">  105 </span>applyConfig :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  106 </span><span class="decl"><span class="istickedoff">applyConfig reg pc</span>
+<span class="lineno">  106 </span><span class="funcount">-- entered 26 times</span><span class="decl"><span class="istickedoff">applyConfig reg pc</span>
 <span class="lineno">  107 </span><span class="spaces">    </span><span class="istickedoff">| not (pcEnabled pc) = disablePlugin reg pc</span>
 <span class="lineno">  108 </span><span class="spaces">    </span><span class="istickedoff">| <span class="tickonlytrue">otherwise</span> = case pcType pc of</span>
 <span class="lineno">  109 </span><span class="spaces">        </span><span class="istickedoff">PTMapper   -&gt; applyMapper reg pc</span>
@@ -136,7 +136,7 @@ span.spaces    { background: white }
 <span class="lineno">  117 </span>
 <span class="lineno">  118 </span>-- | Remove a plugin by name
 <span class="lineno">  119 </span>disablePlugin :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  120 </span><span class="decl"><span class="istickedoff">disablePlugin reg pc = case pcType pc of</span>
+<span class="lineno">  120 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">disablePlugin reg pc = case pcType pc of</span>
 <span class="lineno">  121 </span><span class="spaces">    </span><span class="istickedoff">PTMapper   -&gt; reg { prMappers   = filter ((/= pcName pc) . mhName) (prMappers reg) }</span>
 <span class="lineno">  122 </span><span class="spaces">    </span><span class="istickedoff">PTReporter -&gt; <span class="nottickedoff">reg { prReporters = M.filter ((/= pcName pc) . rhName) (prReporters reg) }</span></span>
 <span class="lineno">  123 </span><span class="spaces">    </span><span class="istickedoff">PTExporter -&gt; reg { prExporters = M.filter ((/= pcName pc) . ehName) (prExporters reg) }</span>
@@ -148,7 +148,7 @@ span.spaces    { background: white }
 <span class="lineno">  129 </span>
 <span class="lineno">  130 </span>-- | Apply mapper config: override priority of existing, or add external
 <span class="lineno">  131 </span>applyMapper :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  132 </span><span class="decl"><span class="istickedoff">applyMapper reg pc =</span>
+<span class="lineno">  132 </span><span class="funcount">-- entered 7 times</span><span class="decl"><span class="istickedoff">applyMapper reg pc =</span>
 <span class="lineno">  133 </span><span class="spaces">    </span><span class="istickedoff">case pcPath pc of</span>
 <span class="lineno">  134 </span><span class="spaces">        </span><span class="istickedoff">Nothing -&gt;</span>
 <span class="lineno">  135 </span><span class="spaces">            </span><span class="istickedoff">-- Override priority of existing built-in</span>
@@ -163,7 +163,7 @@ span.spaces    { background: white }
 <span class="lineno">  144 </span>
 <span class="lineno">  145 </span>-- | Apply reporter config: add external reporter
 <span class="lineno">  146 </span>applyReporter :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  147 </span><span class="decl"><span class="istickedoff">applyReporter reg pc = case pcPath pc of</span>
+<span class="lineno">  147 </span><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">applyReporter reg pc = case pcPath pc of</span>
 <span class="lineno">  148 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">reg</span>  -- Can't override built-in reporter fields (no meaningful overrides)</span>
 <span class="lineno">  149 </span><span class="spaces">    </span><span class="istickedoff">Just path -&gt;</span>
 <span class="lineno">  150 </span><span class="spaces">        </span><span class="istickedoff">let fmtId = resolvedFormatId pc</span>
@@ -173,7 +173,7 @@ span.spaces    { background: white }
 <span class="lineno">  154 </span>
 <span class="lineno">  155 </span>-- | Apply exporter config: add external exporter
 <span class="lineno">  156 </span>applyExporter :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  157 </span><span class="decl"><span class="istickedoff">applyExporter reg pc = case pcPath pc of</span>
+<span class="lineno">  157 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">applyExporter reg pc = case pcPath pc of</span>
 <span class="lineno">  158 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">reg</span></span>
 <span class="lineno">  159 </span><span class="spaces">    </span><span class="istickedoff">Just path -&gt;</span>
 <span class="lineno">  160 </span><span class="spaces">        </span><span class="istickedoff">let fmtId = resolvedFormatId pc</span>
@@ -182,7 +182,7 @@ span.spaces    { background: white }
 <span class="lineno">  163 </span>
 <span class="lineno">  164 </span>-- | Apply analyzer config: add external analyzer
 <span class="lineno">  165 </span>applyAnalyzer :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  166 </span><span class="decl"><span class="istickedoff">applyAnalyzer reg pc = case pcPath pc of</span>
+<span class="lineno">  166 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">applyAnalyzer reg pc = case pcPath pc of</span>
 <span class="lineno">  167 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">reg</span></span>
 <span class="lineno">  168 </span><span class="spaces">    </span><span class="istickedoff">Just path -&gt;</span>
 <span class="lineno">  169 </span><span class="spaces">        </span><span class="istickedoff">let handle = makeExternalAnalyzer (pcName pc) path</span>
@@ -190,7 +190,7 @@ span.spaces    { background: white }
 <span class="lineno">  171 </span>
 <span class="lineno">  172 </span>-- | Apply transform config: override priority of existing, or add external
 <span class="lineno">  173 </span>applyTransform :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  174 </span><span class="decl"><span class="istickedoff">applyTransform reg pc = case pcPath pc of</span>
+<span class="lineno">  174 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">applyTransform reg pc = case pcPath pc of</span>
 <span class="lineno">  175 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt;</span>
 <span class="lineno">  176 </span><span class="spaces">        </span><span class="istickedoff">let transforms' = map <span class="nottickedoff">(\t -&gt; if thName t == pcName pc</span></span>
 <span class="lineno">  177 </span><span class="spaces">                </span><span class="istickedoff"><span class="nottickedoff">then t { thPriority = fromMaybe (thPriority t) (pcPriority pc) }</span></span>
@@ -202,7 +202,7 @@ span.spaces    { background: white }
 <span class="lineno">  183 </span>
 <span class="lineno">  184 </span>-- | Apply validator config: add external validator
 <span class="lineno">  185 </span>applyValidator :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  186 </span><span class="decl"><span class="istickedoff">applyValidator reg pc = case pcPath pc of</span>
+<span class="lineno">  186 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">applyValidator reg pc = case pcPath pc of</span>
 <span class="lineno">  187 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">reg</span></span>
 <span class="lineno">  188 </span><span class="spaces">    </span><span class="istickedoff">Just path -&gt;</span>
 <span class="lineno">  189 </span><span class="spaces">        </span><span class="istickedoff">let phase = case pcPhase pc of</span>
@@ -213,7 +213,7 @@ span.spaces    { background: white }
 <span class="lineno">  194 </span>
 <span class="lineno">  195 </span>-- | Apply importer config: add external importer
 <span class="lineno">  196 </span>applyImporter :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  197 </span><span class="decl"><span class="istickedoff">applyImporter reg pc = case pcPath pc of</span>
+<span class="lineno">  197 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">applyImporter reg pc = case pcPath pc of</span>
 <span class="lineno">  198 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">reg</span></span>
 <span class="lineno">  199 </span><span class="spaces">    </span><span class="istickedoff">Just path -&gt;</span>
 <span class="lineno">  200 </span><span class="spaces">        </span><span class="istickedoff">let handle = makeExternalImporter (pcName pc) path</span>
@@ -221,7 +221,7 @@ span.spaces    { background: white }
 <span class="lineno">  202 </span>
 <span class="lineno">  203 </span>-- | Apply searcher config: override priority of existing, or add external
 <span class="lineno">  204 </span>applySearcher :: PluginRegistry -&gt; PluginConfig -&gt; PluginRegistry
-<span class="lineno">  205 </span><span class="decl"><span class="istickedoff">applySearcher reg pc = case pcPath pc of</span>
+<span class="lineno">  205 </span><span class="funcount">-- entered 4 times</span><span class="decl"><span class="istickedoff">applySearcher reg pc = case pcPath pc of</span>
 <span class="lineno">  206 </span><span class="spaces">    </span><span class="istickedoff">Nothing -&gt;</span>
 <span class="lineno">  207 </span><span class="spaces">        </span><span class="istickedoff">let searchers' = map (\s -&gt; if shName s == pcName pc</span>
 <span class="lineno">  208 </span><span class="spaces">                </span><span class="istickedoff">then s { shPriority = fromMaybe <span class="nottickedoff">(shPriority s)</span> (pcPriority pc) }</span>
@@ -238,20 +238,20 @@ span.spaces    { background: white }
 <span class="lineno">  219 </span>-- | Default priority for external plugins when none is specified.
 <span class="lineno">  220 </span>-- Built-in plugins use 0–30, so 50 places externals after all built-ins.
 <span class="lineno">  221 </span>defaultExternalPriority :: Int
-<span class="lineno">  222 </span><span class="decl"><span class="istickedoff">defaultExternalPriority = 50</span></span>
+<span class="lineno">  222 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">defaultExternalPriority = 50</span></span>
 <span class="lineno">  223 </span>
 <span class="lineno">  224 </span>defaultPriority :: PluginConfig -&gt; Int
-<span class="lineno">  225 </span><span class="decl"><span class="istickedoff">defaultPriority = fromMaybe defaultExternalPriority . pcPriority</span></span>
+<span class="lineno">  225 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">defaultPriority = fromMaybe defaultExternalPriority . pcPriority</span></span>
 <span class="lineno">  226 </span>
 <span class="lineno">  227 </span>resolvedFormatId :: PluginConfig -&gt; Text
-<span class="lineno">  228 </span><span class="decl"><span class="istickedoff">resolvedFormatId pc = fromMaybe (pcName pc) (pcFormatId pc)</span></span>
+<span class="lineno">  228 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">resolvedFormatId pc = fromMaybe (pcName pc) (pcFormatId pc)</span></span>
 <span class="lineno">  229 </span>
 <span class="lineno">  230 </span>-- ──────────────────────────────────────────────
 <span class="lineno">  231 </span>-- External plugin handle constructors
 <span class="lineno">  232 </span>-- ──────────────────────────────────────────────
 <span class="lineno">  233 </span>
 <span class="lineno">  234 </span>makeExternalMapper :: Text -&gt; FilePath -&gt; Int -&gt; MapperHandle
-<span class="lineno">  235 </span><span class="decl"><span class="istickedoff">makeExternalMapper name path priority = MapperHandle</span>
+<span class="lineno">  235 </span><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">makeExternalMapper name path priority = MapperHandle</span>
 <span class="lineno">  236 </span><span class="spaces">    </span><span class="istickedoff">{ mhName     = name</span>
 <span class="lineno">  237 </span><span class="spaces">    </span><span class="istickedoff">, mhBackend  = External path</span>
 <span class="lineno">  238 </span><span class="spaces">    </span><span class="istickedoff">, mhPriority = priority</span>
@@ -277,7 +277,7 @@ span.spaces    { background: white }
 <span class="lineno">  258 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  259 </span>
 <span class="lineno">  260 </span>makeExternalReporter :: Text -&gt; FilePath -&gt; Text -&gt; Text -&gt; ReportHandle
-<span class="lineno">  261 </span><span class="decl"><span class="istickedoff">makeExternalReporter name path fmtId mime = ReportHandle</span>
+<span class="lineno">  261 </span><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">makeExternalReporter name path fmtId mime = ReportHandle</span>
 <span class="lineno">  262 </span><span class="spaces">    </span><span class="istickedoff">{ rhName     = name</span>
 <span class="lineno">  263 </span><span class="spaces">    </span><span class="istickedoff">, rhBackend  = External path</span>
 <span class="lineno">  264 </span><span class="spaces">    </span><span class="istickedoff">, rhFormatId = fmtId</span>
@@ -291,7 +291,7 @@ span.spaces    { background: white }
 <span class="lineno">  272 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  273 </span>
 <span class="lineno">  274 </span>makeExternalExporter :: Text -&gt; FilePath -&gt; Text -&gt; ExportHandle
-<span class="lineno">  275 </span><span class="decl"><span class="istickedoff">makeExternalExporter name path fmtId = ExportHandle</span>
+<span class="lineno">  275 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">makeExternalExporter name path fmtId = ExportHandle</span>
 <span class="lineno">  276 </span><span class="spaces">    </span><span class="istickedoff">{ ehName     = name</span>
 <span class="lineno">  277 </span><span class="spaces">    </span><span class="istickedoff">, ehBackend  = External path</span>
 <span class="lineno">  278 </span><span class="spaces">    </span><span class="istickedoff">, ehFormatId = fmtId</span>
@@ -304,7 +304,7 @@ span.spaces    { background: white }
 <span class="lineno">  285 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  286 </span>
 <span class="lineno">  287 </span>makeExternalAnalyzer :: Text -&gt; FilePath -&gt; AnalyzeHandle
-<span class="lineno">  288 </span><span class="decl"><span class="istickedoff">makeExternalAnalyzer name path = AnalyzeHandle</span>
+<span class="lineno">  288 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">makeExternalAnalyzer name path = AnalyzeHandle</span>
 <span class="lineno">  289 </span><span class="spaces">    </span><span class="istickedoff">{ ahName    = name</span>
 <span class="lineno">  290 </span><span class="spaces">    </span><span class="istickedoff">, ahBackend = External path</span>
 <span class="lineno">  291 </span><span class="spaces">    </span><span class="istickedoff">, ahAnalyze = \_ -&gt; <span class="nottickedoff">do</span></span>
@@ -315,7 +315,7 @@ span.spaces    { background: white }
 <span class="lineno">  296 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  297 </span>
 <span class="lineno">  298 </span>makeExternalTransform :: Text -&gt; FilePath -&gt; Int -&gt; TransformHandle
-<span class="lineno">  299 </span><span class="decl"><span class="nottickedoff">makeExternalTransform name path priority = TransformHandle</span>
+<span class="lineno">  299 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">makeExternalTransform name path priority = TransformHandle</span>
 <span class="lineno">  300 </span><span class="spaces">    </span><span class="nottickedoff">{ thName      = name</span>
 <span class="lineno">  301 </span><span class="spaces">    </span><span class="nottickedoff">, thBackend   = External path</span>
 <span class="lineno">  302 </span><span class="spaces">    </span><span class="nottickedoff">, thPriority  = priority</span>
@@ -326,7 +326,7 @@ span.spaces    { background: white }
 <span class="lineno">  307 </span><span class="spaces">    </span><span class="nottickedoff">}</span></span>
 <span class="lineno">  308 </span>
 <span class="lineno">  309 </span>makeExternalValidator :: Text -&gt; FilePath -&gt; ValidationPhase -&gt; ValidateHandle
-<span class="lineno">  310 </span><span class="decl"><span class="istickedoff">makeExternalValidator name path phase = ValidateHandle</span>
+<span class="lineno">  310 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">makeExternalValidator name path phase = ValidateHandle</span>
 <span class="lineno">  311 </span><span class="spaces">    </span><span class="istickedoff">{ vhName     = name</span>
 <span class="lineno">  312 </span><span class="spaces">    </span><span class="istickedoff">, vhBackend  = External path</span>
 <span class="lineno">  313 </span><span class="spaces">    </span><span class="istickedoff">, vhPhase    = phase</span>
@@ -338,7 +338,7 @@ span.spaces    { background: white }
 <span class="lineno">  319 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  320 </span>
 <span class="lineno">  321 </span>makeExternalImporter :: Text -&gt; FilePath -&gt; ImportHandle
-<span class="lineno">  322 </span><span class="decl"><span class="istickedoff">makeExternalImporter name path = ImportHandle</span>
+<span class="lineno">  322 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">makeExternalImporter name path = ImportHandle</span>
 <span class="lineno">  323 </span><span class="spaces">    </span><span class="istickedoff">{ ihName    = name</span>
 <span class="lineno">  324 </span><span class="spaces">    </span><span class="istickedoff">, ihBackend = External path</span>
 <span class="lineno">  325 </span><span class="spaces">    </span><span class="istickedoff">, ihCanRead = \_ -&gt; <span class="nottickedoff">pure False</span>  -- External importers need explicit configuration</span>
@@ -346,7 +346,7 @@ span.spaces    { background: white }
 <span class="lineno">  327 </span><span class="spaces">    </span><span class="istickedoff">}</span></span>
 <span class="lineno">  328 </span>
 <span class="lineno">  329 </span>makeExternalSearcher :: Text -&gt; FilePath -&gt; Int -&gt; SearchHandle
-<span class="lineno">  330 </span><span class="decl"><span class="istickedoff">makeExternalSearcher name path priority = SearchHandle</span>
+<span class="lineno">  330 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">makeExternalSearcher name path priority = SearchHandle</span>
 <span class="lineno">  331 </span><span class="spaces">    </span><span class="istickedoff">{ shName     = name</span>
 <span class="lineno">  332 </span><span class="spaces">    </span><span class="istickedoff">, shBackend  = External path</span>
 <span class="lineno">  333 </span><span class="spaces">    </span><span class="istickedoff">, shPriority = priority</span>
@@ -355,7 +355,7 @@ span.spaces    { background: white }
 <span class="lineno">  336 </span>
 <span class="lineno">  337 </span>-- | Look up a key in a JSON object
 <span class="lineno">  338 </span>lookupKey :: Text -&gt; KM.KeyMap Value -&gt; Maybe Value
-<span class="lineno">  339 </span><span class="decl"><span class="nottickedoff">lookupKey k = KM.lookup (K.fromText k)</span></span>
+<span class="lineno">  339 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">lookupKey k = KM.lookup (K.fromText k)</span></span>
 
 </pre>
 </body>

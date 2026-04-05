@@ -54,26 +54,26 @@ span.spaces    { background: white }
 <span class="lineno">   35 </span>
 <span class="lineno">   36 </span>-- | Raw parsed ILCD process (before conversion to VoLCA types)
 <span class="lineno">   37 </span>data ILCDProcessRaw = ILCDProcessRaw
-<span class="lineno">   38 </span>    { <span class="nottickedoff"><span class="decl"><span class="nottickedoff">iprUUID</span></span></span>            :: !UUID
-<span class="lineno">   39 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">iprName</span></span></span>            :: !Text
-<span class="lineno">   40 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">iprLocation</span></span></span>        :: !Text
-<span class="lineno">   41 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">iprRefFlowIdx</span></span></span>      :: !Int     -- dataSetInternalID of reference exchange
-<span class="lineno">   42 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">iprExchanges</span></span></span>       :: ![ILCDExchangeRaw]
-<span class="lineno">   43 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">iprClassifications</span></span></span> :: !(M.Map Text Text)
+<span class="lineno">   38 </span>    { <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">iprUUID</span></span></span>            :: !UUID
+<span class="lineno">   39 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">iprName</span></span></span>            :: !Text
+<span class="lineno">   40 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">iprLocation</span></span></span>        :: !Text
+<span class="lineno">   41 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">iprRefFlowIdx</span></span></span>      :: !Int     -- dataSetInternalID of reference exchange
+<span class="lineno">   42 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">iprExchanges</span></span></span>       :: ![ILCDExchangeRaw]
+<span class="lineno">   43 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">iprClassifications</span></span></span> :: !(M.Map Text Text)
 <span class="lineno">   44 </span>    }
 <span class="lineno">   45 </span>
 <span class="lineno">   46 </span>data ILCDExchangeRaw = ILCDExchangeRaw
-<span class="lineno">   47 </span>    { <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ierInternalId</span></span></span> :: !Int
-<span class="lineno">   48 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ierFlowRef</span></span></span>    :: !UUID
-<span class="lineno">   49 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ierDirection</span></span></span>  :: !Text     -- &quot;Input&quot; / &quot;Output&quot;
-<span class="lineno">   50 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ierAmount</span></span></span>     :: !Double
-<span class="lineno">   51 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ierLocation</span></span></span>   :: !Text
+<span class="lineno">   47 </span>    { <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ierInternalId</span></span></span> :: !Int
+<span class="lineno">   48 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ierFlowRef</span></span></span>    :: !UUID
+<span class="lineno">   49 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ierDirection</span></span></span>  :: !Text     -- &quot;Input&quot; / &quot;Output&quot;
+<span class="lineno">   50 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ierAmount</span></span></span>     :: !Double
+<span class="lineno">   51 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ierLocation</span></span></span>   :: !Text
 <span class="lineno">   52 </span>    }
 <span class="lineno">   53 </span>
 <span class="lineno">   54 </span>-- | Parse an ILCD directory into a SimpleDatabase.
 <span class="lineno">   55 </span>-- Expects subdirectories: processes/, flows/, flowproperties/, unitgroups/
 <span class="lineno">   56 </span>parseILCDDirectory :: FilePath -&gt; IO (Either Text SimpleDatabase)
-<span class="lineno">   57 </span><span class="decl"><span class="nottickedoff">parseILCDDirectory dir = do</span>
+<span class="lineno">   57 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseILCDDirectory dir = do</span>
 <span class="lineno">   58 </span><span class="spaces">    </span><span class="nottickedoff">reportProgress Info $ &quot;Loading ILCD database from: &quot; ++ dir</span>
 <span class="lineno">   59 </span><span class="spaces"></span><span class="nottickedoff"></span>
 <span class="lineno">   60 </span><span class="spaces">    </span><span class="nottickedoff">-- Step 1: Parse unit groups and flow properties (small, sequential)</span>
@@ -107,7 +107,7 @@ span.spaces    { background: white }
 <span class="lineno">   88 </span>
 <span class="lineno">   89 </span>-- | List XML files in a directory
 <span class="lineno">   90 </span>listXMLFiles :: FilePath -&gt; IO [FilePath]
-<span class="lineno">   91 </span><span class="decl"><span class="nottickedoff">listXMLFiles d = do</span>
+<span class="lineno">   91 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">listXMLFiles d = do</span>
 <span class="lineno">   92 </span><span class="spaces">    </span><span class="nottickedoff">fs &lt;- listDirectory d</span>
 <span class="lineno">   93 </span><span class="spaces">    </span><span class="nottickedoff">return [d &lt;/&gt; f | f &lt;- fs, map toLower (takeExtension f) == &quot;.xml&quot;]</span></span>
 <span class="lineno">   94 </span>
@@ -116,23 +116,23 @@ span.spaces    { background: white }
 <span class="lineno">   97 </span>--------------------------------------------------------------------------------
 <span class="lineno">   98 </span>
 <span class="lineno">   99 </span>parseUnitGroups :: FilePath -&gt; IO (M.Map UUID (Text, Int))
-<span class="lineno">  100 </span><span class="decl"><span class="nottickedoff">parseUnitGroups dir = do</span>
+<span class="lineno">  100 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseUnitGroups dir = do</span>
 <span class="lineno">  101 </span><span class="spaces">    </span><span class="nottickedoff">files &lt;- listXMLFiles dir</span>
 <span class="lineno">  102 </span><span class="spaces">    </span><span class="nottickedoff">results &lt;- mapM (\f -&gt; parseUnitGroupXML &lt;$&gt; BS.readFile f) files</span>
 <span class="lineno">  103 </span><span class="spaces">    </span><span class="nottickedoff">return $ M.fromList [r | Just r &lt;- results]</span></span>
 <span class="lineno">  104 </span>
 <span class="lineno">  105 </span>data UGState = UGState
-<span class="lineno">  106 </span>    { <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugUUID</span></span></span>      :: !Text
-<span class="lineno">  107 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugRefIdx</span></span></span>    :: !Int
-<span class="lineno">  108 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugUnits</span></span></span>     :: ![(Int, Text)]
-<span class="lineno">  109 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugCurId</span></span></span>     :: !Int
-<span class="lineno">  110 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugCurName</span></span></span>   :: !Text
-<span class="lineno">  111 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugInUnit</span></span></span>    :: !Bool
-<span class="lineno">  112 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ugTextAccum</span></span></span> :: ![BS.ByteString]
+<span class="lineno">  106 </span>    { <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugUUID</span></span></span>      :: !Text
+<span class="lineno">  107 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugRefIdx</span></span></span>    :: !Int
+<span class="lineno">  108 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugUnits</span></span></span>     :: ![(Int, Text)]
+<span class="lineno">  109 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugCurId</span></span></span>     :: !Int
+<span class="lineno">  110 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugCurName</span></span></span>   :: !Text
+<span class="lineno">  111 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugInUnit</span></span></span>    :: !Bool
+<span class="lineno">  112 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ugTextAccum</span></span></span> :: ![BS.ByteString]
 <span class="lineno">  113 </span>    }
 <span class="lineno">  114 </span>
 <span class="lineno">  115 </span>parseUnitGroupXML :: BS.ByteString -&gt; Maybe (UUID, (Text, Int))
-<span class="lineno">  116 </span><span class="decl"><span class="nottickedoff">parseUnitGroupXML bytes =</span>
+<span class="lineno">  116 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseUnitGroupXML bytes =</span>
 <span class="lineno">  117 </span><span class="spaces">    </span><span class="nottickedoff">case X.fold openTag attr endOpen txt closeTag cdata (UGState &quot;&quot; 0 [] (-1) &quot;&quot; False []) bytes of</span>
 <span class="lineno">  118 </span><span class="spaces">        </span><span class="nottickedoff">Left _  -&gt; Nothing</span>
 <span class="lineno">  119 </span><span class="spaces">        </span><span class="nottickedoff">Right s -&gt; do</span>
@@ -178,20 +178,20 @@ span.spaces    { background: white }
 <span class="lineno">  159 </span>--------------------------------------------------------------------------------
 <span class="lineno">  160 </span>
 <span class="lineno">  161 </span>parseFlowProperties :: FilePath -&gt; IO (M.Map UUID UUID)
-<span class="lineno">  162 </span><span class="decl"><span class="nottickedoff">parseFlowProperties dir = do</span>
+<span class="lineno">  162 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseFlowProperties dir = do</span>
 <span class="lineno">  163 </span><span class="spaces">    </span><span class="nottickedoff">files &lt;- listXMLFiles dir</span>
 <span class="lineno">  164 </span><span class="spaces">    </span><span class="nottickedoff">results &lt;- mapM (\f -&gt; parseFlowPropertyXML &lt;$&gt; BS.readFile f) files</span>
 <span class="lineno">  165 </span><span class="spaces">    </span><span class="nottickedoff">return $ M.fromList [r | Just r &lt;- results]</span></span>
 <span class="lineno">  166 </span>
 <span class="lineno">  167 </span>data FPState = FPState
-<span class="lineno">  168 </span>    { <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpUUID</span></span></span>         :: !Text
-<span class="lineno">  169 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpUnitGroupRef</span></span></span> :: !Text
-<span class="lineno">  170 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpInQuantRef</span></span></span>   :: !Bool
-<span class="lineno">  171 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpTextAccum</span></span></span>    :: ![BS.ByteString]
+<span class="lineno">  168 </span>    { <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpUUID</span></span></span>         :: !Text
+<span class="lineno">  169 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpUnitGroupRef</span></span></span> :: !Text
+<span class="lineno">  170 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpInQuantRef</span></span></span>   :: !Bool
+<span class="lineno">  171 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpTextAccum</span></span></span>    :: ![BS.ByteString]
 <span class="lineno">  172 </span>    }
 <span class="lineno">  173 </span>
 <span class="lineno">  174 </span>parseFlowPropertyXML :: BS.ByteString -&gt; Maybe (UUID, UUID)
-<span class="lineno">  175 </span><span class="decl"><span class="nottickedoff">parseFlowPropertyXML bytes =</span>
+<span class="lineno">  175 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseFlowPropertyXML bytes =</span>
 <span class="lineno">  176 </span><span class="spaces">    </span><span class="nottickedoff">case X.fold openTag attr endOpen txt closeTag cdata (FPState &quot;&quot; &quot;&quot; False []) bytes of</span>
 <span class="lineno">  177 </span><span class="spaces">        </span><span class="nottickedoff">Left _  -&gt; Nothing</span>
 <span class="lineno">  178 </span><span class="spaces">        </span><span class="nottickedoff">Right s -&gt; (,) &lt;$&gt; UUID.fromText (fpUUID s) &lt;*&gt; UUID.fromText (fpUnitGroupRef s)</span>
@@ -230,7 +230,7 @@ span.spaces    { background: white }
 <span class="lineno">  211 </span>    -&gt; M.Map UUID UUID          -- flowProperty UUID → unitGroup UUID
 <span class="lineno">  212 </span>    -&gt; M.Map UUID (Text, Int)   -- unitGroup UUID → (refUnitName, refIdx)
 <span class="lineno">  213 </span>    -&gt; (FlowDB, UnitDB)
-<span class="lineno">  214 </span><span class="decl"><span class="nottickedoff">buildFlowAndUnitDB flowInfoMap fpMap ugMap = (flows, allUnits)</span>
+<span class="lineno">  214 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">buildFlowAndUnitDB flowInfoMap fpMap ugMap = (flows, allUnits)</span>
 <span class="lineno">  215 </span><span class="spaces">  </span><span class="nottickedoff">where</span>
 <span class="lineno">  216 </span><span class="spaces">    </span><span class="nottickedoff">flows = M.mapWithKey mkFlow flowInfoMap</span>
 <span class="lineno">  217 </span><span class="spaces"></span><span class="nottickedoff"></span>
@@ -264,26 +264,26 @@ span.spaces    { background: white }
 <span class="lineno">  245 </span>--------------------------------------------------------------------------------
 <span class="lineno">  246 </span>
 <span class="lineno">  247 </span>data ProcState = ProcState
-<span class="lineno">  248 </span>    { <span class="istickedoff"><span class="decl"><span class="istickedoff">psUUID</span></span></span>              :: !Text
-<span class="lineno">  249 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psBaseName</span></span></span>          :: !Text
-<span class="lineno">  250 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psLocation</span></span></span>          :: !Text
-<span class="lineno">  251 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psRefFlowIdx</span></span></span>        :: !Int
-<span class="lineno">  252 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psExchanges</span></span></span>         :: ![ILCDExchangeRaw]
-<span class="lineno">  253 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psInExchange</span></span></span>        :: !Bool
-<span class="lineno">  254 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">psExInternalId</span></span></span>      :: !Int
-<span class="lineno">  255 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psExFlowRef</span></span></span>         :: !Text
-<span class="lineno">  256 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">psExDirection</span></span></span>       :: !Text
-<span class="lineno">  257 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">psExAmount</span></span></span>          :: !Double
-<span class="lineno">  258 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">psExLocation</span></span></span>        :: !Text
-<span class="lineno">  259 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psTextAccum</span></span></span>         :: ![BS.ByteString]
-<span class="lineno">  260 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psInName</span></span></span>            :: !Bool
-<span class="lineno">  261 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psClassifications</span></span></span>   :: !(M.Map Text Text)
-<span class="lineno">  262 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psPendingClassName</span></span></span>  :: !Text
-<span class="lineno">  263 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">psInClass</span></span></span>           :: !Bool
+<span class="lineno">  248 </span>    { <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">psUUID</span></span></span>              :: !Text
+<span class="lineno">  249 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">psBaseName</span></span></span>          :: !Text
+<span class="lineno">  250 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">psLocation</span></span></span>          :: !Text
+<span class="lineno">  251 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">psRefFlowIdx</span></span></span>        :: !Int
+<span class="lineno">  252 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">psExchanges</span></span></span>         :: ![ILCDExchangeRaw]
+<span class="lineno">  253 </span>    , <span class="istickedoff"><span class="funcount">-- entered 29 times</span><span class="decl"><span class="istickedoff">psInExchange</span></span></span>        :: !Bool
+<span class="lineno">  254 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">psExInternalId</span></span></span>      :: !Int
+<span class="lineno">  255 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">psExFlowRef</span></span></span>         :: !Text
+<span class="lineno">  256 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">psExDirection</span></span></span>       :: !Text
+<span class="lineno">  257 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">psExAmount</span></span></span>          :: !Double
+<span class="lineno">  258 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">psExLocation</span></span></span>        :: !Text
+<span class="lineno">  259 </span>    , <span class="istickedoff"><span class="funcount">-- entered 40 times</span><span class="decl"><span class="istickedoff">psTextAccum</span></span></span>         :: ![BS.ByteString]
+<span class="lineno">  260 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">psInName</span></span></span>            :: !Bool
+<span class="lineno">  261 </span>    , <span class="istickedoff"><span class="funcount">-- entered 8 times</span><span class="decl"><span class="istickedoff">psClassifications</span></span></span>   :: !(M.Map Text Text)
+<span class="lineno">  262 </span>    , <span class="istickedoff"><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">psPendingClassName</span></span></span>  :: !Text
+<span class="lineno">  263 </span>    , <span class="istickedoff"><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">psInClass</span></span></span>           :: !Bool
 <span class="lineno">  264 </span>    }
 <span class="lineno">  265 </span>
 <span class="lineno">  266 </span>parseProcessXML :: BS.ByteString -&gt; Maybe ILCDProcessRaw
-<span class="lineno">  267 </span><span class="decl"><span class="istickedoff">parseProcessXML bytes =</span>
+<span class="lineno">  267 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">parseProcessXML bytes =</span>
 <span class="lineno">  268 </span><span class="spaces">    </span><span class="istickedoff">case X.fold openTag attr endOpen txt closeTag <span class="nottickedoff">cdata</span></span>
 <span class="lineno">  269 </span><span class="spaces">        </span><span class="istickedoff">(ProcState &quot;&quot; &quot;&quot; &quot;&quot; 0 [] False (-1) &quot;&quot; &quot;&quot; 0 &quot;&quot; [] False M.empty &quot;&quot; False) bytes of</span>
 <span class="lineno">  270 </span><span class="spaces">        </span><span class="istickedoff">Left _  -&gt; <span class="nottickedoff">Nothing</span></span>
@@ -378,7 +378,7 @@ span.spaces    { background: white }
 <span class="lineno">  359 </span>
 <span class="lineno">  360 </span>-- | Parse process files in parallel using worker pattern
 <span class="lineno">  361 </span>parseProcessFilesParallel :: [FilePath] -&gt; IO [ILCDProcessRaw]
-<span class="lineno">  362 </span><span class="decl"><span class="nottickedoff">parseProcessFilesParallel files = do</span>
+<span class="lineno">  362 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseProcessFilesParallel files = do</span>
 <span class="lineno">  363 </span><span class="spaces">    </span><span class="nottickedoff">numWorkers &lt;- getNumCapabilities</span>
 <span class="lineno">  364 </span><span class="spaces">    </span><span class="nottickedoff">let workers = distributeFiles numWorkers files</span>
 <span class="lineno">  365 </span><span class="spaces">    </span><span class="nottickedoff">workerResults &lt;- mapConcurrently parseWorker workers</span>
@@ -398,7 +398,7 @@ span.spaces    { background: white }
 <span class="lineno">  379 </span>    -&gt; UnitDB
 <span class="lineno">  380 </span>    -&gt; [ILCDProcessRaw]
 <span class="lineno">  381 </span>    -&gt; ActivityMap
-<span class="lineno">  382 </span><span class="decl"><span class="nottickedoff">buildActivityMap flowInfoMap flowDB unitDB procs =</span>
+<span class="lineno">  382 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">buildActivityMap flowInfoMap flowDB unitDB procs =</span>
 <span class="lineno">  383 </span><span class="spaces">    </span><span class="nottickedoff">M.fromList</span>
 <span class="lineno">  384 </span><span class="spaces">        </span><span class="nottickedoff">[ ((iprUUID p, refFlowUUID), activity)</span>
 <span class="lineno">  385 </span><span class="spaces">        </span><span class="nottickedoff">| p &lt;- procs</span>
@@ -408,13 +408,13 @@ span.spaces    { background: white }
 <span class="lineno">  389 </span><span class="spaces">        </span><span class="nottickedoff">]</span></span>
 <span class="lineno">  390 </span>
 <span class="lineno">  391 </span>findRefExchange :: ILCDProcessRaw -&gt; Maybe ILCDExchangeRaw
-<span class="lineno">  392 </span><span class="decl"><span class="nottickedoff">findRefExchange p =</span>
+<span class="lineno">  392 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">findRefExchange p =</span>
 <span class="lineno">  393 </span><span class="spaces">    </span><span class="nottickedoff">case filter (\e -&gt; ierInternalId e == iprRefFlowIdx p) (iprExchanges p) of</span>
 <span class="lineno">  394 </span><span class="spaces">        </span><span class="nottickedoff">(e:_) -&gt; Just e</span>
 <span class="lineno">  395 </span><span class="spaces">        </span><span class="nottickedoff">[]    -&gt; Nothing</span></span>
 <span class="lineno">  396 </span>
 <span class="lineno">  397 </span>buildActivity :: M.Map UUID ILCDFlowInfo -&gt; FlowDB -&gt; UnitDB -&gt; ILCDProcessRaw -&gt; Activity
-<span class="lineno">  398 </span><span class="decl"><span class="nottickedoff">buildActivity flowInfoMap flowDB unitDB p = Activity</span>
+<span class="lineno">  398 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">buildActivity flowInfoMap flowDB unitDB p = Activity</span>
 <span class="lineno">  399 </span><span class="spaces">    </span><span class="nottickedoff">{ activityName = iprName p</span>
 <span class="lineno">  400 </span><span class="spaces">    </span><span class="nottickedoff">, activityDescription = []</span>
 <span class="lineno">  401 </span><span class="spaces">    </span><span class="nottickedoff">, activitySynonyms = M.empty</span>
@@ -454,7 +454,7 @@ span.spaces    { background: white }
 <span class="lineno">  435 </span>type SupplierIndex = M.Map UUID (UUID, UUID)
 <span class="lineno">  436 </span>
 <span class="lineno">  437 </span>fixILCDActivityLinks :: SimpleDatabase -&gt; IO SimpleDatabase
-<span class="lineno">  438 </span><span class="decl"><span class="nottickedoff">fixILCDActivityLinks db = do</span>
+<span class="lineno">  438 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fixILCDActivityLinks db = do</span>
 <span class="lineno">  439 </span><span class="spaces">    </span><span class="nottickedoff">let idx = buildSupplierIndex (sdbActivities db)</span>
 <span class="lineno">  440 </span><span class="spaces">    </span><span class="nottickedoff">reportProgress Info $ printf &quot;Built supplier index with %d entries for ILCD linking&quot; (M.size idx)</span>
 <span class="lineno">  441 </span><span class="spaces">    </span><span class="nottickedoff">return db { sdbActivities = M.map (fixActivityExchanges idx) (sdbActivities db) }</span></span>
@@ -462,7 +462,7 @@ span.spaces    { background: white }
 <span class="lineno">  443 </span>-- | Build a flow-UUID-keyed index of (activityUUID, productUUID) from reference exchanges.
 <span class="lineno">  444 </span>-- UUID-based: no name collisions, no indirection through flowDB.
 <span class="lineno">  445 </span>buildSupplierIndex :: ActivityMap -&gt; SupplierIndex
-<span class="lineno">  446 </span><span class="decl"><span class="istickedoff">buildSupplierIndex activities =</span>
+<span class="lineno">  446 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">buildSupplierIndex activities =</span>
 <span class="lineno">  447 </span><span class="spaces">    </span><span class="istickedoff">M.fromList</span>
 <span class="lineno">  448 </span><span class="spaces">        </span><span class="istickedoff">[ (exchangeFlowId ex, (actUUID, prodUUID))</span>
 <span class="lineno">  449 </span><span class="spaces">        </span><span class="istickedoff">| ((actUUID, prodUUID), act) &lt;- M.toList activities</span>
@@ -471,7 +471,7 @@ span.spaces    { background: white }
 <span class="lineno">  452 </span><span class="spaces">        </span><span class="istickedoff">]</span></span>
 <span class="lineno">  453 </span>
 <span class="lineno">  454 </span>fixActivityExchanges :: SupplierIndex -&gt; Activity -&gt; Activity
-<span class="lineno">  455 </span><span class="decl"><span class="istickedoff">fixActivityExchanges idx act =</span>
+<span class="lineno">  455 </span><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">fixActivityExchanges idx act =</span>
 <span class="lineno">  456 </span><span class="spaces">    </span><span class="istickedoff">act { exchanges = map fixEx (exchanges act) }</span>
 <span class="lineno">  457 </span><span class="spaces">  </span><span class="istickedoff">where</span>
 <span class="lineno">  458 </span><span class="spaces">    </span><span class="istickedoff">fixEx ex@(TechnosphereExchange fid amt uid isInp _ _ procLink loc)</span>

@@ -65,18 +65,18 @@ span.spaces    { background: white }
 <span class="lineno">   46 </span>
 <span class="lineno">   47 </span>-- | Enrichment data extracted from an ILCD flow XML
 <span class="lineno">   48 </span>data ILCDFlowInfo = ILCDFlowInfo
-<span class="lineno">   49 </span>    { <span class="istickedoff"><span class="decl"><span class="istickedoff">ilcdBaseName</span></span></span>       :: !Text
-<span class="lineno">   50 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">ilcdCompartment</span></span></span>    :: !(Maybe Compartment)
-<span class="lineno">   51 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">ilcdCAS</span></span></span>            :: !(Maybe Text)  -- normalized CAS
-<span class="lineno">   52 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">ilcdSynonyms</span></span></span>       :: ![Text]        -- from &lt;common:synonyms xml:lang=&quot;en&quot;&gt;, semicolon-split
-<span class="lineno">   53 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">ilcdFlowType</span></span></span>       :: !Text          -- &quot;Elementary flow&quot; / &quot;Product flow&quot; / &quot;Waste flow&quot;
-<span class="lineno">   54 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">ilcdFlowPropertyRef</span></span></span> :: !(Maybe UUID) -- reference flow property UUID (for unit resolution)
-<span class="lineno">   55 </span>    } deriving (<span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="decl"><span class="nottickedoff">NFData</span></span>, <span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff"><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
+<span class="lineno">   49 </span>    { <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ilcdBaseName</span></span></span>       :: !Text
+<span class="lineno">   50 </span>    , <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ilcdCompartment</span></span></span>    :: !(Maybe Compartment)
+<span class="lineno">   51 </span>    , <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ilcdCAS</span></span></span>            :: !(Maybe Text)  -- normalized CAS
+<span class="lineno">   52 </span>    , <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ilcdSynonyms</span></span></span>       :: ![Text]        -- from &lt;common:synonyms xml:lang=&quot;en&quot;&gt;, semicolon-split
+<span class="lineno">   53 </span>    , <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ilcdFlowType</span></span></span>       :: !Text          -- &quot;Elementary flow&quot; / &quot;Product flow&quot; / &quot;Waste flow&quot;
+<span class="lineno">   54 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">ilcdFlowPropertyRef</span></span></span> :: !(Maybe UUID) -- reference flow property UUID (for unit resolution)
+<span class="lineno">   55 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">NFData</span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
 <span class="lineno">   56 </span>
 <span class="lineno">   57 </span>-- | Given a method directory (containing lciamethods/), find the sibling flows/ directory.
 <span class="lineno">   58 </span>-- ILCD packages have structure: ILCD/{lciamethods/, flows/, ...}
 <span class="lineno">   59 </span>resolveFlowDirectory :: FilePath -&gt; IO (Maybe FilePath)
-<span class="lineno">   60 </span><span class="decl"><span class="nottickedoff">resolveFlowDirectory methodDir = do</span>
+<span class="lineno">   60 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">resolveFlowDirectory methodDir = do</span>
 <span class="lineno">   61 </span><span class="spaces">    </span><span class="nottickedoff">-- methodDir is the directory containing method XMLs (e.g., .../ILCD/lciamethods)</span>
 <span class="lineno">   62 </span><span class="spaces">    </span><span class="nottickedoff">-- flows/ is a sibling: .../ILCD/flows</span>
 <span class="lineno">   63 </span><span class="spaces">    </span><span class="nottickedoff">let parent = takeParentDir methodDir</span>
@@ -91,7 +91,7 @@ span.spaces    { background: white }
 <span class="lineno">   72 </span>--   Uses a zstd-compressed cache to skip re-parsing on subsequent startups.
 <span class="lineno">   73 </span>--   Falls back to worker-based parallel parsing on cache miss.
 <span class="lineno">   74 </span>parseFlowDirectory :: FilePath -&gt; IO (M.Map UUID ILCDFlowInfo)
-<span class="lineno">   75 </span><span class="decl"><span class="nottickedoff">parseFlowDirectory dir = do</span>
+<span class="lineno">   75 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseFlowDirectory dir = do</span>
 <span class="lineno">   76 </span><span class="spaces">    </span><span class="nottickedoff">let cacheFile = flowCacheFile dir</span>
 <span class="lineno">   77 </span><span class="spaces">    </span><span class="nottickedoff">cached &lt;- loadFlowCache cacheFile dir</span>
 <span class="lineno">   78 </span><span class="spaces">    </span><span class="nottickedoff">case cached of</span>
@@ -103,7 +103,7 @@ span.spaces    { background: white }
 <span class="lineno">   84 </span>
 <span class="lineno">   85 </span>-- | Parse all flow XMLs from scratch using worker-based parallelism
 <span class="lineno">   86 </span>parseFlowDirectoryFresh :: FilePath -&gt; IO (M.Map UUID ILCDFlowInfo)
-<span class="lineno">   87 </span><span class="decl"><span class="nottickedoff">parseFlowDirectoryFresh dir = do</span>
+<span class="lineno">   87 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">parseFlowDirectoryFresh dir = do</span>
 <span class="lineno">   88 </span><span class="spaces">    </span><span class="nottickedoff">files &lt;- listDirectory dir</span>
 <span class="lineno">   89 </span><span class="spaces">    </span><span class="nottickedoff">let xmlFiles = [dir &lt;/&gt; f | f &lt;- files, map toLower (takeExtension f) == &quot;.xml&quot;]</span>
 <span class="lineno">   90 </span><span class="spaces">    </span><span class="nottickedoff">numWorkers &lt;- getNumCapabilities</span>
@@ -120,11 +120,11 @@ span.spaces    { background: white }
 <span class="lineno">  101 </span>
 <span class="lineno">  102 </span>-- | Cache file path for a flows directory
 <span class="lineno">  103 </span>flowCacheFile :: FilePath -&gt; FilePath
-<span class="lineno">  104 </span><span class="decl"><span class="nottickedoff">flowCacheFile dir = dir &lt;/&gt; &quot;.volca.flows.cache.zst&quot;</span></span>
+<span class="lineno">  104 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">flowCacheFile dir = dir &lt;/&gt; &quot;.volca.flows.cache.zst&quot;</span></span>
 <span class="lineno">  105 </span>
 <span class="lineno">  106 </span>-- | Load flow info from cache if valid (file exists and is newer than directory)
 <span class="lineno">  107 </span>loadFlowCache :: FilePath -&gt; FilePath -&gt; IO (Maybe (M.Map UUID ILCDFlowInfo))
-<span class="lineno">  108 </span><span class="decl"><span class="nottickedoff">loadFlowCache cacheFile dir = do</span>
+<span class="lineno">  108 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">loadFlowCache cacheFile dir = do</span>
 <span class="lineno">  109 </span><span class="spaces">    </span><span class="nottickedoff">exists &lt;- doesFileExist cacheFile</span>
 <span class="lineno">  110 </span><span class="spaces">    </span><span class="nottickedoff">if not exists then return Nothing</span>
 <span class="lineno">  111 </span><span class="spaces">    </span><span class="nottickedoff">else catch</span>
@@ -151,7 +151,7 @@ span.spaces    { background: white }
 <span class="lineno">  132 </span>
 <span class="lineno">  133 </span>-- | Save parsed flow info to cache
 <span class="lineno">  134 </span>saveFlowCache :: FilePath -&gt; M.Map UUID ILCDFlowInfo -&gt; IO ()
-<span class="lineno">  135 </span><span class="decl"><span class="nottickedoff">saveFlowCache cacheFile info = catch</span>
+<span class="lineno">  135 </span><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">saveFlowCache cacheFile info = catch</span>
 <span class="lineno">  136 </span><span class="spaces">    </span><span class="nottickedoff">(do let serialized = encode info</span>
 <span class="lineno">  137 </span><span class="spaces">            </span><span class="nottickedoff">compressed = Zstd.compress 1 serialized</span>
 <span class="lineno">  138 </span><span class="spaces">        </span><span class="nottickedoff">BS.writeFile cacheFile compressed</span>
@@ -160,29 +160,29 @@ span.spaces    { background: white }
 <span class="lineno">  141 </span>
 <span class="lineno">  142 </span>-- | SAX parse state for flow XML
 <span class="lineno">  143 </span>data FlowParseState = FlowParseState
-<span class="lineno">  144 </span>    { <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsUUID</span></span></span>        :: !Text
-<span class="lineno">  145 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsBaseName</span></span></span>    :: !Text
-<span class="lineno">  146 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsCAS</span></span></span>         :: !Text
-<span class="lineno">  147 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsCategories</span></span></span>  :: ![Text]  -- category level=&quot;0&quot;, &quot;1&quot;, &quot;2&quot; in order
-<span class="lineno">  148 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsPath</span></span></span>        :: ![BS.ByteString]
-<span class="lineno">  149 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsTextAccum</span></span></span>   :: ![BS.ByteString]
-<span class="lineno">  150 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsInBaseName</span></span></span>  :: !Bool
-<span class="lineno">  151 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsSynonyms</span></span></span>    :: ![Text]  -- accumulated synonym names
-<span class="lineno">  152 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsInSynonyms</span></span></span>  :: !Bool    -- inside &lt;common:synonyms&gt;
-<span class="lineno">  153 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsLangIsEn</span></span></span>    :: !Bool    -- current synonyms element has xml:lang=&quot;en&quot;
-<span class="lineno">  154 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsFlowType</span></span></span>    :: !Text    -- &lt;typeOfDataSet&gt; text
-<span class="lineno">  155 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpsRefFlowPropIdx</span></span></span> :: !Int  -- referenceToReferenceFlowProperty index
-<span class="lineno">  156 </span>    , <span class="nottickedoff"><span class="decl"><span class="nottickedoff">fpsCurrentFPIdx</span></span></span>   :: !Int  -- current flowProperty dataSetInternalID
-<span class="lineno">  157 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsFlowPropRef</span></span></span>    :: !(Maybe UUID) -- resolved flow property UUID
-<span class="lineno">  158 </span>    , <span class="istickedoff"><span class="decl"><span class="istickedoff">fpsInFlowProperty</span></span></span> :: !Bool -- inside &lt;flowProperty&gt;
+<span class="lineno">  144 </span>    { <span class="istickedoff"><span class="funcount">-- entered 13 times</span><span class="decl"><span class="istickedoff">fpsUUID</span></span></span>        :: !Text
+<span class="lineno">  145 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">fpsBaseName</span></span></span>    :: !Text
+<span class="lineno">  146 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">fpsCAS</span></span></span>         :: !Text
+<span class="lineno">  147 </span>    , <span class="istickedoff"><span class="funcount">-- entered 8 times</span><span class="decl"><span class="istickedoff">fpsCategories</span></span></span>  :: ![Text]  -- category level=&quot;0&quot;, &quot;1&quot;, &quot;2&quot; in order
+<span class="lineno">  148 </span>    , <span class="istickedoff"><span class="funcount">-- entered 96 times</span><span class="decl"><span class="istickedoff">fpsPath</span></span></span>        :: ![BS.ByteString]
+<span class="lineno">  149 </span>    , <span class="istickedoff"><span class="funcount">-- entered 34 times</span><span class="decl"><span class="istickedoff">fpsTextAccum</span></span></span>   :: ![BS.ByteString]
+<span class="lineno">  150 </span>    , <span class="istickedoff"><span class="funcount">-- entered 42 times</span><span class="decl"><span class="istickedoff">fpsInBaseName</span></span></span>  :: !Bool
+<span class="lineno">  151 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">fpsSynonyms</span></span></span>    :: ![Text]  -- accumulated synonym names
+<span class="lineno">  152 </span>    , <span class="istickedoff"><span class="funcount">-- entered 71 times</span><span class="decl"><span class="istickedoff">fpsInSynonyms</span></span></span>  :: !Bool    -- inside &lt;common:synonyms&gt;
+<span class="lineno">  153 </span>    , <span class="istickedoff"><span class="funcount">-- entered 48 times</span><span class="decl"><span class="istickedoff">fpsLangIsEn</span></span></span>    :: !Bool    -- current synonyms element has xml:lang=&quot;en&quot;
+<span class="lineno">  154 </span>    , <span class="istickedoff"><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">fpsFlowType</span></span></span>    :: !Text    -- &lt;typeOfDataSet&gt; text
+<span class="lineno">  155 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpsRefFlowPropIdx</span></span></span> :: !Int  -- referenceToReferenceFlowProperty index
+<span class="lineno">  156 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">fpsCurrentFPIdx</span></span></span>   :: !Int  -- current flowProperty dataSetInternalID
+<span class="lineno">  157 </span>    , <span class="istickedoff"><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">fpsFlowPropRef</span></span></span>    :: !(Maybe UUID) -- resolved flow property UUID
+<span class="lineno">  158 </span>    , <span class="istickedoff"><span class="funcount">-- entered 48 times</span><span class="decl"><span class="istickedoff">fpsInFlowProperty</span></span></span> :: !Bool -- inside &lt;flowProperty&gt;
 <span class="lineno">  159 </span>    }
 <span class="lineno">  160 </span>
 <span class="lineno">  161 </span>initialFlowState :: FlowParseState
-<span class="lineno">  162 </span><span class="decl"><span class="istickedoff">initialFlowState = FlowParseState &quot;&quot; &quot;&quot; &quot;&quot; [] [] [] False [] False False &quot;&quot; 0 (-1) Nothing False</span></span>
+<span class="lineno">  162 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">initialFlowState = FlowParseState &quot;&quot; &quot;&quot; &quot;&quot; [] [] [] False [] False False &quot;&quot; 0 (-1) Nothing False</span></span>
 <span class="lineno">  163 </span>
 <span class="lineno">  164 </span>-- | Parse a single ILCD flow XML from bytes
 <span class="lineno">  165 </span>parseFlowXML :: BS.ByteString -&gt; Maybe (UUID, ILCDFlowInfo)
-<span class="lineno">  166 </span><span class="decl"><span class="istickedoff">parseFlowXML bytes =</span>
+<span class="lineno">  166 </span><span class="funcount">-- entered 7 times</span><span class="decl"><span class="istickedoff">parseFlowXML bytes =</span>
 <span class="lineno">  167 </span><span class="spaces">    </span><span class="istickedoff">case X.fold openTag attr endOpen txt closeTag <span class="nottickedoff">cdata</span> initialFlowState bytes of</span>
 <span class="lineno">  168 </span><span class="spaces">        </span><span class="istickedoff">Left _  -&gt; <span class="nottickedoff">Nothing</span></span>
 <span class="lineno">  169 </span><span class="spaces">        </span><span class="istickedoff">Right s -&gt; buildFlowInfo s</span>
@@ -275,7 +275,7 @@ span.spaces    { background: white }
 <span class="lineno">  256 </span>-- Level 1: &quot;Emissions to air&quot; → medium = &quot;air&quot;
 <span class="lineno">  257 </span>-- Level 2: &quot;Emissions to air, indoor&quot; → subcompartment = &quot;indoor&quot;
 <span class="lineno">  258 </span>parseCompartment :: [Text] -&gt; Maybe Compartment
-<span class="lineno">  259 </span><span class="decl"><span class="istickedoff">parseCompartment [] = Nothing</span>
+<span class="lineno">  259 </span><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">parseCompartment [] = Nothing</span>
 <span class="lineno">  260 </span><span class="spaces"></span><span class="istickedoff">parseCompartment cats =</span>
 <span class="lineno">  261 </span><span class="spaces">    </span><span class="istickedoff">let -- Level 1 typically contains medium: &quot;Emissions to air&quot;, &quot;Emissions to water&quot;, etc.</span>
 <span class="lineno">  262 </span><span class="spaces">        </span><span class="istickedoff">medium = case drop 1 cats of</span>
