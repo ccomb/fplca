@@ -9,6 +9,8 @@ module ILCD.Parser
     ( parseILCDDirectory
     , parseProcessXML
     , ILCDProcessRaw(..)
+    , buildSupplierIndex
+    , fixActivityExchanges
     ) where
 
 import Control.Concurrent (getNumCapabilities)
@@ -25,7 +27,7 @@ import System.FilePath ((</>), takeExtension)
 import Data.Char (toLower)
 import Text.Printf (printf)
 
-import EcoSpold.Common (bsToText, isElement)
+import EcoSpold.Common (bsToText, isElement, distributeFiles)
 import Method.FlowResolver (ILCDFlowInfo(..), parseFlowDirectory)
 import Method.Types (Compartment(..))
 import Types
@@ -367,18 +369,6 @@ parseProcessFilesParallel files = do
         results <- mapM (\f -> parseProcessXML <$> BS.readFile f) paths
         return [r | Just r <- results]
 
--- | Distribute files evenly across N workers
-distributeFiles :: Int -> [a] -> [[a]]
-distributeFiles n xs =
-    let len = length xs
-        baseSize = len `div` n
-        remainder = len `mod` n
-        sizes = replicate remainder (baseSize + 1) ++ replicate (n - remainder) baseSize
-    in go sizes xs
-  where
-    go [] _ = []
-    go (sz:ss) ys = let (h, t) = splitAt sz ys in h : go ss t
-
 --------------------------------------------------------------------------------
 -- Build ActivityMap from raw processes
 --------------------------------------------------------------------------------
@@ -441,34 +431,33 @@ buildActivity flowInfoMap flowDB unitDB p = Activity
 -- Fix activity links (supplier resolution by name)
 --------------------------------------------------------------------------------
 
-type NameOnlyIndex = M.Map Text (UUID, UUID)
+-- | Flow UUID → (activityUUID, productUUID) for reference exchanges
+type SupplierIndex = M.Map UUID (UUID, UUID)
 
 fixILCDActivityLinks :: SimpleDatabase -> IO SimpleDatabase
 fixILCDActivityLinks db = do
-    let nameIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)
-    reportProgress Info $ printf "Built supplier index with %d entries for ILCD linking" (M.size nameIndex)
-    let fixedActivities = M.map (fixActivityExchanges nameIndex (sdbFlows db)) (sdbActivities db)
-    return db { sdbActivities = fixedActivities }
+    let idx = buildSupplierIndex (sdbActivities db)
+    reportProgress Info $ printf "Built supplier index with %d entries for ILCD linking" (M.size idx)
+    return db { sdbActivities = M.map (fixActivityExchanges idx) (sdbActivities db) }
 
-buildSupplierIndex :: ActivityMap -> FlowDB -> NameOnlyIndex
-buildSupplierIndex activities flowDb =
+-- | Build a flow-UUID-keyed index of (activityUUID, productUUID) from reference exchanges.
+-- UUID-based: no name collisions, no indirection through flowDB.
+buildSupplierIndex :: ActivityMap -> SupplierIndex
+buildSupplierIndex activities =
     M.fromList
-        [ (T.toLower (flowName flow), (actUUID, prodUUID))
+        [ (exchangeFlowId ex, (actUUID, prodUUID))
         | ((actUUID, prodUUID), act) <- M.toList activities
         , ex <- exchanges act
         , exchangeIsReference ex
-        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
         ]
 
-fixActivityExchanges :: NameOnlyIndex -> FlowDB -> Activity -> Activity
-fixActivityExchanges idx flowDb act =
+fixActivityExchanges :: SupplierIndex -> Activity -> Activity
+fixActivityExchanges idx act =
     act { exchanges = map fixEx (exchanges act) }
   where
     fixEx ex@(TechnosphereExchange fid amt uid isInp _ _ procLink loc)
-        | isInp = case M.lookup fid flowDb of
-            Just flow -> case M.lookup (T.toLower (flowName flow)) idx of
-                Just (actUUID, prodUUID) ->
-                    TechnosphereExchange prodUUID amt uid isInp False actUUID procLink loc
-                Nothing -> ex
+        | isInp = case M.lookup fid idx of
+            Just (actUUID, prodUUID) ->
+                TechnosphereExchange prodUUID amt uid isInp False actUUID procLink loc
             Nothing -> ex
     fixEx ex = ex
