@@ -5,4 +5,4 @@ cradle:
     - path: "src/"
       component: "volca:lib:volca"
     - path: "test/"
-      component: "volca:test:acv-tests"
+      component: "volca:test:lca-tests"

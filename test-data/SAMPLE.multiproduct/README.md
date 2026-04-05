@@ -1,6 +1,6 @@
 # SAMPLE.multiproduct - Multi-Output Allocation Test Dataset
 
-This test dataset validates ACV engine handling of multi-output processes and allocation strategies.
+This test dataset validates LCA engine handling of multi-output processes and allocation strategies.
 
 ## Test Activities
 

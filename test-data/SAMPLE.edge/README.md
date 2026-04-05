@@ -1,6 +1,6 @@
 # SAMPLE.edge - Robustness and Error Handling Test Dataset
 
-This test dataset validates ACV engine robustness against edge cases, malformed data, and error conditions.
+This test dataset validates LCA engine robustness against edge cases, malformed data, and error conditions.
 
 ## Test Activities
 

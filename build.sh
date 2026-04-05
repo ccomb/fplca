@@ -399,7 +399,7 @@ if [[ "$RUN_TESTS" == "true" ]]; then
         cabal test --enable-coverage --test-show-details=streaming
 
         log_info "Generating coverage report..."
-        TIX_FILE=$(find "$SCRIPT_DIR/dist-newstyle" -name "acv-tests.tix" -path "*/hpc/*" 2>/dev/null | head -1)
+        TIX_FILE=$(find "$SCRIPT_DIR/dist-newstyle" -name "lca-tests.tix" -path "*/hpc/*" 2>/dev/null | head -1)
         if [[ -n "$TIX_FILE" && -f "$TIX_FILE" ]]; then
             COVERAGE_DIR="$SCRIPT_DIR/coverage-report"
             rm -rf "$COVERAGE_DIR"

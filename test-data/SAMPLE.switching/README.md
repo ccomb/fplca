@@ -1,6 +1,6 @@
 # SAMPLE.switching - Process Switching and Reference Product Test Dataset
 
-This test dataset validates ACV engine handling of **same activity UUID with different reference products** - the critical scenario for process flexibility, market-driven allocation, and database merging.
+This test dataset validates LCA engine handling of **same activity UUID with different reference products** - the critical scenario for process flexibility, market-driven allocation, and database merging.
 
 ## Test Scenarios
 

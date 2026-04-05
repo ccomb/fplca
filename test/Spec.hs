@@ -17,6 +17,8 @@ import qualified ServerSpec
 import qualified ILCDParserSpec
 import qualified SupplyChainSpec
 import qualified HotspotSpec
+import qualified TreeSpec
+import qualified ServiceSpec
 
 main :: IO ()
 main = hspec $ do
@@ -33,3 +35,5 @@ main = hspec $ do
         describe "ILCD Parser" ILCDParserSpec.spec
         describe "Supply Chain" SupplyChainSpec.spec
         describe "Hotspot Analysis" HotspotSpec.spec
+        describe "Loop-Aware Tree" TreeSpec.spec
+        describe "Service Layer" ServiceSpec.spec
