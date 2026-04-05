@@ -25,6 +25,7 @@ import qualified FlowResolverSpec
 import qualified PluginConfigSpec
 import qualified LoaderSpec
 import qualified MappingSpec
+import qualified UploadedDatabaseSpec
 
 main :: IO ()
 main = hspec $ do
@@ -49,3 +50,4 @@ main = hspec $ do
         describe "Plugin Config" PluginConfigSpec.spec
         describe "Loader" LoaderSpec.spec
         describe "Method Mapping" MappingSpec.spec
+        describe "Uploaded Database" UploadedDatabaseSpec.spec

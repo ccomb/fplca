@@ -10,6 +10,9 @@ module Database.UploadedDatabase
       -- * Meta file operations
     , readUploadMeta
     , writeUploadMeta
+    , parseMetaToml
+    , formatMetaToml
+    , parseFormat
       -- * Discovery
     , discoverUploadedDatabases
     , discoverUploadedMethods
