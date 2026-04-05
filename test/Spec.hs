@@ -24,6 +24,7 @@ import qualified SharedSolverSpec
 import qualified FlowResolverSpec
 import qualified PluginConfigSpec
 import qualified LoaderSpec
+import qualified MappingSpec
 
 main :: IO ()
 main = hspec $ do
@@ -47,3 +48,4 @@ main = hspec $ do
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec
         describe "Loader" LoaderSpec.spec
+        describe "Method Mapping" MappingSpec.spec

@@ -1,0 +1,176 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module MappingSpec (spec) where
+
+import Test.Hspec
+import qualified Data.Map.Strict as M
+import Data.Text (Text)
+import Data.UUID (UUID, nil)
+import Data.UUID.V4 (nextRandom)
+
+import Types (Flow(..), FlowType(..), Unit(..))
+import Method.Types (MethodCF(..), Compartment(..), FlowDirection(..))
+import Method.Mapping
+import SynonymDB (emptySynonymDB)
+import UnitConversion (defaultUnitConfig)
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+mkFlow :: UUID -> Text -> Text -> Maybe Text -> Flow
+mkFlow fid name cat msub = Flow
+    { flowId             = fid
+    , flowName           = name
+    , flowCategory       = cat
+    , flowSubcompartment = msub
+    , flowUnitId         = nil
+    , flowType           = Biosphere
+    , flowSynonyms       = M.empty
+    , flowCAS            = Nothing
+    , flowSubstanceId    = Nothing
+    }
+
+mkCF :: Text -> Maybe Text -> Double -> MethodCF
+mkCF name mCas val = MethodCF
+    { mcfFlowRef     = nil
+    , mcfFlowName    = name
+    , mcfDirection   = Output
+    , mcfValue       = val
+    , mcfCompartment = Nothing
+    , mcfCAS         = mCas
+    , mcfUnit        = "kg"
+    }
+
+-- ---------------------------------------------------------------------------
+-- Spec
+-- ---------------------------------------------------------------------------
+
+spec :: Spec
+spec = do
+
+    describe "strategyFromText" $ do
+        it "parses uuid" $ strategyFromText "uuid" `shouldBe` ByUUID
+        it "parses cas"  $ strategyFromText "CAS"  `shouldBe` ByCAS
+        it "parses name" $ strategyFromText "Name" `shouldBe` ByName
+        it "parses synonym" $ strategyFromText "synonym" `shouldBe` BySynonym
+        it "parses fuzzy"   $ strategyFromText "fuzzy"   `shouldBe` ByFuzzy
+        it "unknown falls back to fuzzy" $ strategyFromText "xyz" `shouldBe` ByFuzzy
+
+    describe "findFlowByUUID" $ do
+        it "finds a flow by its UUID" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "CO2" "air" Nothing
+                db   = M.singleton fid flow
+            fmap flowId (findFlowByUUID db fid) `shouldBe` Just fid
+
+        it "returns Nothing for unknown UUID" $ do
+            fid <- nextRandom
+            fmap flowId (findFlowByUUID M.empty fid) `shouldBe` Nothing
+
+    describe "pickByCompartment (via findFlowByNameComp)" $ do
+        it "returns Nothing for empty candidate list" $
+            fmap flowId (findFlowByNameComp M.empty "co2" Nothing) `shouldBe` Nothing
+
+        it "returns first flow when no compartment preference" $ do
+            fid1 <- nextRandom; fid2 <- nextRandom
+            let f1 = mkFlow fid1 "co2" "air" Nothing
+                f2 = mkFlow fid2 "co2" "water" Nothing
+                byName = M.singleton "co2" [f1, f2]
+            fmap flowId (findFlowByNameComp byName "co2" Nothing) `shouldBe` Just fid1
+
+        it "prefers exact medium+subcomp match" $ do
+            fid1 <- nextRandom; fid2 <- nextRandom
+            let fAir   = mkFlow fid1 "co2" "air"   (Just "urban air")
+                fWater = mkFlow fid2 "co2" "water" (Just "surface water")
+                byName = M.singleton "co2" [fWater, fAir]
+                comp   = Compartment "air" "urban air" ""
+            fmap flowId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fid1
+
+        it "falls back to medium match when no exact subcomp" $ do
+            fid1 <- nextRandom; fid2 <- nextRandom
+            let fAir   = mkFlow fid1 "co2" "air"   (Just "non-urban air")
+                fWater = mkFlow fid2 "co2" "water" Nothing
+                byName = M.singleton "co2" [fWater, fAir]
+                comp   = Compartment "air" "unspecified" ""
+            fmap flowId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fid1
+
+        it "falls back to first candidate when no medium matches" $ do
+            fid1 <- nextRandom
+            let fWater = mkFlow fid1 "co2" "water" Nothing
+                byName = M.singleton "co2" [fWater]
+                comp   = Compartment "air" "" ""
+            fmap flowId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fid1
+
+    describe "findFlowByCAS" $ do
+        it "finds flow by CAS number" $ do
+            fid <- nextRandom
+            let flow  = mkFlow fid "Carbon dioxide" "air" Nothing
+                byCAS = M.singleton "124-38-9" [flow]
+            fmap flowId (findFlowByCAS byCAS "124-38-9" Nothing) `shouldBe` Just fid
+
+        it "returns Nothing for unknown CAS" $
+            fmap flowId (findFlowByCAS M.empty "000-00-0" Nothing) `shouldBe` Nothing
+
+    describe "findFlowBySynonym" $ do
+        it "returns Nothing when synonym not in DB" $ do
+            fid <- nextRandom
+            let flow   = mkFlow fid "Carbon dioxide" "air" Nothing
+                byName = M.singleton "carbon dioxide" [flow]
+            fmap flowId (findFlowBySynonym emptySynonymDB byName "CO2") `shouldBe` Nothing
+
+    describe "computeMappingStats" $ do
+        it "counts totals and strategies correctly" $ do
+            fid1 <- nextRandom; fid2 <- nextRandom; fid3 <- nextRandom
+            let f1 = mkFlow fid1 "co2"     "air" Nothing
+                f2 = mkFlow fid2 "methane" "air" Nothing
+                f3 = mkFlow fid3 "n2o"     "air" Nothing
+                cf1 = mkCF "co2"     Nothing 1.0
+                cf2 = mkCF "methane" Nothing 25.0
+                cf3 = mkCF "n2o"     Nothing 298.0
+                cf4 = mkCF "hfc"     Nothing 1300.0
+                mappings = [ (cf1, Just (f1, ByUUID))
+                           , (cf2, Just (f2, ByName))
+                           , (cf3, Just (f3, ByCAS))
+                           , (cf4, Nothing)
+                           ]
+                stats = computeMappingStats mappings
+            msTotal stats     `shouldBe` 4
+            msByUUID stats    `shouldBe` 1
+            msByName stats    `shouldBe` 1
+            msByCAS stats     `shouldBe` 1
+            msBySynonym stats `shouldBe` 0
+            msUnmatched stats `shouldBe` 1
+
+        it "handles all-unmatched" $ do
+            let cf    = mkCF "xyz" Nothing 1.0
+                stats = computeMappingStats [(cf, Nothing)]
+            msUnmatched stats `shouldBe` 1
+            msByUUID stats    `shouldBe` 0
+
+    describe "computeLCIAScore" $ do
+        it "sums UUID-matched flows" $ do
+            fid <- nextRandom
+            let flow  = mkFlow fid "co2" "air" Nothing
+                unit  = Unit { unitId = nil, unitName = "kg", unitSymbol = "kg", unitComment = "" }
+                cf    = mkCF "co2" Nothing 1.0
+                mapping   = [(cf, Just (flow, ByUUID))]
+                inventory = M.singleton fid 100.0
+                flowDB    = M.singleton fid flow
+                unitDB    = M.singleton nil unit
+                score = computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping
+            score `shouldBe` 100.0
+
+        it "returns 0 when inventory is empty" $ do
+            let cf    = mkCF "co2" Nothing 1.0
+                score = computeLCIAScore defaultUnitConfig M.empty M.empty M.empty [(cf, Nothing)]
+            score `shouldBe` 0.0
+
+        it "skips zero-quantity flows" $ do
+            fid <- nextRandom
+            let flow  = mkFlow fid "co2" "air" Nothing
+                cf    = mkCF "co2" Nothing 1.0
+                mapping   = [(cf, Just (flow, ByUUID))]
+                inventory = M.singleton fid 0.0
+                score = computeLCIAScore defaultUnitConfig M.empty (M.singleton fid flow) inventory mapping
+            score `shouldBe` 0.0

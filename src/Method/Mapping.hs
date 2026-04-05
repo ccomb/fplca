@@ -1,5 +1,5 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Flow Mapping Engine
 --
@@ -16,6 +16,7 @@ module Method.Mapping
     , computeLCIAScore
       -- * Matching strategies
     , MatchStrategy(..)
+    , strategyFromText
     , findFlowByUUID
     , findFlowByName
     , findFlowByNameComp
@@ -80,7 +81,7 @@ mapMethodFlows
     -> Method
     -> IO [(MethodCF, Maybe (Flow, MatchStrategy))]
 mapMethodFlows mappers ctx method =
-    mapM (\cf -> fmap (\r -> (cf, r)) (mapSingleFlow mappers ctx cf)) (methodFactors method)
+    mapM (\cf -> fmap (cf,) (mapSingleFlow mappers ctx cf)) (methodFactors method)
 
 -- | Map a single CF using the mapper handle cascade.
 -- Each mapper is tried in order; the first match wins.
@@ -124,7 +125,7 @@ findFlowByUUID flowsByUUID uuid = M.lookup uuid flowsByUUID
 -- | Find flow by CAS number with compartment preference
 findFlowByCAS :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
 findFlowByCAS flowsByCAS cas mComp =
-    fmap (`pickByCompartment` mComp) (M.lookup cas flowsByCAS)
+    M.lookup cas flowsByCAS >>= \flows -> pickByCompartment flows mComp
 
 -- | Find flow by normalized name match (compartment-aware)
 findFlowByName :: M.Map Text [Flow] -> Text -> Maybe Flow
@@ -133,9 +134,7 @@ findFlowByName flowsByName name = findFlowByNameComp flowsByName name Nothing
 -- | Find flow by normalized name with compartment preference
 findFlowByNameComp :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
 findFlowByNameComp flowsByName name mComp =
-    case M.lookup (normalizeName name) flowsByName of
-        Just flows@(_:_) -> Just (pickByCompartment flows mComp)
-        _                -> Nothing
+    M.lookup (normalizeName name) flowsByName >>= \flows -> pickByCompartment flows mComp
 
 -- | Find flow via synonym group (compartment-aware)
 findFlowBySynonym :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Flow
@@ -145,40 +144,35 @@ findFlowBySynonym synDB flowsByName name = findFlowBySynonymComp synDB flowsByNa
 findFlowBySynonymComp :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
 findFlowBySynonymComp synDB flowsByName name mComp =
     case lookupSynonymGroup synDB name of
-        Nothing -> Nothing
-        Just groupId ->
-            case getSynonyms synDB groupId of
-                Nothing -> Nothing
-                Just synonyms ->
-                    let candidates = concatMap (lookupFlows flowsByName) synonyms
-                    in if null candidates then Nothing
-                       else Just (pickByCompartment candidates mComp)
+        Nothing  -> Nothing
+        Just gid -> getSynonyms synDB gid >>= \synonyms ->
+            pickByCompartment (concatMap (lookupFlows flowsByName) synonyms) mComp
   where
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
 
 -- | Pick the best flow match based on compartment preference.
-pickByCompartment :: [Flow] -> Maybe Compartment -> Flow
-pickByCompartment flows Nothing = head flows
-pickByCompartment flows (Just comp) =
-    case find (exactCompMatch comp) flows of
-        Just f  -> f
-        Nothing -> case find (mediumMatch comp) flows of
-            Just f  -> f
-            Nothing -> head flows
+-- Returns Nothing for an empty candidate list.
+pickByCompartment :: [Flow] -> Maybe Compartment -> Maybe Flow
+pickByCompartment []    _          = Nothing
+pickByCompartment (f:_) Nothing    = Just f
+pickByCompartment (f:fs) (Just comp) = Just $
+    case find (exactCompMatch comp) (f:fs) of
+        Just m  -> m
+        Nothing -> fromMaybe f (find (mediumMatch comp) (f:fs))
   where
-    exactCompMatch (Compartment med sub _) f =
-        let cat = T.toLower (flowCategory f)
-            subcomp = maybe "" T.toLower (flowSubcompartment f)
+    exactCompMatch (Compartment med sub _) fl =
+        let cat    = T.toLower (flowCategory fl)
+            subcomp = maybe "" T.toLower (flowSubcompartment fl)
         in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
 
-    mediumMatch (Compartment med _ _) f =
-        matchMedium med (T.toLower (flowCategory f))
+    mediumMatch (Compartment med _ _) fl =
+        matchMedium med (T.toLower (flowCategory fl))
 
     matchMedium med cat
-        | T.null med  = True
-        | med == cat  = True
+        | T.null med        = True
+        | med == cat        = True
         | med `T.isInfixOf` cat = True
-        | otherwise   = False
+        | otherwise         = False
 
 -- | Compute statistics about mapping results
 computeMappingStats :: [(MethodCF, Maybe (Flow, MatchStrategy))] -> MappingStats
@@ -211,9 +205,7 @@ computeLCIAScore unitConfig unitDB flowDB inventory mappings =
         Just (cfVal, cfUnit) ->
             let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
                 converted = if flowUnit == cfUnit || T.null cfUnit then qty
-                            else case convertUnit unitConfig flowUnit cfUnit qty of
-                                Just c  -> c
-                                Nothing -> qty  -- fallback: assume same unit
+                            else fromMaybe qty (convertUnit unitConfig flowUnit cfUnit qty)
             in converted * cfVal
 
     lookupCF fid = case M.lookup fid uuidCF of
