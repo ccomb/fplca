@@ -8,6 +8,8 @@ module Matrix.Export
     , exportMatrixDebugCSVs
     , extractMatrixDebugInfo
     , MatrixDebugInfo(..)
+      -- * Utilities
+    , escapeCsvField
     ) where
 
 import Matrix (applySparseMatrix, buildDemandVectorFromIndex, solveSparseLinearSystem, toList)

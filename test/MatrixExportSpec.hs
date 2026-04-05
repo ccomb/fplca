@@ -7,10 +7,13 @@ import TestHelpers
 import GoldenData
 import Types
 import Service (exportUniversalMatrixFormat)
+import Matrix.Export ( escapeCsvField, extractMatrixDebugInfo, exportMatrixDebugCSVs
+                     , MatrixDebugInfo(..) )
 import System.IO.Temp (withSystemTempDirectory)
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.UUID as UUID
 
 spec :: Spec
 spec = do
@@ -123,3 +126,89 @@ spec = do
                 let firstDataLine = head dataLines
                 let fields = T.splitOn ";" firstDataLine
                 length fields `shouldBe` 8
+
+    -- -------------------------------------------------------------------
+    -- escapeCsvField (pure)
+    -- -------------------------------------------------------------------
+    describe "escapeCsvField" $ do
+
+        it "passes through plain text unchanged" $
+            escapeCsvField "hello world" `shouldBe` "hello world"
+
+        it "quotes text containing a semicolon" $
+            escapeCsvField "a;b" `shouldBe` "\"a;b\""
+
+        it "quotes text containing a double quote and escapes it" $
+            escapeCsvField "say \"hi\"" `shouldBe` "\"say \"\"hi\"\"\""
+
+        it "quotes text containing a newline" $
+            escapeCsvField "line1\nline2" `shouldBe` "\"line1\nline2\""
+
+        it "quotes text containing a carriage return" $
+            escapeCsvField "a\rb" `shouldBe` "\"a\rb\""
+
+        it "passes through empty text unchanged" $
+            escapeCsvField "" `shouldBe` ""
+
+        it "handles text with all special characters" $
+            escapeCsvField "a;b\"c\nd" `shouldBe` "\"a;b\"\"c\nd\""
+
+    -- -------------------------------------------------------------------
+    -- extractMatrixDebugInfo + exportMatrixDebugCSVs
+    -- -------------------------------------------------------------------
+    describe "extractMatrixDebugInfo" $ do
+
+        it "returns supply, demand, and inventory vectors of correct length" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            info <- extractMatrixDebugInfo db targetUUID Nothing
+            let n = fromIntegral (dbActivityCount db)
+            length (mdSupplyVector info)    `shouldBe` n
+            length (mdDemandVector info)    `shouldBe` n
+
+        it "demand vector has exactly one non-zero entry" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            info <- extractMatrixDebugInfo db targetUUID Nothing
+            length (filter (/= 0.0) (mdDemandVector info)) `shouldBe` 1
+
+        it "inventory vector is non-empty (has biosphere contributions)" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            info <- extractMatrixDebugInfo db targetUUID Nothing
+            any (/= 0.0) (mdInventoryVector info) `shouldBe` True
+
+        it "flow filter restricts biosphere triples" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            infoAll    <- extractMatrixDebugInfo db targetUUID Nothing
+            infoFiltered <- extractMatrixDebugInfo db targetUUID (Just "carbon")
+            -- Filtered should have ≤ triples than unfiltered
+            let nAll      = length (mdInventoryVector infoAll)
+                nFiltered = length (mdInventoryVector infoFiltered)
+            nFiltered `shouldSatisfy` (<= nAll)
+
+    describe "exportMatrixDebugCSVs" $ do
+
+        it "creates supply chain and biosphere CSV files" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            info <- extractMatrixDebugInfo db targetUUID Nothing
+            withSystemTempDirectory "acv-debug" $ \tmpDir -> do
+                let base = tmpDir </> "debug"
+                exportMatrixDebugCSVs base info
+                supplyContent <- TIO.readFile (base ++ "_supply_chain.csv")
+                bioContent    <- TIO.readFile (base ++ "_biosphere_matrix.csv")
+                T.isInfixOf "activity_id" supplyContent `shouldBe` True
+                T.isInfixOf "flow_id"     bioContent    `shouldBe` True
+
+        it "supply chain CSV has one row per activity" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
+            info <- extractMatrixDebugInfo db targetUUID Nothing
+            withSystemTempDirectory "acv-debug" $ \tmpDir -> do
+                let base = tmpDir </> "debug"
+                exportMatrixDebugCSVs base info
+                content <- TIO.readFile (base ++ "_supply_chain.csv")
+                -- header + 3 activities (SAMPLE.min3)
+                length (lines (T.unpack content)) `shouldBe` 4
