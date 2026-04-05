@@ -1,9 +1,16 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module SimaProParserSpec (spec) where
 
 import Test.Hspec
-import SimaPro.Parser (parseSimaProCSV)
+import SimaPro.Parser
+    ( parseSimaProCSV, defaultConfig
+    , splitCSV, parseAmount
+    , parseProductRow, parseTechRow, parseBioRow
+    , generateActivityUUID, generateFlowUUID, generateUnitUUID
+    , ProductRow(..), TechExchangeRow(..), BioExchangeRow(..)
+    )
 import SimaPro.Expr (evaluate, normalizeExpr)
 import Types (Activity(..), Exchange(..), Unit(..), Flow, UUID)
 import UnitConversion (defaultUnitConfig, isKnownUnit)
@@ -491,6 +498,237 @@ spec = do
             -- corrected = 250/1000/0.95/0.90 ≈ 0.2924
             length amounts `shouldBe` 1
             head amounts `shouldSatisfy` (\x -> abs (x - 0.2924) < 0.001)
+
+    -- -----------------------------------------------------------------------
+    -- Pure row parsers
+    -- -----------------------------------------------------------------------
+
+    describe "splitCSV" $ do
+        it "splits basic semicolon-delimited row" $
+            splitCSV ';' "a;b;c" `shouldBe` ["a", "b", "c"]
+
+        it "strips quotes and embeds delimiter in field" $
+            splitCSV ';' "\"a;b\";c" `shouldBe` ["a;b", "c"]
+
+        it "splits comma-delimited row" $
+            splitCSV ',' "x,y,z" `shouldBe` ["x", "y", "z"]
+
+        it "handles empty fields" $
+            splitCSV ';' "a;;c" `shouldBe` ["a", "", "c"]
+
+    describe "parseAmount" $ do
+        it "parses integer" $
+            parseAmount '.' "42" `shouldBe` 42.0
+
+        it "parses decimal with dot separator" $
+            parseAmount '.' "3.14" `shouldBe` 3.14
+
+        it "parses decimal with comma separator" $
+            parseAmount ',' "3,14" `shouldBe` 3.14
+
+        it "returns 0.0 for empty input" $
+            parseAmount '.' "" `shouldBe` 0.0
+
+        it "returns 0.0 for non-numeric" $
+            parseAmount '.' "abc" `shouldBe` 0.0
+
+    describe "parseProductRow" $ do
+        it "parses 7-field product row" $
+            parseProductRow defaultConfig "Steel;kg;1.0;100;not defined;material;comment"
+                `shouldBe` Just ProductRow
+                    { prName = "Steel", prUnit = "kg", prAmount = 1.0, prAmountRaw = "1.0"
+                    , prAllocation = 100.0, prAllocRaw = "100", prWasteType = "not defined"
+                    , prCategory = "material", prComment = "comment" }
+
+        it "parses 6-field row (no allocation — waste treatment)" $
+            parseProductRow defaultConfig "Waste flow;kg;1.0;All waste types;waste treatment;comment"
+                `shouldBe` Just ProductRow
+                    { prName = "Waste flow", prUnit = "kg", prAmount = 1.0, prAmountRaw = "1.0"
+                    , prAllocation = 100.0, prAllocRaw = "100"
+                    , prWasteType = "All waste types", prCategory = "waste treatment"
+                    , prComment = "comment" }
+
+        it "returns Nothing for too-short row" $
+            parseProductRow defaultConfig "name;kg" `shouldBe` Nothing
+
+    describe "parseTechRow" $ do
+        it "parses full tech exchange row" $
+            parseTechRow defaultConfig "Coal;kg;5.0;Undefined;;;;;;"
+                `shouldSatisfy` \case
+                    Just r  -> terName r == "Coal" && terUnit r == "kg" && terAmount r == 5.0
+                    Nothing -> False
+
+        it "parses minimal tech row (name;unit;amount)" $
+            parseTechRow defaultConfig "Oil;MJ;2.5"
+                `shouldSatisfy` \case
+                    Just r  -> terName r == "Oil" && terAmount r == 2.5
+                    Nothing -> False
+
+        it "returns Nothing for too-short row" $
+            parseTechRow defaultConfig "name" `shouldBe` Nothing
+
+    describe "parseBioRow" $ do
+        it "parses full bio exchange row" $
+            parseBioRow defaultConfig "Carbon dioxide;air;kg;1.0;Undefined;;;;;;"
+                `shouldSatisfy` \case
+                    Just r  -> berName r == "Carbon dioxide" && berCompartment r == "air" && berAmount r == 1.0
+                    Nothing -> False
+
+        it "parses minimal bio row (name;comp;unit;amount)" $
+            parseBioRow defaultConfig "Methane;air;kg;0.5"
+                `shouldSatisfy` \case
+                    Just r  -> berName r == "Methane" && berUnit r == "kg"
+                    Nothing -> False
+
+        it "returns Nothing for too-short row" $
+            parseBioRow defaultConfig "name;air" `shouldBe` Nothing
+
+    -- -----------------------------------------------------------------------
+    -- UUID generation
+    -- -----------------------------------------------------------------------
+
+    describe "UUID generation" $ do
+        it "generateUnitUUID is deterministic" $
+            generateUnitUUID "kg" `shouldBe` generateUnitUUID "kg"
+
+        it "generateUnitUUID differs for different units" $
+            generateUnitUUID "kg" `shouldNotBe` generateUnitUUID "MJ"
+
+        it "generateFlowUUID is deterministic" $
+            generateFlowUUID "CO2" "air" "kg" `shouldBe` generateFlowUUID "CO2" "air" "kg"
+
+        it "generateFlowUUID differs when compartment differs" $
+            generateFlowUUID "CO2" "air" "kg" `shouldNotBe` generateFlowUUID "CO2" "water" "kg"
+
+    -- -----------------------------------------------------------------------
+    -- Uncovered CSV sections
+    -- -----------------------------------------------------------------------
+
+    describe "SimaPro uncovered sections" $ do
+        it "parses Electricity/heat exchanges" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Electricity/heat"
+                , "Electricity, medium voltage;kWh;0.3;Undefined;;;;;;"
+                ]
+            let act = head activities
+                techIn = [e | e@TechnosphereExchange{} <- exchanges act, techIsInput e, not (techIsReference e)]
+            length techIn `shouldBe` 1
+
+        it "parses Resources (biosphere inputs)" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Resources"
+                , "Water, river;in water;m3;0.1;Undefined;;;;;;"
+                ]
+            let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
+            length bio `shouldBe` 1
+
+        it "parses Emissions to water" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Emissions to water"
+                , "Phosphate;river;kg;0.01;Undefined;;;;;;"
+                ]
+            let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
+            length bio `shouldBe` 1
+
+        it "parses Emissions to soil" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Emissions to soil"
+                , "Zinc;agricultural;kg;0.001;Undefined;;;;;;"
+                ]
+            let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
+            length bio `shouldBe` 1
+
+        it "parses Final waste flows" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Final waste flows"
+                , "Inert waste, for final disposal;kg;0.5;Undefined;;;;;;"
+                ]
+            let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
+            length bio `shouldBe` 1
+
+        it "parses location from process name {XX} pattern" $ do
+            (activities, _, _) <- parseNamedCSV "Widget {FR} U" []
+            activityLocation (head activities) `shouldBe` "FR"
+
+        it "parses location from Geography metadata" $ do
+            (activities, _, _) <- parseTestCSV
+            let a = head activities
+            activityLocation a `shouldBe` "GLO"
+
+    describe "SimaPro comma CSV separator" $ do
+        it "parses comma-separated CSV" $ do
+            (activities, _, _) <- parseCommaCSV
+            length activities `shouldBe` 1
+            activityName (head activities) `shouldBe` "Comma Product"
+
+-- ---------------------------------------------------------------------------
+-- Helpers for section tests
+-- ---------------------------------------------------------------------------
+
+-- | Build a minimal process CSV with extra section lines inserted
+parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseSectionCSV sectionLines =
+    parseNamedCSV "Test process" sectionLines
+
+parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseNamedCSV procName sectionLines =
+    withSystemTempFile "section-test.csv" $ \path handle -> do
+        let content = BS.intercalate "\r\n" $
+                [ "{SimaPro 9.6.0.1}"
+                , "{CSV separator: semicolon}"
+                , "{Decimal separator: .}"
+                , ""
+                , "Process"
+                , ""
+                , "Category type"
+                , "material"
+                , ""
+                , "Process name"
+                , procName
+                , ""
+                , "Type"
+                , "Unit process"
+                , ""
+                , "Products"
+                , "Reference product;kg;1.0;100;not defined;material;"
+                , ""
+                ] ++ sectionLines ++
+                [ ""
+                , "End"
+                ]
+        BS.hPut handle content
+        hClose handle
+        parseSimaProCSV path
+
+-- | CSV with comma as separator
+commaCSV :: BS.ByteString
+commaCSV = BS.intercalate "\r\n"
+    [ "{SimaPro 9.6.0.1}"
+    , "{CSV separator: Comma}"
+    , "{Decimal separator: .}"
+    , ""
+    , "Process"
+    , ""
+    , "Category type"
+    , "material"
+    , ""
+    , "Process name"
+    , "Comma Product"
+    , ""
+    , "Type"
+    , "Unit process"
+    , ""
+    , "Products"
+    , "Comma Product,kg,1.0,100,not defined,material,"
+    , ""
+    , "End"
+    ]
+
+parseCommaCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
+    BS.hPut handle commaCSV
+    hClose handle
+    parseSimaProCSV path
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True

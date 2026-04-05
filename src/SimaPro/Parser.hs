@@ -21,6 +21,9 @@ module SimaPro.Parser
     , ensureUtf8
     , splitCSV
     , parseAmount
+    , parseProductRow
+    , parseTechRow
+    , parseBioRow
     , decodeBS
     ) where
 
