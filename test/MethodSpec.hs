@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module MethodSpec (spec) where
 
@@ -85,6 +86,62 @@ spec = do
                             Just gid -> do
                                 let synonyms = getSynonyms db gid
                                 synonyms `shouldSatisfy` maybe False (not . null)
+
+        describe "buildFromPairs" $ do
+            it "returns empty DB for empty list" $
+                synonymCount (buildFromPairs []) `shouldBe` 0
+
+            it "makes both names in a pair findable" $ do
+                let db = buildFromPairs [("CO2", "Carbon dioxide")]
+                lookupSynonymGroup db "co2" `shouldNotBe` Nothing
+                lookupSynonymGroup db "carbon dioxide" `shouldNotBe` Nothing
+
+            it "ignores pairs where both names normalize identically" $
+                synonymCount (buildFromPairs [("CO2", "co2")]) `shouldBe` 0
+
+            it "handles multiple independent pairs" $ do
+                let db = buildFromPairs [("CO2", "Carbon dioxide"), ("CH4", "Methane")]
+                lookupSynonymGroup db "co2" `shouldNotBe` Nothing
+                lookupSynonymGroup db "ch4" `shouldNotBe` Nothing
+
+            it "does not pollute unrelated pairs — CO2 and CH4 are in separate groups" $ do
+                let db = buildFromPairs [("CO2", "Carbon dioxide"), ("CH4", "Methane")]
+                lookupSynonymGroup db "co2" `shouldNotBe` lookupSynonymGroup db "ch4"
+
+            it "prevents overly generic terms (>50 direct synonyms) from dominating" $ do
+                -- "generic" paired with 51 substances; each substance should still be findable
+                let pairs = map ("generic",) (map (T.pack . show) [1..51 :: Int])
+                    db    = buildFromPairs pairs
+                lookupSynonymGroup db "1" `shouldNotBe` Nothing
+
+        describe "mergeSynonymDBs" $ do
+            it "returns empty DB for empty list" $
+                synonymCount (mergeSynonymDBs []) `shouldBe` 0
+
+            it "returns equivalent DB for singleton list" $ do
+                let db = buildFromPairs [("CO2", "Carbon dioxide")]
+                synonymCount (mergeSynonymDBs [db]) `shouldBe` synonymCount db
+
+            it "merged DB contains entries from both sources" $ do
+                let db1    = buildFromPairs [("CO2", "Carbon dioxide")]
+                    db2    = buildFromPairs [("N2O", "Nitrous oxide")]
+                    merged = mergeSynonymDBs [db1, db2]
+                lookupSynonymGroup merged "co2" `shouldNotBe` Nothing
+                lookupSynonymGroup merged "n2o" `shouldNotBe` Nothing
+
+            it "entries from db1 and db2 are in different groups after merge" $ do
+                let db1    = buildFromPairs [("CO2", "Carbon dioxide")]
+                    db2    = buildFromPairs [("N2O", "Nitrous oxide")]
+                    merged = mergeSynonymDBs [db1, db2]
+                lookupSynonymGroup merged "co2" `shouldNotBe` lookupSynonymGroup merged "n2o"
+
+        describe "synonymCount" $ do
+            it "is 0 for emptySynonymDB" $
+                synonymCount emptySynonymDB `shouldBe` 0
+
+            it "is positive for a non-empty DB" $ do
+                let db = buildFromPairs [("CO2", "Carbon dioxide")]
+                synonymCount db `shouldSatisfy` (> 0)
 
     describe "Method Parser" $ do
         describe "parseMethodBytes" $ do

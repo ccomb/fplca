@@ -11,7 +11,7 @@ import Data.UUID.V4 (nextRandom)
 import Types (Flow(..), FlowType(..), Unit(..))
 import Method.Types (MethodCF(..), Compartment(..), FlowDirection(..))
 import Method.Mapping
-import SynonymDB (emptySynonymDB)
+import SynonymDB (emptySynonymDB, buildFromPairs)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -112,12 +112,46 @@ spec = do
         it "returns Nothing for unknown CAS" $
             fmap flowId (findFlowByCAS M.empty "000-00-0" Nothing) `shouldBe` Nothing
 
+    describe "findFlowByName" $ do
+        it "finds a flow by name (case-insensitive via normalization)" $ do
+            fid <- nextRandom
+            let flow   = mkFlow fid "Carbon dioxide" "air" Nothing
+                byName = M.singleton "carbon dioxide" [flow]
+            fmap flowId (findFlowByName byName "Carbon dioxide") `shouldBe` Just fid
+
+        it "returns Nothing for unknown name" $
+            fmap flowId (findFlowByName M.empty "co2") `shouldBe` Nothing
+
     describe "findFlowBySynonym" $ do
         it "returns Nothing when synonym not in DB" $ do
             fid <- nextRandom
             let flow   = mkFlow fid "Carbon dioxide" "air" Nothing
                 byName = M.singleton "carbon dioxide" [flow]
             fmap flowId (findFlowBySynonym emptySynonymDB byName "CO2") `shouldBe` Nothing
+
+    describe "findFlowBySynonymComp" $ do
+        it "finds flow via synonym with compartment preference" $ do
+            fid1 <- nextRandom; fid2 <- nextRandom
+            let synDB  = buildFromPairs [("CO2", "Carbon dioxide")]
+                fAir   = mkFlow fid1 "Carbon dioxide" "air"   Nothing
+                fWater = mkFlow fid2 "Carbon dioxide" "water" Nothing
+                byName = M.singleton "carbon dioxide" [fWater, fAir]
+                comp   = Compartment "air" "" ""
+            fmap flowId (findFlowBySynonymComp synDB byName "CO2" (Just comp))
+                `shouldBe` Just fid1
+
+        it "returns Nothing when synonym not in DB" $ do
+            fid <- nextRandom
+            let synDB  = buildFromPairs [("CO2", "Carbon dioxide")]
+                flow   = mkFlow fid "Carbon dioxide" "air" Nothing
+                byName = M.singleton "carbon dioxide" [flow]
+            fmap flowId (findFlowBySynonymComp synDB byName "methane" Nothing)
+                `shouldBe` Nothing
+
+        it "returns Nothing when no flows match any synonym" $ do
+            let synDB  = buildFromPairs [("CO2", "Carbon dioxide")]
+            fmap flowId (findFlowBySynonymComp synDB M.empty "CO2" Nothing)
+                `shouldBe` Nothing
 
     describe "computeMappingStats" $ do
         it "counts totals and strategies correctly" $ do
