@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<processDataSet xmlns="http://lca.jrc.it/ILCD/Process"
+                xmlns:common="http://lca.jrc.it/ILCD/Common">
+  <processInformation>
+    <dataSetInformation>
+      <common:UUID>55555555-1234-1234-1234-123456789abc</common:UUID>
+      <name>
+        <baseName xml:lang="en">Mean Amount Process</baseName>
+      </name>
+    </dataSetInformation>
+    <geography location="RER"/>
+    <quantitativeReference>
+      <referenceToReferenceFlow>0</referenceToReferenceFlow>
+    </quantitativeReference>
+  </processInformation>
+  <exchanges>
+    <exchange dataSetInternalID="0">
+      <referenceToFlowDataSet refObjectId="aaaaaaaa-0000-0000-0000-000000000004"/>
+      <exchangeDirection>Output</exchangeDirection>
+      <meanAmount>42.0</meanAmount>
+    </exchange>
+  </exchanges>
+</processDataSet>

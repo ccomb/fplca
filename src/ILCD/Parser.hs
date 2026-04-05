@@ -9,6 +9,7 @@ module ILCD.Parser
     ( parseILCDDirectory
     , parseProcessXML
     , ILCDProcessRaw(..)
+    , ILCDExchangeRaw(..)
     , buildSupplierIndex
     , fixActivityExchanges
     ) where

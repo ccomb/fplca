@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<unitGroupDataSet xmlns="http://lca.jrc.it/ILCD/UnitGroup"
+                  xmlns:common="http://lca.jrc.it/ILCD/Common">
+  <unitGroupInformation>
+    <dataSetInformation>
+      <common:UUID>aaaaaaaa-0000-0000-0000-000000000001</common:UUID>
+      <common:name xml:lang="en">Units of mass</common:name>
+    </dataSetInformation>
+    <quantitativeReference>
+      <referenceToReferenceUnit>0</referenceToReferenceUnit>
+    </quantitativeReference>
+  </unitGroupInformation>
+  <units>
+    <unit dataSetInternalID="0">
+      <name>kg</name>
+      <meanValue>1</meanValue>
+    </unit>
+    <unit dataSetInternalID="1">
+      <name>g</name>
+      <meanValue>0.001</meanValue>
+    </unit>
+  </units>
+</unitGroupDataSet>

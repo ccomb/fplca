@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<flowDataSet xmlns="http://lca.jrc.it/ILCD/Flow"
+             xmlns:common="http://lca.jrc.it/ILCD/Common">
+  <flowInformation>
+    <dataSetInformation>
+      <common:UUID>aaaaaaaa-0000-0000-0000-000000000003</common:UUID>
+      <name>
+        <baseName xml:lang="en">Carbon dioxide</baseName>
+      </name>
+      <classificationInformation>
+        <common:elementaryFlowCategorization>
+          <common:category level="0">Emissions</common:category>
+          <common:category level="1">Emissions to air</common:category>
+        </common:elementaryFlowCategorization>
+      </classificationInformation>
+      <CASNumber>124-38-9</CASNumber>
+    </dataSetInformation>
+    <quantitativeReference>
+      <referenceToReferenceFlowProperty>0</referenceToReferenceFlowProperty>
+    </quantitativeReference>
+  </flowInformation>
+  <modellingAndValidation>
+    <LCIMethod>
+      <typeOfDataSet>Elementary flow</typeOfDataSet>
+    </LCIMethod>
+  </modellingAndValidation>
+  <flowProperties>
+    <flowProperty dataSetInternalID="0">
+      <referenceToFlowPropertyDataSet refObjectId="aaaaaaaa-0000-0000-0000-000000000002"
+                                      type="flow property data set"/>
+      <meanValue>1</meanValue>
+    </flowProperty>
+  </flowProperties>
+</flowDataSet>

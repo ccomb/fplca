@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<processDataSet xmlns="http://lca.jrc.it/ILCD/Process"
+                xmlns:common="http://lca.jrc.it/ILCD/Common">
+  <processInformation>
+    <dataSetInformation>
+      <common:UUID>aaaaaaaa-0000-0000-0000-000000000005</common:UUID>
+      <name>
+        <baseName xml:lang="en">Coal extraction</baseName>
+      </name>
+      <classificationInformation>
+        <common:classification name="ILCDCategories">
+          <common:class level="0">Energy</common:class>
+          <common:class level="1">Hard coal</common:class>
+        </common:classification>
+      </classificationInformation>
+    </dataSetInformation>
+    <geography location="GLO"/>
+    <quantitativeReference>
+      <referenceToReferenceFlow>0</referenceToReferenceFlow>
+    </quantitativeReference>
+  </processInformation>
+  <exchanges>
+    <exchange dataSetInternalID="0">
+      <referenceToFlowDataSet refObjectId="aaaaaaaa-0000-0000-0000-000000000004"
+                              type="flow data set"/>
+      <exchangeDirection>Output</exchangeDirection>
+      <resultingAmount>1.0</resultingAmount>
+    </exchange>
+    <exchange dataSetInternalID="1">
+      <referenceToFlowDataSet refObjectId="aaaaaaaa-0000-0000-0000-000000000003"
+                              type="flow data set"/>
+      <exchangeDirection>Output</exchangeDirection>
+      <resultingAmount>2.5</resultingAmount>
+    </exchange>
+  </exchanges>
+</processDataSet>
