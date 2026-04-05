@@ -337,11 +337,11 @@ span.spaces    { background: white }
 <span class="lineno">  318 </span><span class="spaces">        </span><span class="istickedoff">| <span class="tickonlyfalse">isElement tag &quot;location&quot; &amp;&amp; <span class="nottickedoff">psInExchange s</span></span> =</span>
 <span class="lineno">  319 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">s { psExLocation = accum s, psTextAccum = [] }</span></span>
 <span class="lineno">  320 </span><span class="spaces">        </span><span class="istickedoff">| isElement tag &quot;class&quot; &amp;&amp; psInClass s =</span>
-<span class="lineno">  321 </span><span class="spaces">            </span><span class="istickedoff">let txt = accum s</span>
+<span class="lineno">  321 </span><span class="spaces">            </span><span class="istickedoff">let classVal = accum s</span>
 <span class="lineno">  322 </span><span class="spaces">                </span><span class="istickedoff">key = psPendingClassName s</span>
 <span class="lineno">  323 </span><span class="spaces">                </span><span class="istickedoff">existing = M.findWithDefault &quot;&quot; key (psClassifications s)</span>
-<span class="lineno">  324 </span><span class="spaces">                </span><span class="istickedoff">val = if T.null existing then txt else existing &lt;&gt; &quot;/&quot; &lt;&gt; txt</span>
-<span class="lineno">  325 </span><span class="spaces">            </span><span class="istickedoff">in s { psClassifications = if <span class="tickonlyfalse">T.null txt</span> then <span class="nottickedoff">psClassifications s</span></span>
+<span class="lineno">  324 </span><span class="spaces">                </span><span class="istickedoff">val = if T.null existing then classVal else existing &lt;&gt; &quot;/&quot; &lt;&gt; classVal</span>
+<span class="lineno">  325 </span><span class="spaces">            </span><span class="istickedoff">in s { psClassifications = if <span class="tickonlyfalse">T.null classVal</span> then <span class="nottickedoff">psClassifications s</span></span>
 <span class="lineno">  326 </span><span class="spaces">                                       </span><span class="istickedoff">else M.insert key val (psClassifications s)</span>
 <span class="lineno">  327 </span><span class="spaces">                 </span><span class="istickedoff">, psInClass = False, psTextAccum = [] }</span>
 <span class="lineno">  328 </span><span class="spaces">        </span><span class="istickedoff">| isElement tag &quot;classification&quot; =</span>

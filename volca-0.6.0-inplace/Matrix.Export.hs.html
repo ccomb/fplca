@@ -314,40 +314,49 @@ span.spaces    { background: white }
 <span class="lineno">  295 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">exportAMatrix filePath db = do</span>
 <span class="lineno">  296 </span><span class="spaces">    </span><span class="istickedoff">let techTriples = dbTechnosphereTriples db</span>
 <span class="lineno">  297 </span><span class="spaces">        </span><span class="istickedoff">activityCount = dbActivityCount db</span>
-<span class="lineno">  298 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  299 </span><span class="spaces">        </span><span class="istickedoff">diagonalEntries = [T.pack $ show i ++ &quot;;&quot; ++ show i ++ &quot;;1.0;;;;;&quot;</span>
-<span class="lineno">  300 </span><span class="spaces">                          </span><span class="istickedoff">| i &lt;- [0..fromIntegral activityCount - 1 :: Int]]</span>
-<span class="lineno">  301 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  302 </span><span class="spaces">        </span><span class="istickedoff">offDiagonalRows = U.foldr (\(SparseTriple row col value) acc -&gt;</span>
-<span class="lineno">  303 </span><span class="spaces">                </span><span class="istickedoff">let rowStr = T.pack $ show row ++ &quot;;&quot; ++ show col ++ &quot;;&quot; ++</span>
-<span class="lineno">  304 </span><span class="spaces">                            </span><span class="istickedoff">show (-value) ++ &quot;;;;;;&quot;</span>
-<span class="lineno">  305 </span><span class="spaces">                </span><span class="istickedoff">in rowStr : acc</span>
-<span class="lineno">  306 </span><span class="spaces">            </span><span class="istickedoff">) [] techTriples</span>
+<span class="lineno">  298 </span><span class="spaces">        </span><span class="istickedoff">activities = dbActivities db</span>
+<span class="lineno">  299 </span><span class="spaces"></span><span class="istickedoff"></span>
+<span class="lineno">  300 </span><span class="spaces">        </span><span class="istickedoff">-- Waste activities have their reference product stored as outputGroup=0 with a</span>
+<span class="lineno">  301 </span><span class="spaces">        </span><span class="istickedoff">-- NEGATIVE amount (e.g., hard coal ash = -1.0 kg). These use -1.0 on the diagonal</span>
+<span class="lineno">  302 </span><span class="spaces">        </span><span class="istickedoff">-- in the (I-A) convention. Production activities use 1.0.</span>
+<span class="lineno">  303 </span><span class="spaces">        </span><span class="istickedoff">diagValue i =</span>
+<span class="lineno">  304 </span><span class="spaces">            </span><span class="istickedoff">let act = activities V.! i</span>
+<span class="lineno">  305 </span><span class="spaces">            </span><span class="istickedoff">in if <span class="tickonlyfalse">any (\ex -&gt; exchangeIsReference ex &amp;&amp; exchangeAmount ex &lt; 0) (exchanges act)</span></span>
+<span class="lineno">  306 </span><span class="spaces">               </span><span class="istickedoff">then <span class="nottickedoff">&quot;-1.0&quot;</span> else &quot;1.0&quot;</span>
 <span class="lineno">  307 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  308 </span><span class="spaces">        </span><span class="istickedoff">header = &quot;row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue&quot;</span>
-<span class="lineno">  309 </span><span class="spaces">        </span><span class="istickedoff">allRows = diagonalEntries ++ offDiagonalRows</span>
-<span class="lineno">  310 </span><span class="spaces">        </span><span class="istickedoff">content = T.unlines (header : allRows)</span>
-<span class="lineno">  311 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  312 </span><span class="spaces">    </span><span class="istickedoff">TIO.writeFile filePath content</span>
-<span class="lineno">  313 </span><span class="spaces">    </span><span class="istickedoff">putStrLn $ &quot;Exported technosphere matrix with &quot; ++ show (length diagonalEntries) ++</span>
-<span class="lineno">  314 </span><span class="spaces">               </span><span class="istickedoff">&quot; diagonal + &quot; ++ show (U.length techTriples) ++ &quot; off-diagonal entries to &quot; ++ filePath</span></span>
-<span class="lineno">  315 </span>
-<span class="lineno">  316 </span>-- | Export B_public.csv (Biosphere Matrix)
-<span class="lineno">  317 </span>exportBMatrix :: FilePath -&gt; Database -&gt; IO ()
-<span class="lineno">  318 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">exportBMatrix filePath db = do</span>
-<span class="lineno">  319 </span><span class="spaces">    </span><span class="istickedoff">let bioTriples = dbBiosphereTriples db</span>
+<span class="lineno">  308 </span><span class="spaces">        </span><span class="istickedoff">diagonalEntries = [T.pack $ show i ++ &quot;;&quot; ++ show i ++ &quot;;&quot; ++ diagValue i ++ &quot;;;;;;&quot;</span>
+<span class="lineno">  309 </span><span class="spaces">                          </span><span class="istickedoff">| i &lt;- [0..fromIntegral activityCount - 1 :: Int]]</span>
+<span class="lineno">  310 </span><span class="spaces"></span><span class="istickedoff"></span>
+<span class="lineno">  311 </span><span class="spaces">        </span><span class="istickedoff">offDiagonalRows = U.foldr (\(SparseTriple row col value) acc -&gt;</span>
+<span class="lineno">  312 </span><span class="spaces">                </span><span class="istickedoff">let rowStr = T.pack $ show row ++ &quot;;&quot; ++ show col ++ &quot;;&quot; ++</span>
+<span class="lineno">  313 </span><span class="spaces">                            </span><span class="istickedoff">show (-value) ++ &quot;;;;;;&quot;</span>
+<span class="lineno">  314 </span><span class="spaces">                </span><span class="istickedoff">in rowStr : acc</span>
+<span class="lineno">  315 </span><span class="spaces">            </span><span class="istickedoff">) [] techTriples</span>
+<span class="lineno">  316 </span><span class="spaces"></span><span class="istickedoff"></span>
+<span class="lineno">  317 </span><span class="spaces">        </span><span class="istickedoff">header = &quot;row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue&quot;</span>
+<span class="lineno">  318 </span><span class="spaces">        </span><span class="istickedoff">allRows = diagonalEntries ++ offDiagonalRows</span>
+<span class="lineno">  319 </span><span class="spaces">        </span><span class="istickedoff">content = T.unlines (header : allRows)</span>
 <span class="lineno">  320 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  321 </span><span class="spaces">        </span><span class="istickedoff">rows = U.foldr (\(SparseTriple row col value) acc -&gt;</span>
-<span class="lineno">  322 </span><span class="spaces">                </span><span class="istickedoff">let rowStr = T.pack $ show row ++ &quot;;&quot; ++ show col ++ &quot;;&quot; ++</span>
-<span class="lineno">  323 </span><span class="spaces">                            </span><span class="istickedoff">show value ++ &quot;;;;;;&quot;</span>
-<span class="lineno">  324 </span><span class="spaces">                </span><span class="istickedoff">in rowStr : acc</span>
-<span class="lineno">  325 </span><span class="spaces">            </span><span class="istickedoff">) [] bioTriples</span>
-<span class="lineno">  326 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  327 </span><span class="spaces">        </span><span class="istickedoff">header = &quot;row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue&quot;</span>
-<span class="lineno">  328 </span><span class="spaces">        </span><span class="istickedoff">content = T.unlines (header : rows)</span>
+<span class="lineno">  321 </span><span class="spaces">    </span><span class="istickedoff">TIO.writeFile filePath content</span>
+<span class="lineno">  322 </span><span class="spaces">    </span><span class="istickedoff">putStrLn $ &quot;Exported technosphere matrix with &quot; ++ show (length diagonalEntries) ++</span>
+<span class="lineno">  323 </span><span class="spaces">               </span><span class="istickedoff">&quot; diagonal + &quot; ++ show (U.length techTriples) ++ &quot; off-diagonal entries to &quot; ++ filePath</span></span>
+<span class="lineno">  324 </span>
+<span class="lineno">  325 </span>-- | Export B_public.csv (Biosphere Matrix)
+<span class="lineno">  326 </span>exportBMatrix :: FilePath -&gt; Database -&gt; IO ()
+<span class="lineno">  327 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">exportBMatrix filePath db = do</span>
+<span class="lineno">  328 </span><span class="spaces">    </span><span class="istickedoff">let bioTriples = dbBiosphereTriples db</span>
 <span class="lineno">  329 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">  330 </span><span class="spaces">    </span><span class="istickedoff">TIO.writeFile filePath content</span>
-<span class="lineno">  331 </span><span class="spaces">    </span><span class="istickedoff">putStrLn $ &quot;Exported biosphere matrix with &quot; ++ show (U.length bioTriples) ++ &quot; entries to &quot; ++ filePath</span></span>
+<span class="lineno">  330 </span><span class="spaces">        </span><span class="istickedoff">rows = U.foldr (\(SparseTriple row col value) acc -&gt;</span>
+<span class="lineno">  331 </span><span class="spaces">                </span><span class="istickedoff">let rowStr = T.pack $ show row ++ &quot;;&quot; ++ show col ++ &quot;;&quot; ++</span>
+<span class="lineno">  332 </span><span class="spaces">                            </span><span class="istickedoff">show value ++ &quot;;;;;;&quot;</span>
+<span class="lineno">  333 </span><span class="spaces">                </span><span class="istickedoff">in rowStr : acc</span>
+<span class="lineno">  334 </span><span class="spaces">            </span><span class="istickedoff">) [] bioTriples</span>
+<span class="lineno">  335 </span><span class="spaces"></span><span class="istickedoff"></span>
+<span class="lineno">  336 </span><span class="spaces">        </span><span class="istickedoff">header = &quot;row;column;coefficient;uncertainty type;varianceWithPedigreeUncertainty;minValue;mostLikelyValue;maxValue&quot;</span>
+<span class="lineno">  337 </span><span class="spaces">        </span><span class="istickedoff">content = T.unlines (header : rows)</span>
+<span class="lineno">  338 </span><span class="spaces"></span><span class="istickedoff"></span>
+<span class="lineno">  339 </span><span class="spaces">    </span><span class="istickedoff">TIO.writeFile filePath content</span>
+<span class="lineno">  340 </span><span class="spaces">    </span><span class="istickedoff">putStrLn $ &quot;Exported biosphere matrix with &quot; ++ show (U.length bioTriples) ++ &quot; entries to &quot; ++ filePath</span></span>
 
 </pre>
 </body>

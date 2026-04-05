@@ -40,7 +40,7 @@ span.spaces    { background: white }
 <span class="lineno">   21 </span>import qualified Data.Text.Encoding as TE
 <span class="lineno">   22 </span>import qualified Data.UUID as UUID
 <span class="lineno">   23 </span>import qualified Data.UUID.V5 as UUID5
-<span class="lineno">   24 </span>import System.IO (hPutStrLn, stderr)
+<span class="lineno">   24 </span>import Progress (reportProgress, ProgressLevel(..))
 <span class="lineno">   25 </span>import qualified Xeno.SAX as X
 <span class="lineno">   26 </span>
 <span class="lineno">   27 </span>-- | Namespace UUID for generating deterministic UUIDs from EcoSpold1 numeric IDs
@@ -680,10 +680,10 @@ span.spaces    { background: white }
 <span class="lineno">  661 </span><span class="spaces">    </span><span class="istickedoff">case parseAllWithXeno xmlContent of</span>
 <span class="lineno">  662 </span><span class="spaces">        </span><span class="istickedoff">Right results -&gt; do</span>
 <span class="lineno">  663 </span><span class="spaces">            </span><span class="istickedoff">forM_ [<span class="nottickedoff">e</span> | Left e &lt;- results] $ <span class="nottickedoff">\e -&gt;</span></span>
-<span class="lineno">  664 </span><span class="spaces">                </span><span class="istickedoff"><span class="nottickedoff">hPutStrLn stderr $ &quot;[WARNING] Skipping dataset in &quot; ++ path ++ &quot;: &quot; ++ e</span></span>
+<span class="lineno">  664 </span><span class="spaces">                </span><span class="istickedoff"><span class="nottickedoff">reportProgress Warning $ &quot;Skipping dataset in &quot; ++ path ++ &quot;: &quot; ++ e</span></span>
 <span class="lineno">  665 </span><span class="spaces">            </span><span class="istickedoff">return [r | Right r &lt;- results]</span>
 <span class="lineno">  666 </span><span class="spaces">        </span><span class="istickedoff">Left err -&gt; <span class="nottickedoff">do</span></span>
-<span class="lineno">  667 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">hPutStrLn stderr $ &quot;[WARNING] Failed to parse &quot; ++ path ++ &quot;: &quot; ++ err</span></span>
+<span class="lineno">  667 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">reportProgress Warning $ &quot;Failed to parse &quot; ++ path ++ &quot;: &quot; ++ err</span></span>
 <span class="lineno">  668 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">return []</span></span></span>
 
 </pre>
