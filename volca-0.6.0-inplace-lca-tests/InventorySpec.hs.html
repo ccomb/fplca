@@ -73,24 +73,24 @@ span.spaces    { background: white }
 <span class="lineno">   54 </span><span class="spaces">            </span><span class="istickedoff">db &lt;- loadSampleDatabase &quot;SAMPLE.min&quot;</span>
 <span class="lineno">   55 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   56 </span><span class="spaces">            </span><span class="istickedoff">-- Get first activity ProcessId</span>
-<span class="lineno">   57 </span><span class="spaces">            </span><span class="istickedoff">let <span class="nottickedoff">rootProcessId = 0 :: ProcessId</span></span>
+<span class="lineno">   57 </span><span class="spaces">            </span><span class="istickedoff">let rootProcessId = 0 :: ProcessId</span>
 <span class="lineno">   58 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   59 </span><span class="spaces">            </span><span class="istickedoff">-- Compute inventory</span>
-<span class="lineno">   60 </span><span class="spaces">            </span><span class="istickedoff">inventory &lt;- <span class="nottickedoff">computeInventoryMatrix db rootProcessId</span></span>
+<span class="lineno">   60 </span><span class="spaces">            </span><span class="istickedoff">inventory &lt;- computeInventoryMatrix db rootProcessId</span>
 <span class="lineno">   61 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   62 </span><span class="spaces">            </span><span class="istickedoff">-- All values should be finite</span>
-<span class="lineno">   63 </span><span class="spaces">            </span><span class="istickedoff">let <span class="nottickedoff">allFinite = all (\(_, v) -&gt; not (isInfinite v) &amp;&amp; not (isNaN v)) (M.toList inventory)</span></span>
-<span class="lineno">   64 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">allFinite `shouldBe` True</span></span>
+<span class="lineno">   63 </span><span class="spaces">            </span><span class="istickedoff">let allFinite = all (\(_, v) -&gt; not (isInfinite v) &amp;&amp; not (isNaN v)) (M.toList inventory)</span>
+<span class="lineno">   64 </span><span class="spaces">            </span><span class="istickedoff">allFinite `shouldBe` True</span>
 <span class="lineno">   65 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   66 </span><span class="spaces">        </span><span class="istickedoff">it &quot;computes positive inventory values&quot; $ do</span>
 <span class="lineno">   67 </span><span class="spaces">            </span><span class="istickedoff">db &lt;- loadSampleDatabase &quot;SAMPLE.min&quot;</span>
 <span class="lineno">   68 </span><span class="spaces"></span><span class="istickedoff"></span>
-<span class="lineno">   69 </span><span class="spaces">            </span><span class="istickedoff">let <span class="nottickedoff">rootProcessId = 0 :: ProcessId</span></span>
-<span class="lineno">   70 </span><span class="spaces">            </span><span class="istickedoff">inventory &lt;- <span class="nottickedoff">computeInventoryMatrix db rootProcessId</span></span>
+<span class="lineno">   69 </span><span class="spaces">            </span><span class="istickedoff">let rootProcessId = 0 :: ProcessId</span>
+<span class="lineno">   70 </span><span class="spaces">            </span><span class="istickedoff">inventory &lt;- computeInventoryMatrix db rootProcessId</span>
 <span class="lineno">   71 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   72 </span><span class="spaces">            </span><span class="istickedoff">-- Most biosphere values should be positive (emissions)</span>
-<span class="lineno">   73 </span><span class="spaces">            </span><span class="istickedoff">let <span class="nottickedoff">positiveCount = length $ filter (\(_, v) -&gt; v &gt; 0) (M.toList inventory)</span></span>
-<span class="lineno">   74 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">positiveCount `shouldSatisfy` (&gt; 0)</span></span>
+<span class="lineno">   73 </span><span class="spaces">            </span><span class="istickedoff">let positiveCount = length $ filter (\(_, v) -&gt; v &gt; 0) (M.toList inventory)</span>
+<span class="lineno">   74 </span><span class="spaces">            </span><span class="istickedoff">positiveCount `shouldSatisfy` (&gt; 0)</span>
 <span class="lineno">   75 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   76 </span><span class="spaces">    </span><span class="istickedoff">describe &quot;Inventory Results Validation&quot; $ do</span>
 <span class="lineno">   77 </span><span class="spaces">        </span><span class="istickedoff">it &quot;SAMPLE.min3 inventory is non-empty&quot; $ do</span>

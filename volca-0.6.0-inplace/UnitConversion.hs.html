@@ -85,7 +85,7 @@ span.spaces    { background: white }
 <span class="lineno">   66 </span>-- | Unit configuration loaded from CSV.
 <span class="lineno">   67 </span>data UnitConfig = UnitConfig
 <span class="lineno">   68 </span>    { <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">ucDimensionOrder</span></span></span> :: ![Text]              -- [&quot;mass&quot;, &quot;length&quot;, &quot;time&quot;, ...]
-<span class="lineno">   69 </span>    , <span class="istickedoff"><span class="funcount">-- entered 311 times</span><span class="decl"><span class="istickedoff">ucUnits</span></span></span>          :: !(M.Map Text UnitDef) -- normalized (lowercase, trimmed) keys
+<span class="lineno">   69 </span>    , <span class="istickedoff"><span class="funcount">-- entered 343 times</span><span class="decl"><span class="istickedoff">ucUnits</span></span></span>          :: !(M.Map Text UnitDef) -- normalized (lowercase, trimmed) keys
 <span class="lineno">   70 </span>    , <span class="istickedoff"><span class="funcount">-- entered 2 times</span><span class="decl"><span class="istickedoff">ucOriginalKeys</span></span></span>   :: !(M.Map Text Text)    -- normalized -&gt; original (for error messages)
 <span class="lineno">   71 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Show</span></span></span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>)
 <span class="lineno">   72 </span>
@@ -105,7 +105,7 @@ span.spaces    { background: white }
 <span class="lineno">   86 </span>
 <span class="lineno">   87 </span>-- | Look up a unit definition.
 <span class="lineno">   88 </span>lookupUnitDef :: UnitConfig -&gt; Text -&gt; Maybe UnitDef
-<span class="lineno">   89 </span><span class="funcount">-- entered 300 times</span><span class="decl"><span class="istickedoff">lookupUnitDef cfg u = M.lookup (normalizeUnit u) (ucUnits cfg)</span></span>
+<span class="lineno">   89 </span><span class="funcount">-- entered 332 times</span><span class="decl"><span class="istickedoff">lookupUnitDef cfg u = M.lookup (normalizeUnit u) (ucUnits cfg)</span></span>
 <span class="lineno">   90 </span>
 <span class="lineno">   91 </span>-- | Check if two units are dimensionally compatible.
 <span class="lineno">   92 </span>unitsCompatible :: UnitConfig -&gt; Text -&gt; Text -&gt; Bool
@@ -117,7 +117,7 @@ span.spaces    { background: white }
 <span class="lineno">   98 </span>-- | Convert amount from one unit to another.
 <span class="lineno">   99 </span>-- Returns Nothing if units are incompatible or unknown.
 <span class="lineno">  100 </span>convertUnit :: UnitConfig -&gt; Text -&gt; Text -&gt; Double -&gt; Maybe Double
-<span class="lineno">  101 </span><span class="funcount">-- entered 141 times</span><span class="decl"><span class="istickedoff">convertUnit cfg fromUnit toUnit amount = do</span>
+<span class="lineno">  101 </span><span class="funcount">-- entered 157 times</span><span class="decl"><span class="istickedoff">convertUnit cfg fromUnit toUnit amount = do</span>
 <span class="lineno">  102 </span><span class="spaces">    </span><span class="istickedoff">UnitDef dimFrom factorFrom &lt;- lookupUnitDef cfg fromUnit</span>
 <span class="lineno">  103 </span><span class="spaces">    </span><span class="istickedoff">UnitDef dimTo factorTo     &lt;- lookupUnitDef cfg toUnit</span>
 <span class="lineno">  104 </span><span class="spaces">    </span><span class="istickedoff">if dimFrom == dimTo &amp;&amp; factorTo /= 0</span>
@@ -236,7 +236,7 @@ span.spaces    { background: white }
 <span class="lineno">  217 </span>-- | Convert an amount from one unit to another.
 <span class="lineno">  218 </span>-- Returns the original amount if conversion fails.
 <span class="lineno">  219 </span>convertExchangeAmount :: UnitConfig -&gt; Text -&gt; Text -&gt; Double -&gt; Double
-<span class="lineno">  220 </span><span class="funcount">-- entered 129 times</span><span class="decl"><span class="istickedoff">convertExchangeAmount cfg fromUnit toUnit amount =</span>
+<span class="lineno">  220 </span><span class="funcount">-- entered 145 times</span><span class="decl"><span class="istickedoff">convertExchangeAmount cfg fromUnit toUnit amount =</span>
 <span class="lineno">  221 </span><span class="spaces">    </span><span class="istickedoff">case convertUnit cfg fromUnit toUnit amount of</span>
 <span class="lineno">  222 </span><span class="spaces">        </span><span class="istickedoff">Just converted -&gt; converted</span>
 <span class="lineno">  223 </span><span class="spaces">        </span><span class="istickedoff">Nothing -&gt; amount</span></span>

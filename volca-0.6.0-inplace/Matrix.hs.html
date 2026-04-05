@@ -118,7 +118,7 @@ span.spaces    { background: white }
 <span class="lineno">   99 </span>
 <span class="lineno">  100 </span>-- | Aggregate duplicate matrix entries by summing values for same (i,j) coordinates
 <span class="lineno">  101 </span>aggregateMatrixEntries :: [(Int, Int, Double)] -&gt; [(Int, Int, Double)]
-<span class="lineno">  102 </span><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">aggregateMatrixEntries entries =</span>
+<span class="lineno">  102 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">aggregateMatrixEntries entries =</span>
 <span class="lineno">  103 </span><span class="spaces">    </span><span class="istickedoff">let groupedEntries = M.fromListWith <span class="nottickedoff">(+)</span> [((i, j), val) | (i, j, val) &lt;- entries]</span>
 <span class="lineno">  104 </span><span class="spaces">     </span><span class="istickedoff">in [(i, j, val) | ((i, j), val) &lt;- M.toList groupedEntries]</span></span>
 <span class="lineno">  105 </span>
@@ -187,7 +187,7 @@ span.spaces    { background: white }
 <span class="lineno">  168 </span>Performance: ~3s for 14,457 activities with 116K technosphere entries
 <span class="lineno">  169 </span>-}
 <span class="lineno">  170 </span>solveSparseLinearSystemMUMPS :: [(Int, Int, Double)] -&gt; Int -&gt; Vector -&gt; IO Vector
-<span class="lineno">  171 </span><span class="funcount">-- entered 11 times</span><span class="decl"><span class="istickedoff">solveSparseLinearSystemMUMPS techTriples n demandVec =</span>
+<span class="lineno">  171 </span><span class="funcount">-- entered 13 times</span><span class="decl"><span class="istickedoff">solveSparseLinearSystemMUMPS techTriples n demandVec =</span>
 <span class="lineno">  172 </span><span class="spaces">    </span><span class="istickedoff">withMVar solverGlobalMutex $ \_ -&gt; do</span>
 <span class="lineno">  173 </span><span class="spaces">        </span><span class="istickedoff">let identityTriples = [(i, i, 1.0) | i &lt;- [0 .. n - 1]]</span>
 <span class="lineno">  174 </span><span class="spaces">            </span><span class="istickedoff">systemTechTriples = [(i, j, -value) | (i, j, value) &lt;- techTriples]</span>
@@ -217,7 +217,7 @@ span.spaces    { background: white }
 <span class="lineno">  198 </span>
 <span class="lineno">  199 </span>-- | Efficient sparse matrix multiplication: result = A * vector
 <span class="lineno">  200 </span>applySparseMatrix :: [(Int, Int, Double)] -&gt; Int -&gt; Vector -&gt; Vector
-<span class="lineno">  201 </span><span class="funcount">-- entered 4 times</span><span class="decl"><span class="istickedoff">applySparseMatrix sparseTriples nRows inputVec =</span>
+<span class="lineno">  201 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">applySparseMatrix sparseTriples nRows inputVec =</span>
 <span class="lineno">  202 </span><span class="spaces">    </span><span class="istickedoff">let resultVec = U.create $ do</span>
 <span class="lineno">  203 </span><span class="spaces">            </span><span class="istickedoff">result &lt;- MU.new nRows</span>
 <span class="lineno">  204 </span><span class="spaces">            </span><span class="istickedoff">forM_ [0 .. nRows - 1] $ \i -&gt; MU.write result i 0.0</span>
@@ -238,7 +238,7 @@ span.spaces    { background: white }
 <span class="lineno">  219 </span>(how much of activity i is needed to produce one unit of the root activity).
 <span class="lineno">  220 </span>-}
 <span class="lineno">  221 </span>computeScalingVector :: Database -&gt; ProcessId -&gt; IO Vector
-<span class="lineno">  222 </span><span class="funcount">-- entered 11 times</span><span class="decl"><span class="istickedoff">computeScalingVector db rootProcessId = do</span>
+<span class="lineno">  222 </span><span class="funcount">-- entered 13 times</span><span class="decl"><span class="istickedoff">computeScalingVector db rootProcessId = do</span>
 <span class="lineno">  223 </span><span class="spaces">    </span><span class="istickedoff">let activityCount = dbActivityCount db</span>
 <span class="lineno">  224 </span><span class="spaces">        </span><span class="istickedoff">techTriples = dbTechnosphereTriples db</span>
 <span class="lineno">  225 </span><span class="spaces">        </span><span class="istickedoff">activityIndex = dbActivityIndex db</span>
@@ -254,7 +254,7 @@ span.spaces    { background: white }
 <span class="lineno">  235 </span>(environmental flows) by multiplying with the biosphere intervention matrix.
 <span class="lineno">  236 </span>-}
 <span class="lineno">  237 </span>applyBiosphereMatrix :: Database -&gt; Vector -&gt; Inventory
-<span class="lineno">  238 </span><span class="funcount">-- entered 4 times</span><span class="decl"><span class="istickedoff">applyBiosphereMatrix db supplyVec =</span>
+<span class="lineno">  238 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">applyBiosphereMatrix db supplyVec =</span>
 <span class="lineno">  239 </span><span class="spaces">    </span><span class="istickedoff">let bioFlowCount = dbBiosphereCount db</span>
 <span class="lineno">  240 </span><span class="spaces">        </span><span class="istickedoff">bioTriples = dbBiosphereTriples db</span>
 <span class="lineno">  241 </span><span class="spaces">        </span><span class="istickedoff">bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0..]</span>
@@ -264,7 +264,7 @@ span.spaces    { background: white }
 <span class="lineno">  245 </span><span class="spaces">                  </span><span class="istickedoff">, <span class="tickonlytrue">idx &lt; U.length inventoryVec</span>]</span></span>
 <span class="lineno">  246 </span>
 <span class="lineno">  247 </span>computeInventoryMatrix :: Database -&gt; ProcessId -&gt; IO Inventory
-<span class="lineno">  248 </span><span class="funcount">-- entered 4 times</span><span class="decl"><span class="istickedoff">computeInventoryMatrix db rootProcessId =</span>
+<span class="lineno">  248 </span><span class="funcount">-- entered 6 times</span><span class="decl"><span class="istickedoff">computeInventoryMatrix db rootProcessId =</span>
 <span class="lineno">  249 </span><span class="spaces">    </span><span class="istickedoff">applyBiosphereMatrix db &lt;$&gt; computeScalingVector db rootProcessId</span></span>
 <span class="lineno">  250 </span>
 <span class="lineno">  251 </span>{- |
@@ -424,7 +424,7 @@ span.spaces    { background: white }
 <span class="lineno">  405 </span>- f[i] = 0.0 for all other activities
 <span class="lineno">  406 </span>-}
 <span class="lineno">  407 </span>buildDemandVectorFromIndex :: V.Vector Int32 -&gt; ProcessId -&gt; Vector
-<span class="lineno">  408 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">buildDemandVectorFromIndex activityIndex rootProcessId =</span>
+<span class="lineno">  408 </span><span class="funcount">-- entered 20 times</span><span class="decl"><span class="istickedoff">buildDemandVectorFromIndex activityIndex rootProcessId =</span>
 <span class="lineno">  409 </span><span class="spaces">    </span><span class="istickedoff">let n = V.length activityIndex</span>
 <span class="lineno">  410 </span><span class="spaces">        </span><span class="istickedoff">rootIndex = if <span class="tickonlytrue">fromIntegral rootProcessId &gt;= (0 :: Int) &amp;&amp; fromIntegral rootProcessId &lt; n</span></span>
 <span class="lineno">  411 </span><span class="spaces">                    </span><span class="istickedoff">then fromIntegral $ activityIndex V.! fromIntegral rootProcessId</span>

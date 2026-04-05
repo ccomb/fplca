@@ -39,7 +39,7 @@ span.spaces    { background: white }
 <span class="lineno">   20 </span>
 <span class="lineno">   21 </span>-- | Create a MUMPS solver from COO triplets (0-indexed row/col).
 <span class="lineno">   22 </span>mumpsCreate :: Int -&gt; Int -&gt; [Int] -&gt; [Int] -&gt; [Double] -&gt; IO MUMPSSolver
-<span class="lineno">   23 </span><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">mumpsCreate n nnz rows cols vals = do</span>
+<span class="lineno">   23 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">mumpsCreate n nnz rows cols vals = do</span>
 <span class="lineno">   24 </span><span class="spaces">    </span><span class="istickedoff">let cRows = map fromIntegral rows :: [CInt]</span>
 <span class="lineno">   25 </span><span class="spaces">        </span><span class="istickedoff">cCols = map fromIntegral cols :: [CInt]</span>
 <span class="lineno">   26 </span><span class="spaces">        </span><span class="istickedoff">cVals = map realToFrac   vals :: [CDouble]</span>
@@ -58,20 +58,20 @@ span.spaces    { background: white }
 <span class="lineno">   39 </span>
 <span class="lineno">   40 </span>-- | Run symbolic analysis phase.
 <span class="lineno">   41 </span>mumpsAnalyze :: MUMPSSolver -&gt; IO ()
-<span class="lineno">   42 </span><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">mumpsAnalyze s = do</span>
+<span class="lineno">   42 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">mumpsAnalyze s = do</span>
 <span class="lineno">   43 </span><span class="spaces">    </span><span class="istickedoff">rc &lt;- c_mumps_analyze (solverPtr s)</span>
 <span class="lineno">   44 </span><span class="spaces">    </span><span class="istickedoff">checkError <span class="nottickedoff">&quot;analyze&quot;</span> rc</span></span>
 <span class="lineno">   45 </span>
 <span class="lineno">   46 </span>-- | Run numerical factorization phase.
 <span class="lineno">   47 </span>mumpsFactorize :: MUMPSSolver -&gt; IO ()
-<span class="lineno">   48 </span><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">mumpsFactorize s = do</span>
+<span class="lineno">   48 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">mumpsFactorize s = do</span>
 <span class="lineno">   49 </span><span class="spaces">    </span><span class="istickedoff">rc &lt;- c_mumps_factorize (solverPtr s)</span>
 <span class="lineno">   50 </span><span class="spaces">    </span><span class="istickedoff">checkError <span class="nottickedoff">&quot;factorize&quot;</span> rc</span></span>
 <span class="lineno">   51 </span>
 <span class="lineno">   52 </span>-- | Solve Ax = b. Takes RHS vector, returns solution vector.
 <span class="lineno">   53 </span>-- Can be called repeatedly after factorization with different RHS.
 <span class="lineno">   54 </span>mumpsSolve :: MUMPSSolver -&gt; VS.Vector Double -&gt; IO (VS.Vector Double)
-<span class="lineno">   55 </span><span class="funcount">-- entered 19 times</span><span class="decl"><span class="istickedoff">mumpsSolve s rhs = do</span>
+<span class="lineno">   55 </span><span class="funcount">-- entered 21 times</span><span class="decl"><span class="istickedoff">mumpsSolve s rhs = do</span>
 <span class="lineno">   56 </span><span class="spaces">    </span><span class="istickedoff">let n = solverSize s</span>
 <span class="lineno">   57 </span><span class="spaces">    </span><span class="istickedoff">VS.unsafeWith (VS.map realToFrac rhs :: VS.Vector CDouble) $ \pRhs -&gt;</span>
 <span class="lineno">   58 </span><span class="spaces">        </span><span class="istickedoff">allocaArray n $ \pSol -&gt; do</span>
@@ -85,7 +85,7 @@ span.spaces    { background: white }
 <span class="lineno">   66 </span>
 <span class="lineno">   67 </span>-- | Convenience: analyze + factorize in one call.
 <span class="lineno">   68 </span>mumpsAnalyzeAndFactorize :: MUMPSSolver -&gt; IO ()
-<span class="lineno">   69 </span><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">mumpsAnalyzeAndFactorize s = mumpsAnalyze s &gt;&gt; mumpsFactorize s</span></span>
+<span class="lineno">   69 </span><span class="funcount">-- entered 18 times</span><span class="decl"><span class="istickedoff">mumpsAnalyzeAndFactorize s = mumpsAnalyze s &gt;&gt; mumpsFactorize s</span></span>
 <span class="lineno">   70 </span>
 <span class="lineno">   71 </span>-- | Bracket-style: create, use, destroy.
 <span class="lineno">   72 </span>withMUMPSSolver :: Int -&gt; Int -&gt; [Int] -&gt; [Int] -&gt; [Double] -&gt; (MUMPSSolver -&gt; IO a) -&gt; IO a
@@ -93,7 +93,7 @@ span.spaces    { background: white }
 <span class="lineno">   74 </span><span class="spaces">    </span><span class="nottickedoff">bracket (mumpsCreate n nnz rows cols vals) mumpsDestroy</span></span>
 <span class="lineno">   75 </span>
 <span class="lineno">   76 </span>checkError :: String -&gt; CInt -&gt; IO ()
-<span class="lineno">   77 </span><span class="funcount">-- entered 51 times</span><span class="decl"><span class="istickedoff">checkError phase rc</span>
+<span class="lineno">   77 </span><span class="funcount">-- entered 57 times</span><span class="decl"><span class="istickedoff">checkError phase rc</span>
 <span class="lineno">   78 </span><span class="spaces">    </span><span class="istickedoff">| <span class="tickonlyfalse">rc &lt; 0</span>    = <span class="nottickedoff">throwIO $ userError $ &quot;MUMPS &quot; ++ phase ++ &quot; failed: INFOG(1) = &quot; ++ show rc</span></span>
 <span class="lineno">   79 </span><span class="spaces">    </span><span class="istickedoff">| <span class="tickonlytrue">otherwise</span> = return <span class="nottickedoff">()</span></span></span>
 

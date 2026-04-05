@@ -71,12 +71,12 @@ span.spaces    { background: white }
 <span class="lineno">   52 </span>
 <span class="lineno">   53 </span>-- | Flow type: Technosphere (exchange between activities) or Biosphere (exchange with the environment)
 <span class="lineno">   54 </span>data FlowType = Technosphere | Biosphere
-<span class="lineno">   55 </span>    deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>, <span class="funcount">-- entered 403 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Ord</span></span></span></span></span></span></span></span></span></span></span></span></span></span>, <span class="funcount">-- entered 45 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">NFData</span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
+<span class="lineno">   55 </span>    deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Eq</span></span></span></span>, <span class="funcount">-- entered 419 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Ord</span></span></span></span></span></span></span></span></span></span></span></span></span></span>, <span class="funcount">-- entered 45 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">NFData</span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
 <span class="lineno">   56 </span>
 <span class="lineno">   57 </span>-- | Unit representation (kg, MJ, m³, etc.)
 <span class="lineno">   58 </span>data Unit = Unit
-<span class="lineno">   59 </span>    { <span class="istickedoff"><span class="funcount">-- entered 532 times</span><span class="decl"><span class="istickedoff">unitId</span></span></span> :: !UUID -- Unique unit identifier
-<span class="lineno">   60 </span>    , <span class="istickedoff"><span class="funcount">-- entered 287 times</span><span class="decl"><span class="istickedoff">unitName</span></span></span> :: !Text -- Unit name (e.g. &quot;kg&quot;, &quot;kilogram&quot;)
+<span class="lineno">   59 </span>    { <span class="istickedoff"><span class="funcount">-- entered 568 times</span><span class="decl"><span class="istickedoff">unitId</span></span></span> :: !UUID -- Unique unit identifier
+<span class="lineno">   60 </span>    , <span class="istickedoff"><span class="funcount">-- entered 319 times</span><span class="decl"><span class="istickedoff">unitName</span></span></span> :: !Text -- Unit name (e.g. &quot;kg&quot;, &quot;kilogram&quot;)
 <span class="lineno">   61 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">unitSymbol</span></span></span> :: !Text -- Symbol (e.g. &quot;kg&quot;, &quot;MJ&quot;)
 <span class="lineno">   62 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">unitComment</span></span></span> :: !Text -- Description/comment
 <span class="lineno">   63 </span>    }
@@ -95,13 +95,13 @@ span.spaces    { background: white }
 <span class="lineno">   76 </span>
 <span class="lineno">   77 </span>-- | Flow representation (material, energy, emission, etc.)
 <span class="lineno">   78 </span>data Flow = Flow
-<span class="lineno">   79 </span>    { <span class="istickedoff"><span class="funcount">-- entered 559 times</span><span class="decl"><span class="istickedoff">flowId</span></span></span> :: !UUID -- Flow identifier
-<span class="lineno">   80 </span>    , <span class="istickedoff"><span class="funcount">-- entered 241 times</span><span class="decl"><span class="istickedoff">flowName</span></span></span> :: !Text -- Human-readable name
-<span class="lineno">   81 </span>    , <span class="istickedoff"><span class="funcount">-- entered 357 times</span><span class="decl"><span class="istickedoff">flowCategory</span></span></span> :: !Text -- Category/compartment (e.g. air, water, soil, resource)
+<span class="lineno">   79 </span>    { <span class="istickedoff"><span class="funcount">-- entered 595 times</span><span class="decl"><span class="istickedoff">flowId</span></span></span> :: !UUID -- Flow identifier
+<span class="lineno">   80 </span>    , <span class="istickedoff"><span class="funcount">-- entered 257 times</span><span class="decl"><span class="istickedoff">flowName</span></span></span> :: !Text -- Human-readable name
+<span class="lineno">   81 </span>    , <span class="istickedoff"><span class="funcount">-- entered 377 times</span><span class="decl"><span class="istickedoff">flowCategory</span></span></span> :: !Text -- Category/compartment (e.g. air, water, soil, resource)
 <span class="lineno">   82 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">flowSubcompartment</span></span></span> :: !(Maybe Text) -- Sub-compartment (e.g. &quot;urban air&quot;, &quot;river water&quot;)
 <span class="lineno">   83 </span>    , <span class="istickedoff"><span class="funcount">-- entered 12 times</span><span class="decl"><span class="istickedoff">flowUnitId</span></span></span> :: !UUID -- Reference to default unit in UnitDB
-<span class="lineno">   84 </span>    , <span class="istickedoff"><span class="funcount">-- entered 340 times</span><span class="decl"><span class="istickedoff">flowType</span></span></span> :: !FlowType -- Flow type
-<span class="lineno">   85 </span>    , <span class="istickedoff"><span class="funcount">-- entered 140 times</span><span class="decl"><span class="istickedoff">flowSynonyms</span></span></span> :: !(M.Map Text (S.Set Text)) -- Synonyms by language (e.g. &quot;en&quot; -&gt; {&quot;BaP&quot;, &quot;benzo[a]pyrene&quot;})
+<span class="lineno">   84 </span>    , <span class="istickedoff"><span class="funcount">-- entered 360 times</span><span class="decl"><span class="istickedoff">flowType</span></span></span> :: !FlowType -- Flow type
+<span class="lineno">   85 </span>    , <span class="istickedoff"><span class="funcount">-- entered 156 times</span><span class="decl"><span class="istickedoff">flowSynonyms</span></span></span> :: !(M.Map Text (S.Set Text)) -- Synonyms by language (e.g. &quot;en&quot; -&gt; {&quot;BaP&quot;, &quot;benzo[a]pyrene&quot;})
 <span class="lineno">   86 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">flowCAS</span></span></span> :: !(Maybe Text) -- CAS number for substance identification
 <span class="lineno">   87 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">flowSubstanceId</span></span></span> :: !(Maybe Int) -- Link to Substance in FlowMappingData
 <span class="lineno">   88 </span>    }
@@ -130,34 +130,34 @@ span.spaces    { background: white }
 <span class="lineno">  111 </span>
 <span class="lineno">  112 </span>-- | Helper functions for Exchange variants
 <span class="lineno">  113 </span>exchangeFlowId :: Exchange -&gt; UUID
-<span class="lineno">  114 </span><span class="funcount">-- entered 969 times</span><span class="decl"><span class="istickedoff">exchangeFlowId (TechnosphereExchange fid _ _ _ _ _ _ _) = fid</span>
+<span class="lineno">  114 </span><span class="funcount">-- entered 1033 times</span><span class="decl"><span class="istickedoff">exchangeFlowId (TechnosphereExchange fid _ _ _ _ _ _ _) = fid</span>
 <span class="lineno">  115 </span><span class="spaces"></span><span class="istickedoff">exchangeFlowId (BiosphereExchange fid _ _ _ _) = fid</span></span>
 <span class="lineno">  116 </span>
 <span class="lineno">  117 </span>exchangeAmount :: Exchange -&gt; Double
-<span class="lineno">  118 </span><span class="funcount">-- entered 515 times</span><span class="decl"><span class="istickedoff">exchangeAmount (TechnosphereExchange _ amt _ _ _ _ _ _) = amt</span>
+<span class="lineno">  118 </span><span class="funcount">-- entered 555 times</span><span class="decl"><span class="istickedoff">exchangeAmount (TechnosphereExchange _ amt _ _ _ _ _ _) = amt</span>
 <span class="lineno">  119 </span><span class="spaces"></span><span class="istickedoff">exchangeAmount (BiosphereExchange _ amt _ _ _) = amt</span></span>
 <span class="lineno">  120 </span>
 <span class="lineno">  121 </span>exchangeUnitId :: Exchange -&gt; UUID
-<span class="lineno">  122 </span><span class="funcount">-- entered 251 times</span><span class="decl"><span class="istickedoff">exchangeUnitId (TechnosphereExchange _ _ uid _ _ _ _ _) = uid</span>
+<span class="lineno">  122 </span><span class="funcount">-- entered 283 times</span><span class="decl"><span class="istickedoff">exchangeUnitId (TechnosphereExchange _ _ uid _ _ _ _ _) = uid</span>
 <span class="lineno">  123 </span><span class="spaces"></span><span class="istickedoff">exchangeUnitId (BiosphereExchange _ _ uid _ _) = <span class="nottickedoff">uid</span></span></span>
 <span class="lineno">  124 </span>
 <span class="lineno">  125 </span>exchangeIsInput :: Exchange -&gt; Bool
-<span class="lineno">  126 </span><span class="funcount">-- entered 815 times</span><span class="decl"><span class="istickedoff">exchangeIsInput (TechnosphereExchange _ _ _ isInp _ _ _ _) = isInp</span>
+<span class="lineno">  126 </span><span class="funcount">-- entered 895 times</span><span class="decl"><span class="istickedoff">exchangeIsInput (TechnosphereExchange _ _ _ isInp _ _ _ _) = isInp</span>
 <span class="lineno">  127 </span><span class="spaces"></span><span class="istickedoff">exchangeIsInput (BiosphereExchange _ _ _ isInp _) = <span class="nottickedoff">isInp</span></span></span>
 <span class="lineno">  128 </span>
 <span class="lineno">  129 </span>exchangeIsReference :: Exchange -&gt; Bool
-<span class="lineno">  130 </span><span class="funcount">-- entered 1632 times</span><span class="decl"><span class="istickedoff">exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _ _) = isRef</span>
+<span class="lineno">  130 </span><span class="funcount">-- entered 1764 times</span><span class="decl"><span class="istickedoff">exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _ _) = isRef</span>
 <span class="lineno">  131 </span><span class="spaces"></span><span class="istickedoff">exchangeIsReference (BiosphereExchange _ _ _ _ _) = False</span></span> -- Biosphere exchanges are never reference products
 <span class="lineno">  132 </span>
 <span class="lineno">  133 </span>-- | Get activity link ID (backward compatibility)
 <span class="lineno">  134 </span>exchangeActivityLinkId :: Exchange -&gt; Maybe UUID
-<span class="lineno">  135 </span><span class="funcount">-- entered 348 times</span><span class="decl"><span class="istickedoff">exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _ _) =</span>
+<span class="lineno">  135 </span><span class="funcount">-- entered 380 times</span><span class="decl"><span class="istickedoff">exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _ _) =</span>
 <span class="lineno">  136 </span><span class="spaces">    </span><span class="istickedoff">if linkId == UUID.nil then Nothing else Just linkId</span>
 <span class="lineno">  137 </span><span class="spaces"></span><span class="istickedoff">exchangeActivityLinkId (BiosphereExchange _ _ _ _ _) = <span class="nottickedoff">Nothing</span></span></span>
 <span class="lineno">  138 </span>
 <span class="lineno">  139 </span>-- | Get process link ID (new field)
 <span class="lineno">  140 </span>exchangeProcessLinkId :: Exchange -&gt; Maybe ProcessId
-<span class="lineno">  141 </span><span class="funcount">-- entered 158 times</span><span class="decl"><span class="istickedoff">exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId _) = processLinkId</span>
+<span class="lineno">  141 </span><span class="funcount">-- entered 174 times</span><span class="decl"><span class="istickedoff">exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId _) = processLinkId</span>
 <span class="lineno">  142 </span><span class="spaces"></span><span class="istickedoff">exchangeProcessLinkId (BiosphereExchange _ _ _ _ _) = <span class="nottickedoff">Nothing</span></span></span>
 <span class="lineno">  143 </span>
 <span class="lineno">  144 </span>-- | Get exchange location (for EcoSpold1 supplier lookup)
@@ -167,7 +167,7 @@ span.spaces    { background: white }
 <span class="lineno">  148 </span>
 <span class="lineno">  149 </span>-- | Check if exchange is technosphere
 <span class="lineno">  150 </span>isTechnosphereExchange :: Exchange -&gt; Bool
-<span class="lineno">  151 </span><span class="funcount">-- entered 1994 times</span><span class="decl"><span class="istickedoff">isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _ _) = True</span>
+<span class="lineno">  151 </span><span class="funcount">-- entered 2138 times</span><span class="decl"><span class="istickedoff">isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _ _) = True</span>
 <span class="lineno">  152 </span><span class="spaces"></span><span class="istickedoff">isTechnosphereExchange (BiosphereExchange _ _ _ _ _) = False</span></span>
 <span class="lineno">  153 </span>
 <span class="lineno">  154 </span>-- | Check if exchange is biosphere
@@ -176,11 +176,11 @@ span.spaces    { background: white }
 <span class="lineno">  157 </span>
 <span class="lineno">  158 </span>-- | Get unit information for an exchange
 <span class="lineno">  159 </span>getUnitForExchange :: UnitDB -&gt; Exchange -&gt; Maybe Unit
-<span class="lineno">  160 </span><span class="funcount">-- entered 250 times</span><span class="decl"><span class="istickedoff">getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB</span></span>
+<span class="lineno">  160 </span><span class="funcount">-- entered 282 times</span><span class="decl"><span class="istickedoff">getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB</span></span>
 <span class="lineno">  161 </span>
 <span class="lineno">  162 </span>-- | Get unit name for an exchange (fallback to &quot;unknown&quot; if not found)
 <span class="lineno">  163 </span>getUnitNameForExchange :: UnitDB -&gt; Exchange -&gt; Text
-<span class="lineno">  164 </span><span class="funcount">-- entered 250 times</span><span class="decl"><span class="istickedoff">getUnitNameForExchange unitDB exchange =</span>
+<span class="lineno">  164 </span><span class="funcount">-- entered 282 times</span><span class="decl"><span class="istickedoff">getUnitNameForExchange unitDB exchange =</span>
 <span class="lineno">  165 </span><span class="spaces">    </span><span class="istickedoff">case getUnitForExchange unitDB exchange of</span>
 <span class="lineno">  166 </span><span class="spaces">        </span><span class="istickedoff">Just unit -&gt; unitName unit</span>
 <span class="lineno">  167 </span><span class="spaces">        </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">&quot;unknown&quot;</span></span></span>
@@ -199,13 +199,13 @@ span.spaces    { background: white }
 <span class="lineno">  180 </span>-- | Base LCA activity
 <span class="lineno">  181 </span>-- Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 <span class="lineno">  182 </span>data Activity = Activity
-<span class="lineno">  183 </span>    { <span class="istickedoff"><span class="funcount">-- entered 238 times</span><span class="decl"><span class="istickedoff">activityName</span></span></span> :: !Text -- Name
+<span class="lineno">  183 </span>    { <span class="istickedoff"><span class="funcount">-- entered 254 times</span><span class="decl"><span class="istickedoff">activityName</span></span></span> :: !Text -- Name
 <span class="lineno">  184 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">activityDescription</span></span></span> :: ![Text] -- General description (generalComment) by paragraphs
 <span class="lineno">  185 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">activitySynonyms</span></span></span> :: !(M.Map Text (S.Set Text)) -- Synonyms by language, same structure as flows
 <span class="lineno">  186 </span>    , <span class="istickedoff"><span class="funcount">-- entered 13 times</span><span class="decl"><span class="istickedoff">activityClassification</span></span></span> :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
-<span class="lineno">  187 </span>    , <span class="istickedoff"><span class="funcount">-- entered 391 times</span><span class="decl"><span class="istickedoff">activityLocation</span></span></span> :: !Text -- Location code (e.g. FR, RER)
-<span class="lineno">  188 </span>    , <span class="istickedoff"><span class="funcount">-- entered 201 times</span><span class="decl"><span class="istickedoff">activityUnit</span></span></span> :: !Text -- Reference unit
-<span class="lineno">  189 </span>    , <span class="istickedoff"><span class="funcount">-- entered 1745 times</span><span class="decl"><span class="istickedoff">exchanges</span></span></span> :: ![Exchange] -- List of exchanges
+<span class="lineno">  187 </span>    , <span class="istickedoff"><span class="funcount">-- entered 423 times</span><span class="decl"><span class="istickedoff">activityLocation</span></span></span> :: !Text -- Location code (e.g. FR, RER)
+<span class="lineno">  188 </span>    , <span class="istickedoff"><span class="funcount">-- entered 217 times</span><span class="decl"><span class="istickedoff">activityUnit</span></span></span> :: !Text -- Reference unit
+<span class="lineno">  189 </span>    , <span class="istickedoff"><span class="funcount">-- entered 1889 times</span><span class="decl"><span class="istickedoff">exchanges</span></span></span> :: ![Exchange] -- List of exchanges
 <span class="lineno">  190 </span>    , <span class="istickedoff"><span class="funcount">-- entered 3 times</span><span class="decl"><span class="istickedoff">activityParams</span></span></span> :: !(M.Map Text Double) -- Resolved SimaPro parameter values
 <span class="lineno">  191 </span>    , <span class="istickedoff"><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">activityParamExprs</span></span></span> :: !(M.Map Text Text) -- Raw SimaPro parameter expressions (for re-evaluation)
 <span class="lineno">  192 </span>    }
@@ -298,7 +298,7 @@ span.spaces    { background: white }
 <span class="lineno">  279 </span>newtype instance VU.MVector s SparseTriple = MV_SparseTriple (VU.MVector s (Int32, Int32, Double))
 <span class="lineno">  280 </span>newtype instance VU.Vector SparseTriple = V_SparseTriple (VU.Vector (Int32, Int32, Double))
 <span class="lineno">  281 </span>
-<span class="lineno">  282 </span>instance <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- entered 273 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- entered 273 times</span><span class="decl"><span class="istickedoff">VGM.MVector VU.MVector SparseTriple</span></span></span></span></span></span></span></span></span></span></span></span> where
+<span class="lineno">  282 </span>instance <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- entered 289 times</span><span class="decl"><span class="istickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- entered 289 times</span><span class="decl"><span class="istickedoff">VGM.MVector VU.MVector SparseTriple</span></span></span></span></span></span></span></span></span></span></span></span> where
 <span class="lineno">  283 </span>    {-# INLINE basicLength #-}
 <span class="lineno">  284 </span>    {-# INLINE basicUnsafeSlice #-}
 <span class="lineno">  285 </span>    {-# INLINE basicOverlaps #-}
@@ -306,15 +306,15 @@ span.spaces    { background: white }
 <span class="lineno">  287 </span>    {-# INLINE basicInitialize #-}
 <span class="lineno">  288 </span>    {-# INLINE basicUnsafeRead #-}
 <span class="lineno">  289 </span>    {-# INLINE basicUnsafeWrite #-}
-<span class="lineno">  290 </span>    <span class="funcount">-- entered 1109 times</span><span class="decl"><span class="istickedoff">basicLength (MV_SparseTriple v) = VGM.basicLength v</span></span>
-<span class="lineno">  291 </span>    <span class="funcount">-- entered 692 times</span><span class="decl"><span class="istickedoff">basicUnsafeSlice i n (MV_SparseTriple v) = MV_SparseTriple $ VGM.basicUnsafeSlice i n v</span></span>
+<span class="lineno">  290 </span>    <span class="funcount">-- entered 1173 times</span><span class="decl"><span class="istickedoff">basicLength (MV_SparseTriple v) = VGM.basicLength v</span></span>
+<span class="lineno">  291 </span>    <span class="funcount">-- entered 732 times</span><span class="decl"><span class="istickedoff">basicUnsafeSlice i n (MV_SparseTriple v) = MV_SparseTriple $ VGM.basicUnsafeSlice i n v</span></span>
 <span class="lineno">  292 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">basicOverlaps (MV_SparseTriple v1) (MV_SparseTriple v2) = VGM.basicOverlaps v1 v2</span></span>
-<span class="lineno">  293 </span>    <span class="funcount">-- entered 402 times</span><span class="decl"><span class="istickedoff">basicUnsafeNew n = MV_SparseTriple &lt;$&gt; VGM.basicUnsafeNew n</span></span>
+<span class="lineno">  293 </span>    <span class="funcount">-- entered 426 times</span><span class="decl"><span class="istickedoff">basicUnsafeNew n = MV_SparseTriple &lt;$&gt; VGM.basicUnsafeNew n</span></span>
 <span class="lineno">  294 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">basicInitialize (MV_SparseTriple v) = VGM.basicInitialize v</span></span>
-<span class="lineno">  295 </span>    <span class="funcount">-- entered 189 times</span><span class="decl"><span class="istickedoff">basicUnsafeRead (MV_SparseTriple v) i = do</span>
+<span class="lineno">  295 </span>    <span class="funcount">-- entered 201 times</span><span class="decl"><span class="istickedoff">basicUnsafeRead (MV_SparseTriple v) i = do</span>
 <span class="lineno">  296 </span><span class="spaces">        </span><span class="istickedoff">(r, c, val) &lt;- VGM.basicUnsafeRead v i</span>
 <span class="lineno">  297 </span><span class="spaces">        </span><span class="istickedoff">return $ SparseTriple r c val</span></span>
-<span class="lineno">  298 </span>    <span class="funcount">-- entered 479 times</span><span class="decl"><span class="istickedoff">basicUnsafeWrite (MV_SparseTriple v) i (SparseTriple r c val) =</span>
+<span class="lineno">  298 </span>    <span class="funcount">-- entered 507 times</span><span class="decl"><span class="istickedoff">basicUnsafeWrite (MV_SparseTriple v) i (SparseTriple r c val) =</span>
 <span class="lineno">  299 </span><span class="spaces">        </span><span class="istickedoff">VGM.basicUnsafeWrite v i (r, c, val)</span></span>
 <span class="lineno">  300 </span>
 <span class="lineno">  301 </span>instance <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">VG.Vector VU.Vector SparseTriple</span></span></span></span> where
@@ -323,11 +323,11 @@ span.spaces    { background: white }
 <span class="lineno">  304 </span>    {-# INLINE basicLength #-}
 <span class="lineno">  305 </span>    {-# INLINE basicUnsafeSlice #-}
 <span class="lineno">  306 </span>    {-# INLINE basicUnsafeIndexM #-}
-<span class="lineno">  307 </span>    <span class="funcount">-- entered 129 times</span><span class="decl"><span class="istickedoff">basicUnsafeFreeze (MV_SparseTriple v) = V_SparseTriple &lt;$&gt; VG.basicUnsafeFreeze v</span></span>
+<span class="lineno">  307 </span>    <span class="funcount">-- entered 137 times</span><span class="decl"><span class="istickedoff">basicUnsafeFreeze (MV_SparseTriple v) = V_SparseTriple &lt;$&gt; VG.basicUnsafeFreeze v</span></span>
 <span class="lineno">  308 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">basicUnsafeThaw (V_SparseTriple v) = MV_SparseTriple &lt;$&gt; VG.basicUnsafeThaw v</span></span>
-<span class="lineno">  309 </span>    <span class="funcount">-- entered 306 times</span><span class="decl"><span class="istickedoff">basicLength (V_SparseTriple v) = VG.basicLength v</span></span>
+<span class="lineno">  309 </span>    <span class="funcount">-- entered 326 times</span><span class="decl"><span class="istickedoff">basicLength (V_SparseTriple v) = VG.basicLength v</span></span>
 <span class="lineno">  310 </span>    <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">basicUnsafeSlice i n (V_SparseTriple v) = V_SparseTriple $ VG.basicUnsafeSlice i n v</span></span>
-<span class="lineno">  311 </span>    <span class="funcount">-- entered 92 times</span><span class="decl"><span class="istickedoff">basicUnsafeIndexM (V_SparseTriple v) i = do</span>
+<span class="lineno">  311 </span>    <span class="funcount">-- entered 100 times</span><span class="decl"><span class="istickedoff">basicUnsafeIndexM (V_SparseTriple v) i = do</span>
 <span class="lineno">  312 </span><span class="spaces">        </span><span class="istickedoff">(r, c, val) &lt;- VG.basicUnsafeIndexM v i</span>
 <span class="lineno">  313 </span><span class="spaces">        </span><span class="istickedoff">return $ SparseTriple r c val</span></span>
 <span class="lineno">  314 </span>
@@ -368,7 +368,7 @@ span.spaces    { background: white }
 <span class="lineno">  349 </span>-- | Index for looking up activities by their reference product attributes
 <span class="lineno">  350 </span>-- Used for: (1) upstream link resolution for SimaPro data, (2) future product search
 <span class="lineno">  351 </span>data ProductIndex = ProductIndex
-<span class="lineno">  352 </span>    { <span class="istickedoff"><span class="funcount">-- entered 62 times</span><span class="decl"><span class="istickedoff">piByUUID</span></span></span>     :: !(M.Map UUID ProcessId)      -- Product flow UUID → ProcessId (for upstream links)
+<span class="lineno">  352 </span>    { <span class="istickedoff"><span class="funcount">-- entered 66 times</span><span class="decl"><span class="istickedoff">piByUUID</span></span></span>     :: !(M.Map UUID ProcessId)      -- Product flow UUID → ProcessId (for upstream links)
 <span class="lineno">  353 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">piByName</span></span></span>     :: !(M.Map Text [ProcessId])    -- Normalized product name → [ProcessId] (for search)
 <span class="lineno">  354 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">piByLocation</span></span></span> :: !(M.Map Text [ProcessId])    -- Location → [ProcessId] (for search)
 <span class="lineno">  355 </span>    } deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">NFData</span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
@@ -385,24 +385,24 @@ span.spaces    { background: white }
 <span class="lineno">  366 </span>    , <span class="istickedoff"><span class="funcount">-- entered 31 times</span><span class="decl"><span class="istickedoff">dbActivityUUIDIndex</span></span></span> :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
 <span class="lineno">  367 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbActivityProductsIndex</span></span></span> :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
 <span class="lineno">  368 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbProductIndex</span></span></span> :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links &amp; product search)
-<span class="lineno">  369 </span>    , <span class="istickedoff"><span class="funcount">-- entered 83 times</span><span class="decl"><span class="istickedoff">dbActivities</span></span></span> :: !ActivityDB -- Vector of activities indexed by ProcessId
+<span class="lineno">  369 </span>    , <span class="istickedoff"><span class="funcount">-- entered 84 times</span><span class="decl"><span class="istickedoff">dbActivities</span></span></span> :: !ActivityDB -- Vector of activities indexed by ProcessId
 <span class="lineno">  370 </span>    , <span class="istickedoff"><span class="funcount">-- entered 40 times</span><span class="decl"><span class="istickedoff">dbFlows</span></span></span> :: !FlowDB
 <span class="lineno">  371 </span>    , <span class="istickedoff"><span class="funcount">-- entered 14 times</span><span class="decl"><span class="istickedoff">dbUnits</span></span></span> :: !UnitDB
 <span class="lineno">  372 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbIndexes</span></span></span> :: !Indexes
 <span class="lineno">  373 </span>    , -- Pre-computed sparse matrices for efficient LCA calculations (unboxed for memory efficiency)
-<span class="lineno">  374 </span>      <span class="istickedoff"><span class="funcount">-- entered 31 times</span><span class="decl"><span class="istickedoff">dbTechnosphereTriples</span></span></span> :: !(VU.Vector SparseTriple) -- A matrix: activities × activities (sparse, unboxed)
-<span class="lineno">  375 </span>    , <span class="istickedoff"><span class="funcount">-- entered 15 times</span><span class="decl"><span class="istickedoff">dbBiosphereTriples</span></span></span> :: !(VU.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse, unboxed)
-<span class="lineno">  376 </span>    , <span class="istickedoff"><span class="funcount">-- entered 26 times</span><span class="decl"><span class="istickedoff">dbActivityIndex</span></span></span> :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
-<span class="lineno">  377 </span>    , <span class="istickedoff"><span class="funcount">-- entered 14 times</span><span class="decl"><span class="istickedoff">dbBiosphereFlows</span></span></span> :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
-<span class="lineno">  378 </span>    , <span class="istickedoff"><span class="funcount">-- entered 24 times</span><span class="decl"><span class="istickedoff">dbActivityCount</span></span></span> :: !Int32 -- Number of activities (matrix dimension)
-<span class="lineno">  379 </span>    , <span class="istickedoff"><span class="funcount">-- entered 5 times</span><span class="decl"><span class="istickedoff">dbBiosphereCount</span></span></span> :: !Int32 -- Number of biosphere flows (matrix dimension)
+<span class="lineno">  374 </span>      <span class="istickedoff"><span class="funcount">-- entered 33 times</span><span class="decl"><span class="istickedoff">dbTechnosphereTriples</span></span></span> :: !(VU.Vector SparseTriple) -- A matrix: activities × activities (sparse, unboxed)
+<span class="lineno">  375 </span>    , <span class="istickedoff"><span class="funcount">-- entered 17 times</span><span class="decl"><span class="istickedoff">dbBiosphereTriples</span></span></span> :: !(VU.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse, unboxed)
+<span class="lineno">  376 </span>    , <span class="istickedoff"><span class="funcount">-- entered 28 times</span><span class="decl"><span class="istickedoff">dbActivityIndex</span></span></span> :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
+<span class="lineno">  377 </span>    , <span class="istickedoff"><span class="funcount">-- entered 16 times</span><span class="decl"><span class="istickedoff">dbBiosphereFlows</span></span></span> :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
+<span class="lineno">  378 </span>    , <span class="istickedoff"><span class="funcount">-- entered 27 times</span><span class="decl"><span class="istickedoff">dbActivityCount</span></span></span> :: !Int32 -- Number of activities (matrix dimension)
+<span class="lineno">  379 </span>    , <span class="istickedoff"><span class="funcount">-- entered 7 times</span><span class="decl"><span class="istickedoff">dbBiosphereCount</span></span></span> :: !Int32 -- Number of biosphere flows (matrix dimension)
 <span class="lineno">  380 </span>    -- Cross-database linking (serialized to cache)
 <span class="lineno">  381 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbCrossDBLinks</span></span></span> :: ![CrossDBLink] -- Cross-database supplier links (for chained solving)
 <span class="lineno">  382 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbDependsOn</span></span></span> :: ![Text] -- Names of databases this database depends on
 <span class="lineno">  383 </span>    -- Linking statistics (serialized to cache for setup page)
 <span class="lineno">  384 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbLinkingStats</span></span></span> :: !CrossDBLinkingStats -- Cross-DB linking statistics (completeness, fallbacks, etc.)
 <span class="lineno">  385 </span>    -- Runtime-only fields (not serialized to cache)
-<span class="lineno">  386 </span>    , <span class="istickedoff"><span class="funcount">-- entered 11 times</span><span class="decl"><span class="istickedoff">dbCachedFactorization</span></span></span> :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
+<span class="lineno">  386 </span>    , <span class="istickedoff"><span class="funcount">-- entered 13 times</span><span class="decl"><span class="istickedoff">dbCachedFactorization</span></span></span> :: !(Maybe MatrixFactorization) -- Pre-computed (I - A) for fast solves
 <span class="lineno">  387 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbSynonymDB</span></span></span> :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
 <span class="lineno">  388 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbFlowsByName</span></span></span> :: !(M.Map Text [Flow]) -- Biosphere flow name index for LCIA matching
 <span class="lineno">  389 </span>    , <span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">dbFlowsByCAS</span></span></span> :: !(M.Map Text [Flow]) -- CAS → biosphere flows for LCIA matching
@@ -658,9 +658,9 @@ span.spaces    { background: white }
 <span class="lineno">  639 </span>-- | Simplified version without indexes (for loading compatibility)
 <span class="lineno">  640 </span>-- Used during database loading, before conversion to final Vector structure
 <span class="lineno">  641 </span>data SimpleDatabase = SimpleDatabase
-<span class="lineno">  642 </span>    { <span class="istickedoff"><span class="funcount">-- entered 67 times</span><span class="decl"><span class="istickedoff">sdbActivities</span></span></span> :: !ActivityMap  -- Temporary Map structure
-<span class="lineno">  643 </span>    , <span class="istickedoff"><span class="funcount">-- entered 70 times</span><span class="decl"><span class="istickedoff">sdbFlows</span></span></span> :: !FlowDB
-<span class="lineno">  644 </span>    , <span class="istickedoff"><span class="funcount">-- entered 62 times</span><span class="decl"><span class="istickedoff">sdbUnits</span></span></span> :: !UnitDB
+<span class="lineno">  642 </span>    { <span class="istickedoff"><span class="funcount">-- entered 71 times</span><span class="decl"><span class="istickedoff">sdbActivities</span></span></span> :: !ActivityMap  -- Temporary Map structure
+<span class="lineno">  643 </span>    , <span class="istickedoff"><span class="funcount">-- entered 74 times</span><span class="decl"><span class="istickedoff">sdbFlows</span></span></span> :: !FlowDB
+<span class="lineno">  644 </span>    , <span class="istickedoff"><span class="funcount">-- entered 66 times</span><span class="decl"><span class="istickedoff">sdbUnits</span></span></span> :: !UnitDB
 <span class="lineno">  645 </span>    }
 <span class="lineno">  646 </span>    deriving (<span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Generic</span></span></span></span>, <span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff"><span class="funcount">-- never entered</span><span class="decl"><span class="nottickedoff">Store</span></span></span></span></span></span>)
 <span class="lineno">  647 </span>

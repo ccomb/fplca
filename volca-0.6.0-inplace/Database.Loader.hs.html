@@ -130,7 +130,7 @@ span.spaces    { background: white }
 <span class="lineno">  111 </span>-- When multiple .spold files reference the same biosphere flow, each may carry
 <span class="lineno">  112 </span>-- different synonyms. M.fromListWith mergeFlows ensures no synonym is lost.
 <span class="lineno">  113 </span>mergeFlows :: Flow -&gt; Flow -&gt; Flow
-<span class="lineno">  114 </span><span class="funcount">-- entered 140 times</span><span class="decl"><span class="istickedoff">mergeFlows a b = a { flowSynonyms = M.unionWith <span class="nottickedoff">S.union</span> (flowSynonyms a) (flowSynonyms b) }</span></span>
+<span class="lineno">  114 </span><span class="funcount">-- entered 156 times</span><span class="decl"><span class="istickedoff">mergeFlows a b = a { flowSynonyms = M.unionWith <span class="nottickedoff">S.union</span> (flowSynonyms a) (flowSynonyms b) }</span></span>
 <span class="lineno">  115 </span>
 <span class="lineno">  116 </span>{- |
 <span class="lineno">  117 </span>Schema signature automatically derived from the Database type structure.
@@ -156,7 +156,7 @@ span.spaces    { background: white }
 <span class="lineno">  137 </span><span class="funcount">-- entered once</span><span class="decl"><span class="istickedoff">testDataNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ T.encodeUtf8 &quot;acvengine.test&quot;)</span></span>
 <span class="lineno">  138 </span>
 <span class="lineno">  139 </span>parseUUID :: T.Text -&gt; UUID.UUID
-<span class="lineno">  140 </span><span class="funcount">-- entered 385 times</span><span class="decl"><span class="istickedoff">parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)</span></span>
+<span class="lineno">  140 </span><span class="funcount">-- entered 417 times</span><span class="decl"><span class="istickedoff">parseUUID txt = fromMaybe (UUID5.generateNamed testDataNamespace (BS.unpack $ T.encodeUtf8 txt)) (UUID.fromText txt)</span></span>
 <span class="lineno">  141 </span>
 <span class="lineno">  142 </span>-- | Namespace for EcoSpold1 UUID generation
 <span class="lineno">  143 </span>ecospold1Namespace :: UUID.UUID
@@ -434,13 +434,13 @@ span.spaces    { background: white }
 <span class="lineno">  415 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">&quot;.csv&quot; -&gt; loadSimaProCSV path</span></span>
 <span class="lineno">  416 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">&quot;.xml&quot; -&gt; loadSingleEcoSpold1File locationAliases path</span></span>
 <span class="lineno">  417 </span><span class="spaces">            </span><span class="istickedoff"><span class="nottickedoff">_      -&gt; return $ Left $ T.pack $ &quot;Unsupported file type: &quot; ++ path</span></span>
-<span class="lineno">  418 </span><span class="spaces">        </span><span class="istickedoff">else if isDir</span>
+<span class="lineno">  418 </span><span class="spaces">        </span><span class="istickedoff">else if <span class="tickonlytrue">isDir</span></span>
 <span class="lineno">  419 </span><span class="spaces">            </span><span class="istickedoff">then do</span>
 <span class="lineno">  420 </span><span class="spaces">                </span><span class="istickedoff">hasProcesses &lt;- doesDirectoryExist (path &lt;/&gt; &quot;processes&quot;)</span>
 <span class="lineno">  421 </span><span class="spaces">                </span><span class="istickedoff">if <span class="tickonlyfalse">hasProcesses</span></span>
 <span class="lineno">  422 </span><span class="spaces">                    </span><span class="istickedoff">then <span class="nottickedoff">ILCD.parseILCDDirectory path</span></span>
 <span class="lineno">  423 </span><span class="spaces">                    </span><span class="istickedoff">else loadEcoSpoldDirectory locationAliases path</span>
-<span class="lineno">  424 </span><span class="spaces">            </span><span class="istickedoff">else return $ Left $ T.pack $ &quot;Path does not exist: &quot; ++ path</span></span>
+<span class="lineno">  424 </span><span class="spaces">            </span><span class="istickedoff">else <span class="nottickedoff">return $ Left $ T.pack $ &quot;Path does not exist: &quot; ++ path</span></span></span>
 <span class="lineno">  425 </span>
 <span class="lineno">  426 </span>-- | Load SimaPro CSV file
 <span class="lineno">  427 </span>loadSimaProCSV :: FilePath -&gt; IO (Either T.Text SimpleDatabase)
@@ -541,7 +541,7 @@ span.spaces    { background: white }
 <span class="lineno">  522 </span>
 <span class="lineno">  523 </span>-- | Load EcoSpold files from directory
 <span class="lineno">  524 </span>loadEcoSpoldDirectory :: M.Map T.Text T.Text -&gt; FilePath -&gt; IO (Either T.Text SimpleDatabase)
-<span class="lineno">  525 </span><span class="funcount">-- entered 64 times</span><span class="decl"><span class="istickedoff">loadEcoSpoldDirectory locationAliases dir = do</span>
+<span class="lineno">  525 </span><span class="funcount">-- entered 68 times</span><span class="decl"><span class="istickedoff">loadEcoSpoldDirectory locationAliases dir = do</span>
 <span class="lineno">  526 </span><span class="spaces">    </span><span class="istickedoff">reportProgress Info &quot;Scanning directory for EcoSpold files&quot;</span>
 <span class="lineno">  527 </span><span class="spaces">    </span><span class="istickedoff">files &lt;- listDirectory dir</span>
 <span class="lineno">  528 </span><span class="spaces">    </span><span class="istickedoff">-- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files</span>
@@ -678,7 +678,7 @@ span.spaces    { background: white }
 <span class="lineno">  659 </span><span class="spaces">            </span><span class="istickedoff">(firstErr:_) -&gt; <span class="nottickedoff">return $ Left firstErr</span></span>
 <span class="lineno">  660 </span><span class="spaces">            </span><span class="istickedoff">[] -&gt; do</span>
 <span class="lineno">  661 </span><span class="spaces">                </span><span class="istickedoff">let !procMap = M.fromList [e | Right e &lt;- procEntries]</span>
-<span class="lineno">  662 </span><span class="spaces">                </span><span class="istickedoff">let !flowMap = M.fromListWith <span class="nottickedoff">mergeFlows</span> [(flowId f, f) | f &lt;- allFlows]</span>
+<span class="lineno">  662 </span><span class="spaces">                </span><span class="istickedoff">let !flowMap = M.fromListWith mergeFlows [(flowId f, f) | f &lt;- allFlows]</span>
 <span class="lineno">  663 </span><span class="spaces">                </span><span class="istickedoff">let !unitMap = M.fromList [(unitId u, u) | u &lt;- allUnits]</span>
 <span class="lineno">  664 </span><span class="spaces">                </span><span class="istickedoff">-- Build dataset number index: dsNum → (actUUID, prodUUID)</span>
 <span class="lineno">  665 </span><span class="spaces">                </span><span class="istickedoff">let !dsIndex = M.fromList</span>

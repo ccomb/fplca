@@ -59,7 +59,7 @@ span.spaces    { background: white }
 <span class="lineno">   40 </span>- Solver constructs (I-A) by adding identity and negating technosphere triplets
 <span class="lineno">   41 </span>-}
 <span class="lineno">   42 </span>buildDatabaseWithMatrices :: UnitConfig -&gt; M.Map (UUID, UUID) Activity -&gt; FlowDB -&gt; UnitDB -&gt; IO Database
-<span class="lineno">   43 </span><span class="funcount">-- entered 62 times</span><span class="decl"><span class="istickedoff">buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do</span>
+<span class="lineno">   43 </span><span class="funcount">-- entered 66 times</span><span class="decl"><span class="istickedoff">buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do</span>
 <span class="lineno">   44 </span><span class="spaces">    </span><span class="istickedoff">reportMatrixOperation &quot;Building database with pre-computed sparse matrices&quot;</span>
 <span class="lineno">   45 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">   46 </span><span class="spaces">    </span><span class="istickedoff">-- Step 1: Build UUID interning tables from Map keys</span>
@@ -154,7 +154,7 @@ span.spaces    { background: white }
 <span class="lineno">  135 </span><span class="spaces">                                </span><span class="istickedoff">-- Exclude self-loops (internal consumption): idx == j</span>
 <span class="lineno">  136 </span><span class="spaces">                                </span><span class="istickedoff">-- Self-loops are accounted for in normalization factor but not exported as matrix entries</span>
 <span class="lineno">  137 </span><span class="spaces">                                </span><span class="istickedoff">-- This matches Ecoinvent's convention where internal losses affect normalization only</span>
-<span class="lineno">  138 </span><span class="spaces">                             </span><span class="istickedoff">in ([SparseTriple idx j value | <span class="tickonlytrue">abs value &gt; 1e-15</span>, <span class="tickonlytrue">idx /= j</span>], warnings)</span>
+<span class="lineno">  138 </span><span class="spaces">                             </span><span class="istickedoff">in ([SparseTriple idx j value | <span class="tickonlytrue">abs value &gt; 1e-15</span>, idx /= j], warnings)</span>
 <span class="lineno">  139 </span><span class="spaces">                        </span><span class="istickedoff">Nothing -&gt; ([], warnings)</span>
 <span class="lineno">  140 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">  141 </span><span class="spaces">        </span><span class="istickedoff">buildActivityTriplets (j, consumerPid) =</span>
@@ -172,14 +172,14 @@ span.spaces    { background: white }
 <span class="lineno">  153 </span><span class="spaces">                </span><span class="istickedoff">-- EXACT same (activity, product) pair. Must check both activityLinkId == activityUUID AND</span>
 <span class="lineno">  154 </span><span class="spaces">                </span><span class="istickedoff">-- flowId == productUUID, to avoid counting cross-product inputs in multi-output processes</span>
 <span class="lineno">  155 </span><span class="spaces">                </span><span class="istickedoff">-- (e.g., coal gas input linking to the same coke production plant is NOT a sulfur self-loop).</span>
-<span class="lineno">  156 </span><span class="spaces">                </span><span class="istickedoff">internalConsumption = sum [ <span class="nottickedoff">exchangeAmount ex</span></span>
+<span class="lineno">  156 </span><span class="spaces">                </span><span class="istickedoff">internalConsumption = sum [ exchangeAmount ex</span>
 <span class="lineno">  157 </span><span class="spaces">                                          </span><span class="istickedoff">| ex &lt;- exchanges consumerActivity</span>
 <span class="lineno">  158 </span><span class="spaces">                                          </span><span class="istickedoff">, isTechnosphereExchange ex</span>
 <span class="lineno">  159 </span><span class="spaces">                                          </span><span class="istickedoff">, exchangeIsInput ex</span>
 <span class="lineno">  160 </span><span class="spaces">                                          </span><span class="istickedoff">, <span class="tickonlytrue">not (exchangeIsReference ex)</span>  -- Don't count reference products</span>
-<span class="lineno">  161 </span><span class="spaces">                                          </span><span class="istickedoff">, <span class="tickonlyfalse">case exchangeActivityLinkId ex of</span></span>
-<span class="lineno">  162 </span><span class="spaces">                                                </span><span class="istickedoff"><span class="tickonlyfalse">Just linkUUID -&gt; linkUUID == activityUUID &amp;&amp; <span class="nottickedoff">exchangeFlowId ex == productUUID</span></span></span>
-<span class="lineno">  163 </span><span class="spaces">                                                </span><span class="istickedoff"><span class="tickonlyfalse">Nothing -&gt; <span class="nottickedoff">False</span></span></span>
+<span class="lineno">  161 </span><span class="spaces">                                          </span><span class="istickedoff">, case exchangeActivityLinkId ex of</span>
+<span class="lineno">  162 </span><span class="spaces">                                                </span><span class="istickedoff">Just linkUUID -&gt; linkUUID == activityUUID &amp;&amp; exchangeFlowId ex == productUUID</span>
+<span class="lineno">  163 </span><span class="spaces">                                                </span><span class="istickedoff">Nothing -&gt; <span class="nottickedoff">False</span></span>
 <span class="lineno">  164 </span><span class="spaces">                                          </span><span class="istickedoff">]</span>
 <span class="lineno">  165 </span><span class="spaces"></span><span class="istickedoff"></span>
 <span class="lineno">  166 </span><span class="spaces">                </span><span class="istickedoff">normalizationFactor =</span>
@@ -311,7 +311,7 @@ span.spaces    { background: white }
 <span class="lineno">  292 </span>
 <span class="lineno">  293 </span>-- | Build indexes with ProcessIds
 <span class="lineno">  294 </span>buildIndexesWithProcessIds :: V.Vector Activity -&gt; V.Vector (UUID, UUID) -&gt; FlowDB -&gt; Indexes
-<span class="lineno">  295 </span><span class="funcount">-- entered 59 times</span><span class="decl"><span class="istickedoff">buildIndexesWithProcessIds activityVec processIdTable flowDB =</span>
+<span class="lineno">  295 </span><span class="funcount">-- entered 63 times</span><span class="decl"><span class="istickedoff">buildIndexesWithProcessIds activityVec processIdTable flowDB =</span>
 <span class="lineno">  296 </span><span class="spaces">    </span><span class="istickedoff">let</span>
 <span class="lineno">  297 </span><span class="spaces">        </span><span class="istickedoff">-- Convert Vector to temporary Map for index building</span>
 <span class="lineno">  298 </span><span class="spaces">        </span><span class="istickedoff">-- We use the ProcessId-to-UUID mapping for lookups</span>
@@ -369,7 +369,7 @@ span.spaces    { background: white }
 <span class="lineno">  350 </span>-- Used for: (1) SimaPro upstream link resolution, (2) future product search
 <span class="lineno">  351 </span>-- Maps product flow UUIDs and names to the activities that produce them
 <span class="lineno">  352 </span>buildProductIndex :: V.Vector Activity -&gt; V.Vector (UUID, UUID) -&gt; FlowDB -&gt; ProductIndex
-<span class="lineno">  353 </span><span class="funcount">-- entered 62 times</span><span class="decl"><span class="istickedoff">buildProductIndex activities processIdTable flowDb =</span>
+<span class="lineno">  353 </span><span class="funcount">-- entered 66 times</span><span class="decl"><span class="istickedoff">buildProductIndex activities processIdTable flowDb =</span>
 <span class="lineno">  354 </span><span class="spaces">    </span><span class="istickedoff">let -- Build list of (ProcessId, productUUID, productName, location) for each activity</span>
 <span class="lineno">  355 </span><span class="spaces">        </span><span class="istickedoff">entries =</span>
 <span class="lineno">  356 </span><span class="spaces">            </span><span class="istickedoff">[ (<span class="nottickedoff">pid</span>, prodUUID, prodName, actLoc)</span>
