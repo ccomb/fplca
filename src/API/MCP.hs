@@ -4,7 +4,7 @@
 -- Implements Streamable HTTP transport (MCP spec 2025-03-26).
 -- POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 -- GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
-module API.MCP (mcpApp) where
+module API.MCP (mcpApp, toolDefinitions) where
 
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
@@ -307,9 +307,11 @@ toolDefinitions =
             [ ("database",   "string", "Database name")
             , ("process_id", "string", "Process ID of the supplier to trace downstream")
             ]
-            [ ("name",      "string",  "Filter by name (case-insensitive substring)")
-            , ("limit",     "integer", "Max results (default 1000)")
-            , ("max_depth", "integer", "Max hops from supplier (1 = direct consumers only)")
+            [ ("name",                 "string",  "Filter by name (case-insensitive substring)")
+            , ("classification",       "string",  "Classification system name (e.g. 'ISIC rev.4 ecoinvent')")
+            , ("classification_value", "string",  "Classification value substring to match")
+            , ("limit",                "integer", "Max results (default 1000)")
+            , ("max_depth",            "integer", "Max hops from supplier (1 = direct consumers only)")
             ])
     ]
 
@@ -519,10 +521,13 @@ callGetConsumers rid args (db, _) =
     case textArg "process_id" args of
         Nothing -> return $ toolError rid "Missing required parameter: process_id"
         Just pid ->
-            let nameFilter = textArg "name" args
-                limitParam = intArg "limit" args
-                maxDepth   = intArg "max_depth" args
-            in case Service.getConsumers db pid nameFilter limitParam maxDepth of
+            let nameFilter   = textArg "name" args
+                limitParam   = intArg "limit" args
+                maxDepth     = intArg "max_depth" args
+                classFilters = case (textArg "classification" args, textArg "classification_value" args) of
+                    (Just sys, Just val) -> [(sys, val)]
+                    _                   -> []
+            in case Service.getConsumers db pid nameFilter limitParam maxDepth classFilters of
                 Left err      -> return $ toolError rid (T.pack $ show err)
                 Right results -> return $ toolSuccessJson rid (toJSON results)
 

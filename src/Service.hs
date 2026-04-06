@@ -1286,9 +1286,9 @@ findTechCoefficient db consumer supplier =
 
 -- | Find all activities that transitively depend on a given supplier.
 -- BFS through the technosphere matrix tracking depth; optional max-depth cap.
-getConsumers :: Database -> Text -> Maybe Text -> Maybe Int -> Maybe Int
+getConsumers :: Database -> Text -> Maybe Text -> Maybe Int -> Maybe Int -> [(Text, Text)]
              -> Either ServiceError [ConsumerResult]
-getConsumers db processIdText nameFilter limitParam maxDepthParam = do
+getConsumers db processIdText nameFilter limitParam maxDepthParam classFilters = do
     (processId, _) <- resolveActivityAndProcessId db processIdText
     let -- Build adjacency list: supplier → [direct consumers]
         adj = M.fromListWith (++)
@@ -1318,6 +1318,15 @@ getConsumers db processIdText nameFilter limitParam maxDepthParam = do
             Nothing  -> True
             Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold (activityName activity)
 
+        -- OR within same system, AND across systems
+        classMatches activity =
+            let groups = M.fromListWith (++) [(sys, [val]) | (sys, val) <- classFilters]
+                applyGroup acc (sys, vals) =
+                    acc && case M.lookup sys (activityClassification activity) of
+                        Just v  -> any (\q -> T.isInfixOf (T.toLower q) (T.toLower v)) vals
+                        Nothing -> False
+            in foldl applyGroup True (M.toList groups)
+
         limit = maybe 1000 id limitParam
 
         results =
@@ -1330,6 +1339,7 @@ getConsumers db processIdText nameFilter limitParam maxDepthParam = do
             | (pid, depth) <- M.toAscList allConsumers
             , let activity = dbActivities db V.! fromIntegral pid
             , nameMatches activity
+            , classMatches activity
             , let (prodName, prodAmount, prodUnit) =
                       getReferenceProductInfo (dbFlows db) (dbUnits db) activity
             ]
