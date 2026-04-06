@@ -72,6 +72,46 @@ class SupplyChainEntry:
 
 
 @dataclass
+class PathStep:
+    """One step in the supply chain path returned by get_path_to."""
+    process_id: str
+    name: str
+    location: str
+    unit: str
+    cumulative_quantity: float
+    scaling_factor: float
+    local_step_ratio: float | None = None  # absent on root step
+
+    @classmethod
+    def from_json(cls, d: dict) -> "PathStep":
+        return cls(
+            process_id=d["process_id"],
+            name=d["name"],
+            location=d["location"],
+            unit=d["unit"],
+            cumulative_quantity=d["cumulative_quantity"],
+            scaling_factor=d["scaling_factor"],
+            local_step_ratio=d.get("local_step_ratio"),
+        )
+
+
+@dataclass
+class PathResult:
+    """Shortest upstream path from a root process to a matching activity."""
+    path: list[PathStep]
+    path_length: int
+    total_ratio: float
+
+    @classmethod
+    def from_json(cls, d: dict) -> "PathResult":
+        return cls(
+            path=[PathStep.from_json(s) for s in d["path"]],
+            path_length=d["path_length"],
+            total_ratio=d["total_ratio"],
+        )
+
+
+@dataclass
 class SupplyChainEdge:
     from_id: str
     to_id: str

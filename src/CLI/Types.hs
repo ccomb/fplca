@@ -55,6 +55,9 @@ data Command =
   | Mapping MappingOptions                 -- Flow mapping coverage analysis
   | Stop                                   -- Stop running server
   | Repl                                   -- Interactive REPL over HTTP
+    -- Hidden tooling commands (not shown in --help)
+  | DumpOpenApi                            -- Dump OpenAPI spec as JSON to stdout
+  | DumpMcpTools                           -- Dump MCP tool definitions as JSON to stdout
   deriving (Eq, Show, Generic)
 
 -- | Database management actions

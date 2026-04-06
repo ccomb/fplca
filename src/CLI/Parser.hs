@@ -129,6 +129,11 @@ commandParser =
             <> OA.command "stop" (info (pure Stop <**> helper) (progDesc "Stop running server (uses --config or --url to find it)"))
             <> OA.command "repl" (info (pure Repl <**> helper) (progDesc "Interactive REPL over HTTP (connects to running server)"))
         )
+    <|> subparser
+        ( OA.command "dump-openapi" (info (pure DumpOpenApi) (progDesc "Dump OpenAPI spec as JSON to stdout"))
+            <> OA.command "dump-mcp-tools" (info (pure DumpMcpTools) (progDesc "Dump MCP tool definitions as JSON to stdout"))
+            <> internal
+        )
 
 -- | Database command parser with optional subcommand (defaults to list)
 databaseParser :: Parser Command

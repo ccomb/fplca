@@ -65,6 +65,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "max-depth" Int :> Get '[JSON] [ConsumerResult]
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "flow-hotspot" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] FlowHotspotResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "process-hotspot" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ProcessHotspotResult
@@ -192,6 +193,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         :<|> postActivityInventory
         :<|> postActivitySupplyChain
         :<|> getActivityConsumers
+        :<|> getActivityPathTo
         :<|> getActivityAnalyze
         :<|> getFlowHotspot
         :<|> getProcessHotspot
@@ -570,6 +572,23 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right consumers -> return consumers
+
+    -- Activity path-to endpoint (shortest supply chain path to first matching upstream activity)
+    getActivityPathTo :: Text -> Text -> Maybe Text -> Handler Value
+    getActivityPathTo dbName processIdText targetParam = do
+        (db, solver) <- requireDatabaseByName dbManager dbName
+        target <- maybe
+            (throwError err400{errBody = "Missing required 'target' query parameter"})
+            pure targetParam
+        result <- liftIO $ Service.getPathTo db solver processIdText target
+        case result of
+            Left (Service.ActivityNotFound msg) ->
+                throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left (Service.InvalidProcessId msg) ->
+                throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+            Left err ->
+                throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Right val -> return val
 
     -- Helpers for POST endpoints with substitutions
     resolveOrThrow :: Database -> Text -> Handler (ProcessId, Activity)

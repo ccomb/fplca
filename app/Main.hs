@@ -32,12 +32,13 @@ import Progress
 import Control.Concurrent.STM (readTVarIO)
 
 -- For server mode
-import API.MCP (mcpApp)
+import API.MCP (mcpApp, toolDefinitions)
 import API.OpenApi (volcaOpenApi)
 import API.Routes (lcaAPI, lcaServer)
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Request (..), Response, ResponseReceived, rawPathInfo, rawQueryString, requestMethod, requestHeaders, pathInfo, mapResponseHeaders, responseStream, responseLBS)
@@ -54,6 +55,8 @@ main = do
   validateCLIConfig cliConfig
 
   case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
+    (Just DumpOpenApi, _)                    -> BSL.putStrLn (encode volcaOpenApi)
+    (Just DumpMcpTools, _)                   -> BSL.putStrLn (encode toolDefinitions)
     (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
     (Just Repl, Just cfgFile)                -> runReplMode cliConfig cfgFile
     (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
