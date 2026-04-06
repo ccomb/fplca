@@ -46,8 +46,17 @@ spec = do
         it "parses complex expression (mass*length/time)" $ do
             parseDimension dimOrder "mass*length/time" `shouldBe` Right [1, 1, -1, 0, 0, 0, 0, 0]
 
-        it "rejects unknown dimension" $ do
+        it "rejects empty expression" $
+            parseDimension dimOrder "" `shouldSatisfy` isLeft
+
+        it "rejects whitespace-only expression" $
+            parseDimension dimOrder "   " `shouldSatisfy` isLeft
+
+        it "rejects unknown dimension" $
             parseDimension dimOrder "velocity" `shouldSatisfy` isLeft
+
+        it "rejects unknown dimension in denominator" $
+            parseDimension dimOrder "mass/velocity" `shouldSatisfy` isLeft
 
     describe "Unit Compatibility" $ do
         it "tkm and kgkm are compatible (both mass*length)" $ do
@@ -190,6 +199,21 @@ spec = do
                         Just def -> udFactor def `shouldBe` 999.0
                         Nothing -> expectationFailure "kg should exist"
                 _ -> expectationFailure "both parses should succeed"
+
+        it "mergeUnitConfigs [] returns defaultUnitConfig" $
+            unitCount (mergeUnitConfigs []) `shouldBe` unitCount defaultUnitConfig
+
+        it "fails on malformed CSV (wrong column count)" $ do
+            let csv = "name,dimension,factor\nkg,mass\n"
+            buildFromCSV csv `shouldSatisfy` isLeftT
+
+    describe "unitCount" $ do
+        it "is 0 for empty config" $ do
+            let Right cfg = buildFromCSV "name,dimension,factor\n"
+            unitCount cfg `shouldBe` 0
+
+        it "counts the number of units in defaultUnitConfig" $
+            unitCount defaultUnitConfig `shouldSatisfy` (> 0)
 
 isLeftT :: Either T.Text b -> Bool
 isLeftT (Left _) = True
