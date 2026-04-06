@@ -325,6 +325,70 @@ spec = do
                         ]
                 parseMethodBytes xml `shouldSatisfy` isLeft
 
+            it "fails on invalid UUID string" $ do
+                let xml = TE.encodeUtf8 $ T.unlines
+                        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                        , "<LCIAMethodDataSet>"
+                        , "  <LCIAMethodInformation>"
+                        , "    <dataSetInformation>"
+                        , "      <UUID>not-a-uuid</UUID>"
+                        , "      <name>Test</name>"
+                        , "    </dataSetInformation>"
+                        , "  </LCIAMethodInformation>"
+                        , "</LCIAMethodDataSet>"
+                        ]
+                parseMethodBytes xml `shouldSatisfy` isLeft
+
+            it "returns Nothing for description and methodology when absent" $ do
+                let xml = TE.encodeUtf8 $ T.unlines
+                        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                        , "<LCIAMethodDataSet>"
+                        , "  <LCIAMethodInformation>"
+                        , "    <dataSetInformation>"
+                        , "      <UUID>12345678-1234-1234-1234-123456789012</UUID>"
+                        , "      <name>Minimal</name>"
+                        , "    </dataSetInformation>"
+                        , "  </LCIAMethodInformation>"
+                        , "</LCIAMethodDataSet>"
+                        ]
+                case parseMethodBytes xml of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right method -> do
+                        methodDescription method `shouldBe` Nothing
+                        methodMethodology method `shouldBe` Nothing
+
+            it "resolves flow UUID from uri attribute when refObjectId absent" $ do
+                let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                    xml = TE.encodeUtf8 $ T.unlines
+                        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                        , "<LCIAMethodDataSet>"
+                        , "  <LCIAMethodInformation>"
+                        , "    <dataSetInformation>"
+                        , "      <UUID>12345678-1234-1234-1234-123456789012</UUID>"
+                        , "      <name>URI UUID Test</name>"
+                        , "    </dataSetInformation>"
+                        , "  </LCIAMethodInformation>"
+                        , "  <characterisationFactors>"
+                        , "    <factor>"
+                        , "      <referenceToFlowDataSet uri=\"../flows/" <> uuid <> ".xml\">"
+                        , "        <shortDescription>CO2</shortDescription>"
+                        , "      </referenceToFlowDataSet>"
+                        , "      <exchangeDirection>Output</exchangeDirection>"
+                        , "      <meanValue>1.0</meanValue>"
+                        , "    </factor>"
+                        , "  </characterisationFactors>"
+                        , "</LCIAMethodDataSet>"
+                        ]
+                case parseMethodBytes xml of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right method -> case methodFactors method of
+                        [cf] -> show (mcfFlowRef cf) `shouldBe` T.unpack uuid
+                        _    -> expectationFailure "expected one factor"
+
+            it "returns Left for invalid XML" $ do
+                let xml = TE.encodeUtf8 "<not-valid-xml"
+                parseMethodBytes xml `shouldSatisfy` isLeft
+
     describe "parseMethodBytesWithFlows" $ do
         let minimalXML = TE.encodeUtf8 $ T.unlines
                 [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
