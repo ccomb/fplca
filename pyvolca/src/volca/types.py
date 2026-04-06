@@ -25,6 +25,30 @@ class Activity:
 
 
 @dataclass
+class ConsumerResult:
+    """Activity that consumes a given supplier, with BFS depth."""
+    process_id: str
+    name: str
+    location: str
+    product: str
+    product_amount: float
+    product_unit: str
+    depth: int  # hops from the queried supplier (1 = direct consumer)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ConsumerResult":
+        return cls(
+            process_id=d["crId"],
+            name=d["crName"],
+            location=d["crLocation"],
+            product=d["crProduct"],
+            product_amount=d["crProductAmount"],
+            product_unit=d["crProductUnit"],
+            depth=d["crDepth"],
+        )
+
+
+@dataclass
 class SupplyChainEntry:
     process_id: str
     name: str

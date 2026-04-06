@@ -11,7 +11,7 @@ import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), ConsumerResult (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON, object, (.=))
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
@@ -1285,10 +1285,10 @@ findTechCoefficient db consumer supplier =
        else let SparseTriple _ _ val = U.head matching in Just val
 
 -- | Find all activities that transitively depend on a given supplier.
--- BFS through the technosphere matrix: supplier row → direct consumers → their consumers → ...
-getConsumers :: Database -> Text -> Maybe Text -> Maybe Int
-             -> Either ServiceError [ActivitySummary]
-getConsumers db processIdText nameFilter limitParam = do
+-- BFS through the technosphere matrix tracking depth; optional max-depth cap.
+getConsumers :: Database -> Text -> Maybe Text -> Maybe Int -> Maybe Int
+             -> Either ServiceError [ConsumerResult]
+getConsumers db processIdText nameFilter limitParam maxDepthParam = do
     (processId, _) <- resolveActivityAndProcessId db processIdText
     let -- Build adjacency list: supplier → [direct consumers]
         adj = M.fromListWith (++)
@@ -1297,34 +1297,41 @@ getConsumers db processIdText nameFilter limitParam = do
             , row /= col  -- skip self-loops
             ]
 
-        -- BFS from processId
-        bfs visited [] = visited
-        bfs visited frontier =
-            let next = [ c | pid <- frontier
-                           , c <- M.findWithDefault [] pid adj
-                           , not (S.member c visited)
-                       ]
-                visited' = L.foldl' (flip S.insert) visited next
-            in bfs visited' next
+        -- BFS tracking depth per node (Map ProcessId depth)
+        bfs depthMap [] = depthMap
+        bfs depthMap frontier =
+            let next     = [ (c, d + 1)
+                           | (pid, d) <- frontier
+                           , c        <- M.findWithDefault [] pid adj
+                           , not (M.member c depthMap)
+                           ]
+                -- deduplicate: keep minimum depth for nodes seen in this wave
+                nextDeduped  = M.toList $ M.fromListWith min next
+                nextFiltered = filter (\(_, d) -> maybe True (d <=) maxDepthParam) nextDeduped
+                depthMap'    = L.foldl' (\m (c, d) -> M.insert c d m) depthMap nextFiltered
+            in bfs depthMap' nextFiltered
 
-        allConsumers = S.delete processId $ bfs (S.singleton processId) [processId]
+        allConsumers = M.delete processId $
+                           bfs (M.singleton processId 0) [(processId, 0)]
 
         nameMatches activity = case nameFilter of
-            Nothing -> True
+            Nothing  -> True
             Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold (activityName activity)
 
         limit = maybe 1000 id limitParam
 
         results =
-            [ ActivitySummary
+            [ ConsumerResult
                 (processIdToText db pid)
                 (activityName activity)
                 (activityLocation activity)
                 prodName prodAmount prodUnit
-            | pid <- S.toList allConsumers
+                depth
+            | (pid, depth) <- M.toAscList allConsumers
             , let activity = dbActivities db V.! fromIntegral pid
             , nameMatches activity
-            , let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) activity
+            , let (prodName, prodAmount, prodUnit) =
+                      getReferenceProductInfo (dbFlows db) (dbUnits db) activity
             ]
 
     Right $ take limit results

@@ -36,6 +36,18 @@ data ActivitySummary = ActivitySummary
     }
     deriving (Generic)
 
+-- | Consumer result — ActivitySummary enriched with BFS depth from the queried supplier
+data ConsumerResult = ConsumerResult
+    { crId            :: Text
+    , crName          :: Text
+    , crLocation      :: Text
+    , crProduct       :: Text
+    , crProductAmount :: Double
+    , crProductUnit   :: Text
+    , crDepth         :: Int   -- hops from the queried supplier (1 = direct consumer)
+    }
+    deriving (Generic)
+
 -- | Enhanced flow information for search results (now includes synonyms)
 data FlowSearchResult = FlowSearchResult
     { fsrId :: UUID
@@ -580,6 +592,8 @@ data ClassificationSystem = ClassificationSystem
     deriving (Generic)
 
 -- JSON instances
+instance ToJSON ConsumerResult
+instance FromJSON ConsumerResult
 instance ToJSON ClassificationEntryInfo
 instance ToJSON ClassificationPresetInfo
 instance ToJSON ClassificationSystem

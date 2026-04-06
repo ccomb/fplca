@@ -39,6 +39,7 @@ instance ToSchema LoginRequest
 instance ToSchema ClassificationSystem
 instance (ToSchema a) => ToSchema (SearchResults a)
 instance ToSchema ActivitySummary
+instance ToSchema ConsumerResult
 instance ToSchema FlowSearchResult
 instance ToSchema InventoryExport
 instance ToSchema InventoryMetadata

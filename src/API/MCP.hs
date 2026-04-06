@@ -302,6 +302,15 @@ toolDefinitions =
             , ("process_id", "string", "Root process ID to start from")
             , ("target",     "string", "Case-insensitive name substring to stop at")
             ] [])
+    , mkTool "get_consumers" "Find all activities that transitively consume (depend on) a given supplier. Returns a flat list, each with a crDepth field: 1 = direct consumer, 2 = consumer of consumer, etc. Useful for tracing downstream use of a raw material — e.g. finding transformed food products in Agribalyse that use a raw ingredient."
+        (props
+            [ ("database",   "string", "Database name")
+            , ("process_id", "string", "Process ID of the supplier to trace downstream")
+            ]
+            [ ("name",      "string",  "Filter by name (case-insensitive substring)")
+            , ("limit",     "integer", "Max results (default 1000)")
+            , ("max_depth", "integer", "Max hops from supplier (1 = direct consumers only)")
+            ])
     ]
 
 mkTool :: Text -> Text -> Value -> Value
@@ -360,6 +369,7 @@ callTool dbManager baseUrl rid name args = case name of
     "list_geographies"         -> callListGeographies dbManager rid args
     "list_classifications"     -> withDb dbManager rid args $ callListClassifications rid args
     "get_path_to"              -> withDb dbManager rid args $ callGetPathTo rid args
+    "get_consumers"            -> withDb dbManager rid args $ callGetConsumers rid args
     _                          -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -503,6 +513,18 @@ callGetPathTo rid args (db, solver) =
             case result of
                 Left err  -> return $ toolError rid (T.pack $ show err)
                 Right val -> return $ toolSuccessJson rid val
+
+callGetConsumers :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callGetConsumers rid args (db, _) =
+    case textArg "process_id" args of
+        Nothing -> return $ toolError rid "Missing required parameter: process_id"
+        Just pid ->
+            let nameFilter = textArg "name" args
+                limitParam = intArg "limit" args
+                maxDepth   = intArg "max_depth" args
+            in case Service.getConsumers db pid nameFilter limitParam maxDepth of
+                Left err      -> return $ toolError rid (T.pack $ show err)
+                Right results -> return $ toolSuccessJson rid (toJSON results)
 
 callGetInventory :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetInventory rid args (db, solver) =

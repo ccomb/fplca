@@ -2,7 +2,7 @@
 
 import requests
 
-from .types import Activity, SupplyChain
+from .types import Activity, ConsumerResult, SupplyChain
 
 
 def _substitution_body(substitutions: list[dict]) -> dict:
@@ -196,15 +196,22 @@ class Client:
         process_id: str,
         name: str | None = None,
         limit: int | None = None,
-    ) -> list[Activity]:
-        """Find all activities that transitively depend on this supplier."""
+        max_depth: int | None = None,
+    ) -> list[ConsumerResult]:
+        """Find all activities that transitively consume this supplier.
+
+        Args:
+            max_depth: Max hops from supplier. 1 = direct consumers only.
+        """
         params: dict = {}
         if name:
             params["name"] = name
         if limit is not None:
             params["limit"] = limit
+        if max_depth is not None:
+            params["max-depth"] = max_depth
         r = self._session.get(self._db_url(f"activity/{process_id}/consumers"), params=params)
-        return [Activity.from_json(a) for a in self._json(r)]
+        return [ConsumerResult.from_json(a) for a in self._json(r)]
 
     # -- Tree --
 
