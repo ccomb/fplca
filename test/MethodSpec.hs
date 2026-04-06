@@ -143,6 +143,52 @@ spec = do
                 let db = buildFromPairs [("CO2", "Carbon dioxide")]
                 synonymCount db `shouldSatisfy` (> 0)
 
+    describe "extractFlowName" $ do
+        it "strips the (Mass ...) marker and trailing content" $
+            extractFlowName "methane (fossil) (Mass, kg, Emissions to air)"
+                `shouldBe` "methane (fossil)"
+
+        it "strips the (Volume ...) marker" $
+            extractFlowName "CO2 (Volume, m3, Emissions to water)"
+                `shouldBe` "CO2"
+
+        it "strips the (Energy ...) marker" $
+            extractFlowName "heat (Energy, MJ, Resources)"
+                `shouldBe` "heat"
+
+        it "returns full text when no marker is present" $
+            extractFlowName "simple name"
+                `shouldBe` "simple name"
+
+        it "strips surrounding whitespace from result" $
+            extractFlowName "  water  (Area, m2, Resources)"
+                `shouldBe` "water"
+
+    describe "extractCompartmentFromDesc" $ do
+        it "extracts air compartment with subcompartment" $
+            extractCompartmentFromDesc "methane (Mass, kg, Emissions to air, urban air close to ground)"
+                `shouldBe` Just (Compartment "air" "urban air close to ground" "")
+
+        it "extracts water compartment with subcompartment" $
+            extractCompartmentFromDesc "nitrate (Mass, kg, Emissions to water, river)"
+                `shouldBe` Just (Compartment "water" "river" "")
+
+        it "extracts soil compartment with subcompartment" $
+            extractCompartmentFromDesc "lead (Mass, kg, Emissions to soil, agricultural)"
+                `shouldBe` Just (Compartment "soil" "agricultural" "")
+
+        it "extracts air compartment without subcompartment" $
+            extractCompartmentFromDesc "CO2 (Mass, kg, Emissions to air)"
+                `shouldBe` Just (Compartment "air" "" "")
+
+        it "extracts natural resource compartment" $
+            extractCompartmentFromDesc "coal (Mass, kg, Resources from ground)"
+                `shouldBe` Just (Compartment "natural resource" "" "")
+
+        it "returns Nothing when no compartment keyword matches" $
+            extractCompartmentFromDesc "methane production volume"
+                `shouldBe` Nothing
+
     describe "Method Parser" $ do
         describe "parseMethodBytes" $ do
             it "parses a minimal valid method XML" $ do
