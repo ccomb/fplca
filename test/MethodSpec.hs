@@ -15,6 +15,7 @@ import qualified Data.ByteString.Lazy as BL
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
 import UnitConversion (defaultUnitConfig)
 import Method.Parser
+import Method.FlowResolver (ILCDFlowInfo(..))
 import Method.ParserCSV (parseMethodCSVBytes)
 import Method.ParserSimaPro (parseSimaProMethodCSVBytes, isSimaProMethodCSV)
 import Method.ParserNW (parseNormWeightCSVBytes)
@@ -317,6 +318,74 @@ spec = do
                         , "</LCIAMethodDataSet>"
                         ]
                 parseMethodBytes xml `shouldSatisfy` isLeft
+
+    describe "parseMethodBytesWithFlows" $ do
+        let minimalXML = TE.encodeUtf8 $ T.unlines
+                [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                , "<LCIAMethodDataSet>"
+                , "  <LCIAMethodInformation>"
+                , "    <dataSetInformation>"
+                , "      <UUID>12345678-1234-1234-1234-123456789012</UUID>"
+                , "      <name>Test Method</name>"
+                , "    </dataSetInformation>"
+                , "    <quantitativeReference>"
+                , "      <referenceQuantity><shortDescription>kg CO2 eq</shortDescription></referenceQuantity>"
+                , "    </quantitativeReference>"
+                , "  </LCIAMethodInformation>"
+                , "  <characterisationFactors>"
+                , "    <factor>"
+                , "      <referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\">"
+                , "        <shortDescription>carbon dioxide (Mass, kg, Emissions to air)</shortDescription>"
+                , "      </referenceToFlowDataSet>"
+                , "      <exchangeDirection>Output</exchangeDirection>"
+                , "      <meanValue>1.0</meanValue>"
+                , "    </factor>"
+                , "  </characterisationFactors>"
+                , "</LCIAMethodDataSet>"
+                ]
+            flowUUID = read "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" :: UUID.UUID
+            flowInfo = ILCDFlowInfo
+                { ilcdBaseName        = "Carbon dioxide"
+                , ilcdCompartment     = Just (Compartment "air" "unspecified" "")
+                , ilcdCAS             = Just "124-38-9"
+                , ilcdSynonyms        = []
+                , ilcdFlowType        = "Elementary flow"
+                , ilcdFlowPropertyRef = Nothing
+                }
+
+        it "enriches CF flow name from ILCDFlowInfo" $ do
+            let result = parseMethodBytesWithFlows (M.singleton flowUUID flowInfo) minimalXML
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right method -> case methodFactors method of
+                    [cf] -> mcfFlowName cf `shouldBe` "Carbon dioxide"
+                    _    -> expectationFailure "expected one factor"
+
+        it "enriches CF CAS number from ILCDFlowInfo" $ do
+            let result = parseMethodBytesWithFlows (M.singleton flowUUID flowInfo) minimalXML
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right method -> case methodFactors method of
+                    [cf] -> mcfCAS cf `shouldBe` Just "124-38-9"
+                    _    -> expectationFailure "expected one factor"
+
+        it "prefers ILCDFlowInfo compartment over extracted fallback" $ do
+            let result = parseMethodBytesWithFlows (M.singleton flowUUID flowInfo) minimalXML
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right method -> case methodFactors method of
+                    [cf] -> mcfCompartment cf `shouldBe` Just (Compartment "air" "unspecified" "")
+                    _    -> expectationFailure "expected one factor"
+
+        it "falls back to shortDescription data when UUID not in flow map" $ do
+            let result = parseMethodBytesWithFlows M.empty minimalXML
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right method -> case methodFactors method of
+                    [cf] -> do
+                        mcfFlowName cf `shouldBe` "carbon dioxide"
+                        mcfCAS cf      `shouldBe` Nothing
+                    _ -> expectationFailure "expected one factor"
 
     describe "CSV Method Parser" $ do
         it "parses 2-row header: category defaults to name" $ do
