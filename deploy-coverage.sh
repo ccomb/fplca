@@ -12,9 +12,9 @@ if [[ ! -f "$COVERAGE_DIR/hpc_index.html" ]]; then
 fi
 
 GH_PAGES_DIR=$(mktemp -d)
+trap 'git worktree remove --force "$GH_PAGES_DIR" 2>/dev/null; rm -rf "$GH_PAGES_DIR"' EXIT
 git worktree add "$GH_PAGES_DIR" gh-pages
 rsync -a --delete --exclude='.git' "$COVERAGE_DIR/" "$GH_PAGES_DIR/"
 SUMMARY=$(grep -h "expressions used" "$COVERAGE_DIR/hpc_index.html" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' | tr -d ' \n' || echo "coverage update")
 (cd "$GH_PAGES_DIR" && git add -A && git commit -m "coverage: $SUMMARY" && git push origin gh-pages)
-git worktree remove "$GH_PAGES_DIR"
 echo "Deployed: https://ccomb.github.io/volca/hpc_index.html"
