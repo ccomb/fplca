@@ -52,6 +52,12 @@ spec = do
                 normalizeName "  Carbon Dioxide (biogenic), in air  " `shouldBe` "carbon dioxide biogenic in air"
 
         describe "buildFromCSV" $ do
+            it "returns Left for invalid CSV (wrong number of columns)" $ do
+                let csv = "name1,name2\ncarbon dioxide,co2,extra\n"
+                case buildFromCSV csv of
+                    Left _  -> return ()
+                    Right _ -> expectationFailure "Expected Left for malformed CSV"
+
             it "builds a synonym DB from CSV pairs" $ do
                 let csv = "name1,name2\ncarbon dioxide,co2\nco2,carbon dioxide (fossil)\n"
                 case buildFromCSV csv of

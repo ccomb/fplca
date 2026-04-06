@@ -3,7 +3,9 @@
 module ProgressSpec (spec) where
 
 import Test.Hspec
-import Progress (formatDuration, formatBytes)
+import Progress (formatDuration, formatBytes, getLogLines, reportProgress, reportError,
+                 reportCacheOperation, reportMatrixOperation, reportSolverOperation,
+                 ProgressLevel(..))
 
 spec :: Spec
 spec = do
@@ -45,3 +47,60 @@ spec = do
 
         it "formats zero bytes" $
             formatBytes 0.0 `shouldBe` "0 B"
+
+    -- -----------------------------------------------------------------------
+    -- Log buffer IO functions (read-only; global state is append-only)
+    -- -----------------------------------------------------------------------
+    describe "getLogLines" $ do
+        it "returns a non-negative next index" $ do
+            (idx, _) <- getLogLines 0
+            idx `shouldSatisfy` (>= 0)
+
+        it "returns empty list when since >= nextIndex" $ do
+            (idx, _) <- getLogLines 0
+            (_, lines2) <- getLogLines idx
+            lines2 `shouldBe` []
+
+    describe "reportProgress" $ do
+        it "appends a line to the log buffer (Info level)" $ do
+            (before, _) <- getLogLines 0
+            reportProgress Info "test-info-message"
+            (after, newLines) <- getLogLines before
+            after `shouldSatisfy` (> before)
+            concatLines newLines `shouldSatisfy` ("test-info-message" `isInfixOf`)
+
+        it "prefixes Error level with [ERROR]" $ do
+            (before, _) <- getLogLines 0
+            reportError "something failed"
+            (_, newLines) <- getLogLines before
+            concatLines newLines `shouldSatisfy` ("[ERROR]" `isInfixOf`)
+
+        it "prefixes Cache level with [CACHE]" $ do
+            (before, _) <- getLogLines 0
+            reportCacheOperation "cache hit"
+            (_, newLines) <- getLogLines before
+            concatLines newLines `shouldSatisfy` ("[CACHE]" `isInfixOf`)
+
+        it "prefixes Matrix level with [MATRIX]" $ do
+            (before, _) <- getLogLines 0
+            reportMatrixOperation "building matrix"
+            (_, newLines) <- getLogLines before
+            concatLines newLines `shouldSatisfy` ("[MATRIX]" `isInfixOf`)
+
+        it "prefixes Solver level with [SOLVER]" $ do
+            (before, _) <- getLogLines 0
+            reportSolverOperation "solving"
+            (_, newLines) <- getLogLines before
+            concatLines newLines `shouldSatisfy` ("[SOLVER]" `isInfixOf`)
+
+concatLines :: [String] -> String
+concatLines = concatMap (\l -> l ++ "\n")
+
+isInfixOf :: String -> String -> Bool
+isInfixOf needle haystack = any (needle `isPrefixOf'`) (tails' haystack)
+  where
+    isPrefixOf' [] _       = True
+    isPrefixOf' _ []       = False
+    isPrefixOf' (x:xs) (y:ys) = x == y && isPrefixOf' xs ys
+    tails' []     = [[]]
+    tails' s@(_:rest) = s : tails' rest
