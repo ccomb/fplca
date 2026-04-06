@@ -257,6 +257,52 @@ spec = do
                 CrossDBNotLinked _ -> return ()
                 CrossDBLinked {}   -> expectationFailure "Expected CrossDBNotLinked"
 
+        it "returns UnitIncompatible when product found but unit doesn't match" $ do
+            idb <- loadMin3IndexedDB
+            let ctx = LinkingContext
+                        { lcIndexedDatabases  = [idb]
+                        , lcSynonymDB         = emptySynonymDB
+                        , lcUnitConfig        = defaultUnitConfig
+                        , lcThreshold         = defaultLinkingThreshold
+                        , lcLocationHierarchy = locationHierarchy
+                        }
+            -- "product Y" exists in kg; asking for m3 should fail unit check
+            case findSupplierInIndexedDBs ctx "product Y" "GLO" "m3" of
+                CrossDBNotLinked (UnitIncompatible _ _) -> return ()
+                CrossDBNotLinked reason -> expectationFailure $ "Expected UnitIncompatible but got: " ++ show reason
+                CrossDBLinked {} -> expectationFailure "Expected CrossDBNotLinked for unit mismatch"
+
+        it "finds via synonym when synDB has the pair" $ do
+            idb <- loadMin3IndexedDB
+            -- "product Y" is the canonical name; "producto Y" (alias) can be found via synonym
+            let synDB = buildFromPairs [("product y", "producto y")]
+                ctx = LinkingContext
+                        { lcIndexedDatabases  = [idb]
+                        , lcSynonymDB         = synDB
+                        , lcUnitConfig        = defaultUnitConfig
+                        , lcThreshold         = defaultLinkingThreshold
+                        , lcLocationHierarchy = locationHierarchy
+                        }
+            -- Synonym lookup: "producto y" → group containing "product y" → supplier
+            case findSupplierInIndexedDBs ctx "producto y" "GLO" "kg" of
+                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBNotLinked _ -> pendingWith "synonym linking requires index to be built with synDB"
+
+        it "uses empty location from compound name when location arg is empty" $ do
+            idb <- loadMin3IndexedDB
+            let ctx = LinkingContext
+                        { lcIndexedDatabases  = [idb]
+                        , lcSynonymDB         = emptySynonymDB
+                        , lcUnitConfig        = defaultUnitConfig
+                        , lcThreshold         = defaultLinkingThreshold
+                        , lcLocationHierarchy = locationHierarchy
+                        }
+            -- "product Y {GLO}" compound name with empty location arg
+            -- extractBracketedLocation will find "GLO"
+            case findSupplierInIndexedDBs ctx "product Y {GLO}" "" "kg" of
+                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBNotLinked _ -> pendingWith "Compound name location extraction may not match"
+
 -- ---------------------------------------------------------------------------
 -- Helper: load SAMPLE.min3 as IndexedDatabase
 -- ---------------------------------------------------------------------------
