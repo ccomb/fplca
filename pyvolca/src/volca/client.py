@@ -2,7 +2,7 @@
 
 import requests
 
-from .types import Activity, ConsumerResult, SupplyChain
+from .types import Activity, ConsumerResult, PathResult, SupplyChain
 
 
 def _substitution_body(substitutions: list[dict]) -> dict:
@@ -34,7 +34,7 @@ class Client:
         chain = c.get_supply_chain(plants[0].process_id, name="at farm")
 
     Substitutions can be passed to get_supply_chain, get_inventory, get_lcia,
-    and get_lcia_batch to compute results with Sherman-Morrison rank-1 updates::
+    and get_lcia_batch to compute results with a different upstream supplier — fast::
 
         subs = [{"from": old_pid, "to": new_pid, "consumer": consumer_pid}]
         result = c.get_lcia(pid, method_id, substitutions=subs)
@@ -197,21 +197,41 @@ class Client:
         name: str | None = None,
         limit: int | None = None,
         max_depth: int | None = None,
+        classification_filters: list[tuple[str, str]] | None = None,
     ) -> list[ConsumerResult]:
         """Find all activities that transitively consume this supplier.
 
         Args:
             max_depth: Max hops from supplier. 1 = direct consumers only.
+            classification_filters: List of (system, value) pairs to restrict results,
+                e.g. [("Category", "Agricultural\\\\Food"), ...].
+                Multiple pairs are sent as repeated query parameters (OR semantics).
         """
-        params: dict = {}
+        # Use a list of tuples to support repeated query-param keys
+        params: list[tuple[str, str]] = []
         if name:
-            params["name"] = name
+            params.append(("name", name))
         if limit is not None:
-            params["limit"] = limit
+            params.append(("limit", str(limit)))
         if max_depth is not None:
-            params["max-depth"] = max_depth
+            params.append(("max-depth", str(max_depth)))
+        for cls, val in (classification_filters or []):
+            params.append(("classification", cls))
+            params.append(("classification-value", val))
         r = self._session.get(self._db_url(f"activity/{process_id}/consumers"), params=params)
         return [ConsumerResult.from_json(a) for a in self._json(r)]
+
+    def get_path_to(self, process_id: str, target: str) -> PathResult:
+        """Find the shortest upstream path from process to first activity whose name matches target.
+
+        Returns a PathResult whose path is ordered root → target. Each step includes
+        cumulative_quantity, scaling_factor, and (except the root) local_step_ratio.
+        """
+        r = self._session.get(
+            self._db_url(f"activity/{process_id}/path-to"),
+            params={"target": target},
+        )
+        return PathResult.from_json(self._json(r))
 
     # -- Tree --
 
