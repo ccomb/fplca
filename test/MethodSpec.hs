@@ -11,6 +11,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import Method.Mapping (computeLCIAScore, MatchStrategy(..))
 import UnitConversion (defaultUnitConfig)
@@ -565,6 +566,29 @@ spec = do
                     _ -> expectationFailure "expected one factor"
 
     describe "CSV Method Parser" $ do
+
+        it "parses inline CSV with water/soil/empty compartments" $ do
+            -- Exercises parseCSVCompartment water, soil, empty, and unrecognized paths
+            let csv = BC.unlines
+                    [ ";;Method A;Method B;Method C;Method D"
+                    , ";;kg eq;kg eq;kg eq;kg eq"
+                    , "substance;compartment;;;;"
+                    , "CO2;air;1.0;;;"
+                    , "Nitrate;water;;2.0;;"
+                    , "Lead;soil;;;3.0;"
+                    , "Crude oil;resources;;;;4.0"
+                    ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> length methods `shouldBe` 4
+
+        it "returns Left when fewer than 3 header rows" $ do
+            let csv = BC.unlines
+                    [ ";;Method A"
+                    , "substance;compartment;"
+                    ]
+            parseMethodCSVBytes csv `shouldSatisfy` isLeft
+
         it "parses 2-row header: category defaults to name" $ do
             csv <- BS.readFile "test/data/method.csv"
             case parseMethodCSVBytes csv of
@@ -829,6 +853,26 @@ spec = do
             case parseNormWeightCSVBytes "x" (TE.encodeUtf8 (T.pack csv)) of
                 Left _ -> return ()
                 Right _ -> expectationFailure "Should have failed on empty data"
+
+        it "fails on no valid rows after header" $ do
+            -- All rows have invalid/empty category names
+            let csv = BC.pack "# name: Test\ncategory;normalization;weighting\n;;0\n"
+            case parseNormWeightCSVBytes "x" csv of
+                Left _ -> return ()
+                Right _ -> expectationFailure "Expected Left for no valid rows"
+
+        it "detects tab delimiter" $ do
+            -- Tab-separated NW data
+            let csv = BC.pack "# name: Tab Test\ncategory\tnormalization\tweighting\nCC\t1e-4\t0.21\n"
+            case parseNormWeightCSVBytes "fallback" csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right nw -> M.lookup "CC" (nwNormalization nw) `shouldSatisfy` (/= Nothing)
+
+        it "extracts name from # name: comment line" $ do
+            let csv = BC.pack "# name: My NW Set\ncategory;normalization;weighting\nCC;1e-4;0.21\n"
+            case parseNormWeightCSVBytes "fallback" csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right nw -> nwName nw `shouldBe` "My NW Set"
 
 -- Helper for testing Either values
 isLeft :: Either a b -> Bool
