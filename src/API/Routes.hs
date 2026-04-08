@@ -39,7 +39,7 @@ import Servant
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
-import Data.List (intercalate, sortOn)
+import Data.List (intercalate, sortBy, sortOn)
 import Numeric (showFFloat)
 import qualified Config
 import qualified GHC.Stats
@@ -64,7 +64,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "max-depth" Int :> Get '[JSON] [ConsumerResult]
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ConsumerResult)
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "flow-hotspot" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] FlowHotspotResult
@@ -76,8 +76,8 @@ type LCAAPI =
                 :<|> "method" :> Capture "methodId" Text :> "factors" :> Get '[JSON] [MethodFactorAPI]
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
-                :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
+                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
@@ -563,11 +563,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 return result
 
     -- Activity consumers endpoint (reverse supply chain)
-    getActivityConsumers :: Text -> Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Handler [ConsumerResult]
-    getActivityConsumers dbName processIdText nameFilter classSystems classValues limitParam maxDepthParam = do
+    getActivityConsumers :: Text -> Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ConsumerResult)
+    getActivityConsumers dbName processIdText nameFilter classSystems classValues limitParam offsetParam maxDepthParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         let classFilters = zip classSystems classValues
-        case Service.getConsumers db processIdText nameFilter limitParam maxDepthParam classFilters of
+        case Service.getConsumers db processIdText nameFilter limitParam offsetParam maxDepthParam sortParam orderParam classFilters of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
@@ -965,19 +965,19 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         }
 
     -- Search flows by name or synonym with optional language filtering and pagination
-    searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-    searchFlows dbName queryParam langParam limitParam offsetParam = do
+    searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults FlowSearchResult)
+    searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        searchFlowsInternal db queryParam langParam limitParam offsetParam
+        searchFlowsInternal db queryParam langParam limitParam offsetParam sortParam orderParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues limitParam offsetParam = do
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues limitParam offsetParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
         let classFilters = zip classSystems classValues
-        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam
+        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam sortParam orderParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right jsonValue -> case fromJSON jsonValue of
@@ -1012,13 +1012,19 @@ paginateResults results limitParam offsetParam = do
     return $ SearchResults paginatedResults totalCount offset limit hasMore searchTimeMs
 
 -- | Internal helper for flow search with optional language filtering
-searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Handler (SearchResults FlowSearchResult)
-searchFlowsInternal _ Nothing _ _ _ = return $ SearchResults [] 0 0 50 False 0.0
-searchFlowsInternal db (Just query) _langParam limitParam offsetParam = do
+searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults FlowSearchResult)
+searchFlowsInternal _ Nothing _ _ _ _ _ = return $ SearchResults [] 0 0 50 False 0.0
+searchFlowsInternal db (Just query) _langParam limitParam offsetParam sortParam orderParam = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
-        flowSearchResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
-    liftIO $ paginateResults flowSearchResults limitParam offsetParam
+        allResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
+        isDesc = orderParam == Just "desc"
+        fsCmp = case sortParam of
+            Just "category" -> \a b -> compare (fsrCategory a) (fsrCategory b)
+            Just "unit"     -> \a b -> compare (fsrUnitName a) (fsrUnitName b)
+            _               -> \a b -> compare (fsrName a)     (fsrName b)
+        sorted = sortBy (if isDesc then flip fsCmp else fsCmp) allResults
+    liftIO $ paginateResults sorted limitParam offsetParam
 
 -- | Proxy for the API
 lcaAPI :: Proxy LCAAPI

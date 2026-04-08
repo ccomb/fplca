@@ -269,7 +269,7 @@ executeSearchActivitiesCommand registry fmt database opts = do
   searchResult <- Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
          []  -- classification filter (CLI doesn't expose yet)
-         (searchLimit opts) (searchOffset opts)
+         (searchLimit opts) (searchOffset opts) Nothing Nothing
   case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result
@@ -279,7 +279,7 @@ executeSearchFlowsCommand :: PluginRegistry -> OutputFormat -> Database -> Searc
 executeSearchFlowsCommand registry fmt database opts = do
   searchResult <- Service.searchFlows database
          (searchQuery opts) (searchLang opts)
-         (searchFlowsLimit opts) (searchFlowsOffset opts)
+         (searchFlowsLimit opts) (searchFlowsOffset opts) Nothing Nothing
   case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result

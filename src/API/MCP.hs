@@ -432,7 +432,7 @@ callSearchActivities rid args (db, _) = do
         classFilters = case (textArg "classification" args, textArg "classification_value" args) of
             (Just sys, Just val) -> [(sys, val)]
             _                   -> []
-    result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing
+    result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing Nothing Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val
@@ -462,7 +462,7 @@ callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) = do
     let query = textArg "query" args
         limit = intArg "limit" args
-    result <- Service.searchFlows db query Nothing (limit <|> Just 20) Nothing
+    result <- Service.searchFlows db query Nothing (limit <|> Just 20) Nothing Nothing Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val
@@ -527,7 +527,7 @@ callGetConsumers rid args (db, _) =
                 classFilters = case (textArg "classification" args, textArg "classification_value" args) of
                     (Just sys, Just val) -> [(sys, val)]
                     _                   -> []
-            in case Service.getConsumers db pid nameFilter limitParam maxDepth classFilters of
+            in case Service.getConsumers db pid nameFilter limitParam Nothing maxDepth Nothing Nothing classFilters of
                 Left err      -> return $ toolError rid (T.pack $ show err)
                 Right results -> return $ toolSuccessJson rid (toJSON results)
 
