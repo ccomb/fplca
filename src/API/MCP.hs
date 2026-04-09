@@ -25,7 +25,7 @@ import System.Random (randomIO)
 import Network.Wai (Application, responseLBS, strictRequestBody, requestMethod)
 import qualified Data.ByteString as BS
 
-import Config (DatabaseConfig(..))
+import Config (DatabaseConfig(..), ClassificationPreset(..), ClassificationEntry(..))
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), getDatabase)
 import qualified Database.Manager as DM
 
@@ -102,8 +102,8 @@ newtype McpState = McpState
 encodeSegment :: Text -> Text
 encodeSegment = T.pack . escapeURIString isUnreserved . T.unpack
 
-mcpApp :: DatabaseManager -> IO Application
-mcpApp dbManager = do
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> IO Application
+mcpApp dbManager presets = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState { mcpSessionId = sessionId }
@@ -130,7 +130,7 @@ mcpApp dbManager = do
                     Left err ->
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
-                        resp <- handleRpc dbManager baseUrl st rpcReq
+                        resp <- handleRpc dbManager presets baseUrl st rpcReq
                         case resp of
                             Nothing ->
                                 respond $ responseLBS status202
@@ -161,12 +161,12 @@ mcpApp dbManager = do
 -- RPC dispatch
 -- ---------------------------------------------------------------------------
 
-handleRpc :: DatabaseManager -> Text -> McpState -> RpcRequest -> IO (Maybe Value)
-handleRpc dbManager baseUrl _st req = case rpcMethod req of
+handleRpc :: DatabaseManager -> [ClassificationPreset] -> Text -> McpState -> RpcRequest -> IO (Maybe Value)
+handleRpc dbManager presets baseUrl _st req = case rpcMethod req of
     "initialize"                -> Just <$> handleInitialize req
     "notifications/initialized" -> return Nothing  -- notification, no response
     "tools/list"                -> return $ Just $ handleToolsList req
-    "tools/call"                -> Just <$> handleToolsCall dbManager baseUrl req
+    "tools/call"                -> Just <$> handleToolsCall dbManager presets baseUrl req
     "ping"                      -> return $ Just $ rpcResult (rid req) (object [])
     other                       -> return $ Just $ rpcError (rid req) (-32601)
                                      ("Method not found: " <> other)
@@ -206,6 +206,8 @@ toolDefinitions :: [Value]
 toolDefinitions =
     [ mkTool "list_databases" "List all loaded LCA databases"
         (props [] [])
+    , mkTool "list_presets" "List named classification filter presets configured in this instance. Each preset bundles multiple (system, value, mode) classification filters under a human-readable label. Use the filter values from a preset as inputs to search_activities classification parameters."
+        (props [] [])
     , mkTool "search_activities" "Search for activities (processes) by name, geography, product, or classification. Returns a paginated list of matching activities with their process IDs."
         (props
             [ ("database", "string", "Database name")
@@ -214,7 +216,8 @@ toolDefinitions =
             [ ("geo", "string", "Geography/location filter (e.g. 'FR', 'DE', 'GLO')")
             , ("product", "string", "Product name filter")
             , ("classification", "string", "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems.")
-            , ("classification_value", "string", "Value within the classification system to match (substring, case-insensitive)")
+            , ("classification_value", "string", "Value within the classification system to match")
+            , ("classification_match", "string", "Match mode: \"equals\" (case-insensitive equality) or \"contains\" (substring, default)")
             , ("limit", "integer", "Max results (default 20)")
             ])
     , mkTool "search_flows" "Search for biosphere flows (emissions, resources) by name"
@@ -338,12 +341,12 @@ props required optional = object $
 -- tools/call dispatch
 -- ---------------------------------------------------------------------------
 
-handleToolsCall :: DatabaseManager -> Text -> RpcRequest -> IO Value
-handleToolsCall dbManager baseUrl req = do
+handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> Text -> RpcRequest -> IO Value
+handleToolsCall dbManager presets baseUrl req = do
     let rid = fromMaybe Null (rpcId req)
     case rpcParams req >>= parseCallParams of
         Nothing -> return $ rpcError rid (-32602) "Invalid params: expected {name, arguments}"
-        Just (toolName, args) -> callTool dbManager baseUrl rid toolName args
+        Just (toolName, args) -> callTool dbManager presets baseUrl rid toolName args
 
 parseCallParams :: Value -> Maybe (Text, KeyMap Value)
 parseCallParams (Object o) = do
@@ -354,9 +357,10 @@ parseCallParams (Object o) = do
     return (name, args)
 parseCallParams _ = Nothing
 
-callTool :: DatabaseManager -> Text -> Value -> Text -> KeyMap Value -> IO Value
-callTool dbManager baseUrl rid name args = case name of
+callTool :: DatabaseManager -> [ClassificationPreset] -> Text -> Value -> Text -> KeyMap Value -> IO Value
+callTool dbManager presets baseUrl rid name args = case name of
     "list_databases"          -> callListDatabases dbManager rid
+    "list_presets"            -> callListPresets presets rid
     "search_activities"       -> withDb dbManager rid args $ callSearchActivities rid args
     "search_flows"            -> withDb dbManager rid args $ callSearchFlows rid args
     "get_activity"            -> withDb dbManager rid args $ callGetActivity rid args
@@ -423,14 +427,26 @@ callListDatabases dbManager rid = do
         entries = map mkDbEntry (M.elems loaded)
     return $ toolSuccessJson rid $ object [ "databases" .= entries ]
 
+callListPresets :: [ClassificationPreset] -> Value -> IO Value
+callListPresets presets rid = return $ toolSuccessJson rid $ toJSON
+    [ object
+        [ "name"        .= cpName p
+        , "label"       .= cpLabel p
+        , "description" .= cpDescription p
+        , "filters"     .= [ object ["system" .= ceSystem e, "value" .= ceValue e, "mode" .= ceMode e]
+                             | e <- cpFilters p ]
+        ]
+    | p <- presets ]
+
 callSearchActivities :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchActivities rid args (db, _) = do
     let name    = textArg "name" args
         geo     = textArg "geo" args
         product' = textArg "product" args
         limit   = intArg "limit" args
+        isExact  = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
         classFilters = case (textArg "classification" args, textArg "classification_value" args) of
-            (Just sys, Just val) -> [(sys, val)]
+            (Just sys, Just val) -> [(sys, val, isExact)]
             _                   -> []
     result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing Nothing Nothing
     case result of
@@ -500,7 +516,7 @@ callGetSupplyChain rid args (db, solver) =
                 limit = intArg "limit" args
                 minQ  = doubleArg "min_quantity" args
             result <- Service.getSupplyChain db solver pid nameF limit minQ
-                        Nothing Nothing locF Nothing Nothing Nothing Nothing False
+                        Nothing Nothing locF Nothing [] Nothing Nothing False
             case result of
                 Left err  -> return $ toolError rid (T.pack $ show err)
                 Right val -> return $ toolSuccessJson rid (toJSON val)
@@ -524,8 +540,9 @@ callGetConsumers rid args (db, _) =
             let nameFilter   = textArg "name" args
                 limitParam   = intArg "limit" args
                 maxDepth     = intArg "max_depth" args
+                isExact      = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
                 classFilters = case (textArg "classification" args, textArg "classification_value" args) of
-                    (Just sys, Just val) -> [(sys, val)]
+                    (Just sys, Just val) -> [(sys, val, isExact)]
                     _                   -> []
             in case Service.getConsumers db pid nameFilter limitParam Nothing maxDepth Nothing Nothing classFilters of
                 Left err      -> return $ toolError rid (T.pack $ show err)

@@ -370,7 +370,7 @@ buildProductIndex activities processIdTable flowDb =
 -- Multi-word search: each word must match either name OR location (AND logic)
 -- Returns (ProcessId, Activity) pairs so callers don't need to re-scan for ProcessId.
 -- Uses word-token index when available for O(matches) instead of O(total) name search.
-findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)] -> [(ProcessId, Activity)]
+findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> [(ProcessId, Activity)]
 findActivitiesByFields db nameParam geoParam productParam classFilters =
     let actVec = dbActivities db
         idx = dbSearchIndex db
@@ -440,12 +440,16 @@ findActivitiesByFields db nameParam geoParam productParam classFilters =
                      in filter (\(_, a') -> allWordsMatch prod getProductNames a') (resolveIds filtered)
 
         -- Filter by classification: group by system (OR within same system, AND across systems)
+        -- Each entry is (system, value, isExact); isExact=True uses equality, False uses substring
         classFiltered =
-            let groups = M.fromListWith (++) [(sys, [val]) | (sys, val) <- classFilters]
-                applyGroup acc (sys, vals) =
+            let groups = M.fromListWith (++) [(sys, [(val, isExact)]) | (sys, val, isExact) <- classFilters]
+                matchOne v (q, isExact) = if isExact
+                    then T.toLower q == T.toLower v
+                    else T.isInfixOf (T.toLower q) (T.toLower v)
+                applyGroup acc (sys, pairs) =
                     [ (pid, a) | (pid, a) <- acc
                     , case M.lookup sys (activityClassification a) of
-                        Just v  -> any (\q -> T.isInfixOf (T.toLower q) (T.toLower v)) vals
+                        Just v  -> any (matchOne v) pairs
                         Nothing -> False
                     ]
             in foldl applyGroup productFiltered (M.toList groups)

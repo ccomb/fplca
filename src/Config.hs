@@ -43,6 +43,7 @@ import Plugin.Config (PluginConfig)
 data ClassificationEntry = ClassificationEntry
     { ceSystem :: !Text
     , ceValue  :: !Text
+    , ceMode   :: !Text   -- "exact" (default) or "contains"
     } deriving (Show, Eq, Generic)
 
 -- | A named preset that pre-populates the classification filter
@@ -209,6 +210,7 @@ instance DecodeTOML ClassificationEntry where
     tomlDecoder = do
         ceSystem <- getField "system"
         ceValue  <- getField "value"
+        ceMode   <- fromMaybe "exact" <$> getFieldOpt "mode"
         pure ClassificationEntry{..}
 
 instance DecodeTOML ClassificationPreset where

@@ -57,14 +57,14 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] SupplyChainResponse
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Get '[JSON] LCIABatchResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "top-flows" Int :> Get '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "classification" Text :> QueryParam "classification-value" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ConsumerResult)
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ConsumerResult)
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "flow-hotspot" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] FlowHotspotResult
@@ -77,7 +77,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
@@ -297,7 +297,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             { cpiName        = Config.cpName p
             , cpiLabel       = Config.cpLabel p
             , cpiDescription = Config.cpDescription p
-            , cpiFilters     = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e)) (Config.cpFilters p)
+            , cpiFilters     = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e) (Config.ceMode e)) (Config.cpFilters p)
             }
 
     getLogsHandler :: Maybe Int -> Handler Value
@@ -410,11 +410,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Right graphExport -> return graphExport
 
     -- Activity supply chain endpoint (scaling vector based)
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
-    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdgesParam = do
+    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
+    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter classSystems classValues classModes sortParam orderParam includeEdgesParam = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         let includeEdges = fromMaybe False includeEdgesParam
-        result <- liftIO $ Service.getSupplyChain db sharedSolver processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdges
+            classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+                               (classModes ++ repeat "contains")
+        result <- liftIO $ Service.getSupplyChain db sharedSolver processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter classFilters sortParam orderParam includeEdges
         case result of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
@@ -550,23 +552,26 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 return inventoryExport
 
     -- POST: Supply chain with substitutions
-    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
-    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdgesParam subReq = do
+    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
+    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classSystems classValues classModes sortParam orderParam includeEdgesParam subReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         let includeEdges = fromMaybe False includeEdgesParam
+            classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+                               (classModes ++ repeat "contains")
         (processId, _) <- resolveOrThrow db processIdText
         scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
         case scalingResult of
             Left err -> throwServiceError err
             Right scalingVec -> do
-                let result = Service.buildSupplyChainFromScalingVector db processId scalingVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdges
+                let result = Service.buildSupplyChainFromScalingVector db processId scalingVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classFilters sortParam orderParam includeEdges
                 return result
 
     -- Activity consumers endpoint (reverse supply chain)
-    getActivityConsumers :: Text -> Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ConsumerResult)
-    getActivityConsumers dbName processIdText nameFilter classSystems classValues limitParam offsetParam maxDepthParam sortParam orderParam = do
+    getActivityConsumers :: Text -> Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ConsumerResult)
+    getActivityConsumers dbName processIdText nameFilter classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        let classFilters = zip classSystems classValues
+        let classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+                               (classModes ++ repeat "contains")
         case Service.getConsumers db processIdText nameFilter limitParam offsetParam maxDepthParam sortParam orderParam classFilters of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
@@ -971,12 +976,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         searchFlowsInternal db queryParam langParam limitParam offsetParam sortParam orderParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues limitParam offsetParam sortParam orderParam = do
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
         -- This avoids O(n*m) performance issue where n=results, m=total activities
-        let classFilters = zip classSystems classValues
+        let classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+                               (classModes ++ repeat "contains")
         result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam sortParam orderParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}

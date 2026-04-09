@@ -705,7 +705,7 @@ searchFlows db (Just query) langParam limitParam offsetParam sortParam orderPara
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
 -- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
+searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
 searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam sortParam orderParam = do
     startTime <- getCurrentTime
     let rawResults = findActivitiesByFields db nameParam geoParam productParam classFilters
@@ -1005,10 +1005,10 @@ getFlowActivities db flowIdText = do
 -- | Compute the supply chain for an activity using the scaling vector.
 -- Returns all upstream activities with their scaling factors and subgraph edges.
 getSupplyChain :: Database -> SharedSolver -> Text -> Maybe Text -> Maybe Int -> Maybe Double
-              -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text
+              -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)]
               -> Maybe Text -> Maybe Text -> Bool
               -> IO (Either ServiceError SupplyChainResponse)
-getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdges = do
+getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classFilters sortParam orderParam includeEdges = do
     case resolveActivityAndProcessId db processIdText of
         Left err -> return $ Left err
         Right (processId, _rootActivity) -> do
@@ -1018,7 +1018,7 @@ getSupplyChain db sharedSolver processIdText nameFilter limitParam minQuantityPa
                     let activityIndex = dbActivityIndex db
                         demandVec = buildDemandVectorFromIndex activityIndex processId
                     supplyVec <- solveWithSharedSolver sharedSolver demandVec
-                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdges
+                    return $ Right $ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classFilters sortParam orderParam includeEdges
 
 -- | Find the shortest supply chain path from a root process to the first upstream activity
 -- whose name contains the given substring (case-insensitive).
@@ -1082,11 +1082,11 @@ getPathTo db solver pidText target = do
 buildSupplyChainFromScalingVector
     :: Database -> ProcessId -> U.Vector Double
     -> Maybe Text -> Maybe Int -> Maybe Double
-    -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text
+    -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)]
     -> Maybe Text -> Maybe Text
     -> Bool  -- ^ include edges (expensive: extra pass over technosphere triples)
     -> SupplyChainResponse
-buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter classificationFilter classificationValueFilter sortParam orderParam includeEdges =
+buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classFilters sortParam orderParam includeEdges =
     let minQ = fromMaybe 0 minQuantityParam
         limit = fromMaybe 100 limitParam
         offset = fromMaybe 0 offsetParam
@@ -1121,19 +1121,25 @@ buildSupplyChainFromScalingVector db processId supplyVec nameFilter limitParam m
 
         textMatches pat txt = T.toCaseFold pat `T.isInfixOf` T.toCaseFold txt
 
+        getProductNames activity =
+            [ flowName flow
+            | ex <- exchanges activity
+            , exchangeIsReference ex
+            , not (exchangeIsInput ex)
+            , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+            ]
+
         matchesFilters activity pid =
             let nameOk = maybe True (\pat -> textMatches pat (activityName activity)) nameFilter
                 locOk = maybe True (\pat -> textMatches pat (activityLocation activity)) locationFilter
-                classOk = case (classificationFilter, classificationValueFilter) of
-                    (Just sys, Just val) -> case M.lookup sys (activityClassification activity) of
-                        Just v  -> textMatches val v
-                        Nothing -> False
-                    (Just sys, Nothing)  -> M.member sys (activityClassification activity)
-                    (Nothing,  Just val) -> any (textMatches val) (M.elems (activityClassification activity))
-                    (Nothing,  Nothing)  -> True
+                productOk = maybe True (\pat -> any (textMatches pat) (getProductNames activity)) productFilter
+                classOk = all (\(sys, val, isExact) -> case M.lookup sys (activityClassification activity) of
+                    Just v  -> if isExact then T.toLower val == T.toLower v else textMatches val v
+                    Nothing -> False
+                    ) classFilters
                 depth = IM.findWithDefault maxBound (fromIntegral pid) depthMap
                 depthOk = maybe True (depth <=) maxDepthParam
-            in nameOk && locOk && classOk && depthOk
+            in nameOk && locOk && productOk && classOk && depthOk
 
         filtered =
             [ (pid, val, activity)
@@ -1295,7 +1301,7 @@ findTechCoefficient db consumer supplier =
 
 -- | Find all activities that transitively depend on a given supplier.
 -- BFS through the technosphere matrix tracking depth; optional max-depth cap.
-getConsumers :: Database -> Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Text)]
+getConsumers :: Database -> Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)]
              -> Either ServiceError (SearchResults ConsumerResult)
 getConsumers db processIdText nameFilter limitParam offsetParam maxDepthParam sortParam orderParam classFilters = do
     (processId, _) <- resolveActivityAndProcessId db processIdText
@@ -1329,10 +1335,13 @@ getConsumers db processIdText nameFilter limitParam offsetParam maxDepthParam so
 
         -- OR within same system, AND across systems
         classMatches activity =
-            let groups = M.fromListWith (++) [(sys, [val]) | (sys, val) <- classFilters]
-                applyGroup acc (sys, vals) =
+            let groups = M.fromListWith (++) [(sys, [(val, isExact)]) | (sys, val, isExact) <- classFilters]
+                matchOne v (q, isExact) = if isExact
+                    then T.toLower q == T.toLower v
+                    else T.isInfixOf (T.toLower q) (T.toLower v)
+                applyGroup acc (sys, pairs) =
                     acc && case M.lookup sys (activityClassification activity) of
-                        Just v  -> any (\q -> T.isInfixOf (T.toLower q) (T.toLower v)) vals
+                        Just v  -> any (matchOne v) pairs
                         Nothing -> False
             in foldl applyGroup True (M.toList groups)
 

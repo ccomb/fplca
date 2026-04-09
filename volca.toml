@@ -91,7 +91,7 @@ active = true
 #   name          (required) Internal identifier (used in URLs)
 #   label         (required) Display label shown in the dropdown
 #   description              Optional tooltip / documentation string
-#   filters                  List of { system, value } classification pairs
+#   filters                  List of { system, value, mode } classification pairs (mode: "exact" or "contains")
 #                            AND across different systems, OR within same system
 
 # Example preset for Agribalyse — uncomment to activate:
@@ -101,8 +101,8 @@ active = true
 # label = "Transformed ingredients (at plant)"
 # description = "All downstream food processing steps and agri-transformations. Matches Agricultural\\Food\\* (distribution, packaging, preparation, retail, recipes, cheese production) and *\\Transformation (animal feed, plant oils, etc.)"
 # filters = [
-#     { system = "Category", value = "Agricultural\\Food" },
-#     { system = "Category", value = "Transformation" },
+#     { system = "Category", value = "Agricultural\\Food", mode = "exact" },
+#     { system = "Category", value = "Agricultural\\Plant production\\Cereals\\Transformation", mode = "exact" },
 # ]
 
 # ── Plugins ──────────────────────────────────────────────────────────

@@ -573,6 +573,7 @@ data ExchangeDetail = ExchangeDetail
 data ClassificationEntryInfo = ClassificationEntryInfo
     { ceiSystem :: !Text
     , ceiValue  :: !Text
+    , ceiMode   :: !Text   -- "exact" or "contains"
     } deriving (Show, Eq, Generic)
 
 -- | A named filter preset (from TOML config)

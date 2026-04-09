@@ -209,7 +209,7 @@ overrideLoad dbNames dbConfig =
 -- | Create a Wai application with DatabaseManager
 createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO Application
 createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets = do
-  mcp <- mcpApp dbManager
+  mcp <- mcpApp dbManager filterPresets
   let openApiJson = encode volcaOpenApi
       swaggerHtml = "<!DOCTYPE html><html><head><title>volca API</title>\
         \<meta charset=\"utf-8\"/>\
