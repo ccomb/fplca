@@ -197,15 +197,16 @@ class Client:
         name: str | None = None,
         limit: int | None = None,
         max_depth: int | None = None,
-        classification_filters: list[tuple[str, str]] | None = None,
+        classification_filters: list[tuple[str, str, str]] | None = None,
     ) -> list[ConsumerResult]:
         """Find all activities that transitively consume this supplier.
 
         Args:
             max_depth: Max hops from supplier. 1 = direct consumers only.
-            classification_filters: List of (system, value) pairs to restrict results,
-                e.g. [("Category", "Agricultural\\\\Food"), ...].
-                Multiple pairs are sent as repeated query parameters (OR semantics).
+            classification_filters: List of (system, value, mode) triples to restrict results,
+                e.g. [("Category", "Agricultural\\\\Food", "exact"), ...].
+                Multiple triples are sent as repeated query parameters (OR semantics).
+                Mode is "exact" or "contains".
         """
         # Use a list of tuples to support repeated query-param keys
         params: list[tuple[str, str]] = []
@@ -215,11 +216,12 @@ class Client:
             params.append(("limit", str(limit)))
         if max_depth is not None:
             params.append(("max-depth", str(max_depth)))
-        for cls, val in (classification_filters or []):
+        for cls, val, mode in (classification_filters or []):
             params.append(("classification", cls))
             params.append(("classification-value", val))
+            params.append(("classification-mode", mode))
         r = self._session.get(self._db_url(f"activity/{process_id}/consumers"), params=params)
-        return [ConsumerResult.from_json(a) for a in self._json(r)]
+        return [ConsumerResult.from_json(a) for a in self._json(r)["srResults"]]
 
     def get_path_to(self, process_id: str, target: str) -> PathResult:
         """Find the shortest upstream path from process to first activity whose name matches target.
