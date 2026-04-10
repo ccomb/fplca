@@ -118,6 +118,7 @@ class Client:
         name: str | None = None,
         geo: str | None = None,
         product: str | None = None,
+        preset: str | None = None,
         classification: str | None = None,
         classification_value: str | None = None,
         limit: int | None = None,
@@ -132,6 +133,8 @@ class Client:
             params["geo"] = geo
         if product:
             params["product"] = product
+        if preset:
+            params["preset"] = preset
         if classification:
             params["classification"] = classification
         if classification_value:

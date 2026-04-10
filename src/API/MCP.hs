@@ -208,13 +208,14 @@ toolDefinitions =
         (props [] [])
     , mkTool "list_presets" "List named classification filter presets configured in this instance. Each preset bundles multiple (system, value, mode) classification filters under a human-readable label. Use the filter values from a preset as inputs to search_activities classification parameters."
         (props [] [])
-    , mkTool "search_activities" "Search for activities (processes) by name, geography, product, or classification. Returns a paginated list of matching activities with their process IDs."
+    , mkTool "search_activities" "Search for activities (processes) by name, geography, product, classification, or preset. Returns a paginated list of matching activities with their process IDs."
         (props
             [ ("database", "string", "Database name")
             , ("name", "string", "Name substring to search for")
             ]
             [ ("geo", "string", "Geography/location filter (e.g. 'FR', 'DE', 'GLO')")
             , ("product", "string", "Product name filter")
+            , ("preset", "string", "Name of a classification preset (from list_presets) — expands to its bundled filters. Can be combined with explicit classification filters.")
             , ("classification", "string", "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems.")
             , ("classification_value", "string", "Value within the classification system to match")
             , ("classification_match", "string", "Match mode: \"equals\" (case-insensitive equality) or \"contains\" (substring, default)")
@@ -361,7 +362,7 @@ callTool :: DatabaseManager -> [ClassificationPreset] -> Text -> Value -> Text -
 callTool dbManager presets baseUrl rid name args = case name of
     "list_databases"          -> callListDatabases dbManager rid
     "list_presets"            -> callListPresets presets rid
-    "search_activities"       -> withDb dbManager rid args $ callSearchActivities rid args
+    "search_activities"       -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows"            -> withDb dbManager rid args $ callSearchFlows rid args
     "get_activity"            -> withDb dbManager rid args $ callGetActivity rid args
     "get_tree"                -> withDb dbManager rid args $ callGetTree rid args
@@ -438,16 +439,22 @@ callListPresets presets rid = return $ toolSuccessJson rid $ toJSON
         ]
     | p <- presets ]
 
-callSearchActivities :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callSearchActivities rid args (db, _) = do
+callSearchActivities :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callSearchActivities presets rid args (db, _) = do
     let name    = textArg "name" args
         geo     = textArg "geo" args
         product' = textArg "product" args
         limit   = intArg "limit" args
         isExact  = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-        classFilters = case (textArg "classification" args, textArg "classification_value" args) of
+        presetFilters = case textArg "preset" args of
+            Just pn -> case L.find (\p -> cpName p == pn) presets of
+                Just p  -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
+                Nothing -> []
+            Nothing -> []
+        explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
             (Just sys, Just val) -> [(sys, val, isExact)]
             _                   -> []
+        classFilters = presetFilters ++ explicitFilters
     result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing Nothing Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)

@@ -39,7 +39,7 @@ import Servant
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
-import Data.List (intercalate, sortBy, sortOn)
+import Data.List (find, intercalate, sortBy, sortOn)
 import Numeric (showFFloat)
 import qualified Config
 import qualified GHC.Stats
@@ -77,7 +77,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
+                :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
@@ -976,13 +976,18 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         searchFlowsInternal db queryParam langParam limitParam offsetParam sortParam orderParam
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount dbName nameParam geoParam productParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        -- Use Service.searchActivities which paginates BEFORE calling findProcessIdForActivity
-        -- This avoids O(n*m) performance issue where n=results, m=total activities
-        let classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+        -- Expand preset filters then merge with explicit classification params
+        let presetFilters = case presetParam of
+                Just pn -> case find (\p -> Config.cpName p == pn) classificationPresets of
+                    Just p  -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
+                    Nothing -> []
+                Nothing -> []
+            explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
+            classFilters = presetFilters ++ explicitFilters
         result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam sortParam orderParam
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
