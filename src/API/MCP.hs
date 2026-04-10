@@ -211,10 +211,11 @@ toolDefinitions =
     , mkTool "search_activities" "Search for activities (processes) by name, geography, product, classification, or preset. Returns a paginated list of matching activities with their process IDs."
         (props
             [ ("database", "string", "Database name")
-            , ("name", "string", "Name substring to search for")
+            , ("name", "string", "Name substring to search for (or exact name if exact=true)")
             ]
             [ ("geo", "string", "Geography/location filter (e.g. 'FR', 'DE', 'GLO')")
             , ("product", "string", "Product name filter")
+            , ("exact", "boolean", "If true, name and geo must match exactly (case-insensitive equality) instead of substring search")
             , ("preset", "string", "Name of a classification preset (from list_presets) — expands to its bundled filters. Can be combined with explicit classification filters.")
             , ("classification", "string", "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems.")
             , ("classification_value", "string", "Value within the classification system to match")
@@ -239,7 +240,7 @@ toolDefinitions =
     , mkTool "get_tree" "Get the supply chain tree of an activity, showing recursive inputs with loop detection"
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             ]
             [ ("depth", "integer", "Max tree depth (default 2)")
             , ("name", "string", "Filter nodes by activity name; keeps matching nodes plus all their ancestors up to the root (case-insensitive substring)")
@@ -247,7 +248,7 @@ toolDefinitions =
     , mkTool "get_supply_chain" "Get a flat list of all upstream activities in the supply chain. The 'quantity' field is the cumulative scaled amount relative to the functional unit (scaling_factor × root reference product amount). To get the per-step yield ratio between two connected entries, divide the supplier's scaling_factor by the consumer's scaling_factor."
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             ]
             [ ("name", "string", "Filter by activity name")
             , ("location", "string", "Filter by location")
@@ -257,7 +258,7 @@ toolDefinitions =
     , mkTool "get_inventory" "Compute the Life Cycle Inventory (LCI) — biosphere flows (emissions and resource extractions) for an activity's full supply chain. Returns statistics and top flows by quantity."
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             ]
             [ ("flow", "string", "Filter flows by name (case-insensitive substring)")
             , ("limit", "integer", "Max flows to return, sorted by absolute quantity (default 50)")
@@ -265,7 +266,7 @@ toolDefinitions =
     , mkTool "get_lcia" "Compute Life Cycle Impact Assessment (LCIA) score for an activity. Returns the score, functional unit, and top contributing elementary flows."
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             , ("method_id", "string", "Method UUID")
             ]
             [ ("top_flows", "integer", "Number of top contributing flows to return (default 5)")
@@ -288,7 +289,7 @@ toolDefinitions =
     , mkTool "get_contributing_flows" "Identify which elementary flows (emissions/resources) contribute most to a specific impact category. Answers 'which emissions drive my climate change score?'"
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             , ("method_id", "string", "Method UUID for the impact category")
             ]
             [ ("limit", "integer", "Max flows to return, sorted by contribution (default 20)")
@@ -296,7 +297,7 @@ toolDefinitions =
     , mkTool "get_contributing_activities" "Identify which upstream activities contribute most to a specific impact category. Answers 'which suppliers drive my climate change score?' Uses exact matrix-based computation, valid even for cyclic supply chains."
         (props
             [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID")
+            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
             , ("method_id", "string", "Method UUID for the impact category")
             ]
             [ ("limit", "integer", "Max processes to return, sorted by contribution (default 10)")
@@ -314,17 +315,18 @@ toolDefinitions =
     , mkTool "get_path_to" "Find the shortest supply chain path from a process to the first upstream activity whose name matches a pattern. Each step includes cumulative_quantity, scaling_factor, and local_step_ratio (upstream ÷ downstream scaling factors). total_ratio is the product of all local_step_ratio values — the end-to-end conversion factor."
         (props
             [ ("database",   "string", "Database name")
-            , ("process_id", "string", "Root process ID to start from")
+            , ("process_id", "string", "Root process ID (activityUUID_productUUID format)")
             , ("target",     "string", "Case-insensitive name substring to stop at")
             ] [])
     , mkTool "get_consumers" "Find all activities that transitively consume (depend on) a given supplier. Returns a flat list, each with a crDepth field: 1 = direct consumer, 2 = consumer of consumer, etc. Useful for tracing downstream use of a raw material — e.g. finding transformed food products in Agribalyse that use a raw ingredient."
         (props
             [ ("database",   "string", "Database name")
-            , ("process_id", "string", "Process ID of the supplier to trace downstream")
+            , ("process_id", "string", "Process ID of the supplier (activityUUID_productUUID format)")
             ]
             [ ("name",                 "string",  "Filter by name (case-insensitive substring)")
             , ("location",             "string",  "Filter by geography/location (case-insensitive substring, e.g. 'FR', 'DE')")
             , ("product",              "string",  "Filter by product name (case-insensitive substring)")
+            , ("preset",               "string",  "Name of a classification preset (from list_presets) — expands to its bundled filters")
             , ("classification",       "string",  "Classification system name (e.g. 'ISIC rev.4 ecoinvent')")
             , ("classification_value", "string",  "Classification value substring to match")
             , ("limit",                "integer", "Max results (default 1000)")
@@ -390,7 +392,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "list_geographies"         -> callListGeographies dbManager rid args
     "list_classifications"     -> withDb dbManager rid args $ callListClassifications rid args
     "get_path_to"              -> withDb dbManager rid args $ callGetPathTo rid args
-    "get_consumers"            -> withDb dbManager rid args $ callGetConsumers rid args
+    "get_consumers"            -> withDb dbManager rid args $ callGetConsumers presets rid args
     _                          -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -419,6 +421,11 @@ doubleArg :: Text -> KeyMap Value -> Maybe Double
 doubleArg key args = case KM.lookup (fromText key) args of
     Just (Number n) -> Just (realToFrac n)
     _               -> Nothing
+
+boolArg :: Text -> KeyMap Value -> Maybe Bool
+boolArg key args = case KM.lookup (fromText key) args of
+    Just (Bool b) -> Just b
+    _             -> Nothing
 
 -- ---------------------------------------------------------------------------
 -- Tool implementations
@@ -459,6 +466,7 @@ callSearchActivities presets rid args (db, _) = do
         geo     = textArg "geo" args
         product' = textArg "product" args
         limit   = intArg "limit" args
+        exact   = fromMaybe False (boolArg "exact" args)
         isExact  = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
         presetFilters = case textArg "preset" args of
             Just pn -> case L.find (\p -> cpName p == pn) presets of
@@ -469,7 +477,7 @@ callSearchActivities presets rid args (db, _) = do
             (Just sys, Just val) -> [(sys, val, isExact)]
             _                   -> []
         classFilters = presetFilters ++ explicitFilters
-    result <- Service.searchActivities db name geo product' classFilters (limit <|> Just 20) Nothing Nothing Nothing
+    result <- Service.searchActivities db name geo product' classFilters exact (limit <|> Just 20) Nothing Nothing Nothing
     case result of
         Left err  -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val
@@ -577,15 +585,21 @@ callGetPathTo rid args (db, solver) =
                 Left err  -> return $ toolError rid (T.pack $ show err)
                 Right val -> return $ toolSuccessJson rid val
 
-callGetConsumers :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callGetConsumers rid args (db, _) =
+callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callGetConsumers presets rid args (db, _) =
     case textArg "process_id" args of
         Nothing -> return $ toolError rid "Missing required parameter: process_id"
         Just pid ->
             let isExact      = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-                classFilters = case (textArg "classification" args, textArg "classification_value" args) of
+                presetFilters = case textArg "preset" args of
+                    Just pn -> case L.find (\p -> cpName p == pn) presets of
+                        Just p  -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
+                        Nothing -> []
+                    Nothing -> []
+                explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
                     (Just sys, Just val) -> [(sys, val, isExact)]
                     _                   -> []
+                classFilters = presetFilters ++ explicitFilters
                 af = Service.ActivityFilter
                     { Service.afName = textArg "name" args
                     , Service.afLocation = textArg "location" args
@@ -684,6 +698,7 @@ callGetLCIA dbManager baseUrl rid args = do
                                                     , "category"            .= flowCategory f
                                                     , "compartment"         .= flowSubcompartment f
                                                     , "cf_value"            .= mcfValue cf
+                                                    , "flow_unit"           .= getUnitNameForFlow (dbUnits db) f
                                                     ]
                                                     | (cf, f, c) <- topFlows
                                                     ]

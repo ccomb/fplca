@@ -370,8 +370,8 @@ buildProductIndex activities processIdTable flowDb =
 -- Multi-word search: each word must match either name OR location (AND logic)
 -- Returns (ProcessId, Activity) pairs so callers don't need to re-scan for ProcessId.
 -- Uses word-token index when available for O(matches) instead of O(total) name search.
-findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> [(ProcessId, Activity)]
-findActivitiesByFields db nameParam geoParam productParam classFilters =
+findActivitiesByFields :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Bool -> [(ProcessId, Activity)]
+findActivitiesByFields db nameParam geoParam productParam classFilters exactMatch =
     let actVec = dbActivities db
         idx = dbSearchIndex db
 
@@ -386,10 +386,15 @@ findActivitiesByFields db nameParam geoParam productParam classFilters =
                 fields = map T.toLower (getFields a)
              in all (\w -> any (T.isInfixOf w) fields) searchWords
 
-        -- Filter by name using search index (intersect word sets, then verify substring)
+        -- Filter by name
         nameFiltered = case nameParam of
             Nothing -> [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)]
             Just name
+                | exactMatch ->
+                    -- Exact: case-insensitive equality on activity name only
+                    let nameFold = T.toCaseFold name
+                     in [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)
+                        , T.toCaseFold (activityName a) == nameFold]
                 | M.null idx ->
                     -- Fallback: no search index (shouldn't happen in normal operation)
                     [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)
@@ -405,12 +410,16 @@ findActivitiesByFields db nameParam geoParam productParam classFilters =
                             (first:rest) -> foldl IS.intersection first rest
                      in filter (\(_, a') -> allWordsMatch name (\a'' -> [activityName a'', activityLocation a'']) a') (resolveIds candidates)
 
-        -- Filter by geography if provided (substring match)
+        -- Filter by geography
         geoFiltered = case geoParam of
             Nothing -> nameFiltered
-            Just geo ->
-                let geoLower = T.toLower geo
-                 in [(pid, a) | (pid, a) <- nameFiltered, T.isInfixOf geoLower (T.toLower (activityLocation a))]
+            Just geo
+                | exactMatch ->
+                    let geoFold = T.toCaseFold geo
+                     in [(pid, a) | (pid, a) <- nameFiltered, T.toCaseFold (activityLocation a) == geoFold]
+                | otherwise ->
+                    let geoLower = T.toLower geo
+                     in [(pid, a) | (pid, a) <- nameFiltered, T.isInfixOf geoLower (T.toLower (activityLocation a))]
 
         -- Filter by product if provided (multi-word AND match on reference product name)
         pidx = dbProductSearchIndex db

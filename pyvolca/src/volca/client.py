@@ -123,6 +123,7 @@ class Client:
         classification_value: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        exact: bool = False,
     ) -> list[Activity]:
         params: dict = {"offset": offset}
         if limit is not None:
@@ -133,6 +134,8 @@ class Client:
             params["geo"] = geo
         if product:
             params["product"] = product
+        if exact:
+            params["exact"] = "true"
         if preset:
             params["preset"] = preset
         if classification:

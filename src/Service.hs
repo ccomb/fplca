@@ -719,10 +719,10 @@ searchFlows db (Just query) langParam limitParam offsetParam sortParam orderPara
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
 -- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
-searchActivities db nameParam geoParam productParam classFilters limitParam offsetParam sortParam orderParam = do
+searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Bool -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
+searchActivities db nameParam geoParam productParam classFilters exactMatch limitParam offsetParam sortParam orderParam = do
     startTime <- getCurrentTime
-    let rawResults = findActivitiesByFields db nameParam geoParam productParam classFilters
+    let rawResults = findActivitiesByFields db nameParam geoParam productParam classFilters exactMatch
         isDesc = orderParam == Just "desc"
         actCmp = case sortParam of
             Just "location" -> \(_, a) (_, b) -> compare (activityLocation a) (activityLocation b)

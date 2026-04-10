@@ -279,6 +279,7 @@ executeSearchActivitiesCommand registry fmt database opts = do
   searchResult <- Service.searchActivities database
          (searchName opts) (searchGeo opts) (searchProduct opts)
          []  -- classification filter (CLI doesn't expose yet)
+         False  -- exact match (CLI doesn't expose yet)
          (searchLimit opts) (searchOffset opts) Nothing Nothing
   case searchResult of
     Left err -> reportServiceError err
