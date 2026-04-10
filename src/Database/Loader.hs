@@ -1052,7 +1052,7 @@ loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig
                     , not (T.null (unitName u))
                     ]
             unless (S.null unknownUnits) $
-                reportProgress Warning $ printf "%d unknown unit(s): %s — add to [units.aliases] in volca.toml"
+                reportProgress Warning $ printf "%d unknown unit(s): %s — add to the [[units]] CSV file"
                     (S.size unknownUnits)
                     (T.unpack $ T.intercalate ", " $ map (\u -> "\"" <> u <> "\"") $ S.toList unknownUnits)
 

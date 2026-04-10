@@ -194,6 +194,7 @@ kmy,length*time,31536000000.0
 mile*year,length*time,50805446860.8
 mile.year,length*time,50805446860.8
 guest night,count,1.0
+guestnight,count,1.0
 teu,count,1.0
 unit/ha,count,1.0
 unit per ha,count,1.0
