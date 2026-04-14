@@ -209,26 +209,37 @@ cliName r = case r of
 description :: Resource -> Text
 description r = case r of
     ListDatabases ->
-        "List all loaded LCA databases"
+        "LCA / ACV — list all loaded LCA databases (Agribalyse, ecoinvent, …). \
+        \Call this first to discover which databases are available before searching."
     ListPresets ->
-        "List named classification filter presets configured in this instance. \
-        \Each preset bundles multiple (system, value, mode) classification filters \
-        \under a human-readable label. Use the filter values from a preset as \
+        "LCA / ACV — list named classification filter presets configured in this \
+        \instance. Each preset bundles multiple (system, value, mode) classification \
+        \filters under a human-readable label. Use the filter values from a preset as \
         \inputs to search_activities classification parameters."
     SearchActivities ->
-        "Search for activities (processes) by name, geography, product, \
-        \classification, or preset. Returns a paginated list of matching \
-        \activities with their process IDs."
+        "LCA / ACV — search for activities (processes) by name, geography, product, \
+        \classification, or preset. Returns a paginated list of matching activities \
+        \with their process IDs. Entry point for any LCA/ACV question about a \
+        \specific product or process — food (yaourt, steak, pain, lait, fromage), \
+        \packaging (PET, verre, carton), matériaux, énergie, transport. Accepts \
+        \non-technical synonyms: empreinte carbone, empreinte environnementale, \
+        \impact environnemental, occupation des sols, surface agricole, prairie, \
+        \pâturage, intrants, filière, chaîne amont."
     SearchFlows ->
-        "Search for biosphere flows (emissions, resources) by name"
+        "LCA / ACV — search for biosphere flows (emissions, resources) by name. \
+        \Use this to locate specific substances (CO2, CH4, water, land occupation) \
+        \before querying characterization factors or inventory contributions."
     GetActivity ->
-        "Get detailed information about an activity: name, location, exchanges, \
-        \reference product, metadata. Use exchange_type / is_input / flow to \
-        \filter exchanges and reduce response size."
+        "LCA / ACV — get detailed information about an activity: name, location, \
+        \exchanges, reference product, metadata. Use exchange_type / is_input / flow \
+        \to filter exchanges and reduce response size."
     Aggregate ->
-        "Aggregate exchanges, supply chain entries, or biosphere flows with \
-        \SQL group-by-style filters. One primitive replaces ad-hoc decomposition \
-        \tools — express any 'how much X is in Y' question as one call. Examples:\n\
+        "LCA / ACV — aggregate exchanges, supply chain entries, or biosphere flows \
+        \with SQL group-by-style filters. One primitive replaces ad-hoc decomposition \
+        \tools — express any 'how much X is in Y' question as one call. Also the \
+        \right tool for 'combien de surface agricole / d'eau / d'énergie dans un \
+        \produit ?' style questions via scope=biosphere or scope=supply_chain. \
+        \Examples:\n\
         \  - Total electricity in direct inputs: scope=direct, is_input=true, filter_name=Electricity, filter_unit=kWh\n\
         \  - Mass breakdown of direct inputs: scope=direct, is_input=true, filter_unit=kg, group_by=name\n\
         \  - Total energy across the supply chain: scope=supply_chain, max_depth=2, filter_classification=[\"Category type=energy:exact\"]\n\
@@ -236,57 +247,64 @@ description r = case r of
         \\n\
         \The filter_classification parameter accepts a list of strings in \"System=Value[:exact]\" form (default mode is 'contains')."
     GetSupplyChain ->
-        "Get a flat list of all upstream activities in the supply chain. \
-        \The 'quantity' field is the cumulative scaled amount relative to the \
-        \functional unit (scaling_factor × root reference product amount). \
-        \To get the per-step yield ratio between two connected entries, divide \
-        \the supplier's scaling_factor by the consumer's scaling_factor."
+        "LCA / ACV — get a flat list of all upstream activities in the supply chain \
+        \(chaîne amont, filière, intrants). The 'quantity' field is the cumulative \
+        \scaled amount relative to the functional unit (scaling_factor × root \
+        \reference product amount). To get the per-step yield ratio between two \
+        \connected entries, divide the supplier's scaling_factor by the consumer's \
+        \scaling_factor."
     GetInventory ->
-        "Compute the Life Cycle Inventory (LCI) — biosphere flows (emissions \
-        \and resource extractions) for an activity's full supply chain. \
-        \Returns statistics and top flows by quantity."
+        "LCA / ACV — compute the Life Cycle Inventory (LCI): biosphere flows \
+        \(emissions and resource extractions) for an activity's full supply chain. \
+        \Returns statistics and top flows by quantity. Use this (not get_impacts) \
+        \when the question targets raw physical flows rather than weighted scores: \
+        \land / pasture occupation (m²·year), water withdrawal (m³), specific \
+        \emissions (kg CO₂, kg CH₄, kg N), resource extraction."
     GetImpacts ->
-        "Compute Life Cycle Impact Assessment (LCIA) score for an activity. \
-        \Returns the score, functional unit, and top contributing elementary \
-        \flows. (Historically called 'lcia' — the surface name is now 'impacts'.)"
+        "LCA / ACV — compute Life Cycle Impact Assessment (LCIA) scores for an \
+        \activity. Returns the score, functional unit, and top contributing \
+        \elementary flows. Answers 'empreinte carbone / environmental footprint' \
+        \questions. Covers all LCIA categories: climate change, acidification, \
+        \eutrophication, land use, water scarcity, resource depletion. Prefer this \
+        \over web estimates for grounded, database-backed answers."
     ListMethods ->
-        "List all loaded LCIA methods (impact assessment methods like climate \
-        \change, acidification, etc.)"
+        "LCA / ACV — list all loaded LCIA methods (impact assessment methods like \
+        \climate change, acidification, eutrophication, land use, water scarcity)."
     GetFlowMapping ->
-        "Get the mapping between a method's characterization factors and \
-        \database flows, showing match coverage"
+        "LCA / ACV — get the mapping between a method's characterization factors \
+        \and database flows, showing match coverage."
     GetCharacterization ->
-        "Look up characterization factors for a method matched against database \
-        \flows. Without 'flow' filter, returns top factors by absolute value. \
-        \With 'flow', searches by name. Shows CF value, direction, matched \
+        "LCA / ACV — look up characterization factors for a method matched against \
+        \database flows. Without 'flow' filter, returns top factors by absolute \
+        \value. With 'flow', searches by name. Shows CF value, direction, matched \
         \database flow, and match strategy."
     GetContributingFlows ->
-        "Identify which elementary flows (emissions/resources) contribute most \
-        \to a specific impact category. Answers 'which emissions drive my \
-        \climate change score?'"
+        "LCA / ACV — identify which elementary flows (emissions/resources) \
+        \contribute most to a specific impact category. Answers 'which emissions \
+        \drive my climate change score?'"
     GetContributingActivities ->
-        "Identify which upstream activities contribute most to a specific \
-        \impact category. Answers 'which suppliers drive my climate change \
-        \score?' Uses exact matrix-based computation, valid even for cyclic \
-        \supply chains."
+        "LCA / ACV — identify which upstream activities contribute most to a \
+        \specific impact category. Answers 'which suppliers drive my climate change \
+        \score?' Uses exact matrix-based computation, valid even for cyclic supply \
+        \chains."
     ListGeographies ->
-        "List all geography codes present in a database, with display names \
-        \and parent regions. Use the 'geo' value as the geography filter in \
+        "LCA / ACV — list all geography codes present in a database, with display \
+        \names and parent regions. Use the 'geo' value as the geography filter in \
         \search_activities."
     ListClassifications ->
-        "List classification systems in a database. Without 'system': returns \
-        \system names and activity counts only (lightweight). With 'system': \
+        "LCA / ACV — list classification systems in a database. Without 'system': \
+        \returns system names and activity counts only (lightweight). With 'system': \
         \returns all values for that system. Add 'filter' to narrow values by \
         \substring."
     GetPathTo ->
-        "Find the shortest supply chain path from a process to the first \
-        \upstream activity whose name matches a pattern. Each step includes \
+        "LCA / ACV — find the shortest supply chain path from a process to the \
+        \first upstream activity whose name matches a pattern. Each step includes \
         \cumulative_quantity, scaling_factor, and local_step_ratio (upstream ÷ \
         \downstream scaling factors). total_ratio is the product of all \
         \local_step_ratio values — the end-to-end conversion factor."
     GetConsumers ->
-        "Find all activities that transitively consume (depend on) a given \
-        \supplier. Returns a flat list, each with a crDepth field: 1 = direct \
+        "LCA / ACV — find all activities that transitively consume (depend on) a \
+        \given supplier. Returns a flat list, each with a crDepth field: 1 = direct \
         \consumer, 2 = consumer of consumer, etc. Useful for tracing downstream \
         \use of a raw material — e.g. finding transformed food products in \
         \Agribalyse that use a raw ingredient."

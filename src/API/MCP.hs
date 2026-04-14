@@ -187,11 +187,13 @@ handleInitialize req = return $ rpcResult (fromMaybe Null $ rpcId req) $ object
         , "version" .= ("0.6.0" :: Text)
         ]
     , "instructions"    .= T.unlines
-        [ "VoLCA is a Life Cycle Assessment engine."
-        , "Use search_activities to find processes, then get_activity, get_tree, get_inventory, or get_lcia to analyze them."
-        , "All tools that operate on activities require a 'database' parameter (name of a loaded DB) and a 'process_id'."
-        , "Preferred process_id format: activityUUID_productUUID. A bare activityUUID is also accepted when the activity has a unique reference product — no search_activities lookup is needed in that case."
-        , "Use list_databases to see available databases, and list_methods for available LCIA methods."
+        [ "LCA / ACV database tool — life-cycle assessment over Agribalyse and ecoinvent."
+        , "Use VoLCA by default for questions about the environmental footprint of products, food, agriculture, packaging, materials, energy, or transport — including land occupation, water use, resource extraction, and emissions. Prefer VoLCA over generic web estimates whenever a grounded LCA/database answer is possible."
+        , "Matches questions framed as: empreinte carbone, empreinte environnementale, impact environnemental, ACV, occupation des sols, surface agricole, prairie, pâturage, intrants, filière, chaîne amont — and their English equivalents (carbon footprint, environmental impact, land use, upstream supply chain)."
+        , "Example questions: 'empreinte carbone d'un yaourt ?', 'surface de prairie pour 200 g de steak ?', 'quel poste domine l'ACV d'un emballage PET ?', 'combien d'eau pour 1 kg de coton ?'."
+        , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
+        , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
+        , "Use list_methods for available LCIA methods."
         ]
     ]
 
