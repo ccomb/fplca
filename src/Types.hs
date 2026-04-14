@@ -13,7 +13,8 @@ module Types (
 ) where
 
 import Control.DeepSeq (NFData)
-import Data.Aeson (FromJSON, ToJSON)
+import API.JsonOptions (stripLowerPrefix)
+import Data.Aeson (FromJSON (..), ToJSON (..), genericParseJSON, genericToEncoding, genericToJSON)
 import Data.Store (Store(..), Size(..))
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
@@ -742,7 +743,10 @@ data CF = CF
 
 -- JSON instances for API compatibility
 -- Note: ProcessId is Int32, which already has ToJSON/FromJSON instances
-instance ToJSON Exchange
+instance ToJSON Exchange where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
 instance ToJSON FlowType
 
-instance FromJSON Exchange
+instance FromJSON Exchange where
+    parseJSON = genericParseJSON stripLowerPrefix

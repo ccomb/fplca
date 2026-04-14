@@ -130,8 +130,8 @@ def main():
     # Step 5: Display supply chain
     # Get reference amount for normalization
     activity = c.get_activity(product.process_id)
-    all_products = activity.get("piActivity", {}).get("pfaAllProducts", [])
-    ref_amount = float(all_products[0]["prsProductAmount"]) if all_products else 1.0
+    all_products = activity.get("activity", {}).get("allProducts", [])
+    ref_amount = float(all_products[0]["productAmount"]) if all_products else 1.0
 
     csv_rows = print_supply_chain(groups, ref_amount, product.name, filter_text if not args.prefix else (args.prefix or ""))
     safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in product.name)[:50]

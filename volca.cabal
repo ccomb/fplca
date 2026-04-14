@@ -45,6 +45,7 @@ library
                      , Method.FlowResolver
                      , API.Routes
                      , API.Types
+                     , API.JsonOptions
                      , API.DatabaseHandlers
                      , API.Auth
                      , API.MCP

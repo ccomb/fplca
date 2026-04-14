@@ -278,7 +278,7 @@ renderCSV val =
 findArray :: Value -> Maybe [Value]
 findArray (Array arr) = Just (V.toList arr)
 findArray (Object obj) =
-    -- Look for a single array field (e.g., dlrDatabases, srResults, mclMethods, rdlItems)
+    -- Look for a single array field (e.g., databases, results, methods, items)
     case mapMaybe extractArr (KM.toList obj) of
         [(_, arr)] -> Just arr
         _          -> Nothing

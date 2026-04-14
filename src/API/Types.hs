@@ -5,6 +5,7 @@
 module API.Types where
 
 import Types (Exchange, Flow, UUID, Unit)
+import API.JsonOptions (strippedParseJSON, strippedToEncoding, strippedToJSON)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -26,7 +27,7 @@ data SearchResults a = SearchResults
 
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
-    { prsId :: Text  -- ProcessId format: activity_uuid_product_uuid
+    { prsProcessId :: Text  -- ProcessId format: activity_uuid_product_uuid
     , prsName :: Text
     , prsLocation :: Text
     , prsProduct :: Text  -- Reference product name
@@ -37,7 +38,7 @@ data ActivitySummary = ActivitySummary
 
 -- | Consumer result — ActivitySummary enriched with BFS depth from the queried supplier
 data ConsumerResult = ConsumerResult
-    { crId            :: Text
+    { crProcessId     :: Text
     , crName          :: Text
     , crLocation      :: Text
     , crProduct       :: Text
@@ -155,7 +156,7 @@ data GraphExport = GraphExport
     deriving (Generic)
 
 data GraphNode = GraphNode
-    { gnId :: Int -- Numeric ID for efficient frontend processing
+    { gnNodeId :: Int -- Numeric ID for efficient frontend processing
     , gnLabel :: Text -- Activity name
     , gnValue :: Double -- Cumulative amount from factorized matrix
     , gnUnit :: Text -- Unit (kg, MJ, etc.)
@@ -635,106 +636,108 @@ data Aggregation = Aggregation
 
 -- | One bucket in an aggregation result.
 data AggregationGroup = AggregationGroup
-    { aggGroupKey      :: Text
-    , aggGroupQuantity :: Double
-    , aggGroupUnit     :: Maybe Text       -- Nothing when group's items are heterogeneous
-    , aggGroupShare    :: Maybe Double     -- only set when aggregate=share
-    , aggGroupCount    :: Int
+    { aggKey      :: Text
+    , aggQuantity :: Double
+    , aggUnit     :: Maybe Text       -- Nothing when group's items are heterogeneous
+    , aggShare    :: Maybe Double     -- only set when aggregate=share
+    , aggCount    :: Int
     }
     deriving (Generic)
 
--- JSON instances
-instance ToJSON ConsumerResult
-instance FromJSON ConsumerResult
-instance ToJSON ClassificationEntryInfo
-instance ToJSON ClassificationPresetInfo
-instance ToJSON ClassificationSystem
-instance ToJSON Aggregation
-instance ToJSON AggregationGroup
-instance (ToJSON a) => ToJSON (SearchResults a)
-instance ToJSON ActivitySummary
-instance ToJSON FlowSearchResult
-instance ToJSON InventoryMetadata
-instance ToJSON InventoryStatistics
-instance ToJSON TreeExport
-instance ToJSON TreeMetadata
-instance ToJSON ExportNode
+-- JSON instances. All record types use API.JsonOptions.stripLowerPrefix
+-- via the strippedToJSON/strippedToEncoding/strippedParseJSON helpers.
+-- Sum-only types (NodeType, EdgeType, FlowRole) keep default derivation.
+instance ToJSON ConsumerResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance FromJSON ConsumerResult where { parseJSON = strippedParseJSON }
+instance ToJSON ClassificationEntryInfo where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ClassificationPresetInfo where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ClassificationSystem where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON Aggregation where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON AggregationGroup where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance (ToJSON a) => ToJSON (SearchResults a) where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivitySummary where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowSearchResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON InventoryMetadata where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON InventoryStatistics where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON TreeExport where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON TreeMetadata where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ExportNode where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON NodeType
 instance ToJSON EdgeType
-instance ToJSON TreeEdge
-instance ToJSON FlowInfo
+instance ToJSON TreeEdge where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowInfo where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON FlowRole
-instance ToJSON ExchangeWithUnit
-instance ToJSON ActivityForAPI
-instance ToJSON ActivityInfo
-instance ToJSON ActivityMetadata
-instance ToJSON ActivityLinks
-instance ToJSON ActivityStats
-instance ToJSON InventoryFlowDetail
-instance ToJSON Flow
-instance ToJSON FlowSummary
-instance ToJSON InventoryExport
-instance ToJSON ExchangeDetail
-instance ToJSON Unit
-instance ToJSON FlowDetail
-instance ToJSON GraphExport
-instance ToJSON GraphNode
-instance ToJSON GraphEdge
-instance ToJSON MethodSummary
-instance ToJSON MethodCollectionListResponse
-instance ToJSON MethodCollectionStatusAPI
-instance ToJSON MethodDetail
-instance ToJSON MethodFactorAPI
-instance ToJSON FlowContributionEntry
-instance ToJSON LCIAResult
-instance ToJSON LCIABatchResult
-instance ToJSON ContributingFlowsResult
-instance ToJSON ActivityContribution
-instance ToJSON ContributingActivitiesResult
-instance ToJSON MappingStatus
-instance ToJSON UnmappedFlowAPI
-instance ToJSON FlowCFMapping
-instance ToJSON FlowCFEntry
-instance ToJSON CharacterizationResult
-instance ToJSON CharacterizationEntry
-instance ToJSON SupplyChainResponse
-instance ToJSON SupplyChainEntry
-instance ToJSON SupplyChainEdge
-instance FromJSON SubstitutionRequest
-instance FromJSON Substitution
+instance ToJSON ExchangeWithUnit where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityForAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityInfo where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityMetadata where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityLinks where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityStats where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON InventoryFlowDetail where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON Flow where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowSummary where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON InventoryExport where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ExchangeDetail where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON Unit where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowDetail where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON GraphExport where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON GraphNode where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON GraphEdge where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MethodSummary where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MethodCollectionListResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MethodCollectionStatusAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MethodDetail where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MethodFactorAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowContributionEntry where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON LCIAResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON LCIABatchResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ContributingFlowsResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivityContribution where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ContributingActivitiesResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON MappingStatus where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON UnmappedFlowAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowCFMapping where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON FlowCFEntry where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON CharacterizationResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON CharacterizationEntry where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON SupplyChainResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON SupplyChainEntry where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON SupplyChainEdge where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance FromJSON SubstitutionRequest where { parseJSON = strippedParseJSON }
+instance FromJSON Substitution where { parseJSON = strippedParseJSON }
 
 -- FromJSON instances needed for API conversion
-instance (FromJSON a) => FromJSON (SearchResults a)
-instance FromJSON ActivitySummary
-instance FromJSON ActivityInfo
-instance FromJSON ActivityForAPI
-instance FromJSON ActivityMetadata
-instance FromJSON ActivityLinks
-instance FromJSON ActivityStats
-instance FromJSON ExchangeWithUnit
-instance FromJSON LCIARequest
-instance ToJSON DatabaseListResponse
-instance ToJSON DatabaseStatusAPI
-instance ToJSON ActivateResponse
-instance ToJSON DepLoadResult
-instance ToJSON LoadDatabaseResponse
-instance ToJSON UploadRequest
-instance ToJSON UploadResponse
-instance FromJSON DatabaseListResponse
-instance FromJSON DatabaseStatusAPI
-instance FromJSON ActivateResponse
-instance FromJSON DepLoadResult
-instance FromJSON LoadDatabaseResponse
-instance FromJSON UploadRequest
-instance FromJSON UploadResponse
-instance FromJSON MethodCollectionListResponse
-instance FromJSON MethodCollectionStatusAPI
-instance ToJSON RefDataListResponse
-instance ToJSON RefDataStatusAPI
-instance ToJSON SynonymGroupsResponse
-instance FromJSON RefDataListResponse
-instance FromJSON RefDataStatusAPI
-instance FromJSON SynonymGroupsResponse
+instance (FromJSON a) => FromJSON (SearchResults a) where { parseJSON = strippedParseJSON }
+instance FromJSON ActivitySummary where { parseJSON = strippedParseJSON }
+instance FromJSON ActivityInfo where { parseJSON = strippedParseJSON }
+instance FromJSON ActivityForAPI where { parseJSON = strippedParseJSON }
+instance FromJSON ActivityMetadata where { parseJSON = strippedParseJSON }
+instance FromJSON ActivityLinks where { parseJSON = strippedParseJSON }
+instance FromJSON ActivityStats where { parseJSON = strippedParseJSON }
+instance FromJSON ExchangeWithUnit where { parseJSON = strippedParseJSON }
+instance FromJSON LCIARequest where { parseJSON = strippedParseJSON }
+instance ToJSON DatabaseListResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON DatabaseStatusAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON ActivateResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON DepLoadResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON LoadDatabaseResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON UploadRequest where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON UploadResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance FromJSON DatabaseListResponse where { parseJSON = strippedParseJSON }
+instance FromJSON DatabaseStatusAPI where { parseJSON = strippedParseJSON }
+instance FromJSON ActivateResponse where { parseJSON = strippedParseJSON }
+instance FromJSON DepLoadResult where { parseJSON = strippedParseJSON }
+instance FromJSON LoadDatabaseResponse where { parseJSON = strippedParseJSON }
+instance FromJSON UploadRequest where { parseJSON = strippedParseJSON }
+instance FromJSON UploadResponse where { parseJSON = strippedParseJSON }
+instance FromJSON MethodCollectionListResponse where { parseJSON = strippedParseJSON }
+instance FromJSON MethodCollectionStatusAPI where { parseJSON = strippedParseJSON }
+instance ToJSON RefDataListResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON RefDataStatusAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON SynonymGroupsResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance FromJSON RefDataListResponse where { parseJSON = strippedParseJSON }
+instance FromJSON RefDataStatusAPI where { parseJSON = strippedParseJSON }
+instance FromJSON SynonymGroupsResponse where { parseJSON = strippedParseJSON }
 
 -- openapi3 cannot derive ToSchema for BSL.ByteString directly
 newtype BinaryContent = BinaryContent BSL.ByteString

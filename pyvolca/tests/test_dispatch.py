@@ -81,7 +81,7 @@ class TestDispatcher:
     def test_get_activity_substitutes_path_captures(self, mocked_client, make_response):
         client, session = mocked_client
         session.get.return_value = make_response({
-            "piActivity": {"pfaExchanges": [], "pfaName": "test"},
+            "activity": {"exchanges": [], "name": "test"},
         })
         try:
             client.get_activity("abc_def")
@@ -117,11 +117,11 @@ class TestDispatcher:
         """``min_quantity`` Python → ``min-quantity`` wire."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "scrRoot": {"asProcessId": "x", "asName": "y", "asLocation": "FR", "asUnit": "kg", "asClassifications": {}},
-            "scrSupplyChain": [],
-            "scrEdges": [],
-            "scrTotalActivities": 0,
-            "scrFilteredActivities": 0,
+            "root": {"processId": "x", "name": "y", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "supplyChain": [],
+            "edges": [],
+            "totalActivities": 0,
+            "filteredActivities": 0,
         })
         try:
             client.get_supply_chain("abc_def", min_quantity=0.5, max_depth=3)
@@ -135,11 +135,11 @@ class TestDispatcher:
         """preset= must reach the supply-chain endpoint as a query param."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "scrRoot": {"asProcessId": "x", "asName": "y", "asLocation": "FR", "asUnit": "kg", "asClassifications": {}},
-            "scrSupplyChain": [],
-            "scrEdges": [],
-            "scrTotalActivities": 0,
-            "scrFilteredActivities": 0,
+            "root": {"processId": "x", "name": "y", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "supplyChain": [],
+            "edges": [],
+            "totalActivities": 0,
+            "filteredActivities": 0,
         })
         try:
             client.get_supply_chain("abc_def", preset="raw-ingredients")

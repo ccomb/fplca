@@ -1,7 +1,32 @@
 """Data types for VoLCA API responses."""
 
+import dataclasses
+import re
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Any, ClassVar, Union
+
+
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _to_snake(s: str) -> str:
+    """camelCase → snake_case. Idempotent on already-snake strings."""
+    return _CAMEL_BOUNDARY.sub("_", s).lower()
+
+
+@dataclass
+class FromJson:
+    """Mixin: build the dataclass from a JSON dict by snake-casing keys.
+
+    Picks only the keys that match declared fields. Subclasses with nested
+    dataclass fields, recursive parsing, or envelope unwrapping should
+    override `from_json`.
+    """
+
+    @classmethod
+    def from_json(cls, d: dict) -> Any:
+        names = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in ((_to_snake(k), v) for k, v in d.items()) if k in names})
 
 
 @dataclass
@@ -19,7 +44,7 @@ class ClassificationFilter:
 
 
 @dataclass
-class Activity:
+class Activity(FromJson):
     process_id: str
     name: str
     location: str
@@ -27,20 +52,9 @@ class Activity:
     product_amount: float
     product_unit: str
 
-    @classmethod
-    def from_json(cls, d: dict) -> "Activity":
-        return cls(
-            process_id=d["prsId"],
-            name=d["prsName"],
-            location=d["prsLocation"],
-            product=d["prsProduct"],
-            product_amount=d["prsProductAmount"],
-            product_unit=d["prsProductUnit"],
-        )
-
 
 @dataclass
-class ConsumerResult:
+class ConsumerResult(FromJson):
     """Activity that consumes a given supplier, with BFS depth."""
     process_id: str
     name: str
@@ -50,21 +64,9 @@ class ConsumerResult:
     product_unit: str
     depth: int  # hops from the queried supplier (1 = direct consumer)
 
-    @classmethod
-    def from_json(cls, d: dict) -> "ConsumerResult":
-        return cls(
-            process_id=d["crId"],
-            name=d["crName"],
-            location=d["crLocation"],
-            product=d["crProduct"],
-            product_amount=d["crProductAmount"],
-            product_unit=d["crProductUnit"],
-            depth=d["crDepth"],
-        )
-
 
 @dataclass
-class SupplyChainEntry:
+class SupplyChainEntry(FromJson):
     process_id: str
     name: str
     location: str
@@ -73,22 +75,15 @@ class SupplyChainEntry:
     scaling_factor: float
     classifications: dict[str, str] = field(default_factory=dict)
 
-    @classmethod
-    def from_json(cls, d: dict) -> "SupplyChainEntry":
-        return cls(
-            process_id=d["sceProcessId"],
-            name=d["sceName"],
-            location=d["sceLocation"],
-            quantity=d["sceQuantity"],
-            unit=d["sceUnit"],
-            scaling_factor=d["sceScalingFactor"],
-            classifications=d.get("sceClassifications", {}),
-        )
-
 
 @dataclass
 class PathStep:
-    """One step in the supply chain path returned by get_path_to."""
+    """One step in the supply chain path returned by get_path_to.
+
+    Note: the /path endpoint emits snake_case JSON directly (built via
+    aeson's `object [...]` rather than generic ToJSON), so it bypasses
+    the engine's stripLowerPrefix transform.
+    """
     process_id: str
     name: str
     location: str
@@ -128,17 +123,14 @@ class PathResult:
 
 @dataclass
 class SupplyChainEdge:
+    """`from`/`to` are Python keywords, so they're stored under from_id/to_id."""
     from_id: str
     to_id: str
     amount: float
 
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChainEdge":
-        return cls(
-            from_id=d["sceEdgeFrom"],
-            to_id=d["sceEdgeTo"],
-            amount=d["sceEdgeAmount"],
-        )
+        return cls(from_id=d["edgeFrom"], to_id=d["edgeTo"], amount=d["edgeAmount"])
 
 
 @dataclass
@@ -152,11 +144,11 @@ class SupplyChain:
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChain":
         return cls(
-            root=Activity.from_json(d["scrRoot"]),
-            total_activities=d["scrTotalActivities"],
-            filtered_activities=d["scrFilteredActivities"],
-            entries=[SupplyChainEntry.from_json(e) for e in d["scrSupplyChain"]],
-            edges=[SupplyChainEdge.from_json(e) for e in d.get("scrEdges", [])],
+            root=Activity.from_json(d["root"]),
+            total_activities=d["totalActivities"],
+            filtered_activities=d["filteredActivities"],
+            entries=[SupplyChainEntry.from_json(e) for e in d["supplyChain"]],
+            edges=[SupplyChainEdge.from_json(e) for e in d.get("edges", [])],
         )
 
 
@@ -166,33 +158,37 @@ class SupplyChain:
 
 @dataclass
 class TechnosphereExchange:
-    """An exchange with another activity (input or output of an intermediate product)."""
+    """An exchange with another activity (input or output of an intermediate product).
 
-    flow_name: str            # ewuFlowName
-    flow_category: str        # ewuFlowCategory ("technosphere")
-    amount: float             # techAmount
-    unit: str                 # ewuUnitName
-    is_input: bool            # techIsInput
-    is_reference: bool        # techIsReference (True for the activity's reference product)
-    target_activity: str | None      # ewuTargetActivity — supplier name
-    target_location: str | None      # ewuTargetLocation
-    target_process_id: str | None    # ewuTargetProcessId — used to descend into the supplier
+    Built from an `ExchangeWithUnit` envelope: outer fields like flowName/unitName
+    live next to an inner `exchange` object (the discriminated `Exchange` sum).
+    """
+
+    flow_name: str
+    flow_category: str
+    amount: float
+    unit: str
+    is_input: bool
+    is_reference: bool
+    target_activity: str | None
+    target_location: str | None
+    target_process_id: str | None
 
     is_biosphere: bool = False  # discriminator for callers using duck typing
 
     @classmethod
     def from_json(cls, ewu: dict) -> "TechnosphereExchange":
-        inner = ewu["ewuExchange"]
+        inner = ewu["exchange"]
         return cls(
-            flow_name=ewu["ewuFlowName"],
-            flow_category=ewu["ewuFlowCategory"],
-            amount=inner["techAmount"],
-            unit=ewu["ewuUnitName"],
-            is_input=inner["techIsInput"],
-            is_reference=inner["techIsReference"],
-            target_activity=ewu.get("ewuTargetActivity"),
-            target_location=ewu.get("ewuTargetLocation"),
-            target_process_id=ewu.get("ewuTargetProcessId"),
+            flow_name=ewu["flowName"],
+            flow_category=ewu["flowCategory"],
+            amount=inner["amount"],
+            unit=ewu["unitName"],
+            is_input=inner["isInput"],
+            is_reference=inner["isReference"],
+            target_activity=ewu.get("targetActivity"),
+            target_location=ewu.get("targetLocation"),
+            target_process_id=ewu.get("targetProcessId"),
         )
 
 
@@ -200,23 +196,23 @@ class TechnosphereExchange:
 class BiosphereExchange:
     """An exchange with the environment (resource extraction or emission)."""
 
-    flow_name: str            # ewuFlowName
-    flow_category: str        # ewuFlowCategory — compartment (e.g. "air", "water", "soil")
-    amount: float             # bioAmount
-    unit: str                 # ewuUnitName
-    is_input: bool            # bioIsInput — True = resource extraction, False = emission
+    flow_name: str
+    flow_category: str
+    amount: float
+    unit: str
+    is_input: bool  # True = resource extraction, False = emission
 
     is_biosphere: bool = True  # discriminator for callers using duck typing
 
     @classmethod
     def from_json(cls, ewu: dict) -> "BiosphereExchange":
-        inner = ewu["ewuExchange"]
+        inner = ewu["exchange"]
         return cls(
-            flow_name=ewu["ewuFlowName"],
-            flow_category=ewu["ewuFlowCategory"],
-            amount=inner["bioAmount"],
-            unit=ewu["ewuUnitName"],
-            is_input=inner["bioIsInput"],
+            flow_name=ewu["flowName"],
+            flow_category=ewu["flowCategory"],
+            amount=inner["amount"],
+            unit=ewu["unitName"],
+            is_input=inner["isInput"],
         )
 
 
@@ -226,11 +222,11 @@ Exchange = Union[TechnosphereExchange, BiosphereExchange]
 def parse_exchange(ewu: dict) -> Exchange:
     """Parse an `ExchangeWithUnit` JSON dict (as returned by GET /activity).
 
-    The inner `ewuExchange` object is tagged with a `"tag"` discriminator
+    The inner `exchange` object is tagged with a `"tag"` discriminator
     (``"TechnosphereExchange"`` or ``"BiosphereExchange"``) and carries all
     variant-specific fields flat at the same level.
     """
-    tag = ewu["ewuExchange"].get("tag")
+    tag = ewu["exchange"].get("tag")
     if tag == "TechnosphereExchange":
         return TechnosphereExchange.from_json(ewu)
     if tag == "BiosphereExchange":
@@ -239,41 +235,40 @@ def parse_exchange(ewu: dict) -> Exchange:
 
 
 def parse_exchange_detail(ed: dict) -> Exchange:
-    """Parse an `ExchangeDetail` JSON dict (as returned by GET /activity/{pid}/inputs|outputs).
+    """Parse an `ExchangeDetail` JSON dict (returned by GET /activity/{pid}/inputs|outputs).
 
     The richer ExchangeDetail shape carries full Flow / Unit / ActivitySummary
     objects. This parser projects it onto the lean Exchange representation; if a
     caller needs the richer shape it should hit the REST endpoint directly.
     """
-    inner = ed["edExchange"]
-    flow = ed.get("edFlow", {})
-    flow_name = flow.get("flowName", "")
-    flow_category = flow.get("flowCategory", "")
-    unit = ed.get("edExchangeUnitName", "")
-    if "TechnosphereExchange" in inner:
-        tx = inner["TechnosphereExchange"]
-        target = ed.get("edTargetActivity") or {}
+    inner = ed["exchange"]
+    flow = ed.get("flow", {})
+    flow_name = flow.get("name", "")
+    flow_category = flow.get("category", "")
+    unit = ed.get("exchangeUnitName", "")
+    tag = inner.get("tag")
+    if tag == "TechnosphereExchange":
+        target = ed.get("targetActivity") or {}
         return TechnosphereExchange(
             flow_name=flow_name,
             flow_category=flow_category or "technosphere",
-            amount=tx["techAmount"],
+            amount=inner["amount"],
             unit=unit,
-            is_input=tx["techIsInput"],
-            is_reference=tx["techIsReference"],
-            target_activity=target.get("prsName"),
-            target_location=target.get("prsLocation"),
-            target_process_id=target.get("prsId"),
+            is_input=inner["isInput"],
+            is_reference=inner["isReference"],
+            target_activity=target.get("name"),
+            target_location=target.get("location"),
+            target_process_id=target.get("processId"),
         )
-    if "BiosphereExchange" in inner:
-        bx = inner["BiosphereExchange"]
+    if tag == "BiosphereExchange":
         return BiosphereExchange(
             flow_name=flow_name,
             flow_category=flow_category,
-            amount=bx["bioAmount"],
+            amount=inner["amount"],
             unit=unit,
-            is_input=bx["bioIsInput"],
+            is_input=inner["isInput"],
         )
-    raise ValueError(f"Unknown exchange variant: {list(inner.keys())}")
+    raise ValueError(f"Unknown exchange variant tag: {tag!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -292,30 +287,30 @@ class ActivityDetail:
     name: str
     location: str
     unit: str
-    description: list[str]                  # pfaDescription paragraphs
-    classifications: dict[str, str]         # pfaClassifications
+    description: list[str]
+    classifications: dict[str, str]
     reference_product: str | None
     reference_product_amount: float | None
     reference_product_unit: str | None
-    all_products: list[Activity]            # pfaAllProducts
-    exchanges: list[Exchange]               # parsed via parse_exchange
+    all_products: list[Activity]
+    exchanges: list[Exchange]
 
     @classmethod
     def from_json(cls, d: dict) -> "ActivityDetail":
-        # The /activity endpoint returns ActivityInfo: piActivity is the ActivityForAPI.
-        pfa = d["piActivity"]
+        # The /activity endpoint returns ActivityInfo: `activity` is the ActivityForAPI.
+        pfa = d["activity"]
         return cls(
-            process_id=pfa["pfaProcessId"],
-            name=pfa["pfaName"],
-            location=pfa["pfaLocation"],
-            unit=pfa["pfaUnit"],
-            description=pfa.get("pfaDescription", []),
-            classifications=pfa.get("pfaClassifications", {}),
-            reference_product=pfa.get("pfaReferenceProduct"),
-            reference_product_amount=pfa.get("pfaReferenceProductAmount"),
-            reference_product_unit=pfa.get("pfaReferenceProductUnit"),
-            all_products=[Activity.from_json(a) for a in pfa.get("pfaAllProducts", [])],
-            exchanges=[parse_exchange(e) for e in pfa.get("pfaExchanges", [])],
+            process_id=pfa["processId"],
+            name=pfa["name"],
+            location=pfa["location"],
+            unit=pfa["unit"],
+            description=pfa.get("description", []),
+            classifications=pfa.get("classifications", {}),
+            reference_product=pfa.get("referenceProduct"),
+            reference_product_amount=pfa.get("referenceProductAmount"),
+            reference_product_unit=pfa.get("referenceProductUnit"),
+            all_products=[Activity.from_json(a) for a in pfa.get("allProducts", [])],
+            exchanges=[parse_exchange(e) for e in pfa.get("exchanges", [])],
         )
 
     @property
@@ -335,7 +330,7 @@ class ActivityDetail:
 
     @property
     def is_allocated(self) -> bool:
-        """True iff pfaDescription contains a parseable allocation block.
+        """True iff description contains a parseable allocation block.
 
         Implemented in volca/agribalyse.py to keep Agribalyse-specific text
         parsing out of the generic types module.
@@ -349,23 +344,13 @@ class ActivityDetail:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class AggregateGroup:
+class AggregateGroup(FromJson):
     """One bucket inside an AggregateResult."""
     key: str
     quantity: float
-    unit: str | None
-    share: float | None
     count: int
-
-    @classmethod
-    def from_json(cls, d: dict) -> "AggregateGroup":
-        return cls(
-            key=d["aggGroupKey"],
-            quantity=d["aggGroupQuantity"],
-            unit=d.get("aggGroupUnit"),
-            share=d.get("aggGroupShare"),
-            count=d["aggGroupCount"],
-        )
+    unit: str | None = None
+    share: float | None = None
 
 
 @dataclass
@@ -385,9 +370,9 @@ class AggregateResult:
     @classmethod
     def from_json(cls, d: dict) -> "AggregateResult":
         return cls(
-            scope=d["aggScope"],
-            filtered_total=d["aggFilteredTotal"],
-            filtered_unit=d.get("aggFilteredUnit"),
-            filtered_count=d["aggFilteredCount"],
-            groups=[AggregateGroup.from_json(g) for g in d.get("aggGroups", [])],
+            scope=d["scope"],
+            filtered_total=d["filteredTotal"],
+            filtered_unit=d.get("filteredUnit"),
+            filtered_count=d["filteredCount"],
+            groups=[AggregateGroup.from_json(g) for g in d.get("groups", [])],
         )

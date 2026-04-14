@@ -15,6 +15,7 @@ module API.OpenApi (enrichWithResources) where
 
 import qualified API.Resources as R
 import API.Resources (Resource)
+import API.JsonOptions (strippedSchemaOptions)
 import API.Types
 import Control.Lens ((&), (?~), (%~), (^.))
 import Data.Aeson (Value)
@@ -38,82 +39,83 @@ instance ToSchema Value where
 
 -- Domain types
 instance ToSchema FlowType
-instance ToSchema Unit
-instance ToSchema Flow
-instance ToSchema Exchange
+instance ToSchema Unit where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema Flow where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema Exchange where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 
 -- Database.Manager types
 instance ToSchema MissingSupplier
 instance ToSchema DependencySuggestion
 instance ToSchema DatabaseSetupInfo
 
--- API.Types
-instance ToSchema ClassificationSystem
-instance (ToSchema a) => ToSchema (SearchResults a)
-instance ToSchema ActivitySummary
-instance ToSchema ConsumerResult
-instance ToSchema FlowSearchResult
-instance ToSchema InventoryExport
-instance ToSchema InventoryMetadata
-instance ToSchema InventoryFlowDetail
-instance ToSchema InventoryStatistics
-instance ToSchema TreeExport
-instance ToSchema TreeMetadata
-instance ToSchema ExportNode
+-- API.Types — every record type uses strippedSchemaOptions so the generated
+-- OpenAPI spec matches the wire JSON keys produced by API.JsonOptions.stripLowerPrefix.
+instance ToSchema ClassificationSystem where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance (ToSchema a) => ToSchema (SearchResults a) where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivitySummary where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ConsumerResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowSearchResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema InventoryExport where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema InventoryMetadata where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema InventoryFlowDetail where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema InventoryStatistics where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema TreeExport where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema TreeMetadata where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ExportNode where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema NodeType
 instance ToSchema EdgeType
-instance ToSchema TreeEdge
-instance ToSchema FlowInfo
-instance ToSchema FlowSummary
+instance ToSchema TreeEdge where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowInfo where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowSummary where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema FlowRole
-instance ToSchema GraphExport
-instance ToSchema GraphNode
-instance ToSchema GraphEdge
-instance ToSchema LCIARequest
-instance ToSchema LCIAResult
-instance ToSchema LCIABatchResult
-instance ToSchema FlowContributionEntry
-instance ToSchema ContributingFlowsResult
-instance ToSchema ActivityContribution
-instance ToSchema ContributingActivitiesResult
-instance ToSchema MappingStatus
-instance ToSchema UnmappedFlowAPI
-instance ToSchema FlowCFMapping
-instance ToSchema FlowCFEntry
-instance ToSchema CharacterizationResult
-instance ToSchema CharacterizationEntry
-instance ToSchema DatabaseListResponse
-instance ToSchema DatabaseStatusAPI
-instance ToSchema ActivateResponse
-instance ToSchema DepLoadResult
-instance ToSchema LoadDatabaseResponse
-instance ToSchema UploadRequest
-instance ToSchema UploadResponse
-instance ToSchema MethodCollectionListResponse
-instance ToSchema MethodCollectionStatusAPI
-instance ToSchema RefDataListResponse
-instance ToSchema RefDataStatusAPI
-instance ToSchema SynonymGroupsResponse
-instance ToSchema MethodSummary
-instance ToSchema MethodDetail
-instance ToSchema MethodFactorAPI
-instance ToSchema SupplyChainResponse
-instance ToSchema SupplyChainEntry
-instance ToSchema SupplyChainEdge
-instance ToSchema Aggregation
-instance ToSchema AggregationGroup
-instance ToSchema SubstitutionRequest
-instance ToSchema Substitution
-instance ToSchema ExchangeDetail
-instance ToSchema ExchangeWithUnit
-instance ToSchema ActivityForAPI
-instance ToSchema ActivityInfo
-instance ToSchema ActivityMetadata
-instance ToSchema ActivityLinks
-instance ToSchema ActivityStats
-instance ToSchema FlowDetail
-instance ToSchema ClassificationEntryInfo
-instance ToSchema ClassificationPresetInfo
+instance ToSchema GraphExport where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema GraphNode where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema GraphEdge where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema LCIARequest where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema LCIAResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema LCIABatchResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowContributionEntry where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ContributingFlowsResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityContribution where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ContributingActivitiesResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MappingStatus where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema UnmappedFlowAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowCFMapping where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowCFEntry where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema CharacterizationResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema CharacterizationEntry where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema DatabaseListResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema DatabaseStatusAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivateResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema DepLoadResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema LoadDatabaseResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema UploadRequest where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema UploadResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MethodCollectionListResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MethodCollectionStatusAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema RefDataListResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema RefDataStatusAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema SynonymGroupsResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MethodSummary where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MethodDetail where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema MethodFactorAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema SupplyChainResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema SupplyChainEntry where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema SupplyChainEdge where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema Aggregation where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema AggregationGroup where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema SubstitutionRequest where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema Substitution where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ExchangeDetail where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ExchangeWithUnit where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityForAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityInfo where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityMetadata where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityLinks where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ActivityStats where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema FlowDetail where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ClassificationEntryInfo where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema ClassificationPresetInfo where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema BinaryContent where
     declareNamedSchema _ = pure $ NamedSchema (Just "OctetStream") $
         mempty & type_ ?~ OpenApiString & format ?~ "binary"

@@ -659,7 +659,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                             else error $ "Invalid ProcessId in graph: " ++ show pid
                                   processIdText = processIdToText db pid
                               in GraphNode
-                                  { gnId = nodeId
+                                  { gnNodeId = nodeId
                                   , gnLabel = activityName activity
                                   , gnValue = cumulativeVal
                                   , gnUnit = activityUnit activity
@@ -916,7 +916,7 @@ getAllProductsForActivity db activityUUID =
         Just processIds ->
             [ let (prodName, prodAmount, prodUnit) = getProductInfo db pid
               in ActivitySummary
-                { prsId = processIdToText db pid
+                { prsProcessId = processIdToText db pid
                 , prsName = getActivityNameForPid db pid
                 , prsLocation = maybe "" activityLocation (findActivityByProcessId db pid)
                 , prsProduct = prodName
@@ -949,7 +949,7 @@ getTargetActivity db exchange = do
     let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) targetActivity
     return $
         ActivitySummary
-            { prsId = processIdToText db processId
+            { prsProcessId = processIdToText db processId
             , prsName = activityName targetActivity
             , prsLocation = activityLocation targetActivity
             , prsProduct = prodName
@@ -1197,7 +1197,7 @@ buildSupplyChainFromScalingVector db processId supplyVec af includeEdges =
                 }
 
         rootSummary = ActivitySummary
-            { prsId = processIdToText db processId
+            { prsProcessId = processIdToText db processId
             , prsName = activityName rootActivity
             , prsLocation = activityLocation rootActivity
             , prsProduct = fromMaybe (activityName rootActivity)

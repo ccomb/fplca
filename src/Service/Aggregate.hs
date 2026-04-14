@@ -283,15 +283,15 @@ reduce p rowsAll =
         let gqty = sum (map rowQuantity rs)
             gunit = homogeneousUnit rs
         in AggregationGroup
-            { aggGroupKey      = key
-            , aggGroupQuantity = gqty
-            , aggGroupUnit     = gunit
-            , aggGroupShare    = case apAggregate p of
+            { aggKey      = key
+            , aggQuantity = gqty
+            , aggUnit     = gunit
+            , aggShare    = case apAggregate p of
                 AggShare -> if total == 0 then Just 0 else Just (gqty / total)
                 _        -> Nothing
-            , aggGroupCount    = length rs
+            , aggCount    = length rs
             }
-    sortGroups = L.sortBy (\a b -> compare (abs (aggGroupQuantity b)) (abs (aggGroupQuantity a)))
+    sortGroups = L.sortBy (\a b -> compare (abs (aggQuantity b)) (abs (aggQuantity a)))
 
 scopeText :: AggScope -> Text
 scopeText ScopeDirect      = "direct"

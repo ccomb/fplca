@@ -41,7 +41,7 @@ def main():
 
     for i, act in enumerate(all_activities[:sample_size]):
         detail = c.get_activity(act.process_id)
-        classifications = detail.get("piActivity", {}).get("pfaClassifications", {})
+        classifications = detail.get("activity", {}).get("classifications", {})
         name_vs_class.append((act.name, classifications))
 
         for k, v in classifications.items():

@@ -60,7 +60,7 @@ globalOptionsParser = do
                 <$> strOption
                     ( long "jsonpath"
                         <> metavar "PATH"
-                        <> help "JSONPath for CSV extraction (required with --format csv). Examples: 'srResults', 'piActivity.pfaExchanges'"
+                        <> help "JSONPath for CSV extraction (required with --format csv). Examples: 'results', 'activity.exchanges'"
                     )
             )
 
