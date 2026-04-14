@@ -62,7 +62,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "tree" :> Get '[JSON] TreeExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> Get '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "graph" :> QueryParam "cutoff" Double :> Get '[JSON] GraphExport
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] SupplyChainResponse
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "aggregate"
                         :> QueryParam "scope" Text
                         :> QueryParam "is_input" Bool
@@ -70,6 +70,7 @@ type LCAAPI =
                         :> QueryParam "filter_name" Text
                         :> QueryParam "filter_name_not" Text
                         :> QueryParam "filter_unit" Text
+                        :> QueryParam "preset" Text
                         :> QueryParams "filter_classification" Text
                         :> QueryParam "filter_target_name" Text
                         :> QueryParam "filter_is_reference" Bool
@@ -81,7 +82,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "top-flows" Int :> Get '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ConsumerResult)
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
@@ -209,6 +210,17 @@ instance ToSchema LoginRequest
 --      on @operationId@ (e.g. @"get_impacts"@).
 volcaOpenApi :: OpenApi
 volcaOpenApi = API.OpenApi.enrichWithResources (toOpenApi (Proxy :: Proxy LCAAPI))
+
+-- | Expand a named classification preset from config into the
+-- (system, value, exact) triples used by the Service/Aggregate layers.
+-- An unknown preset name yields the empty list (same behavior as the
+-- previous inline implementations in searchActivitiesWithCount and
+-- getActivityConsumers).
+expandPreset :: [Config.ClassificationPreset] -> Maybe Text -> [(Text, Text, Bool)]
+expandPreset _ Nothing = []
+expandPreset presets (Just pn) = case find (\p -> Config.cpName p == pn) presets of
+    Just p  -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
+    Nothing -> []
 
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
@@ -453,12 +465,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Right graphExport -> return graphExport
 
     -- Activity supply chain endpoint (scaling vector based)
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
-    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter classSystems classValues classModes sortParam orderParam includeEdgesParam = do
+    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
+    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         let includeEdges = fromMaybe False includeEdgesParam
-            classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+            presetFilters = expandPreset classificationPresets presetParam
+            explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
+            classFilters = presetFilters ++ explicitFilters
             af = Service.ActivityFilter
                 { Service.afName = nameFilter, Service.afLocation = locationFilter, Service.afProduct = productFilter
                 , Service.afClassifications = classFilters, Service.afLimit = limitParam, Service.afOffset = offsetParam
@@ -481,6 +495,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -> Maybe Text  -- filter_name
         -> Maybe Text  -- filter_name_not
         -> Maybe Text  -- filter_unit
+        -> Maybe Text  -- preset
         -> [Text]      -- filter_classification (repeatable: "System=Value[:exact]")
         -> Maybe Text  -- filter_target_name
         -> Maybe Bool  -- filter_is_reference
@@ -488,7 +503,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -> Maybe Text  -- aggregate fn
         -> Handler Aggregation
     getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam
-                        fnameParam fnameNotParam funitParam fclassParams ftargetParam
+                        fnameParam fnameNotParam funitParam presetParam fclassParams ftargetParam
                         freferenceParam groupByParam aggregateParam = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         scope <- case scopeParam of
@@ -502,14 +517,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Just "count"          -> return Agg.AggCount
             Just "share"          -> return Agg.AggShare
             Just other            -> throwError err400{errBody = "aggregate must be one of: sum_quantity | count | share (got " <> BSL.fromStrict (T.encodeUtf8 other) <> ")"}
-        let params = Agg.AggregateParams
+        let presetFilters = expandPreset classificationPresets presetParam
+            explicitFilters = mapMaybe parseClassFilter fclassParams
+            params = Agg.AggregateParams
                 { Agg.apScope                 = scope
                 , Agg.apIsInput               = isInputParam
                 , Agg.apMaxDepth              = maxDepthParam
                 , Agg.apFilterName            = fnameParam
                 , Agg.apFilterNameNot         = maybe [] (map T.strip . T.splitOn ",") fnameNotParam
                 , Agg.apFilterUnit            = funitParam
-                , Agg.apFilterClassifications = mapMaybe parseClassFilter fclassParams
+                , Agg.apFilterClassifications = presetFilters ++ explicitFilters
                 , Agg.apFilterTargetName      = ftargetParam
                 , Agg.apFilterIsReference     = freferenceParam
                 , Agg.apGroupBy               = groupByParam
@@ -663,12 +680,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 return inventoryExport
 
     -- POST: Supply chain with substitutions
-    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
-    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter classSystems classValues classModes sortParam orderParam includeEdgesParam subReq = do
+    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
+    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         let includeEdges = fromMaybe False includeEdgesParam
-            classFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
+            presetFilters = expandPreset classificationPresets presetParam
+            explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
+            classFilters = presetFilters ++ explicitFilters
             af = Service.ActivityFilter
                 { Service.afName = nameFilter, Service.afLocation = locationFilter, Service.afProduct = productFilter
                 , Service.afClassifications = classFilters, Service.afLimit = limitParam, Service.afOffset = offsetParam
@@ -686,11 +705,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ConsumerResult)
     getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        let presetFilters = case presetParam of
-                Just pn -> case find (\p -> Config.cpName p == pn) classificationPresets of
-                    Just p  -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
-                    Nothing -> []
-                Nothing -> []
+        let presetFilters = expandPreset classificationPresets presetParam
             explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
             classFilters = presetFilters ++ explicitFilters
@@ -1157,11 +1172,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (db, _) <- requireDatabaseByName dbManager dbName
         -- Expand preset filters then merge with explicit classification params
         let exactMatch = fromMaybe False exactParam
-            presetFilters = case presetParam of
-                Just pn -> case find (\p -> Config.cpName p == pn) classificationPresets of
-                    Just p  -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
-                    Nothing -> []
-                Nothing -> []
+            presetFilters = expandPreset classificationPresets presetParam
             explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
             classFilters = presetFilters ++ explicitFilters

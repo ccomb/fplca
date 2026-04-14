@@ -131,6 +131,36 @@ class TestDispatcher:
         assert params.get("min-quantity") == "0.5"
         assert params.get("max-depth") == "3"
 
+    def test_supply_chain_forwards_preset(self, mocked_client, make_response):
+        """preset= must reach the supply-chain endpoint as a query param."""
+        client, session = mocked_client
+        session.get.return_value = make_response({
+            "scrRoot": {"asProcessId": "x", "asName": "y", "asLocation": "FR", "asUnit": "kg", "asClassifications": {}},
+            "scrSupplyChain": [],
+            "scrEdges": [],
+            "scrTotalActivities": 0,
+            "scrFilteredActivities": 0,
+        })
+        try:
+            client.get_supply_chain("abc_def", preset="raw-ingredients")
+        except Exception:
+            pass
+        params = dict(session.get.call_args[1]["params"])
+        assert params.get("preset") == "raw-ingredients"
+
+    def test_aggregate_forwards_preset(self, mocked_client, make_response):
+        """preset= must reach the aggregate endpoint as a query param."""
+        client, session = mocked_client
+        session.get.return_value = make_response({})
+        client.call(
+            "aggregate",
+            process_id="abc",
+            scope="supply_chain",
+            preset="raw-ingredients",
+        )
+        params = dict(session.get.call_args[1]["params"])
+        assert params.get("preset") == "raw-ingredients"
+
     def test_get_impacts_uses_all_four_path_captures(self, mocked_client, make_response):
         client, session = mocked_client
         session.get.return_value = make_response({"score": 1.0})
