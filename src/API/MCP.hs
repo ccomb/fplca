@@ -236,7 +236,9 @@ paramsToSchema ps = object $
     ]
   where
     propEntry p = fromText (paramName p) .= object
-        [ "type" .= paramType p, "description" .= paramDesc p ]
+        ( [ "type" .= paramType p, "description" .= paramDesc p ]
+       ++ [ "items" .= object ["type" .= ("string" :: Text)] | paramType p == "array" ]
+        )
 
 -- ---------------------------------------------------------------------------
 -- tools/call dispatch

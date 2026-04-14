@@ -28,6 +28,7 @@ import qualified MappingSpec
 import qualified UploadedDatabaseSpec
 import qualified ProgressSpec
 import qualified EcoSpold1Spec
+import qualified MCPSchemaSpec
 
 main :: IO ()
 main = hspec $ do
@@ -55,3 +56,4 @@ main = hspec $ do
         describe "Uploaded Database" UploadedDatabaseSpec.spec
         describe "Progress Formatting" ProgressSpec.spec
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec
+        describe "MCP Tool Schemas" MCPSchemaSpec.spec
