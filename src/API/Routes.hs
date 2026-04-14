@@ -20,7 +20,6 @@ import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
 import Data.OpenApi (OpenApi, ToSchema)
-import Data.Proxy (Proxy (..))
 import Servant.OpenApi (toOpenApi)
 import Progress (getLogLines, reportProgress, ProgressLevel(Info))
 import Database
