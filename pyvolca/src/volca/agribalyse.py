@@ -64,6 +64,10 @@ class Decomposition:
     # (Agribalyse placeholder with no exchanges); energies are forced to 0.
     dummy_op: bool = False
     operation_name: str | None = None          # transformation step name, for debug
+    # True for fully-allocated by-product activities (residues, bran, …)
+    # whose upstream inputs are all zero because 100% of the mass/impact is
+    # attributed to a sibling main product elsewhere in Agribalyse.
+    is_byproduct: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +89,15 @@ _FACTOR_RE = re.compile(
     r"([A-Za-z][A-Za-z0-9 _\-]+?)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\s*%"
 )
 
+# Grammatical words that the greedy factor regex would otherwise pick up as
+# co-product names from fragments like "… and 25%", "less than 10%",
+# "allocation is 100%". Kept in lowercase to match the normalised key.
+_FACTOR_STOPWORDS = {
+    "and", "or", "of", "is", "are", "the", "a", "an", "with", "without",
+    "less", "less than", "more", "more than", "allocation", "approximately",
+    "about", "around", "by", "to", "from", "in", "at", "than",
+}
+
 
 def parse_allocation(description: list[str]) -> Allocation | None:
     """Parse allocation factors from a process's pfaDescription paragraphs.
@@ -102,13 +115,15 @@ def parse_allocation(description: list[str]) -> Allocation | None:
     if m:
         method = m.group(1).strip().lower()
 
-    # Extract "name NN%" pairs. Normalise whitespace in names.
+    # Extract "name NN%" pairs. Normalise whitespace in names, and drop the
+    # tail word if it's a stopword ("... solid waste treatment is 50%" →
+    # key "solid waste treatment", not "… is").
     factors: dict[str, float] = {}
     for name, pct in _FACTOR_RE.findall(text):
         clean = " ".join(name.split()).lower()
-        # Skip false positives like "100 %" on its own by requiring a name
-        # at least 3 chars.
-        if len(clean) < 3:
+        while clean and clean.rsplit(" ", 1)[-1] in _FACTOR_STOPWORDS:
+            clean = clean.rsplit(" ", 1)[0] if " " in clean else ""
+        if len(clean) < 3 or clean in _FACTOR_STOPWORDS:
             continue
         factors[clean] = round(float(pct) / 100.0, 4)
 
@@ -309,9 +324,31 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
     raw_name: str | None = None
     raw_kg: float = 0.0
     operations: list[SupplyChainEntry] = []
+    is_byproduct = False
     if pattern == "layered":
         operations, dummy_op = _find_layered_operations(client, process_id)
         raw_entry = _find_layered_raw(client, process_id)
+
+        # Fully-allocated by-products (e.g. "Alaska pollock, residues") have
+        # every technosphere input at amount=0 because 100% of the upstream
+        # mass/impact is attributed to the sibling main product. The preset
+        # walk stops on zero-amount edges, so raw_entry is None. Recover the
+        # raw from a non-[Dummy] parent via one extra preset walk.
+        if raw_entry is None and all(
+            e.amount == 0.0 for e in act.technosphere_inputs
+        ) and act.technosphere_inputs:
+            is_byproduct = True
+            parent = next(
+                (
+                    e for e in act.technosphere_inputs
+                    if e.target_process_id
+                    and not (e.target_activity or "").startswith("[Dummy]")
+                ),
+                None,
+            )
+            if parent and parent.target_process_id:
+                raw_entry = _find_layered_raw(client, parent.target_process_id)
+
         if raw_entry is not None:
             raw_name = raw_entry.name
             raw_kg = _kg_equiv(raw_entry)
@@ -376,6 +413,25 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
             grouped[key] = grouped.get(key, 0.0) + e.amount
     co_products = [(name, qty, unit) for (name, unit), qty in grouped.items()]
 
+    # Agribalyse uses allocation-based modelling, so co-products rarely
+    # appear as technosphere outputs — they're recorded in the allocation
+    # block of the description instead. Fall back to the parsed allocation:
+    # siblings of the main product (whose name is the closest match to the
+    # wrapping activity name) become the co-product list.
+    allocation = parse_allocation(target_description)
+    if not co_products and allocation is not None and allocation.factors:
+        act_name_l = act.name.lower()
+        main_key = max(
+            allocation.factors,
+            key=lambda k: sum(1 for w in k.split() if w in act_name_l),
+            default=None,
+        )
+        co_products = [
+            (name, fraction, "kg/kg")
+            for name, fraction in allocation.factors.items()
+            if name != main_key
+        ]
+
     if dummy_op:
         elec_kwh = heat_mj = tap_water_kg = wastewater_m3 = biowaste_kg = 0.0
     else:
@@ -395,9 +451,10 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
         wastewater_m3=wastewater_m3,
         biowaste_kg=biowaste_kg,
         co_products=co_products,
-        allocation=parse_allocation(target_description),
+        allocation=allocation,
         dummy_op=dummy_op,
         operation_name=operation_name,
+        is_byproduct=is_byproduct,
     )
 
 
