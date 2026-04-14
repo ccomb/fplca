@@ -20,7 +20,6 @@ data GlobalOptions = GlobalOptions
   , methodsDir :: Maybe FilePath  -- Methods directory (--methods) for LCIA methods
   , format :: Maybe OutputFormat  -- Output format (--format)
   , jsonPath :: Maybe Text        -- JSONPath for CSV extraction (--jsonpath)
-  , treeDepth :: Int             -- Maximum tree depth (--tree-depth)
   , noCache :: Bool              -- Disable caching (--no-cache)
   , serverUrl :: Maybe String    -- Server URL (--url) for HTTP client mode
   , serverPassword :: Maybe String -- Auth password (--password, VOLCA_PASSWORD, or config)
@@ -33,14 +32,12 @@ data Command =
     -- Core resource queries
   | Activity Text                           -- Basic activity info
   | Flow Text (Maybe FlowSubCommand)       -- Flow info (keep subcommands for now)
-    -- Tree and inventory promoted to top-level
-  | Tree Text TreeOptions                  -- Supply chain tree
   | Inventory Text                         -- Life cycle inventory
     -- Search commands promoted to top-level
   | SearchActivities SearchActivitiesOptions   -- Search activities
   | SearchFlows SearchFlowsOptions             -- Search flows
     -- No separate synonyms command - synonyms are included in flow responses
-  | LCIA Text LCIAOptions                 -- LCIA computation
+  | Impacts Text LCIAOptions              -- LCIA (impact assessment) computation
   | DebugMatrices Text DebugMatricesOptions -- Matrix debugging for activity
   | ExportMatrices FilePath               -- Export matrices in universal format
     -- Resource management (symmetric subcommands)
@@ -52,7 +49,7 @@ data Command =
   | Synonyms                               -- List synonym sources
   | CompartmentMappings                    -- List compartment mappings
   | Units                                  -- List unit definitions
-  | Mapping MappingOptions                 -- Flow mapping coverage analysis
+  | FlowMapping MappingOptions             -- Flow mapping coverage analysis
   | Stop                                   -- Stop running server
   | Repl                                   -- Interactive REPL over HTTP
     -- Hidden tooling commands (not shown in --help)
@@ -93,6 +90,7 @@ data ServerOptions = ServerOptions
   , serverDesktopMode :: Bool       -- Desktop mode (--desktop): print port and minimize logging
   , serverStaticDir :: Maybe FilePath -- Static directory (--static-dir): override default web/dist
   , serverIdleTimeout :: Int        -- Idle timeout in minutes (--idle-timeout, 0=disabled). Server exits after being idle.
+  , serverTreeDepth :: Int          -- Default max depth for /tree endpoint (--tree-depth, default 2)
   } deriving (Eq, Show, Generic)
 
 -- | Activity sub-commands (kept for flow activities only now)
@@ -102,11 +100,6 @@ data ActivitySubCommand =
   | ActivityOutputs              -- /activity/{uuid}/outputs
   | ActivityReferenceProduct     -- /activity/{uuid}/reference-product
   deriving (Eq, Show, Generic)
-
--- | Tree-specific options (can override global tree depth)
-data TreeOptions = TreeOptions
-  { treeDepthOverride :: Maybe Int  -- Override global --tree-depth for this tree
-  } deriving (Eq, Show, Generic)
 
 -- | Flow sub-commands
 data FlowSubCommand =

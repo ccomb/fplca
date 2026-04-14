@@ -33,7 +33,7 @@ import Control.Concurrent.STM (readTVarIO)
 
 -- For server mode
 import API.MCP (mcpApp, toolDefinitions)
-import API.OpenApi (volcaOpenApi)
+import API.Routes (volcaOpenApi)
 import API.Routes (lcaAPI, lcaServer)
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
@@ -157,7 +157,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
       hFlush stdout
     else do
       reportProgress Info $ "Starting API server on port " ++ show port
-      reportProgress Info $ "Tree depth: " ++ show (treeDepth (globalOptions cliConfig))
+      reportProgress Info $ "Tree depth: " ++ show (serverTreeDepth serverOpts)
       case password of
         Just _ -> reportProgress Info "Authentication: ENABLED"
         Nothing -> reportProgress Info "Authentication: DISABLED (use --password or VOLCA_PASSWORD to enable)"
@@ -177,7 +177,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
       pure ()
 
   -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-  baseApp <- Main.createServerApp dbManager (treeDepth (globalOptions cliConfig)) staticDir desktopMode password (cfgHosting effectiveConfig) (cfgClassificationPresets effectiveConfig)
+  baseApp <- Main.createServerApp dbManager (serverTreeDepth serverOpts) staticDir desktopMode password (cfgHosting effectiveConfig) (cfgClassificationPresets effectiveConfig)
   let appWithIdleAndShutdown = idleTrackingMiddleware lastRequestRef
           $ shutdownEndpoint mainTid lastRequestRef idleActiveRef baseApp
       finalApp = case password of

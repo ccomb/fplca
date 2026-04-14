@@ -220,9 +220,9 @@ allCompletions :: [String]
 allCompletions = commands ++ flags
   where
     commands =
-        [ "activity", "tree", "inventory", "flow", "activities", "flows"
-        , "lcia", "database", "method", "methods", "synonyms"
-        , "compartment-mappings", "units", "mapping"
+        [ "activity", "inventory", "flow", "activities", "flows"
+        , "impacts", "database", "method", "methods", "synonyms"
+        , "compartment-mappings", "units", "flow-mapping"
         , "use", ":format", ":help", ":quit"
         , ":server", "stop", "start", "status"
         ]
@@ -237,14 +237,13 @@ allCompletions = commands ++ flags
 printHelp :: IO ()
 printHelp = do
     putStrLn "Commands:"
-    putStrLn "  activity UUID              Activity info"
-    putStrLn "  tree UUID [--depth N]      Supply chain tree"
-    putStrLn "  inventory UUID             Life cycle inventory"
-    putStrLn "  flow FLOW_ID [activities]  Flow info"
-    putStrLn "  activities [--name X]      Search activities"
-    putStrLn "  flows [--query X]          Search flows"
-    putStrLn "  lcia UUID --method M_UUID  LCIA computation"
-    putStrLn "  mapping METHOD_UUID        Flow mapping coverage"
+    putStrLn "  activity UUID               Activity info"
+    putStrLn "  inventory UUID              Life cycle inventory"
+    putStrLn "  flow FLOW_ID [activities]   Flow info"
+    putStrLn "  activities [--name X]       Search activities"
+    putStrLn "  flows [--query X]           Search flows"
+    putStrLn "  impacts UUID --method M     Impact assessment (LCIA)"
+    putStrLn "  flow-mapping METHOD_UUID    Flow mapping coverage"
     putStrLn "  database [list|upload|delete]"
     putStrLn "  method [list|upload|delete]"
     putStrLn "  methods                    List loaded methods"

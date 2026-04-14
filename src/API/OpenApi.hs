@@ -2,20 +2,35 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
--- | OpenAPI 3.0 specification for the volca REST API.
--- ToSchema instances are orphans collected here to avoid scattering them
--- across all domain modules.
-module API.OpenApi (volcaOpenApi) where
+-- | OpenAPI 3.0 schema instances and enrichment for the volca REST API.
+--
+-- This module collects the orphan 'ToSchema' instances for domain types
+-- (avoids scattering them across all domain modules) and defines the
+-- 'enrichWithResources' post-processor that stamps @operationId@,
+-- @summary@, and long @description@ onto each operation with a matching
+-- entry in 'API.Resources'. The actual spec derivation from 'LCAAPI'
+-- lives in 'API.Routes' to break an otherwise-circular dependency
+-- (API.Routes -> API.OpenApi -> API.Routes).
+module API.OpenApi (enrichWithResources) where
 
-import API.Routes (LCAAPI, LoginRequest)
+import qualified API.Resources as R
+import API.Resources (Resource)
 import API.Types
-import Control.Lens ((&), (?~))
+import Control.Lens ((&), (?~), (%~), (^.))
 import Data.Aeson (Value)
+import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
-import Data.Proxy (Proxy (..))
+import qualified Data.OpenApi.Lens as OA
+import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, MissingSupplier, DependencySuggestion)
-import Servant.OpenApi (toOpenApi)
+import Network.HTTP.Types.Method (StdMethod (..))
 import Types (Exchange, Flow, FlowType, Unit)
+
+-- | Orphan schema instance forward declaration for the login request body.
+-- The real type lives in "API.Routes"; this is defined there and re-imported
+-- here would create a cycle. Instead, the instance is declared adjacent to
+-- the type in "API.Routes" — see 'instance ToSchema LoginRequest' there.
 
 -- Aeson Value: used for untyped JSON endpoints (logs, version, stats, hosting)
 instance ToSchema Value where
@@ -31,9 +46,6 @@ instance ToSchema Exchange
 instance ToSchema MissingSupplier
 instance ToSchema DependencySuggestion
 instance ToSchema DatabaseSetupInfo
-
--- API.Routes types
-instance ToSchema LoginRequest
 
 -- API.Types
 instance ToSchema ClassificationSystem
@@ -106,6 +118,56 @@ instance ToSchema BinaryContent where
     declareNamedSchema _ = pure $ NamedSchema (Just "OctetStream") $
         mempty & type_ ?~ OpenApiString & format ?~ "binary"
 
--- | The complete OpenAPI 3.0 specification, derived from the Servant API type.
-volcaOpenApi :: OpenApi
-volcaOpenApi = toOpenApi (Proxy :: Proxy LCAAPI)
+-- | Walk the spec and stamp metadata from 'API.Resources' onto each
+-- resource-backed operation. Operations without a matching 'Resource'
+-- (e.g. infrastructure endpoints like @/auth@, @/logs@, @/version@) are
+-- left unchanged.
+--
+-- Operations with parameters also get their parameter @description@ fields
+-- populated from 'Resources.params'.
+enrichWithResources :: OpenApi -> OpenApi
+enrichWithResources spec0 = foldr stampResource spec0 R.allResources
+  where
+    stampResource :: Resource -> OpenApi -> OpenApi
+    stampResource r spec = case R.apiPathText r of
+        Nothing             -> spec  -- MCP-only resource, no HTTP route to stamp
+        Just (method, path) -> spec & OA.paths %~ InsOrdHashMap.adjust (stampPathItem r method) (T.unpack path)
+
+    stampPathItem :: Resource -> StdMethod -> PathItem -> PathItem
+    stampPathItem r method = case method of
+        GET    -> OA.get    %~ fmap (stampOperation r)
+        POST   -> OA.post   %~ fmap (stampOperation r)
+        PUT    -> OA.put    %~ fmap (stampOperation r)
+        DELETE -> OA.delete %~ fmap (stampOperation r)
+        _      -> id  -- HEAD/OPTIONS/TRACE/PATCH/CONNECT: not used by VoLCA today
+
+    stampOperation :: Resource -> Operation -> Operation
+    stampOperation r op = op
+        & OA.operationId ?~ R.mcpName r
+        & OA.summary     ?~ firstSentence (R.description r)
+        & OA.description ?~ R.description r
+        & OA.parameters  %~ enrichParameters (R.params r)
+
+-- | Update parameter descriptions in-place, keyed on name. Any parameter
+-- whose name doesn't appear in the resource's param list is left as-is
+-- (this covers implicit Servant-generated query params like @sort@/@order@
+-- that we don't describe in 'API.Resources').
+enrichParameters :: [R.Param] -> [Referenced Param] -> [Referenced Param]
+enrichParameters resParams = map enrich
+  where
+    paramMap :: [(Text, Text)]
+    paramMap = [(R.paramName p, R.paramDesc p) | p <- resParams]
+
+    enrich :: Referenced Param -> Referenced Param
+    enrich (Inline p) =
+        case lookup (p ^. OA.name) paramMap of
+            Just desc -> Inline (p & OA.description ?~ desc)
+            Nothing   -> Inline p
+    enrich ref = ref  -- $ref-style parameters (rare in servant-openapi3 output) left alone
+
+-- | First sentence of a description, for the OpenAPI 'summary' field
+-- (which should fit on one line in Swagger UI).
+firstSentence :: Text -> Text
+firstSentence t =
+    let (before, _) = T.breakOn ". " t
+    in if T.null before then t else before <> "."

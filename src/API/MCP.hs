@@ -28,6 +28,8 @@ import qualified Data.ByteString as BS
 import Config (DatabaseConfig(..), ClassificationPreset(..), ClassificationEntry(..))
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), getDatabase)
 import qualified Database.Manager as DM
+import qualified API.Resources as R
+import API.Resources (Resource, Param(..), ParamKind(..))
 
 import Matrix (computeInventoryMatrix, computeScalingVector, applyBiosphereMatrix, computeProcessLCIAContributions)
 import Method.Mapping (computeLCIAScore, mapMethodToFlows, computeMappingStats, MappingStats(..))
@@ -201,178 +203,38 @@ handleToolsList :: RpcRequest -> Value
 handleToolsList req = rpcResult (fromMaybe Null $ rpcId req) $ object
     [ "tools" .= toolDefinitions ]
 
+-- | MCP tool list, derived from 'API.Resources'.
+--
+-- See note [Tool definitions come from Resources.hs].
 toolDefinitions :: [Value]
-toolDefinitions =
-    [ mkTool "list_databases" "List all loaded LCA databases"
-        (props [] [])
-    , mkTool "list_presets" "List named classification filter presets configured in this instance. Each preset bundles multiple (system, value, mode) classification filters under a human-readable label. Use the filter values from a preset as inputs to search_activities classification parameters."
-        (props [] [])
-    , mkTool "search_activities" "Search for activities (processes) by name, geography, product, classification, or preset. Returns a paginated list of matching activities with their process IDs."
-        (props
-            [ ("database", "string", "Database name")
-            , ("name", "string", "Name substring to search for (or exact name if exact=true)")
-            ]
-            [ ("geo", "string", "Geography/location filter (e.g. 'FR', 'DE', 'GLO')")
-            , ("product", "string", "Product name filter")
-            , ("exact", "boolean", "If true, name and geo must match exactly (case-insensitive equality) instead of substring search")
-            , ("preset", "string", "Name of a classification preset (from list_presets) — expands to its bundled filters. Can be combined with explicit classification filters.")
-            , ("classification", "string", "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems.")
-            , ("classification_value", "string", "Value within the classification system to match")
-            , ("classification_match", "string", "Match mode: \"equals\" (case-insensitive equality) or \"contains\" (substring, default)")
-            , ("limit", "integer", "Max results (default 20)")
-            ])
-    , mkTool "search_flows" "Search for biosphere flows (emissions, resources) by name"
-        (props
-            [ ("database", "string", "Database name")
-            , ("query", "string", "Flow name to search for")
-            ]
-            [ ("limit", "integer", "Max results (default 20)")
-            ])
-    , mkTool "get_activity" "Get detailed information about an activity: name, location, exchanges, reference product, metadata. Use exchange_type / is_input / flow to filter exchanges and reduce response size."
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            ]
-            [ ("exchange_type", "string", "Filter exchanges: \"biosphere\" (emissions/resources only), \"technosphere\" (inputs/outputs only), or \"all\" (default)")
-            , ("is_input", "boolean", "If true, return only inputs; if false, only outputs; omit for both. Combines with exchange_type.")
-            , ("flow", "string", "Filter exchanges by flow name (case-insensitive substring)")
-            ])
-    , mkTool "get_tree" "Get the supply chain tree of an activity, showing recursive inputs with loop detection"
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            ]
-            [ ("depth", "integer", "Max tree depth (default 2)")
-            , ("name", "string", "Filter nodes by activity name; keeps matching nodes plus all their ancestors up to the root (case-insensitive substring)")
-            ])
-    , mkTool "aggregate" "Aggregate exchanges, supply chain entries, or biosphere flows with SQL group-by-style filters. One primitive replaces ad-hoc decomposition tools — express any 'how much X is in Y' question as one call. Examples:\n  - Total electricity in direct inputs: scope=direct, is_input=true, filter_name=Electricity, filter_unit=kWh\n  - Mass breakdown of direct inputs: scope=direct, is_input=true, filter_unit=kg, group_by=name\n  - Total energy across the supply chain: scope=supply_chain, max_depth=2, filter_classification=[\"Category type=energy:exact\"]\n  - Largest pasture occupation flow: scope=biosphere, filter_name=Occupation, pasture, group_by=name\n\nThe filter_classification parameter accepts a list of strings in \"System=Value[:exact]\" form (default mode is 'contains')."
-        (props
-            [ ("database",   "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            , ("scope",      "string", "direct | supply_chain | biosphere")
-            ]
-            [ ("is_input",              "boolean", "Only for scope=direct — true=inputs only, false=outputs only")
-            , ("max_depth",             "integer", "Only for scope=supply_chain — max hops from the root activity")
-            , ("filter_name",           "string",  "Case-insensitive substring on flow/activity name")
-            , ("filter_name_not",       "string",  "Comma-separated substring exclude list")
-            , ("filter_unit",           "string",  "Exact unit name")
-            , ("filter_classification", "array",   "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode")
-            , ("filter_target_name",    "string",  "Only for scope=direct technosphere — filter by upstream activity name")
-            , ("filter_is_reference",   "boolean", "Filter by reference-product flag (typically for outputs)")
-            , ("group_by",              "string",  "name | flow_id | name_prefix | unit | classification.<system> | location | target_name")
-            , ("aggregate",             "string",  "sum_quantity | count | share (default: sum_quantity)")
-            ])
-    , mkTool "get_supply_chain" "Get a flat list of all upstream activities in the supply chain. The 'quantity' field is the cumulative scaled amount relative to the functional unit (scaling_factor × root reference product amount). To get the per-step yield ratio between two connected entries, divide the supplier's scaling_factor by the consumer's scaling_factor."
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            ]
-            [ ("name", "string", "Filter by activity name")
-            , ("location", "string", "Filter by location")
-            , ("limit", "integer", "Max results (default 100)")
-            , ("min_quantity", "number", "Min scaled quantity threshold")
-            , ("max_depth", "integer", "Max depth from root (1 = direct inputs only)")
-            , ("classification", "string", "Classification system name (e.g. 'Category', 'Category type')")
-            , ("classification_value", "string", "Value within the classification system")
-            , ("classification_match", "string", "Match mode: \"exact\" (case-insensitive equality) or \"contains\" (substring, default)")
-            ])
-    , mkTool "get_inventory" "Compute the Life Cycle Inventory (LCI) — biosphere flows (emissions and resource extractions) for an activity's full supply chain. Returns statistics and top flows by quantity."
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            ]
-            [ ("flow", "string", "Filter flows by name (case-insensitive substring)")
-            , ("limit", "integer", "Max flows to return, sorted by absolute quantity (default 50)")
-            ])
-    , mkTool "get_lcia" "Compute Life Cycle Impact Assessment (LCIA) score for an activity. Returns the score, functional unit, and top contributing elementary flows."
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            , ("method_id", "string", "Method UUID")
-            ]
-            [ ("top_flows", "integer", "Number of top contributing flows to return (default 5)")
-            ])
-    , mkTool "list_methods" "List all loaded LCIA methods (impact assessment methods like climate change, acidification, etc.)"
-        (props [] [])
-    , mkTool "get_flow_mapping" "Get the mapping between a method's characterization factors and database flows, showing match coverage"
-        (props
-            [ ("database", "string", "Database name")
-            , ("method_id", "string", "Method UUID")
-            ] [])
-    , mkTool "get_characterization" "Look up characterization factors for a method matched against database flows. Without 'flow' filter, returns top factors by absolute value. With 'flow', searches by name. Shows CF value, direction, matched database flow, and match strategy."
-        (props
-            [ ("database", "string", "Database name")
-            , ("method_id", "string", "Method UUID")
-            ]
-            [ ("flow", "string", "Filter by flow name (case-insensitive substring, matches both method CF name and database flow name)")
-            , ("limit", "integer", "Max results (default 20)")
-            ])
-    , mkTool "get_contributing_flows" "Identify which elementary flows (emissions/resources) contribute most to a specific impact category. Answers 'which emissions drive my climate change score?'"
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            , ("method_id", "string", "Method UUID for the impact category")
-            ]
-            [ ("limit", "integer", "Max flows to return, sorted by contribution (default 20)")
-            ])
-    , mkTool "get_contributing_activities" "Identify which upstream activities contribute most to a specific impact category. Answers 'which suppliers drive my climate change score?' Uses exact matrix-based computation, valid even for cyclic supply chains."
-        (props
-            [ ("database", "string", "Database name")
-            , ("process_id", "string", "Process ID (activityUUID_productUUID format)")
-            , ("method_id", "string", "Method UUID for the impact category")
-            ]
-            [ ("limit", "integer", "Max processes to return, sorted by contribution (default 10)")
-            ])
-    , mkTool "list_geographies" "List all geography codes present in a database, with display names and parent regions. Use the 'geo' value as the geography filter in search_activities."
-        (props
-            [ ("database", "string", "Database name")
-            ] [])
-    , mkTool "list_classifications" "List classification systems in a database. Without 'system': returns system names and activity counts only (lightweight). With 'system': returns all values for that system. Add 'filter' to narrow values by substring."
-        (props
-            [ ("database", "string", "Database name") ]
-            [ ("system", "string", "Classification system name to inspect (e.g. 'ISIC rev.4 ecoinvent'). If omitted, returns only system names and counts.")
-            , ("filter", "string", "Substring filter applied to values when a system is specified (case-insensitive).")
-            ])
-    , mkTool "get_path_to" "Find the shortest supply chain path from a process to the first upstream activity whose name matches a pattern. Each step includes cumulative_quantity, scaling_factor, and local_step_ratio (upstream ÷ downstream scaling factors). total_ratio is the product of all local_step_ratio values — the end-to-end conversion factor."
-        (props
-            [ ("database",   "string", "Database name")
-            , ("process_id", "string", "Root process ID (activityUUID_productUUID format)")
-            , ("target",     "string", "Case-insensitive name substring to stop at")
-            ] [])
-    , mkTool "get_consumers" "Find all activities that transitively consume (depend on) a given supplier. Returns a flat list, each with a crDepth field: 1 = direct consumer, 2 = consumer of consumer, etc. Useful for tracing downstream use of a raw material — e.g. finding transformed food products in Agribalyse that use a raw ingredient."
-        (props
-            [ ("database",   "string", "Database name")
-            , ("process_id", "string", "Process ID of the supplier (activityUUID_productUUID format)")
-            ]
-            [ ("name",                 "string",  "Filter by name (case-insensitive substring)")
-            , ("location",             "string",  "Filter by geography/location (case-insensitive substring, e.g. 'FR', 'DE')")
-            , ("product",              "string",  "Filter by product name (case-insensitive substring)")
-            , ("preset",               "string",  "Name of a classification preset (from list_presets) — expands to its bundled filters")
-            , ("classification",       "string",  "Classification system name (e.g. 'ISIC rev.4 ecoinvent')")
-            , ("classification_value", "string",  "Classification value substring to match")
-            , ("limit",                "integer", "Max results (default 1000)")
-            , ("max_depth",            "integer", "Max hops from supplier (1 = direct consumers only)")
-            ])
+toolDefinitions = map toolFromResource R.allResources
+
+-- Note [Tool definitions come from Resources.hs]
+--
+-- The tool name, description, and parameter schema all live in 'API.Resources'
+-- so they can be shared between the MCP surface, CLI --help, pyvolca stub
+-- generation, and OpenAPI enrichment. This module is responsible for
+-- projecting the data into the MCP JSON-RPC tool schema shape.
+
+toolFromResource :: Resource -> Value
+toolFromResource r = object
+    [ "name"        .= R.mcpName r
+    , "description" .= R.description r
+    , "inputSchema" .= paramsToSchema (R.params r)
     ]
 
-mkTool :: Text -> Text -> Value -> Value
-mkTool name desc schema = object
-    [ "name"        .= name
-    , "description" .= desc
-    , "inputSchema" .= schema
-    ]
-
--- Build a JSON Schema object with required + optional properties
-props :: [(Text, Text, Text)] -> [(Text, Text, Text)] -> Value
-props required optional = object $
+-- | Build a JSON Schema object from a resource's parameter list.
+paramsToSchema :: [Param] -> Value
+paramsToSchema ps = object $
     [ "type"       .= ("object" :: Text)
-    , "properties" .= object
-        (map propEntry (required ++ optional))
+    , "properties" .= object (map propEntry ps)
     ] ++
-    [ "required" .= map (\(n,_,_) -> n) required | not (null required) ]
+    [ "required" .= [paramName p | p <- ps, paramKind p == Required]
+    | any ((== Required) . paramKind) ps
+    ]
   where
-    propEntry (n, ty, desc) = fromText n .= object
-        [ "type" .= ty, "description" .= desc ]
+    propEntry p = fromText (paramName p) .= object
+        [ "type" .= paramType p, "description" .= paramDesc p ]
 
 -- ---------------------------------------------------------------------------
 -- tools/call dispatch
@@ -396,26 +258,25 @@ parseCallParams _ = Nothing
 
 callTool :: DatabaseManager -> [ClassificationPreset] -> Text -> Value -> Text -> KeyMap Value -> IO Value
 callTool dbManager presets baseUrl rid name args = case name of
-    "list_databases"          -> callListDatabases dbManager rid
-    "list_presets"            -> callListPresets presets rid
-    "search_activities"       -> withDb dbManager rid args $ callSearchActivities presets rid args
-    "search_flows"            -> withDb dbManager rid args $ callSearchFlows rid args
-    "get_activity"            -> withDb dbManager rid args $ callGetActivity rid args
-    "get_tree"                -> withDb dbManager rid args $ callGetTree rid args
-    "get_supply_chain"        -> withDb dbManager rid args $ callGetSupplyChain rid args
-    "aggregate"               -> withDb dbManager rid args $ callAggregate rid args
-    "get_inventory"           -> withDb dbManager rid args $ callGetInventory rid args
-    "get_lcia"                -> callGetLCIA dbManager baseUrl rid args
-    "list_methods"            -> callListMethods dbManager rid
-    "get_flow_mapping"        -> callGetFlowMapping dbManager rid args
-    "get_characterization"    -> callGetCharacterization dbManager rid args
-    "get_contributing_flows"   -> callGetContributingFlows dbManager baseUrl rid args
+    "list_databases"              -> callListDatabases dbManager rid
+    "list_presets"                -> callListPresets presets rid
+    "search_activities"           -> withDb dbManager rid args $ callSearchActivities presets rid args
+    "search_flows"                -> withDb dbManager rid args $ callSearchFlows rid args
+    "get_activity"                -> withDb dbManager rid args $ callGetActivity rid args
+    "get_supply_chain"            -> withDb dbManager rid args $ callGetSupplyChain rid args
+    "aggregate"                   -> withDb dbManager rid args $ callAggregate rid args
+    "get_inventory"               -> withDb dbManager rid args $ callGetInventory rid args
+    "get_impacts"                 -> callGetImpacts dbManager baseUrl rid args
+    "list_methods"                -> callListMethods dbManager rid
+    "get_flow_mapping"            -> callGetFlowMapping dbManager rid args
+    "get_characterization"        -> callGetCharacterization dbManager rid args
+    "get_contributing_flows"      -> callGetContributingFlows dbManager baseUrl rid args
     "get_contributing_activities" -> callGetContributingActivities dbManager baseUrl rid args
-    "list_geographies"         -> callListGeographies dbManager rid args
-    "list_classifications"     -> withDb dbManager rid args $ callListClassifications rid args
-    "get_path_to"              -> withDb dbManager rid args $ callGetPathTo rid args
-    "get_consumers"            -> withDb dbManager rid args $ callGetConsumers presets rid args
-    _                          -> return $ toolError rid ("Unknown tool: " <> name)
+    "list_geographies"            -> callListGeographies dbManager rid args
+    "list_classifications"        -> withDb dbManager rid args $ callListClassifications rid args
+    "get_path_to"                 -> withDb dbManager rid args $ callGetPathTo rid args
+    "get_consumers"               -> withDb dbManager rid args $ callGetConsumers presets rid args
+    _                             -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
 withDb :: DatabaseManager -> Value -> KeyMap Value
@@ -579,17 +440,6 @@ callGetActivity rid args (db, _) =
         Nothing -> True
         Just want -> exchangeIsInput (ewuExchange ewu) == want
 
-callGetTree :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callGetTree rid args (db, _) =
-    case textArg "process_id" args of
-        Nothing -> return $ toolError rid "Missing required parameter: process_id"
-        Just pid ->
-            let depth  = fromMaybe 2 (intArg "depth" args)
-                nameF  = textArg "name" args
-            in case Service.getActivityTree db pid depth nameF of
-                Left err  -> return $ toolError rid (T.pack $ show err)
-                Right val -> return $ toolSuccessJson rid val
-
 callGetSupplyChain :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetSupplyChain rid args (db, solver) =
     case textArg "process_id" args of
@@ -740,8 +590,12 @@ callGetInventory rid args (db, solver) =
                             , "flows"       .= map slim topN
                             ]
 
-callGetLCIA :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callGetLCIA dbManager baseUrl rid args = do
+-- | Handler for the 'get_impacts' MCP tool (computes LCIA score).
+-- Historically named 'get_lcia' — the MCP surface now uses 'impacts'
+-- per the naming audit; internal Haskell types keep the 'LCIA' acronym
+-- (LCIAResult, computeLCIAScore) since they're the domain term of art.
+callGetImpacts :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callGetImpacts dbManager baseUrl rid args = do
     case (textArg "database" args, textArg "process_id" args, textArg "method_id" args) of
         (Nothing, _, _) -> return $ toolError rid "Missing required parameter: database"
         (_, Nothing, _) -> return $ toolError rid "Missing required parameter: process_id"
@@ -773,7 +627,7 @@ callGetLCIA dbManager baseUrl rid args = do
                                                 functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
                                                 contribs = L.sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
                                                 topFlows = take topN contribs
-                                                webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/lcia/" <> encodeSegment colName <> "/" <> UUID.toText uuid
+                                                webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/impacts/" <> encodeSegment colName <> "/" <> UUID.toText uuid
                                             let hasNeg = any (\(_, _, c) -> c < 0) contribs
                                             return $ toolSuccessJson rid $ object
                                                 [ "method"                     .= methodName method

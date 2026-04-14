@@ -64,15 +64,6 @@ globalOptionsParser = do
                     )
             )
 
-    treeDepth <-
-        option
-            auto
-            ( long "tree-depth"
-                <> value 2
-                <> metavar "DEPTH"
-                <> help "Maximum tree depth for tree operations (default: 2)"
-            )
-
     noCache <-
         switch
             ( long "no-cache"
@@ -110,12 +101,11 @@ commandParser =
     subparser
         ( OA.command "server" (info (serverParser <**> helper) (progDesc "Start API server"))
             <> OA.command "activity" (info (activityParser <**> helper) (progDesc "Get basic activity information"))
-            <> OA.command "tree" (info (treeParser <**> helper) (progDesc "Get supply chain tree for activity"))
             <> OA.command "inventory" (info (inventoryParser <**> helper) (progDesc "Get life cycle inventory for activity"))
             <> OA.command "flow" (info (flowParser <**> helper) (progDesc "Query flow information"))
             <> OA.command "activities" (info (searchActivitiesParser <**> helper) (progDesc "Search activities"))
             <> OA.command "flows" (info (searchFlowsParser <**> helper) (progDesc "Search flows"))
-            <> OA.command "lcia" (info (lciaParser <**> helper) (progDesc "Compute LCIA scores with characterization method"))
+            <> OA.command "impacts" (info (impactsParser <**> helper) (progDesc "Compute impact assessment (LCIA) scores with a characterization method"))
             <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
             <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
             <> OA.command "database" (info (databaseParser <**> helper) (progDesc "Manage databases (list, upload, delete)"))
@@ -125,7 +115,7 @@ commandParser =
             <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
             <> OA.command "units" (info (pure Units <**> helper) (progDesc "List unit definitions"))
-            <> OA.command "mapping" (info (mappingParser <**> helper) (progDesc "Analyze flow mapping coverage between a method and database"))
+            <> OA.command "flow-mapping" (info (flowMappingParser <**> helper) (progDesc "Analyze flow mapping coverage between a method and database"))
             <> OA.command "stop" (info (pure Stop <**> helper) (progDesc "Stop running server (uses --config or --url to find it)"))
             <> OA.command "repl" (info (pure Repl <**> helper) (progDesc "Interactive REPL over HTTP (connects to running server)"))
         )
@@ -225,6 +215,14 @@ serverOptionsParser = do
                 <> metavar "SECONDS"
                 <> help "Shutdown after N seconds of inactivity (0=disabled, default: 0)"
             )
+    serverTreeDepth <-
+        option
+            auto
+            ( long "tree-depth"
+                <> value 2
+                <> metavar "DEPTH"
+                <> help "Default max depth for the /tree endpoint (default: 2)"
+            )
     pure ServerOptions{..}
 
 -- | Reader for comma-separated list of database names
@@ -236,20 +234,6 @@ activityParser :: Parser Command
 activityParser = do
     uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format)")
     pure $ Activity uuid
-
--- | Tree command parser (now top-level)
-treeParser :: Parser Command
-treeParser = do
-    uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for tree generation")
-    depthOverride <-
-        optional $
-            option
-                auto
-                ( long "depth"
-                    <> metavar "DEPTH"
-                    <> help "Override global tree depth for this operation"
-                )
-    pure $ Tree uuid TreeOptions{treeDepthOverride = depthOverride}
 
 -- | Inventory command parser (now top-level)
 inventoryParser :: Parser Command
@@ -358,12 +342,12 @@ searchFlowsParser = do
 
     pure $ SearchFlows SearchFlowsOptions{..}
 
--- | LCIA command parser
-lciaParser :: Parser Command
-lciaParser = do
-    uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for LCIA computation")
+-- | Impacts (LCIA) command parser
+impactsParser :: Parser Command
+impactsParser = do
+    uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for impact assessment")
     options <- lciaOptionsParser
-    pure $ LCIA uuid options
+    pure $ Impacts uuid options
 
 -- | LCIA options parser
 lciaOptionsParser :: Parser LCIAOptions
@@ -429,9 +413,10 @@ exportMatricesParser = do
     outputDir <- argument str (metavar "OUTPUT_DIR" <> help "Output directory for matrix export")
     pure $ ExportMatrices outputDir
 
--- | Mapping command parser
-mappingParser :: Parser Command
-mappingParser = do
+-- | Flow mapping command parser (renamed from 'mapping' to disambiguate
+-- from compartment-mapping and similar resources).
+flowMappingParser :: Parser Command
+flowMappingParser = do
     methodId <- argument textReader (metavar "METHOD_UUID" <> help "UUID of the characterization method")
     showMatched <- switch
         ( long "matched"
@@ -445,7 +430,7 @@ mappingParser = do
         ( long "uncharacterized"
             <> help "List DB biosphere flows that no CF matched"
         )
-    pure $ Mapping MappingOptions
+    pure $ FlowMapping MappingOptions
         { mappingMethodId = methodId
         , mappingShowMatched = showMatched
         , mappingShowUnmatched = showUnmatched
@@ -478,9 +463,8 @@ cliParserInfo =
                 \  volca --config volca.toml server --port 8080         # Start server\n\
                 \  volca --config volca.toml --db ecoinvent activities --name electricity\n\
                 \  volca --config volca.toml --db ecoinvent activity UUID\n\
-                \  volca --config volca.toml --db ecoinvent tree UUID --depth 3\n\
                 \  volca --config volca.toml --db ecoinvent inventory UUID\n\
-                \  volca --config volca.toml --db ecoinvent lcia UUID --method METHOD_UUID\n\
+                \  volca --config volca.toml --db ecoinvent impacts UUID --method METHOD_UUID\n\
                 \  volca --config volca.toml database                   # List databases\n\
                 \  volca --config volca.toml database upload mydb.7z --name \"My DB\"\n\
                 \  volca --config volca.toml method upload pef.zip --name \"PEF\"\n\

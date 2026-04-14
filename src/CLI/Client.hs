@@ -111,10 +111,6 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             db <- resolveDbName mgr rc (dbName globalOpts)
             apiGet mgr rc (dbPath db ++ "/flow/" ++ T.unpack flowId ++ "/activities") >>= output fmt jp
 
-        Tree uuid _treeOpts -> do
-            db <- resolveDbName mgr rc (dbName globalOpts)
-            apiGet mgr rc (dbPath db ++ "/activity/" ++ T.unpack uuid ++ "/tree") >>= output fmt jp
-
         Inventory uuid -> do
             db <- resolveDbName mgr rc (dbName globalOpts)
             apiGet mgr rc (dbPath db ++ "/activity/" ++ T.unpack uuid ++ "/inventory") >>= output fmt jp
@@ -140,17 +136,17 @@ executeRemoteCommand mgr rc globalOpts cmd = do
                     ]
             apiGet mgr rc (dbPath db ++ "/flows" ++ qs) >>= output fmt jp
 
-        LCIA uuid lciaOpts -> do
+        Impacts uuid lciaOpts -> do
             db <- resolveDbName mgr rc (dbName globalOpts)
             let methodIdText = lciaMethodId lciaOpts
             mCollection <- lookupMethodCollection mgr rc methodIdText
             case mCollection of
                 Nothing  -> reportError "Method not found in loaded collections" >> exitFailure
                 Just col -> apiGet mgr rc (dbPath db ++ "/activity/" ++ T.unpack uuid
-                                ++ "/lcia/" ++ T.unpack col ++ "/" ++ T.unpack methodIdText)
+                                ++ "/impacts/" ++ T.unpack col ++ "/" ++ T.unpack methodIdText)
                             >>= output fmt jp
 
-        Mapping opts -> do
+        FlowMapping opts -> do
             db <- resolveDbName mgr rc (dbName globalOpts)
             let methodId = T.unpack (mappingMethodId opts)
             apiGet mgr rc (dbPath db ++ "/method/" ++ methodId ++ "/mapping") >>= output fmt jp

@@ -18,6 +18,10 @@ import Database.Manager (DatabaseManager(..), LoadedDatabase(..), DatabaseSetupI
 import qualified Database.Manager as DM
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
+import qualified API.OpenApi
+import Data.OpenApi (OpenApi, ToSchema)
+import Data.Proxy (Proxy (..))
+import Servant.OpenApi (toOpenApi)
 import Progress (getLogLines, reportProgress, ProgressLevel(Info))
 import Database
 import qualified Service
@@ -72,10 +76,10 @@ type LCAAPI =
                         :> QueryParam "group_by" Text
                         :> QueryParam "aggregate" Text
                         :> Get '[JSON] Aggregation
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Get '[JSON] LCIABatchResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "top-flows" Int :> Get '[JSON] LCIAResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "lcia" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Get '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "top-flows" Int :> Get '[JSON] LCIAResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "inventory" :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] InventoryExport
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ConsumerResult)
@@ -94,7 +98,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
-                :<|> "db" :> Capture "dbName" Text :> "lcia" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
+                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "processId" Text :> ReqBody '[JSON] LCIARequest :> Post '[JSON] Value
                 -- Database management endpoints
                 :<|> "db" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
@@ -145,6 +149,9 @@ type LCAAPI =
                 :<|> "stats" :> Get '[JSON] Value
                 -- Classification presets (from TOML config)
                 :<|> "classification-presets" :> Get '[JSON] [ClassificationPresetInfo]
+                -- OpenAPI spec, enriched with operationId/description from API.Resources.
+                -- pyvolca's runtime dispatcher reads this to route operation_id → HTTP.
+                :<|> "openapi.json" :> Get '[JSON] Value
            )
 
 -- | Get database by name, throw 404 if not loaded
@@ -187,6 +194,21 @@ newtype LoginRequest = LoginRequest
 instance FromJSON LoginRequest where
     parseJSON = withObject "LoginRequest" $ \v ->
         LoginRequest <$> v .: "code"
+
+-- ToSchema orphan for the login request — lives here (not in API.OpenApi)
+-- to avoid a circular dependency.
+instance ToSchema LoginRequest
+
+-- | The complete OpenAPI 3.0 specification for the VoLCA REST API.
+--
+-- Built in two steps:
+--   1. 'toOpenApi' derives the structural spec from the 'LCAAPI' Servant type.
+--   2. 'API.OpenApi.enrichWithResources' stamps @operationId@, @summary@, and
+--      the long @description@ onto each operation with a matching entry in
+--      'API.Resources'. This makes pyvolca's runtime dispatcher able to key
+--      on @operationId@ (e.g. @"get_impacts"@).
+volcaOpenApi :: OpenApi
+volcaOpenApi = API.OpenApi.enrichWithResources (toOpenApi (Proxy :: Proxy LCAAPI))
 
 -- | API server implementation
 -- DatabaseManager is used to dynamically fetch current database on each request
@@ -266,7 +288,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         :<|> getHosting
         :<|> getStats
         :<|> getClassificationPresets
+        :<|> getOpenApiSpec
   where
+    getOpenApiSpec :: Handler Value
+    getOpenApiSpec = return $ toJSON volcaOpenApi
+
     getVersion :: Handler Value
     getVersion = return $ object
         [ "version" .= Version.version

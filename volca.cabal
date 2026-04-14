@@ -49,6 +49,7 @@ library
                      , API.Auth
                      , API.MCP
                      , API.OpenApi
+                     , API.Resources
                      , CLI.Types
                      , CLI.Parser
                      , CLI.Command
@@ -85,6 +86,7 @@ library
                      , servant-multipart
                      , servant-openapi3
                      , openapi3
+                     , insert-ordered-containers
                      , lens
                      , warp
                      , aeson

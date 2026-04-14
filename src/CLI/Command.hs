@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (Command(..), DatabaseAction(..), MethodAction(..), PluginAction(..), UploadArgs(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), TreeOptions(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..), MappingOptions(..))
+import CLI.Types (Command(..), DatabaseAction(..), MethodAction(..), PluginAction(..), UploadArgs(..), FlowSubCommand(..), GlobalOptions(..), CLIConfig(..), OutputFormat(..), SearchActivitiesOptions(..), SearchFlowsOptions(..), LCIAOptions(..), DebugMatricesOptions(..), MappingOptions(..))
 import Plugin.Types (PluginRegistry(..), ReportHandle(..), ExportHandle(..), ExportContext(..), MapperHandle(..), TransformHandle(..), ValidateHandle(..), SearchHandle(..), AnalyzeHandle(..), ImportHandle(..), PluginBackend(..))
 import qualified Database.Manager as DM
 import Database.Manager (DatabaseManager(..), LoadedDatabase(..), addDatabase, addMethodCollection)
@@ -128,16 +128,12 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
     Plugin PluginList ->
       executePluginList registry outputFormat
 
-    Mapping opts -> do
+    FlowMapping opts -> do
       (database, _solver) <- requireDatabase manager (dbName globalOpts)
-      executeMappingCommand registry outputFormat database manager opts
+      executeFlowMappingCommand registry outputFormat database manager opts
 
     -- Database-level commands
     Activity _ -> do
-      (database, _solver) <- requireDatabase manager (dbName globalOpts)
-      executeDbCommand registry outputFormat globalOpts database cmd
-
-    Tree _ _ -> do
       (database, _solver) <- requireDatabase manager (dbName globalOpts)
       executeDbCommand registry outputFormat globalOpts database cmd
 
@@ -157,7 +153,7 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
       (database, _solver) <- requireDatabase manager (dbName globalOpts)
       executeDbCommand registry outputFormat globalOpts database cmd
 
-    LCIA _ _ -> do
+    Impacts _ _ -> do
       (database, _solver) <- requireDatabase manager (dbName globalOpts)
       executeDbCommand registry outputFormat globalOpts database cmd
 
@@ -187,13 +183,9 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
 
 -- | Execute commands that require a loaded database
 executeDbCommand :: PluginRegistry -> OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
-executeDbCommand registry fmt globalOpts database = \case
+executeDbCommand registry fmt _globalOpts database = \case
     Activity uuid ->
       executeActivityCommand registry fmt database uuid
-
-    Tree uuid treeOpts -> do
-      let depth = maybe (treeDepth globalOpts) id (treeDepthOverride treeOpts)
-      executeActivityTreeCommand registry fmt database uuid depth
 
     Inventory uuid ->
       executeActivityInventoryCommand registry fmt database uuid
@@ -210,8 +202,8 @@ executeDbCommand registry fmt globalOpts database = \case
     SearchFlows opts ->
       executeSearchFlowsCommand registry fmt database opts
 
-    LCIA uuid lciaOpts ->
-      executeLCIACommand registry fmt database uuid lciaOpts
+    Impacts uuid lciaOpts ->
+      executeImpactsCommand registry fmt database uuid lciaOpts
 
     DebugMatrices uuid debugOpts ->
       executeDebugMatricesCommand database uuid debugOpts
@@ -228,7 +220,7 @@ executeDbCommand registry fmt globalOpts database = \case
     Synonyms -> pure ()
     CompartmentMappings -> pure ()
     Units -> pure ()
-    Mapping _ -> pure ()
+    FlowMapping _ -> pure ()
     Stop -> pure ()
     Repl -> pure ()
     DumpOpenApi -> pure ()
@@ -238,13 +230,6 @@ executeDbCommand registry fmt globalOpts database = \case
 executeActivityCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> IO ()
 executeActivityCommand registry fmt database uuid =
   case Service.getActivityInfo defaultUnitConfig database uuid of
-    Left err -> reportServiceError err
-    Right result -> outputResult registry fmt result
-
--- | Execute activity tree command
-executeActivityTreeCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> Int -> IO ()
-executeActivityTreeCommand registry fmt database uuid depth =
-  case Service.getActivityTree database uuid depth Nothing of
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result
 
@@ -295,10 +280,10 @@ executeSearchFlowsCommand registry fmt database opts = do
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result
 
--- | LCIA is now handled via HTTP client (see CLI.Client)
-executeLCIACommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> LCIAOptions -> IO ()
-executeLCIACommand _ _ _ _ _ = do
-  reportError "LCIA is only available via HTTP. Start the server first: volca --config volca.toml server"
+-- | Impacts (LCIA) is now handled via HTTP client (see CLI.Client)
+executeImpactsCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> LCIAOptions -> IO ()
+executeImpactsCommand _ _ _ _ _ = do
+  reportError "impacts is only available via HTTP. Start the server first: volca --config volca.toml server"
   exitFailure
 
 -- | Execute matrix debugging command
@@ -501,8 +486,8 @@ executeMcDelete registry fmt manager name = do
       outputResult registry fmt $ object ["deleted" .= name]
 
 -- | Execute mapping command: analyze flow mapping coverage
-executeMappingCommand :: PluginRegistry -> OutputFormat -> Types.Database -> DatabaseManager -> MappingOptions -> IO ()
-executeMappingCommand registry fmt database manager opts = do
+executeFlowMappingCommand :: PluginRegistry -> OutputFormat -> Types.Database -> DatabaseManager -> MappingOptions -> IO ()
+executeFlowMappingCommand registry fmt database manager opts = do
   -- Find method by UUID
   loadedMethods <- DM.getLoadedMethods manager
   let allMethods = map snd loadedMethods
