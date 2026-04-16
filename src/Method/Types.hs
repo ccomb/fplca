@@ -123,7 +123,8 @@ emptyMethodCollection ms = MethodCollection ms [] [] []
 -- Normalization divides, weighting multiplies.
 -- Scores are named output formulas over the normalized/weighted environment.
 data ScoringSet = ScoringSet
-    { ssName          :: !Text                  -- ^ Display name (e.g., "ECS")
+    { ssName          :: !Text                  -- ^ Display name
+    , ssUnit          :: !Text                  -- ^ Display unit (e.g., "Pts")
     , ssVariables     :: !(M.Map Text Text)     -- ^ var → impact category name
     , ssComputed      :: !(M.Map Text Text)     -- ^ var → formula (e.g., "2 * etfo + etfi")
     , ssNormalization :: !(M.Map Text Double)    -- ^ var → normalization factor (divisor)

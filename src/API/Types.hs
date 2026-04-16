@@ -337,6 +337,8 @@ data LCIABatchResult = LCIABatchResult
     , lbrAvailableNWsets :: [Text]
     , lbrScoringResults :: M.Map Text (M.Map Text Double)
       -- ^ Scoring set name → (score name → value). All formula-based scoring sets computed at once.
+    , lbrScoringUnits :: M.Map Text Text
+      -- ^ Scoring set name → display unit (e.g., "Pts", "µPts PEF")
     }
     deriving (Generic)
 

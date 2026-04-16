@@ -558,6 +558,7 @@ uploadMetaToConfig slug dirPath meta = DatabaseConfig
 configToScoringSet :: ScoringSetConfig -> ScoringSet
 configToScoringSet ssc = ScoringSet
     { ssName = sscName ssc
+    , ssUnit = sscUnit ssc
     , ssVariables = sscVariables ssc
     , ssComputed = sscComputed ssc
     , ssNormalization = sscNormalization ssc

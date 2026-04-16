@@ -112,7 +112,8 @@ data MethodConfig = MethodConfig
 
 -- | Configuration for a formula-based scoring set (parsed from TOML [[methods.scoring]])
 data ScoringSetConfig = ScoringSetConfig
-    { sscName          :: !Text                  -- Display name (e.g., "ECS")
+    { sscName          :: !Text                  -- Display name
+    , sscUnit          :: !Text                  -- Display unit (e.g., "Pts")
     , sscVariables     :: !(M.Map Text Text)     -- var → impact category name
     , sscComputed      :: !(M.Map Text Text)     -- var → formula string
     , sscNormalization :: !(M.Map Text Double)    -- var → normalization factor
@@ -205,6 +206,7 @@ instance DecodeTOML MethodConfig where
 instance DecodeTOML ScoringSetConfig where
     tomlDecoder = do
         sscName <- getField "name"
+        sscUnit <- fromMaybe "Pt" <$> getFieldOpt "unit"
         sscVariables <- fromMaybe M.empty <$> getFieldOpt "variables"
         sscComputed <- fromMaybe M.empty <$> getFieldOpt "computed"
         sscNormalization <- fromMaybe M.empty <$> getFieldOpt "normalization"

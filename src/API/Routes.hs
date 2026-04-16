@@ -633,41 +633,35 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 rawResults <- liftIO $ mapM (computeCategoryResult db activity 5 inventory) methods
                 -- Enrich with NW data
                 let results = map (enrichWithNW dcLookup mNW) rawResults
-                    singleScore = case mNW of
-                        Just _ -> Just $ sum [s | r <- results, Just s <- [lrWeightedScore r]]
-                        Nothing -> Nothing
                     -- Compute formula-based scoring sets
                     rawScoreMap = M.fromList
                         [(lrCategory r, lrScore r) | r <- rawResults]
                 -- Compute each scoring set, logging errors
                 scoringResults <- liftIO $ do
-                    results <- forM (mcScoringSets collection) $ \ss -> do
+                    ssResults <- forM (mcScoringSets collection) $ \ss -> do
                         case computeFormulaScores ss rawScoreMap of
                             Right scores -> return $ Just (ssName ss, scores)
                             Left err -> do
                                 reportProgress Warning $ "  Scoring set '" <> T.unpack (ssName ss)
                                     <> "' failed: " <> err
                                 return Nothing
-                    return $ M.fromList [(n, s) | Just (n, s) <- results]
+                    return $ M.fromList [(n, s) | Just (n, s) <- ssResults]
                 t2 <- liftIO getCurrentTime
                 liftIO $ mapM_ (logBatchCategory invSize) results
                 liftIO $ reportProgress Info $ "  Total: "
                     <> show (length results) <> " categories ("
                     <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) "" <> "s)"
-                case singleScore of
-                    Just ss -> liftIO $ reportProgress Info $ "  Single score: "
-                        <> showFFloat (Just 6) ss "" <> " Pt"
-                    Nothing -> return ()
                 forM_ (M.toList scoringResults) $ \(name, scores) ->
                     liftIO $ reportProgress Info $ "  Scoring '" <> T.unpack name <> "': "
                         <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
                 return LCIABatchResult
                     { lbrResults = results
-                    , lbrSingleScore = singleScore
-                    , lbrSingleScoreUnit = if null nwSets then Nothing else Just "Pt"
+                    , lbrSingleScore = Nothing
+                    , lbrSingleScoreUnit = Nothing
                     , lbrNormWeightSetName = nwName <$> mNW
                     , lbrAvailableNWsets = map nwName nwSets
                     , lbrScoringResults = scoringResults
+                    , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- mcScoringSets collection]
                     }
 
     -- POST: Batch LCIA with substitutions
@@ -685,9 +679,6 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 let inventory = Matrix.applyBiosphereMatrix db scalingVec
                 rawResults <- liftIO $ mapM (computeCategoryResult db activity 5 inventory) methods
                 let results = map (enrichWithNW dcLookup mNW) rawResults
-                    singleScore = case mNW of
-                        Just _ -> Just $ sum [s | r <- results, Just s <- [lrWeightedScore r]]
-                        Nothing -> Nothing
                     rawScoreMap = M.fromList
                         [(lrCategory r, lrScore r) | r <- rawResults]
                     scoringResults = M.fromList
@@ -697,11 +688,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         ]
                 return LCIABatchResult
                     { lbrResults = results
-                    , lbrSingleScore = singleScore
-                    , lbrSingleScoreUnit = if null nwSets then Nothing else Just "Pt"
+                    , lbrSingleScore = Nothing
+                    , lbrSingleScoreUnit = Nothing
                     , lbrNormWeightSetName = nwName <$> mNW
                     , lbrAvailableNWsets = map nwName nwSets
                     , lbrScoringResults = scoringResults
+                    , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
                     }
 
     -- POST: Inventory with substitutions
