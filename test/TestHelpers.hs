@@ -31,8 +31,11 @@ loadSampleDatabaseWithPath path = do
     loadResult <- loadDatabase ("test-data/" ++ path)
     case loadResult of
         Left err -> error $ "Failed to load test database: " ++ show err
-        Right simpleDb ->
-            buildDatabaseWithMatrices defaultUnitConfig (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+        Right simpleDb -> do
+            dbResult <- buildDatabaseWithMatrices defaultUnitConfig (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+            case dbResult of
+                Left err -> error $ "Failed to build matrix: " ++ show err
+                Right db -> return db
 
 -- | Check if two floating point numbers are within tolerance
 withinTolerance :: Double -> Double -> Double -> Bool

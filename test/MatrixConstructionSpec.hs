@@ -6,7 +6,6 @@ import Test.Hspec
 import TestHelpers
 import GoldenData
 import Types
-import Database (buildDatabaseWithMatrices)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map as M

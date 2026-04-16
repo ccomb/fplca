@@ -712,25 +712,28 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
                 Right dbRaw -> do
                     -- Apply transform plugins (sorted by priority) before runtime init
                     transformed <- applyTransforms transforms (toSimpleDatabase dbRaw)
-                    dbRebuilt <- if null transforms
-                        then pure dbRaw
+                    dbRebuiltResult <- if null transforms
+                        then pure (Right dbRaw)
                         else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbFlows transformed) (sdbUnits transformed)
 
-                    -- Initialize runtime fields (synonym DB and flow name index)
-                    let database = initializeRuntimeFields dbRebuilt synonymDB
+                    case dbRebuiltResult of
+                        Left err -> return $ Left err
+                        Right dbRebuilt -> do
+                            -- Initialize runtime fields (synonym DB and flow name index)
+                            let database = initializeRuntimeFields dbRebuilt synonymDB
 
-                    -- Create shared solver with lazy factorization (deferred to first query)
-                    let techTriples = dbTechnosphereTriples database
-                        activityCount = dbActivityCount database
-                        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                        activityCountInt = fromIntegral activityCount
-                    sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
+                            -- Create shared solver with lazy factorization (deferred to first query)
+                            let techTriples = dbTechnosphereTriples database
+                                activityCount = dbActivityCount database
+                                techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+                                activityCountInt = fromIntegral activityCount
+                            sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
 
-                    return $ Right LoadedDatabase
-                        { ldDatabase = database
-                        , ldSharedSolver = sharedSolver
-                        , ldConfig = dbConfig
-                        }
+                            return $ Right LoadedDatabase
+                                { ldDatabase = database
+                                , ldSharedSolver = sharedSolver
+                                , ldConfig = dbConfig
+                                }
 
 -- | Apply transform plugins sequentially (sorted by priority)
 applyTransforms :: [TransformHandle] -> SimpleDatabase -> IO SimpleDatabase
@@ -837,9 +840,12 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                             reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                             let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                             linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                            !db <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
-                            Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                            return $ Right db
+                            dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
+                            case dbResult of
+                                Left err -> return $ Left err
+                                Right db -> do
+                                    Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
+                                    return $ Right db
                         else do
                             mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName path
                             case mCachedDb of
@@ -852,9 +858,12 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                                     reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                                     let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                                     linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                                    !db <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
-                                    Loader.saveCachedDatabaseWithMatrices dbName path db
-                                    return $ Right db
+                                    dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
+                                    case dbResult of
+                                        Left err -> return $ Left err
+                                        Right db -> do
+                                            Loader.saveCachedDatabaseWithMatrices dbName path db
+                                            return $ Right db
                 FormatUnknown ->
                     return $ Left $ "No supported database files found in: " <> T.pack path <>
                                    ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv), ILCD"
@@ -880,20 +889,23 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                             case loadResult of
                                 Left err -> return $ Left err
                                 Right (simpleDb, stats) -> do
-                                    !db <- buildDatabaseWithMatrices unitConfig
+                                    dbResult <- buildDatabaseWithMatrices unitConfig
                                         (sdbActivities simpleDb)
                                         (sdbFlows simpleDb)
                                         (sdbUnits simpleDb)
-                                    let crossLinks = cdlLinks stats
-                                        depDbs = M.keys (crossDBBySource stats)
-                                        dbWithLinks = db
-                                            { dbCrossDBLinks = crossLinks
-                                            , dbDependsOn = depDbs
-                                            , dbLinkingStats = stats
-                                            }
-                                    unless noCache $
-                                        Loader.saveCachedDatabaseWithMatrices dbName path dbWithLinks
-                                    return $ Right dbWithLinks
+                                    case dbResult of
+                                        Left err -> return $ Left err
+                                        Right db -> do
+                                            let crossLinks = cdlLinks stats
+                                                depDbs = M.keys (crossDBBySource stats)
+                                                dbWithLinks = db
+                                                    { dbCrossDBLinks = crossLinks
+                                                    , dbDependsOn = depDbs
+                                                    , dbLinkingStats = stats
+                                                    }
+                                            unless noCache $
+                                                Loader.saveCachedDatabaseWithMatrices dbName path dbWithLinks
+                                            return $ Right dbWithLinks
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -1581,47 +1593,54 @@ finalizeDatabase manager dbName = do
                 synonymDB <- getMergedSynonymDB manager
 
                 -- Use pre-built database from cache, or build matrices from scratch
-                (dbWithRuntime, fromCache) <- case sdCachedDB staged of
+                buildResult <- case sdCachedDB staged of
                     Just cachedDb -> do
                         let db = initializeRuntimeFields cachedDb synonymDB
-                        return (db, True)
+                        return $ Right (db, True)
                     Nothing -> do
                         unitConfig <- getMergedUnitConfig manager
-                        !db <- buildDatabaseWithMatrices unitConfig
+                        dbResult <- buildDatabaseWithMatrices unitConfig
                             (sdbActivities (sdSimpleDB staged))
                             (sdbFlows (sdSimpleDB staged))
                             (sdbUnits (sdSimpleDB staged))
-                        let dbWithLinks = db
-                                { dbCrossDBLinks = sdCrossDBLinks staged
-                                , dbDependsOn = sdSelectedDeps staged
-                                , dbLinkingStats = sdLinkingStats staged
-                                }
-                        return (initializeRuntimeFields dbWithLinks synonymDB, False)
+                        case dbResult of
+                            Left err -> return $ Left err
+                            Right db -> do
+                                let dbWithLinks = db
+                                        { dbCrossDBLinks = sdCrossDBLinks staged
+                                        , dbDependsOn = sdSelectedDeps staged
+                                        , dbLinkingStats = sdLinkingStats staged
+                                        }
+                                return $ Right (initializeRuntimeFields dbWithLinks synonymDB, False)
 
-                -- Create shared solver with lazy factorization (deferred to first query)
-                let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
-                    activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
-                sharedSolver <- createSharedSolver dbName techTriplesInt activityCountInt
+                case buildResult of
+                  Left err -> return $ Left err
+                  Right (dbWithRuntime, fromCache) -> do
 
-                let loaded = LoadedDatabase
-                        { ldDatabase = dbWithRuntime
-                        , ldSharedSolver = sharedSolver
-                        , ldConfig = sdConfig staged
-                        }
+                    -- Create shared solver with lazy factorization (deferred to first query)
+                    let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
+                        activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
+                    sharedSolver <- createSharedSolver dbName techTriplesInt activityCountInt
 
-                -- Move from staged to loaded
-                let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithRuntime
-                atomically $ do
-                    modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-                    modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                    modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                    let loaded = LoadedDatabase
+                            { ldDatabase = dbWithRuntime
+                            , ldSharedSolver = sharedSolver
+                            , ldConfig = sdConfig staged
+                            }
 
-                -- Only save to cache when matrices were built fresh
-                when (not fromCache) $
-                    Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
+                    -- Move from staged to loaded
+                    let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithRuntime
+                    atomically $ do
+                        modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+                        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+                        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
 
-                reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
-                return $ Right loaded
+                    -- Only save to cache when matrices were built fresh
+                    when (not fromCache) $
+                        Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
+
+                    reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
+                    return $ Right loaded
 
 --------------------------------------------------------------------------------
 -- Method Collection Management
