@@ -64,6 +64,8 @@ module Database.Manager
     , removeDependencyFromStaged
     , setDataPath
     , finalizeDatabase
+      -- * Cached flow mapping
+    , mapMethodToFlowsCached
       -- * Internal (for Main.hs to load database)
     , loadDatabaseFromConfig
     ) where
@@ -103,7 +105,9 @@ import SharedSolver (SharedSolver, createSharedSolver)
 import Progress (reportProgress, reportProgressWithTiming, reportError, ProgressLevel(..))
 import Database (buildDatabaseWithMatrices)
 import SynonymDB (SynonymDB(..), emptySynonymDB, buildFromCSV, buildFromPairs, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
-import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapSize, Method(..), MethodCollection(..), ScoringSet(..))
+import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapSize, Method(..), MethodCF, MethodCollection(..), ScoringSet(..)
+    )
+import Method.Mapping (MatchStrategy, mapMethodToFlows)
 import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), Unit(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
 import qualified UnitConversion
 import qualified Database.Loader as Loader
@@ -340,7 +344,33 @@ data DatabaseManager = DatabaseManager
     , dmNoCache          :: !Bool                              -- Caching disabled flag
     , dmPlugins          :: !PluginRegistry                    -- Plugin registry (built-in + external)
     , dmGeographies      :: !(Map Text (Text, [Text]))          -- code → (display_name, parent_codes)
+    , dmMethodMappingCache :: !(TVar (Map (Text, UUID) [(MethodCF, Maybe (Flow, MatchStrategy))]))
+      -- ^ Cached flow mappings: (dbName, methodId) → mappings.
+      -- Invalidated on database/method/synonym reload.
     }
+
+-- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
+-- The mapping depends only on (database, method), not on the process being evaluated.
+mapMethodToFlowsCached :: DatabaseManager -> Text -> Database -> Method -> IO [(MethodCF, Maybe (Flow, MatchStrategy))]
+mapMethodToFlowsCached manager dbName db method = do
+    let key = (dbName, methodId method)
+    cache <- readTVarIO (dmMethodMappingCache manager)
+    case M.lookup key cache of
+        Just cached -> return cached
+        Nothing -> do
+            result <- mapMethodToFlows (prMappers (dmPlugins manager)) db method
+            atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
+            return result
+
+-- | Clear all cached flow mappings (call when databases, methods, or synonyms change)
+clearMethodMappingCache :: DatabaseManager -> IO ()
+clearMethodMappingCache manager =
+    atomically $ writeTVar (dmMethodMappingCache manager) M.empty
+
+-- | Clear cached flow mappings for a specific database
+clearMethodMappingCacheForDb :: DatabaseManager -> Text -> IO ()
+clearMethodMappingCacheForDb manager dbName =
+    atomically $ modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
 
 -- | Initialize database manager from config
 -- Pre-loads databases with load=true at startup
@@ -397,6 +427,8 @@ initDatabaseManager config noCache configPath = do
         Nothing   -> return M.empty
         Just path -> parseGeographiesCSV (resolveRelative path)
 
+    methodMappingCacheVar <- newTVarIO M.empty
+
     let manager = DatabaseManager
             { dmLoadedDbs = loadedDbsVar
             , dmStagedDbs = stagedDbsVar
@@ -414,6 +446,7 @@ initDatabaseManager config noCache configPath = do
             , dmNoCache = noCache
             , dmPlugins = buildRegistry (cfgPlugins config)
             , dmGeographies = geographies
+            , dmMethodMappingCache = methodMappingCacheVar
             }
 
     -- Auto-load active reference data (flow synonyms, compartment mappings, units)
@@ -963,6 +996,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                             atomically $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
                                 modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                            clearMethodMappingCacheForDb manager dbName
                             reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
                             -- Auto-extract synonyms from biosphere flows
                             let db = ldDatabase loaded
@@ -1121,8 +1155,9 @@ unloadDatabase manager dbName = do
                 modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
                 modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
 
-            -- Clear the cached MUMPS solver to release memory
+            -- Clear cached solvers and flow mappings
             clearCachedSolver dbName
+            clearMethodMappingCacheForDb manager dbName
 
             -- Force garbage collection to release memory
             performGC
@@ -1474,6 +1509,7 @@ restageLoadedDatabase manager dbName ld = do
         modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
         modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
     clearCachedSolver dbName
+    clearMethodMappingCacheForDb manager dbName
     return staged
 
 -- | Get or create staged database (re-stages loaded DBs on the fly)
@@ -1634,6 +1670,7 @@ finalizeDatabase manager dbName = do
                         modifyTVar' (dmStagedDbs manager) (M.delete dbName)
                         modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
                         modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                    clearMethodMappingCacheForDb manager dbName
 
                     -- Only save to cache when matrices were built fresh
                     when (not fromCache) $
@@ -1765,6 +1802,7 @@ loadMethodCollection manager name = do
                             let scoringSets = map configToScoringSet (Config.mcScoringSets mc)
                                 collection = collection0 { Method.Types.mcScoringSets = scoringSets }
                             atomically $ modifyTVar' (dmLoadedMethods manager) (M.insert name collection)
+                            clearMethodMappingCache manager
                             let methods = mcMethods collection
                                 totalCFs = sum $ map (length . methodFactors) methods
                             reportProgress Info $ "  [OK] Loaded: " <> T.unpack name
@@ -1783,6 +1821,7 @@ unloadMethodCollection manager name = do
     if M.member name loaded
         then do
             atomically $ modifyTVar' (dmLoadedMethods manager) (M.delete name)
+            clearMethodMappingCache manager
             reportProgress Info $ "Unloaded method: " <> T.unpack name
             return $ Right ()
         else return $ Left $ "Method collection not loaded: " <> name

@@ -32,9 +32,9 @@ import qualified API.Resources as R
 import API.Resources (Resource, Param(..), ParamKind(..))
 
 import Matrix (computeInventoryMatrix, computeScalingVector, applyBiosphereMatrix, computeProcessLCIAContributions)
-import Method.Mapping (computeLCIAScore, mapMethodToFlows, computeMappingStats, MappingStats(..))
+import Method.Mapping (computeLCIAScore, computeMappingStats, MappingStats(..))
 import Method.Types (Method(..), MethodCF(..), FlowDirection(..))
-import Plugin.Types (PluginRegistry(..))
+import Plugin.Types ()
 import Plugin.Builtin (flowContribution)
 import SharedSolver (SharedSolver)
 import qualified Data.List as L
@@ -626,9 +626,8 @@ callGetImpacts dbManager baseUrl rid args = do
                                         Left err -> return $ toolError rid (T.pack $ show err)
                                         Right (processId, activity) -> do
                                             inventory <- computeInventoryMatrix db processId
-                                            let mappers = prMappers (dmPlugins dbManager)
                                             unitCfg <- DM.getMergedUnitConfig dbManager
-                                            mappings <- mapMethodToFlows mappers db method
+                                            mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
                                             let stats = computeMappingStats mappings
                                                 score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                                                 (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbFlows db) (dbUnits db) activity
@@ -690,8 +689,7 @@ callGetFlowMapping dbManager rid args =
                             case filter (\m -> methodId m == uuid) allMethods of
                                 [] -> return $ toolError rid "Method not found"
                                 (method:_) -> do
-                                    let mappers = prMappers (dmPlugins dbManager)
-                                    mappings <- mapMethodToFlows mappers db method
+                                    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
                                     let stats = computeMappingStats mappings
                                         total = msTotal stats
                                         matched = total - msUnmatched stats
@@ -724,8 +722,7 @@ callGetCharacterization dbManager rid args =
                                 lim     = fromMaybe 20 (intArg "limit" args)
                                 flowQ   = textArg "flow" args
                                 queryLower = fmap T.toLower flowQ
-                                mappers = prMappers (dmPlugins dbManager)
-                            mappings <- mapMethodToFlows mappers db method
+                            mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
                             let matched = [ (cf, f, strat)
                                           | (cf, Just (f, strat)) <- mappings
                                           , matchQuery queryLower (mcfFlowName cf) (flowName f)
@@ -786,12 +783,11 @@ callGetContributingFlows dbManager baseUrl rid args =
                                 Right (processId, _) -> do
                                     let db      = ldDatabase ld
                                         lim     = fromMaybe 20 (intArg "limit" args)
-                                        mappers = prMappers (dmPlugins dbManager)
                                         webUrl  = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/contributing-flows/" <> encodeSegment colName <> "/" <> methodIdText
                                     unitCfg  <- DM.getMergedUnitConfig dbManager
                                     scalingVec <- computeScalingVector db processId
                                     let inventory = applyBiosphereMatrix db scalingVec
-                                    mappings <- mapMethodToFlows mappers db method
+                                    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
                                     let score   = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                                         contribs = L.sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
                                         top      = take lim contribs
@@ -835,11 +831,10 @@ callGetContributingActivities dbManager baseUrl rid args =
                                 Right (processId, _) -> do
                                     let db      = ldDatabase ld
                                         lim     = fromMaybe 10 (intArg "limit" args)
-                                        mappers = prMappers (dmPlugins dbManager)
                                     unitCfg    <- DM.getMergedUnitConfig dbManager
                                     scalingVec <- computeScalingVector db processId
                                     let inventory = applyBiosphereMatrix db scalingVec
-                                    mappings <- mapMethodToFlows mappers db method
+                                    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
                                     let score        = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                                         cfMap        = M.fromList [(flowId f, mcfValue cf) | (cf, Just (f, _)) <- mappings]
                                         contributions = computeProcessLCIAContributions db scalingVec cfMap

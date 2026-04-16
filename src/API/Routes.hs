@@ -9,7 +9,7 @@ module API.Routes where
 import qualified Matrix
 import Matrix (Inventory, computeProcessLCIAContributions)
 import SharedSolver (SharedSolver)
-import Method.Mapping (computeLCIAScore, mapMethodToFlows, MatchStrategy(..), MappingStats(..), computeMappingStats)
+import Method.Mapping (computeLCIAScore, MatchStrategy(..), MappingStats(..), computeMappingStats)
 import Plugin.Types (PluginRegistry(..), AnalyzeHandle(..), AnalyzeContext(..))
 import Plugin.Builtin (flowContribution)
 import qualified Data.Vector as V
@@ -576,7 +576,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, activity) -> do
                 inventory <- liftIO $ Matrix.computeInventoryMatrix db actProcessId
-                result <- liftIO $ computeCategoryResult db activity (fromMaybe 5 topFlowsParam) inventory method
+                result <- liftIO $ computeCategoryResult dbName db activity (fromMaybe 5 topFlowsParam) inventory method
                 liftIO $ logLCIAResult result method
                 return result
 
@@ -591,7 +591,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left err -> throwServiceError err
             Right scalingVec -> do
                 let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                liftIO $ computeCategoryResult db activity 5 inventory method
+                liftIO $ computeCategoryResult dbName db activity 5 inventory method
 
     -- Batch LCIA endpoint (all methods in a collection)
     getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
@@ -630,7 +630,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 when (invSize > 0 && invSize <= 5) $
                     liftIO $ reportProgress Info $ "  Inventory UUIDs: "
                         <> intercalate ", " (map UUID.toString $ M.keys inventory)
-                rawResults <- liftIO $ mapM (computeCategoryResult db activity 5 inventory) methods
+                rawResults <- liftIO $ mapM (computeCategoryResult dbName db activity 5 inventory) methods
                 -- Enrich with NW data
                 let results = map (enrichWithNW dcLookup mNW) rawResults
                     -- Compute formula-based scoring sets
@@ -677,7 +677,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left err -> throwServiceError err
             Right scalingVec -> do
                 let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                rawResults <- liftIO $ mapM (computeCategoryResult db activity 5 inventory) methods
+                rawResults <- liftIO $ mapM (computeCategoryResult dbName db activity 5 inventory) methods
                 let results = map (enrichWithNW dcLookup mNW) rawResults
                     rawScoreMap = M.fromList
                         [(lrCategory r, lrScore r) | r <- rawResults]
@@ -834,12 +834,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, _) -> do
-                let mappers = prMappers (dmPlugins dbManager)
-                    lim = fromMaybe 20 limitParam
+                let lim = fromMaybe 20 limitParam
                 unitCfg <- liftIO $ getMergedUnitConfig dbManager
                 scalingVec <- liftIO $ Matrix.computeScalingVector db actProcessId
                 let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                mappings <- liftIO $ mapMethodToFlows mappers db method
+                mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
                 let score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                     contribs = sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
                     topFlows = [ FlowContributionEntry
@@ -870,12 +869,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, _) -> do
-                let mappers = prMappers (dmPlugins dbManager)
-                    lim = fromMaybe 10 limitParam
+                let lim = fromMaybe 10 limitParam
                 unitCfg <- liftIO $ getMergedUnitConfig dbManager
                 scalingVec <- liftIO $ Matrix.computeScalingVector db actProcessId
                 let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                mappings <- liftIO $ mapMethodToFlows mappers db method
+                mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
                 let score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
                     cfMap = M.fromList [(flowId f, mcfValue cf) | (cf, Just (f, _)) <- mappings]
                     contributions = computeProcessLCIAContributions db scalingVec cfMap
@@ -903,11 +901,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     }
 
     -- Helper: compute LCIA result for a single method against an inventory
-    computeCategoryResult :: Database -> Activity -> Int -> Inventory -> Method -> IO LCIAResult
-    computeCategoryResult db activity topFlows inventory method = do
-        let mappers = prMappers (dmPlugins dbManager)
+    computeCategoryResult :: Text -> Database -> Activity -> Int -> Inventory -> Method -> IO LCIAResult
+    computeCategoryResult dbName db activity topFlows inventory method = do
         unitCfg <- getMergedUnitConfig dbManager
-        mappings <- mapMethodToFlows mappers db method
+        mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
         let stats = computeMappingStats mappings
             score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
             (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbFlows db) (dbUnits db) activity
@@ -1022,8 +1019,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getMethodMapping dbName methodIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let mappers = prMappers (dmPlugins dbManager)
-        mappings <- liftIO $ mapMethodToFlows mappers db method
+        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
         let stats = computeMappingStats mappings
             totalFactors = length mappings
             coverage = if totalFactors > 0
@@ -1060,8 +1056,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getFlowCFMapping dbName methodIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let mappers = prMappers (dmPlugins dbManager)
-        mappings <- liftIO $ mapMethodToFlows mappers db method
+        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
         let
             -- Build reverse index: DB flow UUID → (MethodCF, MatchStrategy)
             reverseIndex = M.fromList
@@ -1103,10 +1098,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getCharacterization dbName methodIdText flowFilter limitParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
-        let mappers = prMappers (dmPlugins dbManager)
-            lim = fromMaybe 50 limitParam
+        let lim = fromMaybe 50 limitParam
             queryLower = fmap T.toLower flowFilter
-        mappings <- liftIO $ mapMethodToFlows mappers db method
+        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
         let matched = [ (cf, f, strat)
                       | (cf, Just (f, strat)) <- mappings
                       , matchesQuery queryLower (mcfFlowName cf) (flowName f)
