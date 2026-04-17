@@ -42,6 +42,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import Progress
 import Types
+import UnitConversion (UnitConfig)
 import Matrix
     ( Vector
     , Inventory
@@ -169,70 +170,84 @@ every level of the dependency DAG:
 Depth is capped at 10 as a safety net against pathological data (cyclic links).
 -}
 computeInventoryMatrixBatchWithDepsCached
-    :: DepSolverLookup
+    :: UnitConfig
+    -> DepSolverLookup
     -> Database
     -> SharedSolver
     -> [ProcessId]
-    -> IO [Inventory]
-computeInventoryMatrixBatchWithDepsCached _         _  _      [] = pure []
-computeInventoryMatrixBatchWithDepsCached depLookup db solver pids =
-    goWithDeps depLookup db solver
+    -> IO (Either Text [Inventory])
+computeInventoryMatrixBatchWithDepsCached _          _         _  _      [] = pure (Right [])
+computeInventoryMatrixBatchWithDepsCached unitConfig depLookup db solver pids =
+    goWithDeps unitConfig depLookup db solver
         (map (buildDemandVectorFromIndex (dbActivityIndex db)) pids)
         0
 
 -- | Single-process convenience wrapper. One-element batch.
 computeInventoryMatrixWithDepsCached
-    :: DepSolverLookup -> Database -> SharedSolver -> ProcessId -> IO Inventory
-computeInventoryMatrixWithDepsCached depLookup db solver pid = do
-    invs <- computeInventoryMatrixBatchWithDepsCached depLookup db solver [pid]
-    case invs of
-        (inv : _) -> pure inv
-        []        -> pure M.empty  -- unreachable: batch is non-empty
+    :: UnitConfig
+    -> DepSolverLookup
+    -> Database
+    -> SharedSolver
+    -> ProcessId
+    -> IO (Either Text Inventory)
+computeInventoryMatrixWithDepsCached unitConfig depLookup db solver pid = do
+    res <- computeInventoryMatrixBatchWithDepsCached unitConfig depLookup db solver [pid]
+    pure $ case res of
+        Left err        -> Left err
+        Right (inv : _) -> Right inv
+        Right []        -> Right M.empty  -- unreachable: batch is non-empty
 
 -- | Safety net against cyclic cross-DB links (Ginko → Agribalyse → Ginko).
 maxDepsDepth :: Int
 maxDepsDepth = 10
 
 goWithDeps
-    :: DepSolverLookup
+    :: UnitConfig
+    -> DepSolverLookup
     -> Database
     -> SharedSolver
     -> [Vector]   -- ^ K demand vectors, length = dbActivityCount db
     -> Int        -- ^ recursion depth
-    -> IO [Inventory]
-goWithDeps depLookup db solver demands depth = do
+    -> IO (Either Text [Inventory])
+goWithDeps unitConfig depLookup db solver demands depth = do
     scalings <- solveMultiWithSharedSolver solver demands
     let localInvs = map (applyBiosphereMatrix db) scalings
     if depth >= maxDepsDepth
-        then pure localInvs
+        then pure (Right localInvs)
         else do
             let perRootDepDemands = map (accumulateDepDemands db) scalings
                 allDepDbs = S.toList $ S.unions $ map M.keysSet perRootDepDemands
             if null allDepDbs
-                then pure localInvs
+                then pure (Right localInvs)
                 else do
-                    depContribsByDb <- mapConcurrently
-                        (resolveDep depLookup perRootDepDemands depth (length demands))
+                    depResults <- mapConcurrently
+                        (resolveDep unitConfig depLookup perRootDepDemands depth (length demands))
                         allDepDbs
-                    let perRootDepInvs = transpose depContribsByDb
-                    pure $ zipWith
-                        (foldr (M.unionWith (+)))
-                        localInvs
-                        perRootDepInvs
+                    pure $ case sequence depResults of
+                        Left err             -> Left err
+                        Right depContribsByDb ->
+                            let perRootDepInvs = transpose depContribsByDb
+                            in Right $ zipWith
+                                (foldr (M.unionWith (+)))
+                                localInvs
+                                perRootDepInvs
 
 resolveDep
-    :: DepSolverLookup
-    -> [M.Map Text (M.Map (UUID, UUID) Double)]
+    :: UnitConfig
+    -> DepSolverLookup
+    -> [M.Map Text (M.Map (UUID, UUID) (Double, Text))]
     -> Int  -- ^ current depth (for recursion)
     -> Int  -- ^ K (so we can pad with empty on a missing dep DB)
     -> Text
-    -> IO [Inventory]
-resolveDep depLookup perRootDepDemands depth k depDbName = do
+    -> IO (Either Text [Inventory])
+resolveDep unitConfig depLookup perRootDepDemands depth k depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
-            pure (replicate k M.empty)
-        Just (depDb, depSolver) -> do
+            pure (Right (replicate k M.empty))
+        Just (depDb, depSolver) ->
             let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
-                depDemandVecs  = map (depDemandsToVector depDb) demandsPerRoot
-            goWithDeps depLookup depDb depSolver depDemandVecs (depth + 1)
+                depVecsE       = traverse (depDemandsToVector unitConfig depDbName depDb) demandsPerRoot
+            in case depVecsE of
+                Left err           -> pure (Left err)
+                Right depDemandVecs -> goWithDeps unitConfig depLookup depDb depSolver depDemandVecs (depth + 1)

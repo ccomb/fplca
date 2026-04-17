@@ -15,6 +15,7 @@ module API.DatabaseHandlers
       getDatabases
     , loadDatabaseHandler
     , unloadDatabaseHandler
+    , relinkDatabaseHandler
     , deleteDatabaseHandler
     , uploadDatabaseHandler
     , uploadMethodHandler
@@ -80,6 +81,8 @@ import Database.Manager
     , removeDependencyFromStaged
     , setDataPath
     , unloadDatabase
+    , relinkDatabase
+    , RelinkResult(..)
     -- Flow synonyms
     , listFlowSynonyms, loadFlowSynonyms, unloadFlowSynonyms, addFlowSynonyms, removeFlowSynonyms, getFlowSynonymGroups
     -- Compartment mappings
@@ -95,6 +98,7 @@ import API.Types
     , DatabaseStatusAPI(..)
     , RefDataListResponse(..)
     , RefDataStatusAPI(..)
+    , RelinkResponse(..)
     , SynonymGroupsResponse(..)
     , UploadRequest(..)
     , UploadResponse(..)
@@ -131,6 +135,22 @@ loadDatabaseHandler dbManager dbName = do
 unloadDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse
 unloadDatabaseHandler dbManager dbName =
     simpleAction (unloadDatabase dbManager dbName) ("Unloaded database: " <> dbName)
+
+-- | Re-run cross-DB linking for a loaded database against the currently-loaded
+-- dependency databases. Lets the user recover from loads that happened in a
+-- suboptimal order without reloading the whole database.
+relinkDatabaseHandler :: DatabaseManager -> Text -> Handler RelinkResponse
+relinkDatabaseHandler dbManager dbName = do
+    res <- liftIO $ relinkDatabase dbManager dbName
+    case res of
+        Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right r  -> return RelinkResponse
+            { rrDbName           = rresDbName r
+            , rrUnresolvedBefore = rresUnresolvedBefore r
+            , rrUnresolvedAfter  = rresUnresolvedAfter r
+            , rrCrossDBLinks     = rresCrossDBLinks r
+            , rrDependsOn        = rresDepsLoaded r
+            }
 
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: DatabaseManager -> Text -> Handler ActivateResponse

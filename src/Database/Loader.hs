@@ -39,6 +39,7 @@ module Database.Loader
     , generateMatrixCacheFilename
       -- * Cross-Database Linking
     , fixActivityLinksWithCrossDB
+    , findAllCrossDBLinks
     , CrossDBLinkingStats(..)
     , emptyCrossDBLinkingStats
     , crossDBLinksCount
@@ -1234,6 +1235,7 @@ findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID (Tech
                                 , cdlSupplierActUUID = supplierActUUID
                                 , cdlSupplierProdUUID = supplierProdUUID
                                 , cdlCoefficient = amt
+                                , cdlExchangeUnit = flowUnitName
                                 , cdlFlowName = prodName
                                 , cdlLocation = supplierLoc
                                 , cdlSourceDatabase = dbName

@@ -39,7 +39,7 @@ import Plugin.Builtin (flowContribution)
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, computeScalingVectorCached)
 import qualified Data.List as L
 import qualified Service
-import Types (Database(..), Activity(..), Indexes(..), FlowType(..), activityName, activityLocation, flowName, flowId, flowCategory, flowSubcompartment, getUnitNameForFlow, processIdToText, exchangeIsInput)
+import Types (Database(..), Activity(..), Indexes(..), FlowType(..), activityName, activityLocation, flowName, flowId, flowCategory, flowSubcompartment, getUnitNameForFlow, processIdToText, exchangeIsInput, unresolvedCount)
 import API.Types (InventoryExport(..), InventoryFlowDetail(..), ClassificationSystem(..), ActivityInfo(..), ActivityForAPI(..), ExchangeWithUnit(..))
 import qualified Service.Aggregate as Agg
 import UnitConversion (defaultUnitConfig)
@@ -499,7 +499,8 @@ callAggregate dbManager rid args (db, solver) =
                             , Agg.apGroupBy               = textArg "group_by" args
                             , Agg.apAggregate             = fn
                             }
-                    result <- Agg.aggregate db solver (DM.mkDepSolverLookup dbManager) pid params
+                    unitCfg <- DM.getMergedUnitConfig dbManager
+                    result <- Agg.aggregate unitCfg db solver (DM.mkDepSolverLookup dbManager) pid params
                     case result of
                         Left err  -> return $ toolError rid (T.pack $ show err)
                         Right agg -> return $ toolSuccessJson rid (toJSON agg)
@@ -625,40 +626,50 @@ callGetImpacts dbManager baseUrl rid args = do
                                     case Service.resolveActivityAndProcessId db pidText of
                                         Left err -> return $ toolError rid (T.pack $ show err)
                                         Right (processId, activity) -> do
-                                            inventory <- computeInventoryMatrixWithDepsCached
-                                                (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) processId
-                                            unitCfg <- DM.getMergedUnitConfig dbManager
-                                            mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-                                            let stats = computeMappingStats mappings
-                                                score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
-                                                (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbFlows db) (dbUnits db) activity
-                                                functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-                                                contribs = L.sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
-                                                topFlows = take topN contribs
-                                                webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/impacts/" <> encodeSegment colName <> "/" <> UUID.toText uuid
-                                            let hasNeg = any (\(_, _, c) -> c < 0) contribs
-                                            return $ toolSuccessJson rid $ object
-                                                [ "method"                     .= methodName method
-                                                , "category"                   .= methodCategory method
-                                                , "score"                      .= score
-                                                , "unit"                       .= methodUnit method
-                                                , "functional_unit"            .= functionalUnit
-                                                , "mapped_flows"               .= (msTotal stats - msUnmatched stats)
-                                                , "has_negative_contributions" .= hasNeg
-                                                , "web_url"                    .= webUrl
-                                                , "top_flows"                  .= [ object
-                                                    [ "flow_name"           .= flowName f
-                                                    , "contribution"        .= c
-                                                    , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                                    , "flow_id"             .= UUID.toText (flowId f)
-                                                    , "category"            .= flowCategory f
-                                                    , "compartment"         .= flowSubcompartment f
-                                                    , "cf_value"            .= mcfValue cf
-                                                    , "flow_unit"           .= getUnitNameForFlow (dbUnits db) f
-                                                    ]
-                                                    | (cf, f, c) <- topFlows
-                                                    ]
-                                                ]
+                                            let unresolved = unresolvedCount (dbLinkingStats db)
+                                            if unresolved > 0
+                                              then return $ toolError rid $
+                                                  "Database \"" <> dbName <> "\" has "
+                                                  <> T.pack (show unresolved)
+                                                  <> " unresolved cross-DB products. Load the missing dependency databases and re-link before computing impacts."
+                                              else do
+                                                unitCfg <- DM.getMergedUnitConfig dbManager
+                                                invE <- computeInventoryMatrixWithDepsCached
+                                                    unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) processId
+                                                case invE of
+                                                 Left err -> return $ toolError rid err
+                                                 Right inventory -> do
+                                                    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
+                                                    let stats = computeMappingStats mappings
+                                                        score = computeLCIAScore unitCfg (dbUnits db) (dbFlows db) inventory mappings
+                                                        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbFlows db) (dbUnits db) activity
+                                                        functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+                                                        contribs = L.sortOn (\(_,_,c) -> negate (abs c)) (mapMaybe (flowContribution inventory) mappings)
+                                                        topFlows = take topN contribs
+                                                        webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> pidText <> "/impacts/" <> encodeSegment colName <> "/" <> UUID.toText uuid
+                                                        hasNeg = any (\(_, _, c) -> c < 0) contribs
+                                                    return $ toolSuccessJson rid $ object
+                                                        [ "method"                     .= methodName method
+                                                        , "category"                   .= methodCategory method
+                                                        , "score"                      .= score
+                                                        , "unit"                       .= methodUnit method
+                                                        , "functional_unit"            .= functionalUnit
+                                                        , "mapped_flows"               .= (msTotal stats - msUnmatched stats)
+                                                        , "has_negative_contributions" .= hasNeg
+                                                        , "web_url"                    .= webUrl
+                                                        , "top_flows"                  .= [ object
+                                                            [ "flow_name"           .= flowName f
+                                                            , "contribution"        .= c
+                                                            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+                                                            , "flow_id"             .= UUID.toText (flowId f)
+                                                            , "category"            .= flowCategory f
+                                                            , "compartment"         .= flowSubcompartment f
+                                                            , "cf_value"            .= mcfValue cf
+                                                            , "flow_unit"           .= getUnitNameForFlow (dbUnits db) f
+                                                            ]
+                                                            | (cf, f, c) <- topFlows
+                                                            ]
+                                                        ]
 
 callListMethods :: DatabaseManager -> Value -> IO Value
 callListMethods dbManager rid = do

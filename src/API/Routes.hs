@@ -27,7 +27,7 @@ import Database
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityInfo (..), ActivitySummary (..), Aggregation(..), BinaryContent(..), ClassificationSystem(..), ConsumerResult (..), ExchangeDetail (..), ClassificationEntryInfo(..), ClassificationPresetInfo(..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry(..), FlowDetail (..), ContributingFlowsResult(..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIAResult (..), LCIABatchResult(..), BatchImpactsRequest(..), BatchImpactsEntry(..), BatchImpactsResponse(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), ActivityContribution(..), ContributingActivitiesResult(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SubstitutionRequest(..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), CharacterizationResult(..), CharacterizationEntry(..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), UploadRequest(..), UploadResponse(..))
+import API.Types (ActivityInfo (..), ActivitySummary (..), Aggregation(..), BinaryContent(..), ClassificationSystem(..), ConsumerResult (..), ExchangeDetail (..), ClassificationEntryInfo(..), ClassificationPresetInfo(..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry(..), FlowDetail (..), ContributingFlowsResult(..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIAResult (..), LCIABatchResult(..), BatchImpactsRequest(..), BatchImpactsEntry(..), BatchImpactsResponse(..), MappingStatus (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), MethodCollectionListResponse(..), MethodCollectionStatusAPI(..), ActivityContribution(..), ContributingActivitiesResult(..), RefDataListResponse(..), SynonymGroupsResponse(..), SearchResults (..), SubstitutionRequest(..), SupplyChainResponse(..), TreeExport (..), UnmappedFlowAPI (..), CharacterizationResult(..), CharacterizationEntry(..), DatabaseListResponse(..), ActivateResponse(..), LoadDatabaseResponse(..), RelinkResponse(..), UploadRequest(..), UploadResponse(..))
 import qualified Service.Aggregate as Agg
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
@@ -108,6 +108,7 @@ type LCAAPI =
                 -- Load/Unload/Delete endpoints
                 :<|> "db" :> Capture "dbName" Text :> "load" :> Post '[JSON] LoadDatabaseResponse
                 :<|> "db" :> Capture "dbName" Text :> "unload" :> Post '[JSON] ActivateResponse
+                :<|> "db" :> Capture "dbName" Text :> "relink" :> Post '[JSON] RelinkResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Upload endpoint (base64-encoded ZIP in JSON body)
                 :<|> "db" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
@@ -165,6 +166,42 @@ requireDatabaseByName dbManager dbName = do
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
         Nothing -> throwError err404{errBody = "Database not loaded: " <> BSL.fromStrict (T.encodeUtf8 dbName)}
+
+-- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
+-- the user to load the missing dep DBs (or POST /relink) rather than
+-- silently undercounting impacts.
+requireFullyLinked :: Text -> Database -> Handler ()
+requireFullyLinked dbName db =
+    let n = unresolvedCount (dbLinkingStats db)
+    in when (n > 0) $ throwError err422
+        { errBody = BSL.fromStrict $ T.encodeUtf8 $
+              "Database \"" <> dbName <> "\" has " <> T.pack (show n)
+              <> " unresolved cross-DB products. Load the missing dependency "
+              <> "databases (see GET /api/v1/db/" <> dbName
+              <> "/setup) then POST /api/v1/db/" <> dbName <> "/relink."
+        }
+
+-- | Inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
+inventoryWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Handler Inventory
+inventoryWithDeps dbManager dbName db solver pid = do
+    requireFullyLinked dbName db
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    res <- liftIO $ SharedSolver.computeInventoryMatrixWithDepsCached
+        unitCfg (DM.mkDepSolverLookup dbManager) db solver pid
+    case res of
+        Right inv -> pure inv
+        Left err  -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+
+-- | Batch inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
+inventoriesWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> [ProcessId] -> Handler [Inventory]
+inventoriesWithDeps dbManager dbName db solver pids = do
+    requireFullyLinked dbName db
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    res <- liftIO $ SharedSolver.computeInventoryMatrixBatchWithDepsCached
+        unitCfg (DM.mkDepSolverLookup dbManager) db solver pids
+    case res of
+        Right invs -> pure invs
+        Left err   -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
 
 
 -- | Helper function to validate ProcessId and lookup activity
@@ -265,6 +302,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         :<|> DBHandlers.getDatabases dbManager
         :<|> DBHandlers.loadDatabaseHandler dbManager
         :<|> DBHandlers.unloadDatabaseHandler dbManager
+        :<|> DBHandlers.relinkDatabaseHandler dbManager
         :<|> DBHandlers.deleteDatabaseHandler dbManager
         :<|> DBHandlers.uploadDatabaseHandler dbManager
         :<|> DBHandlers.getDatabaseSetupHandler dbManager
@@ -548,7 +586,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , Agg.apGroupBy               = groupByParam
                 , Agg.apAggregate             = aggFn
                 }
-        result <- liftIO $ Agg.aggregate db sharedSolver (DM.mkDepSolverLookup dbManager) processId params
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        result <- liftIO $ Agg.aggregate unitCfg db sharedSolver (DM.mkDepSolverLookup dbManager) processId params
         case result of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
@@ -578,8 +617,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, activity) -> do
-                inventory <- liftIO $ SharedSolver.computeInventoryMatrixWithDepsCached
-                    (DM.mkDepSolverLookup dbManager) db sharedSolver actProcessId
+                inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
                 result <- liftIO $ computeCategoryResult dbName db activity (fromMaybe 5 topFlowsParam) inventory method
                 liftIO $ logLCIAResult result method
                 return result
@@ -621,8 +659,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, activity) -> do
                 t0 <- liftIO getCurrentTime
-                inventory <- liftIO $ SharedSolver.computeInventoryMatrixWithDepsCached
-                    (DM.mkDepSolverLookup dbManager) db sharedSolver actProcessId
+                inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
                 t1 <- liftIO getCurrentTime
                 let !invSize = M.size inventory
                 liftIO $ reportProgress Info $ "[LCIA batch] " <> T.unpack collectionName
@@ -818,8 +855,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
                     Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
                     Right (actProcessId, _) -> do
-                        inventory <- liftIO $ SharedSolver.computeInventoryMatrixWithDepsCached
-                            (DM.mkDepSolverLookup dbManager) db sharedSolver actProcessId
+                        inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
                         loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
                         let methods = map snd loadedMethods
                             ctx = AnalyzeContext
@@ -1240,8 +1276,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             invalid   = [ pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved ]
             validPidNums = [ pidNum | (_, pidNum, _) <- valid ]
         t0 <- liftIO getCurrentTime
-        inventories <- liftIO $ SharedSolver.computeInventoryMatrixBatchWithDepsCached
-            (DM.mkDepSolverLookup dbManager) db sharedSolver validPidNums
+        inventories <- inventoriesWithDeps dbManager dbName db sharedSolver validPidNums
         t1 <- liftIO getCurrentTime
         let mkEntry ((pidText, _pidNum, activity), inventory) = do
                 impacts <- buildLCIABatchResult dbName db activity collection inventory

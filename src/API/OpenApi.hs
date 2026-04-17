@@ -89,6 +89,7 @@ instance ToSchema CharacterizationEntry where { declareNamedSchema = genericDecl
 instance ToSchema DatabaseListResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema DatabaseStatusAPI where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema ActivateResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
+instance ToSchema RelinkResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema DepLoadResult where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema LoadDatabaseResponse where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }
 instance ToSchema UploadRequest where { declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions }

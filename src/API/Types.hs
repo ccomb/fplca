@@ -457,6 +457,17 @@ data ActivateResponse = ActivateResponse
     }
     deriving (Generic)
 
+-- | Response for the re-link endpoint: fresh cross-DB link stats after a
+-- second-pass linking against the currently-loaded databases.
+data RelinkResponse = RelinkResponse
+    { rrDbName           :: Text
+    , rrUnresolvedBefore :: Int
+    , rrUnresolvedAfter  :: Int
+    , rrCrossDBLinks     :: Int
+    , rrDependsOn        :: [Text]
+    }
+    deriving (Generic)
+
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded    { dlrName :: Text }
@@ -741,6 +752,7 @@ instance FromJSON ExchangeWithUnit where { parseJSON = strippedParseJSON }
 instance ToJSON DatabaseListResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON DatabaseStatusAPI where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON ActivateResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
+instance ToJSON RelinkResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON DepLoadResult where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON LoadDatabaseResponse where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
 instance ToJSON UploadRequest where { toJSON = strippedToJSON; toEncoding = strippedToEncoding }
@@ -748,6 +760,7 @@ instance ToJSON UploadResponse where { toJSON = strippedToJSON; toEncoding = str
 instance FromJSON DatabaseListResponse where { parseJSON = strippedParseJSON }
 instance FromJSON DatabaseStatusAPI where { parseJSON = strippedParseJSON }
 instance FromJSON ActivateResponse where { parseJSON = strippedParseJSON }
+instance FromJSON RelinkResponse where { parseJSON = strippedParseJSON }
 instance FromJSON DepLoadResult where { parseJSON = strippedParseJSON }
 instance FromJSON LoadDatabaseResponse where { parseJSON = strippedParseJSON }
 instance FromJSON UploadRequest where { parseJSON = strippedParseJSON }

@@ -726,6 +726,7 @@ data CrossDBLink = CrossDBLink
     , cdlSupplierActUUID :: !UUID           -- ^ Supplier activity UUID (in another database)
     , cdlSupplierProdUUID :: !UUID          -- ^ Supplier product UUID (in another database)
     , cdlCoefficient    :: !Double          -- ^ Amount consumed per unit output of consumer
+    , cdlExchangeUnit   :: !Text            -- ^ Consumer's exchange unit (converted to supplier refUnit at matrix-build time)
     , cdlFlowName       :: !Text            -- ^ Product name (for display/debugging)
     , cdlLocation       :: !Text            -- ^ Supplier location (for display)
     , cdlSourceDatabase :: !Text            -- ^ Source database name

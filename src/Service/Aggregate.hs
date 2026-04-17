@@ -46,7 +46,7 @@ import Types
     )
 import Service
     ( ActivityFilter(..)
-    , ServiceError
+    , ServiceError(..)
     , resolveActivityAndProcessId
     , getActivityExchangeDetails
     , buildSupplyChainFromScalingVector
@@ -54,6 +54,7 @@ import Service
     )
 import Matrix (buildDemandVectorFromIndex)
 import SharedSolver (SharedSolver, DepSolverLookup, solveWithSharedSolver, computeInventoryMatrixWithDepsCached)
+import UnitConversion (UnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Parameters
@@ -122,13 +123,14 @@ data AggRow = AggRow
 -- ---------------------------------------------------------------------------
 
 aggregate
-    :: Database
+    :: UnitConfig
+    -> Database
     -> SharedSolver
     -> DepSolverLookup     -- cross-DB lookup for ScopeBiosphere
     -> Text                -- processId text
     -> AggregateParams
     -> IO (Either ServiceError Aggregation)
-aggregate db solver depLookup pidText params =
+aggregate unitConfig db solver depLookup pidText params =
     case resolveActivityAndProcessId db pidText of
         Left err -> return (Left err)
         Right (processId, activity) ->
@@ -142,9 +144,12 @@ aggregate db solver depLookup pidText params =
                         response = buildSupplyChainFromScalingVector db processId supplyVec af False
                     return $ Right $ reduce params (rowsFromSupplyChain response)
                 ScopeBiosphere -> do
-                    inventory <- computeInventoryMatrixWithDepsCached depLookup db solver processId
-                    let export = convertToInventoryExport db processId activity inventory
-                    return $ Right $ reduce params (rowsFromBiosphere export)
+                    invE <- computeInventoryMatrixWithDepsCached unitConfig depLookup db solver processId
+                    case invE of
+                        Left err        -> return (Left (MatrixError err))
+                        Right inventory ->
+                            let export = convertToInventoryExport db processId activity inventory
+                            in return $ Right $ reduce params (rowsFromBiosphere export)
   where
     emptyFilter maxD = ActivityFilter
         { afName = Nothing, afLocation = Nothing, afProduct = Nothing

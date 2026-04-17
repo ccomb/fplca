@@ -53,6 +53,7 @@ module Matrix (
 
 import Progress
 import Types
+import qualified UnitConversion
 import Control.Exception (catch, evaluate, SomeException)
 import Control.Monad (forM_, when)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar, readMVar, modifyMVar_)
@@ -421,7 +422,10 @@ refAmount). 'cdlCoefficient' is the raw exchange amount per ref-unit of the
 consumer, while the scaling vector is in per-kg units — so we re-scale
 before accumulating.
 -}
-accumulateDepDemands :: Database -> Vector -> M.Map Text (M.Map (UUID, UUID) Double)
+accumulateDepDemands
+    :: Database
+    -> Vector
+    -> M.Map Text (M.Map (UUID, UUID) (Double, Text))
 accumulateDepDemands db scalingVec =
     foldr step M.empty (dbCrossDBLinks db)
   where
@@ -437,12 +441,19 @@ accumulateDepDemands db scalingVec =
                     normFactor    = M.findWithDefault 1.0 consumerPid normFactors
                     demand        = cdlCoefficient link * consumerScale / normFactor
                     supplierKey   = (cdlSupplierActUUID link, cdlSupplierProdUUID link)
+                    entry         = (demand, cdlExchangeUnit link)
                 in if demand == 0
                      then acc
-                     else M.insertWith (M.unionWith (+))
+                     else M.insertWith (M.unionWith mergeEntry)
                             (cdlSourceDatabase link)
-                            (M.singleton supplierKey demand)
+                            (M.singleton supplierKey entry)
                             acc
+    -- Two links hitting the same supplier should share the same exchange unit
+    -- (it's the supplier's product, and the consumer-side exchange is written
+    -- in that product's unit). Keep the first; conversion will catch any
+    -- inconsistency because depDemandsToVector converts exchangeUnit →
+    -- supplierRefUnit per entry.
+    mergeEntry (a, u) (b, _) = (a + b, u)
 
 -- | Normalization factor (ref-product amount) for each consumer activity that
 -- appears in 'dbCrossDBLinks'. Mirrors the factor used in 'buildActivityTriplets'.
@@ -484,19 +495,57 @@ activityNormalizationFactor db pid =
 
 {- |
 Convert a sparse supplier-demand map into a length-@n_dep@ demand vector for
-the dependency database. Suppliers whose @(actUUID, prodUUID)@ does not resolve
-in the dep DB are silently dropped.
+the dependency database.
+
+Each entry's consumer-side exchange unit is converted to the supplier's
+reference-product unit via 'convertUnit', mirroring the internal technosphere
+path in 'Database.buildDatabaseWithMatrices'. Fails with 'Left' on an unknown
+unit pair — we never silently use raw values when units are incompatible.
+
+Suppliers whose @(actUUID, prodUUID)@ does not resolve in the dep DB are
+silently dropped (they've already been accepted as cross-DB links; a missing
+ProcessId here means the dep DB was loaded but doesn't have that exact
+supplier, which is recorded at link time).
 -}
-depDemandsToVector :: Database -> M.Map (UUID, UUID) Double -> Vector
-depDemandsToVector depDb demands =
-    let actIdx     = dbActivityIndex depDb
-        procLookup = dbProcessIdLookup depDb
-        n          = fromIntegral (dbActivityCount depDb) :: Int
-        entries    = [ (fromIntegral (actIdx V.! fromIntegral pid), d)
-                     | (key, d) <- M.toList demands
-                     , Just pid <- [M.lookup key procLookup]
-                     ]
-    in U.accum (+) (U.replicate n 0.0) entries
+depDemandsToVector
+    :: UnitConversion.UnitConfig
+    -> Text                     -- ^ dep DB name, for error messages
+    -> Database
+    -> M.Map (UUID, UUID) (Double, Text)
+    -> Either Text Vector
+depDemandsToVector unitConfig depDbName depDb demands = do
+    converted <- traverse convertEntry (M.toList demands)
+    let n       = fromIntegral (dbActivityCount depDb) :: Int
+        entries = [e | Just e <- converted]
+    Right $ U.accum (+) (U.replicate n 0.0) entries
+  where
+    actIdx     = dbActivityIndex depDb
+    procLookup = dbProcessIdLookup depDb
+    activities = dbActivities depDb
+    unitsDB    = dbUnits depDb
+    convertEntry ((actUUID, prodUUID), (amt, exchangeUnit)) =
+        case M.lookup (actUUID, prodUUID) procLookup of
+            Nothing  -> Right Nothing  -- supplier absent in dep DB; drop
+            Just pid ->
+                let act          = activities V.! fromIntegral pid
+                    refExs       = [ex | ex <- exchanges act, exchangeIsReference ex, not (exchangeIsInput ex)]
+                    supplierUnit = case refExs of
+                        (ex:_) -> getUnitNameForExchange unitsDB ex
+                        []     -> ""
+                    needsConversion =
+                        UnitConversion.normalizeUnit exchangeUnit /= UnitConversion.normalizeUnit supplierUnit
+                        && not (T.null exchangeUnit) && not (T.null supplierUnit)
+                    idx          = fromIntegral (actIdx V.! fromIntegral pid) :: Int
+                in if not needsConversion
+                       then Right (Just (idx, amt))
+                       else case UnitConversion.convertUnit unitConfig exchangeUnit supplierUnit amt of
+                                Just v  -> Right (Just (idx, v))
+                                Nothing -> Left $
+                                    "Unknown unit conversion: \"" <> exchangeUnit
+                                    <> "\" \8594 \"" <> supplierUnit
+                                    <> "\" for supplier " <> activityName act
+                                    <> " in database " <> depDbName
+                                    <> " \8212 add these units to [[units]] CSV"
 
 {- |
 Build the final demand vector f for LCA calculations.

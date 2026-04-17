@@ -29,6 +29,8 @@ module Database.Manager
       -- * Load/Unload
     , loadDatabase
     , unloadDatabase
+    , relinkDatabase
+    , RelinkResult(..)
     , addDatabase
     , removeDatabase
       -- * Method Operations
@@ -116,7 +118,7 @@ import qualified Search.BM25 as BM25
 import qualified UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
-import Database.CrossLinking (IndexedDatabase(..), buildIndexedDatabaseFromDB)
+import Database.CrossLinking (IndexedDatabase(..), buildIndexedDatabaseFromDB, LinkingContext(..), defaultLinkingThreshold)
 import qualified Database.Upload as Upload
 import Database.Upload (DatabaseFormat(..), findMethodDirectory)
 import qualified Database.UploadedDatabase as UploadedDB
@@ -1037,7 +1039,95 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 pairs = extractFromEcoSpold2 (dbFlows db) bioUUIDs
                             autoCreateFlowSynonyms manager dbName
                                 ("Auto-extracted from " <> dcDisplayName dbConfig) pairs
+                            relinkDependents manager dbName
                             return $ Right loaded
+
+-- | Result of a relink operation (unresolved counts before/after).
+data RelinkResult = RelinkResult
+    { rresDbName           :: !Text
+    , rresUnresolvedBefore :: !Int
+    , rresUnresolvedAfter  :: !Int
+    , rresCrossDBLinks     :: !Int
+    , rresDepsLoaded       :: ![Text]
+    } deriving (Show, Eq)
+
+-- | Re-run cross-DB linking for an already-loaded DB against the current set
+-- of loaded dep DBs. Updates 'dbCrossDBLinks' and 'dbLinkingStats' in place
+-- in the LoadedDatabase record. Does NOT rebuild the technosphere matrix or
+-- invalidate the MUMPS factorization — cross-DB links are consumed only at
+-- solve time.
+relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
+relinkDatabase manager dbName = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    case M.lookup dbName loadedDbs of
+        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Just loaded -> do
+            indexedDbs <- readTVarIO (dmIndexedDbs manager)
+            let otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName]
+            synonymDB  <- getMergedSynonymDB manager
+            unitConfig <- getMergedUnitConfig manager
+            let db = ldDatabase loaded
+                beforeUnresolved = unresolvedCount (dbLinkingStats db)
+                activityMap = M.fromList
+                    [ (dbProcessIdTable db V.! i, dbActivities db V.! i)
+                    | i <- [0 .. V.length (dbActivities db) - 1]
+                    ]
+                ctx = LinkingContext
+                    { lcIndexedDatabases  = otherIndexes
+                    , lcSynonymDB         = synonymDB
+                    , lcUnitConfig        = unitConfig
+                    , lcThreshold         = defaultLinkingThreshold
+                    , lcLocationHierarchy = M.map snd (dmGeographies manager)
+                    }
+                !totalInputs = Loader.countTotalTechInputs (toSimpleDatabase db)
+                rawStats = Loader.findAllCrossDBLinks
+                    ctx (dbFlows db) (dbUnits db) activityMap
+                newStats = rawStats { cdlTotalInputs = totalInputs }
+                newLinks = cdlLinks newStats
+                newDeps  = M.keys (crossDBBySource newStats)
+                !db'     = db
+                    { dbCrossDBLinks = newLinks
+                    , dbDependsOn    = newDeps
+                    , dbLinkingStats = newStats
+                    }
+                !loaded' = loaded { ldDatabase = db' }
+                afterUnresolved = unresolvedCount newStats
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager)  (M.insert dbName loaded')
+                modifyTVar' (dmIndexedDbs manager)
+                    (M.insert dbName (buildIndexedDatabaseFromDB dbName synonymDB db'))
+            clearMethodMappingCacheForDb manager dbName
+            reportProgress Info $
+                "Re-linked " <> T.unpack dbName <> ": "
+                <> show beforeUnresolved <> " \8594 " <> show afterUnresolved
+                <> " unresolved products ("
+                <> show (length newLinks) <> " cross-DB links)"
+            return $ Right RelinkResult
+                { rresDbName           = dbName
+                , rresUnresolvedBefore = beforeUnresolved
+                , rresUnresolvedAfter  = afterUnresolved
+                , rresCrossDBLinks     = length newLinks
+                , rresDepsLoaded       = newDeps
+                }
+
+-- | After a DB loads (or reloads), re-link every already-loaded DB that
+-- declares it as a dependency. This makes cross-DB linking converge
+-- automatically regardless of load order.
+relinkDependents :: DatabaseManager -> Text -> IO ()
+relinkDependents manager newlyLoaded = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    let dependents =
+            [ name
+            | (name, ld) <- M.toList loadedDbs
+            , name /= newlyLoaded
+            , newlyLoaded `elem` dbDependsOn (ldDatabase ld)
+            ]
+    forM_ dependents $ \depName -> do
+        result <- relinkDatabase manager depName
+        case result of
+            Right _  -> return ()
+            Left err -> reportProgress Warning $
+                "Re-link of " <> T.unpack depName <> " failed: " <> T.unpack err
 
 -- | Auto-load unloaded dependencies via loadDatabaseSingle
 autoLoadDeps :: DatabaseManager -> [Text] -> IO [DepLoadResult]
@@ -1175,7 +1265,9 @@ stageUploadedDatabase manager dbConfig = do
                     reportProgress Info $ "  [OK] Staged: " <> T.unpack (dcDisplayName dbConfig)
                     return $ Right ()
 
--- | Unload a database from memory (keeps config for reloading)
+-- | Unload a database from memory (keeps config for reloading).
+-- Refuses to unload if any currently-loaded database declares this one as a
+-- dependency — unloading would leave the dependent's cross-DB links dangling.
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 unloadDatabase manager dbName = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
@@ -1183,20 +1275,32 @@ unloadDatabase manager dbName = do
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
         Just _ -> do
-            -- Remove from loaded databases and IndexedDatabases (for cross-DB linking)
-            atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
-                modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
+            let dependents =
+                    [ name
+                    | (name, ld) <- M.toList loadedDbs
+                    , name /= dbName
+                    , dbName `elem` dbDependsOn (ldDatabase ld)
+                    ]
+            if not (null dependents)
+                then return $ Left $
+                    "Cannot unload " <> dbName <> ": still required by "
+                    <> T.intercalate ", " dependents
+                    <> ". Unload dependents first."
+                else do
+                    -- Remove from loaded databases and IndexedDatabases (for cross-DB linking)
+                    atomically $ do
+                        modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
+                        modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
 
-            -- Clear cached solvers and flow mappings
-            clearCachedSolver dbName
-            clearMethodMappingCacheForDb manager dbName
+                    -- Clear cached solvers and flow mappings
+                    clearCachedSolver dbName
+                    clearMethodMappingCacheForDb manager dbName
 
-            -- Force garbage collection to release memory
-            performGC
+                    -- Force garbage collection to release memory
+                    performGC
 
-            reportProgress Info $ "Unloaded database: " <> T.unpack dbName
-            return $ Right ()
+                    reportProgress Info $ "Unloaded database: " <> T.unpack dbName
+                    return $ Right ()
 
 -- | Add a new database config to the manager (without loading)
 addDatabase :: DatabaseManager -> DatabaseConfig -> IO ()
