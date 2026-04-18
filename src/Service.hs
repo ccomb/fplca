@@ -767,6 +767,23 @@ bm25Retrieve db queryText = do
                 sorted = L.sortOn (\(_, s, _) -> negate s) scored
             in Just [(pid, a) | (pid, _, a) <- sorted]
 
+-- | Set of ProcessIds whose name fuzzy-matches the query, using the same
+-- semantics as @/activities@ BM25 search. @Nothing@ signals \"no filter\":
+-- either the query tokenizes to nothing or the database has no BM25 index
+-- (only happens in bare test fixtures; production DBs always carry one).
+bm25MatchingPids :: Database -> Text -> Maybe IS.IntSet
+bm25MatchingPids db =
+    fmap (IS.fromList . map (fromIntegral . fst)) . bm25Retrieve db
+
+-- | BM25/fuzzy membership set for the optional @name@ filter carried on an
+-- 'ActivityFilter'. Blank/absent queries and DBs without a BM25 index both
+-- collapse to @Nothing@ (⇒ predicate accepts every pid), so call sites stay
+-- a one-liner.
+nameFilterSet :: Database -> Maybe Text -> Maybe IS.IntSet
+nameFilterSet db mq = do
+    q <- mq
+    if T.null (T.strip q) then Nothing else bm25MatchingPids db q
+
 -- | Search activities (returns same format as API)
 searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Bool -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
 searchActivities db nameParam geoParam productParam classFilters exactMatch limitParam offsetParam sortParam orderParam = do
@@ -1253,6 +1270,13 @@ collectSupplyChainEntries db dbName mRootPid supplyVec af includeEdges qualifyPi
 
         textMatches pat txt = T.toCaseFold pat `T.isInfixOf` T.toCaseFold txt
 
+        -- BM25/fuzzy membership set for afName, computed once per request so
+        -- /supply-chain matches whatever /activities already found for the
+        -- same query. Nothing ⇒ no effective filter (absent, blank, or DB
+        -- without a BM25 index — only bare test fixtures hit that last case).
+        mNameSet = nameFilterSet db (afName af)
+        nameMatchesPid pid = maybe True (IS.member (fromIntegral pid)) mNameSet
+
         getProductNames activity =
             [ flowName flow
             | ex <- exchanges activity
@@ -1262,7 +1286,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec af includeEdges qualifyPi
             ]
 
         matchesFilters activity pid =
-            let nameOk     = maybe True (\pat -> textMatches pat (activityName activity)) (afName af)
+            let nameOk     = nameMatchesPid pid
                 locOk      = maybe True (\pat -> textMatches pat (activityLocation activity)) (afLocation af)
                 productOk  = maybe True (\pat -> any (textMatches pat) (getProductNames activity)) (afProduct af)
                 classOk    = matchClassifications activity (afClassifications af)
@@ -1997,9 +2021,8 @@ getConsumers db processIdText af = do
         allConsumers = M.delete processId $
                            bfs (M.singleton processId 0) [(processId, 0)]
 
-        nameMatches activity = case afName af of
-            Nothing  -> True
-            Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold (activityName activity)
+        mNameSet = nameFilterSet db (afName af)
+        nameMatches pid = maybe True (IS.member (fromIntegral pid)) mNameSet
 
         locationMatches activity = case afLocation af of
             Nothing  -> True
@@ -2022,8 +2045,8 @@ getConsumers db processIdText af = do
                 prodName prodAmount prodUnit
                 depth
             | (pid, depth) <- M.toAscList allConsumers
+            , nameMatches pid
             , let activity = dbActivities db V.! fromIntegral pid
-            , nameMatches activity
             , locationMatches activity
             , classMatches activity
             , let (prodName, prodAmount, prodUnit) =

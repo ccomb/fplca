@@ -6,9 +6,10 @@ import Test.Hspec
 import TestHelpers
 import GoldenData
 import Types
-import API.Types (SupplyChainEntry(..), SupplyChainResponse(..), TreeExport(..), TreeMetadata(..), ExportNode(..), TreeEdge(..), FlowInfo(..), NodeType(..), EdgeType(..))
-import Service (ActivityFilter(..), buildSupplyChainFromScalingVector, filterTreeExport, bfsToPattern, getPathTo)
+import API.Types (ConsumerResult(..), SearchResults(..), SupplyChainEntry(..), SupplyChainResponse(..), TreeExport(..), TreeMetadata(..), ExportNode(..), TreeEdge(..), FlowInfo(..), NodeType(..), EdgeType(..))
+import Service (ActivityFilter(..), buildSupplyChainFromScalingVector, filterTreeExport, bfsToPattern, getConsumers, getPathTo)
 import Matrix (computeScalingVector)
+import qualified Search.BM25 as BM25
 import SharedSolver (createSharedSolver)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
@@ -75,6 +76,94 @@ spec = do
             let depth1 = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec
                     emptyFilter { afMaxDepth = Just 1 } False
             scrFilteredActivities depth1 `shouldSatisfy` (< scrFilteredActivities noFilter)
+
+    -- -----------------------------------------------------------------------
+    -- Fuzzy name filter (BM25/fuzzy parity with /activities search)
+    -- SAMPLE.min3: pid 0 "production of product X" (root)
+    --              pid 1 "production of product Y" (depth 1)
+    --              pid 2 "production of product Z" (depth 2)
+    -- BM25 vocab therefore contains: production, of, product, x, y, z.
+    -- -----------------------------------------------------------------------
+    describe "Fuzzy name filter on supply-chain" $ do
+        let loadWithIndex = fmap BM25.addBM25Index (loadSampleDatabase "SAMPLE.min3")
+            buildWithName db pid vec nameQ =
+                buildSupplyChainFromScalingVector db "test-db" pid vec
+                    emptyFilter { afName = nameQ } False
+
+        it "narrows to single entry when token matches only one activity" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            -- Only pid 1's name contains the token "y".
+            let entries = scrSupplyChain (buildWithName db rootPid supplyVec (Just "Y"))
+            map sceName entries `shouldBe` ["production of product Y"]
+
+        it "accepts typos via edit-distance expansion" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            -- "prodcution" is "production" with two characters transposed.
+            let entries = scrSupplyChain (buildWithName db rootPid supplyVec (Just "prodcution"))
+            length entries `shouldSatisfy` (>= 1)
+
+        it "accepts stems via prefix-coverage expansion" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            -- "produc" is a stem of "production" — both Y and Z pass.
+            let entries = scrSupplyChain (buildWithName db rootPid supplyVec (Just "produc"))
+            length entries `shouldBe` 2
+
+        it "is case-insensitive" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            let nUpper = scrFilteredActivities (buildWithName db rootPid supplyVec (Just "PRODUCT"))
+                nLower = scrFilteredActivities (buildWithName db rootPid supplyVec (Just "product"))
+            nUpper `shouldBe` nLower
+
+        it "blank name query is equivalent to no filter" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            let nNone  = scrFilteredActivities (buildWithName db rootPid supplyVec Nothing)
+                nBlank = scrFilteredActivities (buildWithName db rootPid supplyVec (Just "   "))
+            nBlank `shouldBe` nNone
+
+        it "preserves depth sort order across filtered entries" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            let resp = buildSupplyChainFromScalingVector db "test-db" rootPid supplyVec
+                    emptyFilter { afName = Just "produc", afSort = Just "depth" } False
+            map sceDepth (scrSupplyChain resp) `shouldBe` [1, 2]
+
+    describe "Fuzzy name filter on consumers" $ do
+        let loadWithIndex = fmap BM25.addBM25Index (loadSampleDatabase "SAMPLE.min3")
+
+        it "narrows consumers to activities matching the query token" $ do
+            db <- loadWithIndex
+            -- Consumers of Z (pid 2) are Y (pid 1, direct) and X (pid 0, transitive).
+            let pidZ = processIdToText db 2
+            case getConsumers db pidZ emptyFilter { afName = Just "X" } of
+                Left err -> expectationFailure $ "getConsumers failed: " ++ show err
+                Right sr -> do
+                    map crName (srResults sr) `shouldBe` ["production of product X"]
+                    srTotal sr `shouldBe` 1
+
+        it "accepts typos in the name filter" $ do
+            db <- loadWithIndex
+            let pidZ = processIdToText db 2
+            case getConsumers db pidZ emptyFilter { afName = Just "prodcution" } of
+                Left err -> expectationFailure $ "getConsumers failed: " ++ show err
+                Right sr -> length (srResults sr) `shouldSatisfy` (>= 1)
+
+        it "returns all consumers when name filter is absent" $ do
+            db <- loadWithIndex
+            let pidZ = processIdToText db 2
+            case getConsumers db pidZ emptyFilter of
+                Left err -> expectationFailure $ "getConsumers failed: " ++ show err
+                Right sr -> length (srResults sr) `shouldBe` 2
 
     -- -----------------------------------------------------------------------
     -- filterTreeExport
