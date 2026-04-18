@@ -897,6 +897,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
                     Right (actProcessId, _) -> do
                         inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+                        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                         loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
                         let methods = map snd loadedMethods
                             ctx = AnalyzeContext
@@ -904,6 +905,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                 , acInventory  = inventory
                                 , acMethods    = methods
                                 , acParameters = M.empty
+                                , acFlowDB     = mFlows
+                                , acUnitDB     = mUnits
                                 }
                         liftIO $ ahAnalyze analyzer ctx
 

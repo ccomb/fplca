@@ -54,7 +54,7 @@ import Matrix (Inventory)
 import SynonymDB (emptySynonymDB)
 import Data.Char (toLower)
 import Data.List (sortOn)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
@@ -159,7 +159,7 @@ lciaAnalyzer = AnalyzeHandle
             mappings <- Mapping.mapMethodFlows defaultMappers mapCtx m
             pure $ toJSON $ M.fromList
                 [ ("method" :: String, toJSON (show m))
-                , ("score",  toJSON (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (dbUnits db) (dbFlows db) inv mappings))
+                , ("score",  toJSON (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acFlowDB ctx) inv mappings))
                 ]
             ) methods
         pure $ toJSON scores
@@ -293,26 +293,32 @@ hotspotAnalyzer = AnalyzeHandle
             methods = acMethods ctx
             mapCtx = Mapping.buildMapContext db
             topN = 20
-        results <- mapM (analyzeMethod db mapCtx inv topN) methods
+            flowDB = acFlowDB ctx
+            unitDB = acUnitDB ctx
+        results <- mapM (analyzeMethod flowDB unitDB mapCtx inv topN) methods
         pure $ toJSON results
     }
   where
-    analyzeMethod db mapCtx inv topN method = do
+    -- Walk the inventory directly via 'inventoryContributions' so flows from
+    -- dep DBs (absent from the root-DB method mapping) still contribute.
+    -- Characterization uses the merged flow/unit snapshot the caller built.
+    analyzeMethod flowDB unitDB mapCtx inv topN method = do
         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx method
-        let contributions = mapMaybe (flowContribution inv) mappings
-            sorted = take topN $ sortOn (\(_,_,c) -> negate (abs c)) contributions
-            total = Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (dbUnits db) (dbFlows db) inv mappings
+        let tables          = Mapping.buildMethodTables mappings
+            (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables
+            sorted          = take topN $ sortOn (\(_,_,c) -> negate (abs c)) rawContribs
+            total           = Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables
         pure $ toJSON $ M.fromList
             [ ("method" :: String, toJSON (methodName method))
             , ("unit", toJSON (methodUnit method))
             , ("totalScore", toJSON total)
             , ("topFlows", toJSON [ toJSON $ M.fromList
                 [ ("flowName" :: String, toJSON (flowName f))
-                , ("cfName", toJSON (mcfFlowName cf))
+                , ("cfValue", toJSON cfVal)
                 , ("contribution", toJSON contrib)
                 , ("percent", toJSON (if total /= 0 then contrib / total * 100 else 0 :: Double))
                 ]
-                | (cf, f, contrib) <- sorted
+                | (f, cfVal, contrib) <- sorted
                 ])
             ]
 

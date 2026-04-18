@@ -209,6 +209,12 @@ data AnalyzeContext = AnalyzeContext
     , acInventory  :: !Inventory
     , acMethods    :: ![Method]
     , acParameters :: !(Map Text Value)
+    -- | Merged flow metadata across every loaded DB. The 'Inventory' passed
+    -- in may be cross-DB-merged, so analyzers that characterize or enrich
+    -- by flow UUID should look up through these rather than @dbFlows acDatabase@
+    -- (which would silently drop dep-DB flows).
+    , acFlowDB     :: !FlowDB
+    , acUnitDB     :: !UnitDB
     }
 
 -- ──────────────────────────────────────────────

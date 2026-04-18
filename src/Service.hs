@@ -1016,15 +1016,56 @@ getActivitiesUsingFlow db flowUUID =
                 , Just processId <- [findProcessIdForActivity db proc]
                 ]
 
--- | Helper function to get detailed exchanges with filtering
+-- | Helper function to get detailed exchanges with filtering. Resolves
+-- cross-DB technosphere inputs (SimaPro pattern: activityLinkId is nil,
+-- the supplier lives in a dep DB via 'dbCrossDBLinks') by synthesizing an
+-- 'ActivitySummary' with a qualified pid @"dbName::actUUID_prodUUID"@ —
+-- same convention the @/activity/{pid}@ endpoint uses.
 getActivityExchangeDetails :: Database -> Activity -> (Exchange -> Bool) -> [ExchangeDetail]
 getActivityExchangeDetails db activity filterFn =
-    [ ExchangeDetail exchange flow (getUnitNameForFlow (dbUnits db) flow) unit (getUnitNameForExchange (dbUnits db) exchange) (getTargetActivity db exchange)
+    [ ExchangeDetail exchange flow
+        (getUnitNameForFlow (dbUnits db) flow)
+        unit
+        (getUnitNameForExchange (dbUnits db) exchange)
+        (resolveTarget exchange flow)
     | exchange <- exchanges activity
     , filterFn exchange
     , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
     , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
     ]
+  where
+    -- Cross-DB link lookup by consumer's flow name, built once per activity
+    -- for O(log n) per-exchange resolution.
+    crossLinkByFlow :: M.Map Text CrossDBLink
+    crossLinkByFlow = case findProcessIdForActivity db activity >>= processIdToUUIDs db of
+        Just (actUUID, _) ->
+            M.fromList
+                [ (T.toLower (cdlFlowName link), link)
+                | link <- dbCrossDBLinks db
+                , cdlConsumerActUUID link == actUUID
+                ]
+        Nothing -> M.empty
+
+    resolveTarget exchange flow =
+        case getTargetActivity db exchange of
+            Just s  -> Just s
+            Nothing -> crossDBTarget flow
+
+    crossDBTarget flow =
+        case M.lookup (T.toLower (flowName flow)) crossLinkByFlow of
+            Nothing -> Nothing
+            Just link ->
+                let qualifiedPid = cdlSourceDatabase link <> "::"
+                                <> UUID.toText (cdlSupplierActUUID link) <> "_"
+                                <> UUID.toText (cdlSupplierProdUUID link)
+                in Just ActivitySummary
+                    { prsProcessId     = qualifiedPid
+                    , prsName          = cdlFlowName link
+                    , prsLocation      = cdlLocation link
+                    , prsProduct       = cdlFlowName link
+                    , prsProductAmount = 1.0
+                    , prsProductUnit   = cdlExchangeUnit link
+                    }
 
 -- | Get detailed input exchanges
 getActivityInputDetails :: Database -> Activity -> [ExchangeDetail]
