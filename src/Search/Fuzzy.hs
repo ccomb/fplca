@@ -75,23 +75,21 @@ expandTokensGrouped idx = map expand
 -- `minSharedTrigrams` trigrams with the query are considered.
 -- Results sorted by (jaccard desc, editDistance asc).
 editCandidates :: BM25Index -> Text -> [Text]
-editCandidates idx q =
-    let qTrigs = trigramsOf q
-        k      = maxEditK (T.length q)
-    in if S.null qTrigs
-           then []
-           else
-               let bucket = candidateBucket idx qTrigs
-                   scored =
-                       [ (c, ja, d)
-                       | c <- bucket
-                       , let ja = jaccard qTrigs (trigramsOf c)
-                       , ja >= minJaccard
-                       , let d = editDistance q c
-                       , d <= k
-                       ]
-                   bestFirst = sortBy (comparing (\(_, ja, d) -> (Down ja, d)))
-               in [c | (c, _, _) <- bestFirst scored]
+editCandidates idx q
+    | S.null qTrigs = []
+    | otherwise     = map (\(c, _, _) -> c) (sortBy (comparing sortKey) scored)
+  where
+    qTrigs  = trigramsOf q
+    k       = maxEditK (T.length q)
+    sortKey (_, ja, d) = (Down ja, d)
+    scored  =
+        [ (c, ja, d)
+        | c <- candidateBucket idx qTrigs
+        , let ja = jaccard qTrigs (trigramsOf c)
+        , ja >= minJaccard
+        , let d = editDistance q c
+        , d <= k
+        ]
 
 -- | Candidate tokens that have the query's trigrams as a near-subset
 -- (prefix/stem matches). Length guard prevents short queries from matching
@@ -99,23 +97,20 @@ editCandidates idx q =
 -- Results sorted by (coverage desc, candidate length asc).
 prefixCandidates :: BM25Index -> Text -> [Text]
 prefixCandidates idx q
-    | T.length q < minPrefixLen = []
-    | otherwise =
-        let qTrigs = trigramsOf q
-            qLen   = T.length q
-        in if S.size qTrigs < minSharedTrigrams
-               then []
-               else
-                   let bucket = candidateBucket idx qTrigs
-                       scored =
-                           [ (c, cov)
-                           | c <- bucket
-                           , T.length c <= maxPrefixRatio * qLen
-                           , let cov = coverage qTrigs (trigramsOf c)
-                           , cov >= minCoverage
-                           ]
-                       bestFirst = sortBy (comparing (\(c, cov) -> (Down cov, T.length c)))
-                   in [c | (c, _) <- bestFirst scored]
+    | T.length q < minPrefixLen         = []
+    | S.size qTrigs < minSharedTrigrams = []
+    | otherwise                         = map fst (sortBy (comparing sortKey) scored)
+  where
+    qTrigs  = trigramsOf q
+    qLen    = T.length q
+    sortKey (c, cov) = (Down cov, T.length c)
+    scored  =
+        [ (c, cov)
+        | c <- candidateBucket idx qTrigs
+        , T.length c <= maxPrefixRatio * qLen
+        , let cov = coverage qTrigs (trigramsOf c)
+        , cov >= minCoverage
+        ]
 
 -- | Vocabulary tokens that share at least `minSharedTrigrams` trigrams with
 -- the query's trigrams. Aggregation uses an unboxed counter vector for speed.

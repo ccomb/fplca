@@ -369,39 +369,40 @@ resolveActivityIds actVec ids =
 -- typos and stems still retrieve activities. Exact path is a linear scan
 -- for case-insensitive full-name equality.
 findActivityNameCandidates :: Database -> Maybe Text -> Bool -> [(ProcessId, Activity)]
-findActivityNameCandidates db nameParam exactMatch =
-    let actVec = dbActivities db
-    in case nameParam of
-        Nothing -> [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)]
-        Just name
-            | exactMatch ->
-                let nameFold = T.toCaseFold name
-                 in [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)
-                    , T.toCaseFold (activityName a) == nameFold]
-            | otherwise ->
-                case dbBM25Index db of
-                    Just idx ->
-                        let groups = Fuzzy.expandTokensGrouped idx (Normalize.tokenize name)
-                            -- AND semantics: intersect per-query-token candidate
-                            -- sets, where each set is the union over a token's
-                            -- fuzzy expansions.
-                            byQueryToken =
-                                [ IS.unions
-                                    [ IS.fromList [ docId | (docId, _) <- VU.toList postings ]
-                                    | (expTok, _) <- groupWeights
-                                    , Just postings <- [M.lookup expTok (BM25T.bm25Postings idx)]
-                                    ]
-                                | groupWeights <- groups
-                                ]
-                            candidates = case byQueryToken of
-                                []           -> IS.empty
-                                (first:rest) -> foldl IS.intersection first rest
-                        in resolveActivityIds actVec candidates
-                    Nothing ->
-                        -- Degenerate fallback: no BM25 index available. Full
-                        -- scan on activity name with AND-of-tokens substring.
-                        [(fromIntegral i, a) | (i, a) <- zip [(0::Int)..] (V.toList actVec)
-                        , allWordsMatch name (\a' -> [activityName a']) a]
+findActivityNameCandidates db Nothing _ = allActivities (dbActivities db)
+findActivityNameCandidates db (Just name) True = exactNameMatches (dbActivities db) name
+findActivityNameCandidates db (Just name) False =
+    case dbBM25Index db of
+        Just idx -> resolveActivityIds (dbActivities db) (bm25DocsMatchingName idx name)
+        Nothing  -> fullScanNameMatches (dbActivities db) name
+
+allActivities :: V.Vector Activity -> [(ProcessId, Activity)]
+allActivities actVec =
+    [(fromIntegral i, a) | (i, a) <- zip [(0 :: Int) ..] (V.toList actVec)]
+
+exactNameMatches :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
+exactNameMatches actVec name =
+    [pair | pair@(_, a) <- allActivities actVec, T.toCaseFold (activityName a) == nameFold]
+  where
+    nameFold = T.toCaseFold name
+
+fullScanNameMatches :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
+fullScanNameMatches actVec name =
+    [pair | pair@(_, a) <- allActivities actVec, allWordsMatch name (\a' -> [activityName a']) a]
+
+-- | Docs whose BM25 postings cover every query token (AND), allowing any
+-- fuzzy expansion of a token to satisfy that token (OR within a token).
+bm25DocsMatchingName :: BM25T.BM25Index -> Text -> IS.IntSet
+bm25DocsMatchingName idx name =
+    intersectAll (map docsForGroup groups)
+  where
+    groups                = Fuzzy.expandTokensGrouped idx (Normalize.tokenize name)
+    docsForGroup g        = IS.unions [docsForToken t | (t, _) <- g]
+    docsForToken t        = case M.lookup t (BM25T.bm25Postings idx) of
+        Nothing       -> IS.empty
+        Just postings -> IS.fromList [docId | (docId, _) <- VU.toList postings]
+    intersectAll []       = IS.empty
+    intersectAll (x : xs) = foldl IS.intersection x xs
 
 -- | Apply geo, product, and classification filters to a pre-built candidate list.
 -- Does NOT touch the name query — callers (BM25 retrieval or name-candidate lookup)
