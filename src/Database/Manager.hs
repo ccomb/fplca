@@ -114,14 +114,8 @@ import SynonymDB (SynonymDB(..), emptySynonymDB, buildFromCSV, buildFromPairs, l
 import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapSize, Method(..), MethodCF, MethodCollection(..), ScoringSet(..)
     )
 import Method.Mapping (MatchStrategy, mapMethodToFlows, MethodTables, buildMethodTables)
-<<<<<<< HEAD
-import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), Unit(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
-import qualified Search.BM25 as BM25
-||||||| parent of cd0b933 (fix: score cross-DB-merged inventory against merged flow metadata)
-import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), Unit(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
-=======
 import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), Unit(..), FlowDB, UnitDB, exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
->>>>>>> cd0b933 (fix: score cross-DB-merged inventory against merged flow metadata)
+import qualified Search.BM25 as BM25
 import qualified UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader

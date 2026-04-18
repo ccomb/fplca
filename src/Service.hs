@@ -4,8 +4,9 @@
 module Service where
 
 import CLI.Types (DebugMatricesOptions (..))
+import Control.Concurrent.Async (mapConcurrently)
 import qualified Progress
-import Matrix (Inventory, activityNormalizationFactor, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
+import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, shermanMorrisonVariant, toList)
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
 import qualified SharedSolver
@@ -1379,16 +1380,18 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
             Left err -> return $ Left err
             Right x' -> foldSubstitutions x' ss f
 
--- | What-if inventory with substitutions applied to the root DB's scaling
--- vector, then propagated across the dep graph. Mirrors the GET-path
--- 'inventoryWithDeps' but seeds the recursion with the substituted
--- scaling so dep DBs solve against the modified supply chain.
+-- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
+maxSubsDepth :: Int
+maxSubsDepth = 10
+
+-- | What-if inventory with substitutions applied at every DB level of the
+-- dep graph. Substitutions are filtered at each level by
+-- 'applySubstitutionsAt' — a sub whose consumer lives in a dep DB is
+-- applied when the recursion reaches that dep DB's solver, not at root.
 --
--- Uses 'computeScalingVectorWithSubstitutionsCrossDB' so that substitution
--- targets in @subFrom@/@subTo@ may live in any loaded database (qualified
--- as @"dbName::pid"@). Cross-DB substitutions inject virtual
--- 'CrossDBLink' entries that 'goWithDepsFromScalings' folds into
--- the dep-demand accumulation at the root level.
+-- This generalizes the root-only path: substitutions in @subFrom@/@subTo@
+-- may live in any loaded database (qualified as @"dbName::pid"@), and
+-- @subConsumer@ may also be qualified — the filter finds the right level.
 inventoryWithSubsAndDeps
     :: UnitConfig
     -> SharedSolver.DepSolverLookup
@@ -1399,15 +1402,80 @@ inventoryWithSubsAndDeps
     -> [Substitution]
     -> IO (Either ServiceError Inventory)
 inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
-    eScaling <- computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid subs
-    case eScaling of
-        Left e  -> pure (Left e)
-        Right (x, virtualLinks) -> do
-            eInv <- SharedSolver.goWithDepsFromScalings unitCfg depLookup db virtualLinks [x] 0
-            case eInv of
-                Left err    -> pure (Left (MatrixError err))
-                Right (inv:_) -> pure (Right inv)
-                Right []    -> pure (Right M.empty)  -- unreachable: batch non-empty
+    let demand = buildDemandVectorFromIndex (dbActivityIndex db) pid
+    res <- goWithSubsAndDeps unitCfg depLookup db rootDbName solver [demand] subs 0
+    pure $ case res of
+        Left err      -> Left err
+        Right (inv:_) -> Right inv
+        Right []      -> Right M.empty  -- unreachable: K=1
+
+-- | Recursive what-if inventory with per-level substitution application.
+-- Mirrors 'SharedSolver.goWithDepsFromScalings' but inserts
+-- 'applySubstitutionsAt' between the solve and the dep-demand accumulation
+-- at every DB level, letting substitutions target consumers in any DB.
+goWithSubsAndDeps
+    :: UnitConfig
+    -> SharedSolver.DepSolverLookup
+    -> Database                    -- ^ THIS DB
+    -> Text                        -- ^ THIS DB's name
+    -> SharedSolver                -- ^ THIS DB's cached solver
+    -> [U.Vector Double]           -- ^ demand vectors at this level
+    -> [Substitution]              -- ^ full sub list (filtered per level)
+    -> Int                         -- ^ recursion depth
+    -> IO (Either ServiceError [Inventory])
+goWithSubsAndDeps unitCfg depLookup thisDb thisDbName solver demands allSubs depth = do
+    scalings <- SharedSolver.solveMultiWithSharedSolver solver demands
+    eApply   <- applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs
+    case eApply of
+        Left e                         -> pure (Left e)
+        Right (scalings', virtualLks)  -> propagate scalings' virtualLks
+  where
+    propagate scalings' virtualLks = do
+        let localInvs = map (applyBiosphereMatrix thisDb) scalings'
+        if depth >= maxSubsDepth
+            then pure (Right localInvs)
+            else do
+                let perRootDepDemands = map (accumulateDepDemandsWith thisDb virtualLks) scalings'
+                    allDepDbs         = S.toList $ S.unions $ map M.keysSet perRootDepDemands
+                if null allDepDbs
+                    then pure (Right localInvs)
+                    else do
+                        depResults <- mapConcurrently
+                            (resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth (length scalings'))
+                            allDepDbs
+                        pure $ case sequence depResults of
+                            Left err              -> Left err
+                            Right depContribsByDb ->
+                                let perRootDepInvs = L.transpose depContribsByDb
+                                in Right $ zipWith
+                                    (foldr (M.unionWith (+)))
+                                    localInvs
+                                    perRootDepInvs
+
+-- | Dep resolver variant that threads the substitution list into the
+-- recursion. Matches 'SharedSolver.resolveDep' but delegates to
+-- 'goWithSubsAndDeps' instead of the plain path.
+resolveDepWithSubs
+    :: UnitConfig
+    -> SharedSolver.DepSolverLookup
+    -> [M.Map Text (M.Map (UUID, UUID) (Double, Text))]
+    -> [Substitution]
+    -> Int
+    -> Int
+    -> Text
+    -> IO (Either ServiceError [Inventory])
+resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth k depDbName = do
+    depM <- depLookup depDbName
+    case depM of
+        Nothing ->
+            pure (Right (replicate k M.empty))
+        Just (depDb, depSolver) ->
+            let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
+                depVecsE       = traverse (depDemandsToVector unitCfg depDbName depDb) demandsPerRoot
+            in case depVecsE of
+                Left err           -> pure (Left (MatrixError err))
+                Right depDemandVecs ->
+                    goWithSubsAndDeps unitCfg depLookup depDb depDbName depSolver depDemandVecs allSubs (depth + 1)
 
 -- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 --

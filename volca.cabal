@@ -179,6 +179,7 @@ test-suite lca-tests
                      , MCPSchemaSpec
                      , NormalizeSpec
                      , BM25Spec
+                     , NestedSubstitutionSpec
   build-depends:       base >=4.14 && <5
                      , volca
                      , hspec
