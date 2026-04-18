@@ -1402,12 +1402,70 @@ inventoryWithSubsAndDeps
     -> [Substitution]
     -> IO (Either ServiceError Inventory)
 inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
-    let demand = buildDemandVectorFromIndex (dbActivityIndex db) pid
-    res <- goWithSubsAndDeps unitCfg depLookup db rootDbName solver [demand] subs 0
-    pure $ case res of
-        Left err      -> Left err
-        Right (inv:_) -> Right inv
-        Right []      -> Right M.empty  -- unreachable: K=1
+    eValid <- validateConsumerDbs depLookup db rootDbName subs
+    case eValid of
+        Left e   -> pure (Left e)
+        Right () -> do
+            let demand = buildDemandVectorFromIndex (dbActivityIndex db) pid
+            res <- goWithSubsAndDeps unitCfg depLookup db rootDbName solver [demand] subs 0
+            pure $ case res of
+                Left err      -> Left err
+                Right (inv:_) -> Right inv
+                Right []      -> Right M.empty  -- unreachable: K=1
+
+-- | Reject substitutions whose consumer is qualified to a DB that is either
+-- unloaded or not reachable from @rootDbName@ via 'dbCrossDBLinks'. Such
+-- subs would otherwise be silently filtered at every level of the
+-- recursion (because the consumer DB never appears as @thisDbName@),
+-- which violates the no-silent-errors invariant.
+validateConsumerDbs
+    :: SharedSolver.DepSolverLookup
+    -> Database
+    -> Text
+    -> [Substitution]
+    -> IO (Either ServiceError ())
+validateConsumerDbs depLookup rootDb rootDbName subs = do
+    let externalConsumerDbs =
+            S.delete rootDbName $
+            S.fromList
+                [ cDb
+                | sub <- subs
+                , let (cDb, _) = parseSubRef rootDbName (subConsumer sub)
+                ]
+    if S.null externalConsumerDbs
+        then pure (Right ())
+        else do
+            reachable <- reachableDepDbs depLookup rootDbName rootDb
+            let unreachable = externalConsumerDbs `S.difference` reachable
+            case S.toList unreachable of
+                []    -> pure (Right ())
+                (d:_) -> do
+                    mLoad <- depLookup d
+                    pure $ Left $ MatrixError $ case mLoad of
+                        Nothing -> "substitution consumer references unloaded database: " <> d
+                        Just _  ->
+                            "substitution consumer database '" <> d
+                            <> "' is not reachable from root database's dep-graph"
+
+-- | BFS the loaded portion of the dep-DB DAG from @rootDbName@. Returns
+-- the set of DB names that are statically reachable via 'dbCrossDBLinks'
+-- chains (including unloaded leaves — 'validateConsumerDbs' distinguishes
+-- loaded-but-unreachable from unloaded).
+reachableDepDbs
+    :: SharedSolver.DepSolverLookup
+    -> Text
+    -> Database
+    -> IO (S.Set Text)
+reachableDepDbs depLookup rootDbName rootDb = go (S.singleton rootDbName) [rootDb]
+  where
+    go visited []          = pure visited
+    go visited (cur:queue) = do
+        let childNames  = S.fromList [cdlSourceDatabase l | l <- dbCrossDBLinks cur]
+            unvisited   = S.toList (childNames `S.difference` visited)
+            visited'    = visited `S.union` childNames
+        mPairs <- mapM depLookup unvisited
+        let loadedChildren = [cdb | Just (cdb, _) <- mPairs]
+        go visited' (loadedChildren ++ queue)
 
 -- | Recursive what-if inventory with per-level substitution application.
 -- Mirrors 'SharedSolver.goWithDepsFromScalings' but inserts

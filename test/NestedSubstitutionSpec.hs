@@ -14,7 +14,8 @@ import Test.Hspec
 import TestHelpers (loadSampleDatabase)
 import Types
 import Service
-    ( applySubstitutionsAt
+    ( ServiceError(..)
+    , applySubstitutionsAt
     , inventoryWithSubsAndDeps
     )
 import SharedSolver
@@ -111,11 +112,10 @@ spec = do
                 (Left e, _) -> expectationFailure ("baseline failed: " <> T.unpack e)
                 (_, Left e) -> expectationFailure ("subs path failed: " <> show e)
 
-        it "silently skips dep-consumer subs when the dep DB is unreachable" $ do
-            -- Before commit 3 introduces the 422 error for unreachable consumer
-            -- DBs, such a sub flows through the filter at every level without
-            -- matching — the result equals the no-sub baseline. Commit 3 will
-            -- change this; this test gets updated alongside it.
+        it "rejects dep-consumer subs whose DB is not loaded (422 surface)" $ do
+            -- No-silent-errors invariant: a sub with a consumer qualified to
+            -- an unloaded DB used to be silently filtered at every level.
+            -- 'validateConsumerDbs' now surfaces it before the recursion.
             db <- loadSampleDatabase "SAMPLE.min3"
             solver <- mkSolver db "SAMPLE.min3"
             let pid = 0
@@ -126,11 +126,12 @@ spec = do
                     , subTo       = realRootPid
                     , subConsumer = "phantom-dep::" <> realRootPid
                     }
-            eBaseline <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid []
             eFiltered <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid [subWithPhantomConsumer]
-            case (eBaseline, eFiltered) of
-                (Right a, Right b) -> M.toList b `shouldBe` M.toList a
-                _                  -> expectationFailure "both calls should succeed"
+            case eFiltered of
+                Left (MatrixError msg) ->
+                    msg `shouldSatisfy` T.isInfixOf "unloaded database"
+                Left other -> expectationFailure ("wrong error: " <> show other)
+                Right _    -> expectationFailure "expected Left for unloaded consumer DB"
 
 -- | Build a fresh 'SharedSolver' from a database's technosphere triples.
 mkSolver :: Database -> T.Text -> IO SharedSolver
