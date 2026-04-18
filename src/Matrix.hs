@@ -36,6 +36,7 @@ module Matrix (
     computeInventoryMatrix,
     accumulateDepDemands,
     accumulateDepDemandsWith,
+    activityNormalizationFactor,
     depDemandsToVector,
     computeProcessLCIAContributions,
     shermanMorrisonVariant,
@@ -367,13 +368,24 @@ computeProcessLCIAContributions db scalingVec cfMap =
 {- |
 Sherman-Morrison rank-1 update for ingredient substitution (~4ms per variant).
 
-Swapping supplier oldSup -> newSup for activity 'row' is a rank-1 update to (I-A).
-Instead of re-factorizing (~3s), we reuse the cached factorization:
+A substitution applied at technosphere row 'row' (the consumer) is a rank-1
+update to (I-A) represented by a perturbation vector u. Instead of
+re-factorizing (~3s), we reuse the cached factorization:
 
     x' = x - z * (v^T * x) / (1 + v^T * z)
 
-where z = inv(I-A) * u is one back-substitution, u = coeff*(e_oldSup - e_newSup),
-and v = e_row.
+where z = inv(I-A) * u is one back-substitution and v = e_row.
+
+The perturbation is passed as a sparse list @[(supplierIdx, delta)]@ so both
+symmetric swaps (same-DB oldSup -> newSup: @[(old, +a), (new, -a)]@) and
+asymmetric cross-DB cases work with the same code path:
+
+* @[(old, +a)]@ — drop a root-DB supplier (new supplier lives in a dep DB;
+  a virtual 'CrossDBLink' carries the new demand).
+* @[(new, -a)]@ — add a root-DB supplier (old supplier was a dep-DB link;
+  a virtual 'CrossDBLink' with negative coefficient cancels the static one).
+* @[]@ — no root-matrix change (both old and new suppliers live in dep DBs);
+  returns @x@ unchanged, bypassing the singularity check entirely.
 
 Returns Left if the update is singular (|1 + v^T*z| < epsilon).
 -}
@@ -382,32 +394,29 @@ shermanMorrisonVariant
     -> Maybe MatrixFactorization  -- ^ Cached factorization from SharedSolver (Nothing = full re-solve)
     -> Vector              -- ^ Original scaling vector x
     -> Int                 -- ^ Activity being modified (row = consumer index)
-    -> Int                 -- ^ Old supplier index (to remove)
-    -> Int                 -- ^ New supplier index (to add)
-    -> Double              -- ^ Exchange coefficient a (amount consumed)
+    -> [(Int, Double)]     -- ^ Non-zero entries of the perturbation vector u
     -> IO (Either T.Text Vector)  -- ^ Variant scaling vector x'
-shermanMorrisonVariant db mFact x row oldSup newSup coeff = do
-    let n = U.length x
-        u = fromList [if i == oldSup then coeff
-                      else if i == newSup then -coeff
-                      else 0.0
-                     | i <- [0 .. n - 1]]
-    z <- case mFact of
-        Just f  -> solveSparseLinearSystemWithFactorization f u
-        Nothing -> do
-            let techTriples = dbTechnosphereTriples db
-                activityCount = dbActivityCount db
-            solveSparseLinearSystem
-                [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                (fromIntegral activityCount) u
-    let vtx = x U.! row
-        vtz = z U.! row
-        denom = 1.0 + vtz
-    if abs denom < 1e-12
-        then return $ Left "Sherman-Morrison update is singular \x2014 substitution creates a degenerate supply chain"
-        else do
-            let scale = vtx / denom
-            return $ Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+shermanMorrisonVariant db mFact x row perturb
+    | null perturb = pure (Right x)     -- no root-matrix change (cross-DB-only sub)
+    | otherwise    = do
+        let n = U.length x
+            u = U.accum (+) (U.replicate n 0.0) perturb
+        z <- case mFact of
+            Just f  -> solveSparseLinearSystemWithFactorization f u
+            Nothing -> do
+                let techTriples = dbTechnosphereTriples db
+                    activityCount = dbActivityCount db
+                solveSparseLinearSystem
+                    [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+                    (fromIntegral activityCount) u
+        let vtx = x U.! row
+            vtz = z U.! row
+            denom = 1.0 + vtz
+        if abs denom < 1e-12
+            then pure $ Left "Sherman-Morrison update is singular \x2014 substitution creates a degenerate supply chain"
+            else do
+                let scale = vtx / denom
+                pure $ Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
 
 {- |
 Accumulate cross-database supplier demands for a given root scaling vector.

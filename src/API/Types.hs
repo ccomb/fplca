@@ -11,6 +11,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender(..), OctetStream)
 
@@ -536,13 +537,29 @@ newtype SubstitutionRequest = SubstitutionRequest
     }
     deriving (Generic)
 
--- | A single supplier substitution
+-- | A single supplier substitution.
+--
+-- Each field is a 'ProcessId' text, either in the bare form
+-- @"actUUID_prodUUID"@ (resolved in the URL's database, i.e. the root DB)
+-- or in the cross-DB qualified form @"dbName::actUUID_prodUUID"@ (resolved
+-- against the named dep DB). See 'parseSubRef'. @subConsumer@ must live in
+-- the root DB — a qualified consumer is rejected at the handler level.
 data Substitution = Substitution
-    { subFrom     :: Text  -- Original supplier ProcessId
-    , subTo       :: Text  -- Replacement supplier ProcessId
-    , subConsumer :: Text  -- Activity that consumes the original supplier
+    { subFrom     :: Text  -- Original supplier ProcessId (bare or dbName::pid)
+    , subTo       :: Text  -- Replacement supplier ProcessId (bare or dbName::pid)
+    , subConsumer :: Text  -- Consumer activity ProcessId (root DB only)
     }
     deriving (Generic)
+
+-- | Parse a substitution reference into @(targetDB, bare pid)@. A bare
+-- @"actUUID_prodUUID"@ resolves in the caller-supplied root DB; a qualified
+-- @"dbName::actUUID_prodUUID"@ resolves in @dbName@. The @::@ separator is
+-- unambiguous because UUIDs contain no colons.
+parseSubRef :: Text -> Text -> (Text, Text)
+parseSubRef rootDb raw = case T.breakOn (T.pack "::") raw of
+    (pid, rest)
+      | T.null rest -> (rootDb, pid)
+      | otherwise   -> (pid, T.drop 2 rest)
 
 -- | Exchange with unit and flow information for API responses
 data ExchangeWithUnit = ExchangeWithUnit

@@ -22,6 +22,7 @@ import qualified ServiceSpec
 import qualified CrossLinkingSpec
 import qualified CrossDBInventorySpec
 import qualified SubstitutionSpec
+import qualified CrossDBSubstitutionSpec
 import qualified SharedSolverSpec
 import qualified FlowResolverSpec
 import qualified PluginConfigSpec
@@ -54,6 +55,7 @@ main = hspec $ do
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Substitutions" SubstitutionSpec.spec
+        describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec
         describe "Shared Solver" SharedSolverSpec.spec
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec

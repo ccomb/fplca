@@ -5,7 +5,7 @@ module Service where
 
 import CLI.Types (DebugMatricesOptions (..))
 import qualified Progress
-import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
+import Matrix (Inventory, activityNormalizationFactor, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
 import qualified SharedSolver
@@ -14,7 +14,7 @@ import qualified Search.BM25 as BM25
 import qualified Search.Normalize as Normalize
 import Tree (buildLoopAwareTree)
 import Types
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), ConsumerResult (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), ConsumerResult (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
 import UnitConversion (UnitConfig, defaultUnitConfig, unitsCompatible)
 import Data.Aeson (Value, toJSON, object, (.=))
 import Plugin.Types (ValidateHandle(..), ValidateContext(..), ValidationPhase(..), ValidationIssue(..), Severity(..))
@@ -1364,10 +1364,10 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
                         "No technosphere link from " <> processIdToText db consumerPid
                         <> " to supplier " <> subFrom sub
                     Just a -> do
+                        -- Symmetric root-only swap: +a at old supplier, -a at new.
+                        let perturb = [(fromIntegral oldPid, a), (fromIntegral newPid, -a)]
                         smResult <- shermanMorrisonVariant db mFact x
-                            (fromIntegral consumerPid)
-                            (fromIntegral oldPid)
-                            (fromIntegral newPid) a
+                            (fromIntegral consumerPid) perturb
                         return $ case smResult of
                             Left msg -> Left $ MatrixError msg
                             Right x' -> Right x'
@@ -1384,27 +1384,217 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
 -- 'inventoryWithDeps' but seeds the recursion with the substituted
 -- scaling so dep DBs solve against the modified supply chain.
 --
--- Phase 2 will extend this signature with virtual cross-DB links returned
--- by 'computeScalingVectorWithSubstitutions' for cross-DB substitution
--- targeting; Phase 1 passes @[]@.
+-- Uses 'computeScalingVectorWithSubstitutionsCrossDB' so that substitution
+-- targets in @subFrom@/@subTo@ may live in any loaded database (qualified
+-- as @"dbName::pid"@). Cross-DB substitutions inject virtual
+-- 'CrossDBLink' entries that 'goWithDepsFromScalings' folds into
+-- the dep-demand accumulation at the root level.
 inventoryWithSubsAndDeps
     :: UnitConfig
     -> SharedSolver.DepSolverLookup
     -> Database
+    -> Text                       -- ^ root DB name (for qualified-PID parsing)
     -> SharedSolver
     -> ProcessId
     -> [Substitution]
     -> IO (Either ServiceError Inventory)
-inventoryWithSubsAndDeps unitCfg depLookup db solver pid subs = do
-    eScaling <- computeScalingVectorWithSubstitutions db solver pid subs
+inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
+    eScaling <- computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid subs
     case eScaling of
         Left e  -> pure (Left e)
-        Right x -> do
-            eInv <- SharedSolver.goWithDepsFromScalings unitCfg depLookup db [] [x] 0
+        Right (x, virtualLinks) -> do
+            eInv <- SharedSolver.goWithDepsFromScalings unitCfg depLookup db virtualLinks [x] 0
             case eInv of
                 Left err    -> pure (Left (MatrixError err))
                 Right (inv:_) -> pure (Right inv)
                 Right []    -> pure (Right M.empty)  -- unreachable: batch non-empty
+
+-- | Cross-DB substitution resolver.
+--
+-- Parses each 'Substitution' against the root DB name (see 'parseSubRef')
+-- and classifies by where the old and new suppliers live:
+--
+-- * Case A — both in root DB: symmetric rank-1 update @[(old,+a),(new,-a)]@.
+-- * Case B — old in root, new in dep: asymmetric root update @[(old,+a)]@
+--   plus a virtual @CrossDBLink@ routing demand @+a@ to the dep supplier.
+-- * Case C — old in dep, new in root: asymmetric root update
+--   @[(new,-a_norm)]@ plus a virtual @CrossDBLink@ with negative
+--   coefficient that cancels the existing static dep-DB link.
+-- * Case D — both in dep DBs: no root-matrix change; two virtual
+--   @CrossDBLink@ entries (@-a@ on the old dep supplier, @+a@ on the new).
+--
+-- @subConsumer@ must live in the root DB (the URL's DB); a qualified
+-- consumer returns 400-style 'MatrixError'. Missing dep DBs, unresolved
+-- qualified PIDs, and Case-C without a matching static link also surface
+-- as 'MatrixError' (no silent fallback — the caller maps to 422).
+computeScalingVectorWithSubstitutionsCrossDB
+    :: SharedSolver.DepSolverLookup
+    -> Database
+    -> Text                       -- ^ root DB name
+    -> SharedSolver
+    -> ProcessId
+    -> [Substitution]
+    -> IO (Either ServiceError (U.Vector Double, [CrossDBLink]))
+computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid subs = do
+    let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
+    originalX <- solveWithSharedSolver solver demandVec
+    case subs of
+        [] -> pure $ Right (originalX, [])
+        _  -> do
+            mFact <- getFactorization solver
+            applyAll mFact originalX [] subs
+  where
+    applyAll _     x links []         = pure $ Right (x, links)
+    applyAll mFact x links (sub:rest) = do
+        res <- applySub mFact x sub
+        case res of
+            Left e                 -> pure (Left e)
+            Right (x', extraLinks) -> applyAll mFact x' (links ++ extraLinks) rest
+
+    applySub mFact x sub = do
+        let (cDb, cPidText) = parseSubRef rootDbName (subConsumer sub)
+        if cDb /= rootDbName
+          then pure $ Left $ MatrixError "substitution consumer must live in root database"
+          else case resolveActivityAndProcessId db cPidText of
+            Left e -> pure (Left e)
+            Right (consumerPid, _) -> do
+                let (fromDb, fromPidText) = parseSubRef rootDbName (subFrom sub)
+                    (toDb,   toPidText)   = parseSubRef rootDbName (subTo sub)
+                eFrom <- resolveRef fromDb fromPidText
+                eTo   <- resolveRef toDb   toPidText
+                case (eFrom, eTo) of
+                    (Left e, _)           -> pure (Left e)
+                    (_, Left e)           -> pure (Left e)
+                    (Right fromRef, Right toRef) ->
+                        classify mFact x consumerPid sub fromRef toRef
+
+    classify mFact x consumerPid sub fromRef toRef =
+        let (fromDb, fromPid, fromUUIDs, _)           = fromRef
+            (toDb,   toPid,   toUUIDs,   toDbObj)     = toRef
+        in case (fromDb == rootDbName, toDb == rootDbName) of
+            (True, True) ->
+                case findTechCoefficient db consumerPid fromPid of
+                    Nothing -> noTechLinkErr sub consumerPid
+                    Just aNorm ->
+                        applyRankOne mFact x consumerPid
+                            [(fromIntegral fromPid,  aNorm),
+                             (fromIntegral toPid,   -aNorm)]
+                            []
+
+            (True, False) ->
+                -- Case B: drop root oldSup, route demand to dep newSup.
+                case findTechCoefficient db consumerPid fromPid of
+                    Nothing -> noTechLinkErr sub consumerPid
+                    Just aNorm ->
+                        let aRaw  = aNorm * activityNormalizationFactor db consumerPid
+                            newLk = mkVirtualLink db consumerPid toDbObj toDb toUUIDs toPid aRaw
+                        in applyRankOne mFact x consumerPid
+                               [(fromIntegral fromPid, aNorm)]
+                               [newLk]
+
+            (False, True) ->
+                -- Case C: cancel existing dep link, pull new root supplier.
+                case findStaticCrossDBLink db consumerPid fromDb fromUUIDs of
+                    Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
+                    Just staticLk ->
+                        let aRaw   = cdlCoefficient staticLk
+                            aNorm  = aRaw / activityNormalizationFactor db consumerPid
+                            cancel = staticLk { cdlCoefficient = -aRaw }
+                        in applyRankOne mFact x consumerPid
+                               [(fromIntegral toPid, -aNorm)]
+                               [cancel]
+
+            (False, False) ->
+                -- Case D: re-route demand between two dep DBs; root x unchanged.
+                case findStaticCrossDBLink db consumerPid fromDb fromUUIDs of
+                    Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
+                    Just staticLk ->
+                        let aRaw   = cdlCoefficient staticLk
+                            cancel = staticLk { cdlCoefficient = -aRaw }
+                            newLk  = mkVirtualLink db consumerPid toDbObj toDb toUUIDs toPid aRaw
+                        in applyRankOne mFact x consumerPid [] [cancel, newLk]
+
+    applyRankOne mFact x consumerPid perturb extra = do
+        r <- shermanMorrisonVariant db mFact x (fromIntegral consumerPid) perturb
+        pure $ case r of
+            Left msg -> Left (MatrixError msg)
+            Right x' -> Right (x', extra)
+
+    noTechLinkErr sub consumerPid = pure $ Left $ MatrixError $
+        "No technosphere link from " <> processIdToText db consumerPid
+        <> " to supplier " <> subFrom sub
+
+    noStaticLinkErr sub consumerPid fromDb fromPid = pure $ Left $ MatrixError $
+        "no cross-DB link from " <> processIdToText db consumerPid
+        <> " to " <> fromDb <> "::" <> T.pack (show fromPid)
+        <> " (requested by substitution " <> subFrom sub <> " -> " <> subTo sub <> ")"
+
+    resolveRef :: Text -> Text -> IO (Either ServiceError (Text, ProcessId, (UUID, UUID), Database))
+    resolveRef refDb pidText
+      | refDb == rootDbName = case resolveActivityAndProcessId db pidText of
+          Left e        -> pure (Left e)
+          Right (p, _)  ->
+              let uuids = dbProcessIdTable db V.! fromIntegral p
+              in pure (Right (refDb, p, uuids, db))
+      | otherwise = do
+          mPair <- depLookup refDb
+          case mPair of
+              Nothing -> pure $ Left $ MatrixError $
+                  "substitution references unloaded database: " <> refDb
+              Just (depDb, _) -> case resolveActivityAndProcessId depDb pidText of
+                  Left _        -> pure $ Left $ MatrixError $
+                      "substitution PID not found in " <> refDb <> ": " <> pidText
+                  Right (p, _)  ->
+                      let uuids = dbProcessIdTable depDb V.! fromIntegral p
+                      in pure (Right (refDb, p, uuids, depDb))
+
+-- | Build a synthesized 'CrossDBLink' for a what-if substitution targeting a
+-- dep-DB supplier. Mirrors the fields a real (load-time) link would have so
+-- 'accumulateDepDemandsWith' handles it identically — including the raw→refUnit
+-- conversion in 'depDemandsToVector' (we set the exchange unit to the supplier's
+-- own reference-product unit so no conversion is needed).
+mkVirtualLink
+    :: Database              -- ^ root DB (consumer side)
+    -> ProcessId             -- ^ consumer's root ProcessId
+    -> Database              -- ^ dep DB (supplier side)
+    -> Text                  -- ^ dep DB name
+    -> (UUID, UUID)          -- ^ supplier's (actUUID, prodUUID) in dep DB
+    -> ProcessId             -- ^ supplier's dep-DB ProcessId
+    -> Double                -- ^ raw exchange coefficient (pre-normalization)
+    -> CrossDBLink
+mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
+    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+        supAct          = dbActivities depDb V.! fromIntegral supPid
+        refUnit         = case [ex | ex <- exchanges supAct, exchangeIsReference ex, not (exchangeIsInput ex)] of
+                              (ex:_) -> getUnitNameForExchange (dbUnits depDb) ex
+                              []     -> ""
+        (supActU, supProdU) = supUUIDs
+    in CrossDBLink
+        { cdlConsumerActUUID  = cActU
+        , cdlConsumerProdUUID = cProdU
+        , cdlSupplierActUUID  = supActU
+        , cdlSupplierProdUUID = supProdU
+        , cdlCoefficient      = coef
+        , cdlExchangeUnit     = refUnit
+        , cdlFlowName         = activityName supAct
+        , cdlLocation         = activityLocation supAct
+        , cdlSourceDatabase   = depDbName
+        }
+
+-- | Find the static 'CrossDBLink' matching @(rootConsumer, depDbName, depSupplierUUIDs)@.
+-- Returns 'Nothing' if no link exists — caller surfaces as 422 rather than
+-- silently no-op.
+findStaticCrossDBLink :: Database -> ProcessId -> Text -> (UUID, UUID) -> Maybe CrossDBLink
+findStaticCrossDBLink rootDb consumerPid depDbName depSupUUIDs =
+    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+        matches lk =
+               cdlSourceDatabase lk   == depDbName
+            && cdlConsumerActUUID lk  == cActU
+            && cdlConsumerProdUUID lk == cProdU
+            && (cdlSupplierActUUID lk, cdlSupplierProdUUID lk) == depSupUUIDs
+    in case filter matches (dbCrossDBLinks rootDb) of
+        (lk:_) -> Just lk
+        []     -> Nothing
 
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
 findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double

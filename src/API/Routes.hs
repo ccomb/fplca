@@ -671,7 +671,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (processId, activity) <- resolveOrThrow db processIdText
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         eInv <- liftIO $ Service.inventoryWithSubsAndDeps
-            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+            unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId (srSubstitutions subReq)
         inventory <- either throwServiceError pure eInv
         liftIO $ computeCategoryResult dbName db activity 5 inventory method
 
@@ -757,7 +757,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             mNW = case nwSets of { (nw:_) -> Just nw; [] -> Nothing }
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         eInv <- liftIO $ Service.inventoryWithSubsAndDeps
-            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+            unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId (srSubstitutions subReq)
         inventory <- either throwServiceError pure eInv
         rawResults <- liftIO $ mapConcurrently (computeCategoryResult dbName db activity 5 inventory) methods
         let results = map (enrichWithNW dcLookup mNW) rawResults
@@ -786,7 +786,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (processId, activity) <- resolveOrThrow db processIdText
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         eInv <- liftIO $ Service.inventoryWithSubsAndDeps
-            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+            unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId (srSubstitutions subReq)
         inventory <- either throwServiceError pure eInv
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         pure $ Service.convertToInventoryExport db mFlows mUnits processId activity inventory
@@ -806,12 +806,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , Service.afMaxDepth = maxDepthParam, Service.afMinQuantity = minQuantityParam
                 , Service.afSort = sortParam, Service.afOrder = orderParam }
         (processId, _) <- resolveOrThrow db processIdText
-        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
+        -- Use the cross-DB-aware substitution resolver so qualified PIDs in
+        -- subFrom/subTo are accepted; the virtual cross-DB links it returns
+        -- don't affect the root scaling vector (they drive dep-DB demand),
+        -- which is all the supply-chain navigation reads.
+        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutionsCrossDB
+            (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId (srSubstitutions subReq)
         case scalingResult of
             Left err -> throwServiceError err
-            Right scalingVec -> do
-                let result = Service.buildSupplyChainFromScalingVector db processId scalingVec af includeEdges
-                return result
+            Right (scalingVec, _virtualLinks) ->
+                pure $ Service.buildSupplyChainFromScalingVector db processId scalingVec af includeEdges
 
     -- Activity consumers endpoint (reverse supply chain)
     getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ConsumerResult)

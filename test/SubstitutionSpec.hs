@@ -41,7 +41,7 @@ spec = do
                 noDeps _ = pure Nothing
 
             eBase <- computeInventoryMatrixWithDepsCached defaultUnitConfig noDeps db solver pid
-            eSub  <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db solver pid []
+            eSub  <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid []
 
             case (eBase, eSub) of
                 (Right base, Right sub) -> M.toList sub `shouldBe` M.toList base
@@ -59,7 +59,7 @@ spec = do
                 noDeps _ = pure Nothing
 
             eRaw <- computeScalingVectorWithSubstitutions db solver pid []
-            eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db solver pid []
+            eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid []
 
             case (eRaw, eSub) of
                 (Right x, Right sub) ->
@@ -81,7 +81,7 @@ spec = do
                     , subTo       = bogusPid
                     , subConsumer = bogusPid
                     }
-            eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db solver pid [badSub]
+            eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid [badSub]
             case eSub of
                 Left _  -> pure ()
                 Right _ -> expectationFailure "expected Left on unresolvable substitution PID"
