@@ -1409,24 +1409,14 @@ inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
                 Right (inv:_) -> pure (Right inv)
                 Right []    -> pure (Right M.empty)  -- unreachable: batch non-empty
 
--- | Cross-DB substitution resolver.
+-- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 --
--- Parses each 'Substitution' against the root DB name (see 'parseSubRef')
--- and classifies by where the old and new suppliers live:
---
--- * Case A — both in root DB: symmetric rank-1 update @[(old,+a),(new,-a)]@.
--- * Case B — old in root, new in dep: asymmetric root update @[(old,+a)]@
---   plus a virtual @CrossDBLink@ routing demand @+a@ to the dep supplier.
--- * Case C — old in dep, new in root: asymmetric root update
---   @[(new,-a_norm)]@ plus a virtual @CrossDBLink@ with negative
---   coefficient that cancels the existing static dep-DB link.
--- * Case D — both in dep DBs: no root-matrix change; two virtual
---   @CrossDBLink@ entries (@-a@ on the old dep supplier, @+a@ on the new).
---
--- @subConsumer@ must live in the root DB (the URL's DB); a qualified
--- consumer returns 400-style 'MatrixError'. Missing dep DBs, unresolved
--- qualified PIDs, and Case-C without a matching static link also surface
--- as 'MatrixError' (no silent fallback — the caller maps to 422).
+-- Solves the root scaling vector then delegates to 'applySubstitutionsAt'
+-- against the root DB. Keeps the \"consumer must live in root\" guard
+-- because supply-chain renders only the root technosphere graph — a
+-- dep-DB consumer sub would be silently ignored here, so we surface it as
+-- an error (the inventory/LCIA path lifts this restriction via
+-- 'goWithSubsAndDeps').
 computeScalingVectorWithSubstitutionsCrossDB
     :: SharedSolver.DepSolverLookup
     -> Database
@@ -1436,106 +1426,161 @@ computeScalingVectorWithSubstitutionsCrossDB
     -> [Substitution]
     -> IO (Either ServiceError (U.Vector Double, [CrossDBLink]))
 computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid subs = do
-    let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
-    originalX <- solveWithSharedSolver solver demandVec
-    case subs of
-        [] -> pure $ Right (originalX, [])
+    case firstNonRootConsumer of
+        Just cDb -> pure $ Left $ MatrixError $
+            "substitution consumer must live in root database (got: " <> cDb <> ")"
+        Nothing  -> do
+            let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
+            originalX <- solveWithSharedSolver solver demandVec
+            res <- applySubstitutionsAt depLookup db rootDbName solver [originalX] subs
+            pure $ case res of
+                Left e                  -> Left e
+                Right ([x'], links)     -> Right (x', links)
+                Right (x':_,  links)    -> Right (x', links)  -- unreachable: K=1
+                Right ([],    _)        -> Right (originalX, [])  -- unreachable
+  where
+    firstNonRootConsumer =
+        case [ cDb | sub <- subs
+                   , let (cDb, _) = parseSubRef rootDbName (subConsumer sub)
+                   , cDb /= rootDbName ] of
+            (d:_) -> Just d
+            []    -> Nothing
+
+-- | Apply all substitutions whose consumer lives in @thisDbName@ to the
+-- given scaling vectors. Substitutions whose consumer lives elsewhere are
+-- skipped at this level — they'll match at the DB where their consumer
+-- lives during the recursive traversal in 'goWithSubsAndDeps'.
+--
+-- Classifies each sub by where its old/new suppliers live relative to
+-- @thisDbName@:
+--
+-- * Case A — both in this DB: symmetric rank-1 update @[(old,+a),(new,-a)]@.
+-- * Case B — old in this DB, new elsewhere: asymmetric root update
+--   @[(old,+a)]@ plus a virtual @CrossDBLink@ routing demand @+a@ to the
+--   other-DB supplier.
+-- * Case C — old elsewhere, new in this DB: asymmetric root update
+--   @[(new,-a_norm)]@ plus a virtual @CrossDBLink@ with negative coefficient
+--   that cancels the existing static link.
+-- * Case D — both elsewhere: no matrix change; two virtual @CrossDBLink@
+--   entries (@-a@ on the old supplier, @+a@ on the new).
+--
+-- Missing dep DBs, unresolved qualified PIDs, and Case-C without a matching
+-- static link surface as 'MatrixError' (no silent fallback — the caller
+-- maps to 422).
+applySubstitutionsAt
+    :: SharedSolver.DepSolverLookup
+    -> Database                -- ^ THIS DB
+    -> Text                    -- ^ THIS DB's name (for parseSubRef)
+    -> SharedSolver            -- ^ THIS DB's cached solver
+    -> [U.Vector Double]       -- ^ K scalings at this level
+    -> [Substitution]          -- ^ full sub list (filtered to consumer==this)
+    -> IO (Either ServiceError ([U.Vector Double], [CrossDBLink]))
+applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
+    let localSubs = filter consumerLivesHere allSubs
+    case localSubs of
+        [] -> pure $ Right (scalings, [])
         _  -> do
             mFact <- getFactorization solver
-            applyAll mFact originalX [] subs
+            applyAll mFact scalings [] localSubs
   where
-    applyAll _     x links []         = pure $ Right (x, links)
-    applyAll mFact x links (sub:rest) = do
-        res <- applySub mFact x sub
+    consumerLivesHere sub =
+        let (cDb, _) = parseSubRef thisDbName (subConsumer sub)
+        in cDb == thisDbName
+
+    applyAll _     xs links []         = pure $ Right (xs, links)
+    applyAll mFact xs links (sub:rest) = do
+        res <- applySub mFact xs sub
         case res of
             Left e                 -> pure (Left e)
-            Right (x', extraLinks) -> applyAll mFact x' (links ++ extraLinks) rest
+            Right (xs', extraLks)  -> applyAll mFact xs' (links ++ extraLks) rest
 
-    applySub mFact x sub = do
-        let (cDb, cPidText) = parseSubRef rootDbName (subConsumer sub)
-        if cDb /= rootDbName
-          then pure $ Left $ MatrixError "substitution consumer must live in root database"
-          else case resolveActivityAndProcessId db cPidText of
+    applySub mFact xs sub = do
+        let (_, cPidText) = parseSubRef thisDbName (subConsumer sub)
+        case resolveActivityAndProcessId thisDb cPidText of
             Left e -> pure (Left e)
             Right (consumerPid, _) -> do
-                let (fromDb, fromPidText) = parseSubRef rootDbName (subFrom sub)
-                    (toDb,   toPidText)   = parseSubRef rootDbName (subTo sub)
+                let (fromDb, fromPidText) = parseSubRef thisDbName (subFrom sub)
+                    (toDb,   toPidText)   = parseSubRef thisDbName (subTo sub)
                 eFrom <- resolveRef fromDb fromPidText
                 eTo   <- resolveRef toDb   toPidText
                 case (eFrom, eTo) of
                     (Left e, _)           -> pure (Left e)
                     (_, Left e)           -> pure (Left e)
                     (Right fromRef, Right toRef) ->
-                        classify mFact x consumerPid sub fromRef toRef
+                        classify mFact xs consumerPid sub fromRef toRef
 
-    classify mFact x consumerPid sub fromRef toRef =
-        let (fromDb, fromPid, fromUUIDs, _)           = fromRef
-            (toDb,   toPid,   toUUIDs,   toDbObj)     = toRef
-        in case (fromDb == rootDbName, toDb == rootDbName) of
+    classify mFact xs consumerPid sub fromRef toRef =
+        let (fromDb, fromPid, fromUUIDs, _)         = fromRef
+            (toDb,   toPid,   toUUIDs,   toDbObj)   = toRef
+        in case (fromDb == thisDbName, toDb == thisDbName) of
             (True, True) ->
-                case findTechCoefficient db consumerPid fromPid of
+                case findTechCoefficient thisDb consumerPid fromPid of
                     Nothing -> noTechLinkErr sub consumerPid
                     Just aNorm ->
-                        applyRankOne mFact x consumerPid
+                        applyRankOne mFact xs consumerPid
                             [(fromIntegral fromPid,  aNorm),
                              (fromIntegral toPid,   -aNorm)]
                             []
 
             (True, False) ->
-                -- Case B: drop root oldSup, route demand to dep newSup.
-                case findTechCoefficient db consumerPid fromPid of
+                -- Case B: drop this-DB oldSup, route demand to other-DB newSup.
+                case findTechCoefficient thisDb consumerPid fromPid of
                     Nothing -> noTechLinkErr sub consumerPid
                     Just aNorm ->
-                        let aRaw  = aNorm * activityNormalizationFactor db consumerPid
-                            newLk = mkVirtualLink db consumerPid toDbObj toDb toUUIDs toPid aRaw
-                        in applyRankOne mFact x consumerPid
+                        let aRaw  = aNorm * activityNormalizationFactor thisDb consumerPid
+                            newLk = mkVirtualLink thisDb consumerPid toDbObj toDb toUUIDs toPid aRaw
+                        in applyRankOne mFact xs consumerPid
                                [(fromIntegral fromPid, aNorm)]
                                [newLk]
 
             (False, True) ->
-                -- Case C: cancel existing dep link, pull new root supplier.
-                case findStaticCrossDBLink db consumerPid fromDb fromUUIDs of
+                -- Case C: cancel existing cross-DB link, pull new this-DB supplier.
+                case findStaticCrossDBLink thisDb consumerPid fromDb fromUUIDs of
                     Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
                     Just staticLk ->
                         let aRaw   = cdlCoefficient staticLk
-                            aNorm  = aRaw / activityNormalizationFactor db consumerPid
+                            aNorm  = aRaw / activityNormalizationFactor thisDb consumerPid
                             cancel = staticLk { cdlCoefficient = -aRaw }
-                        in applyRankOne mFact x consumerPid
+                        in applyRankOne mFact xs consumerPid
                                [(fromIntegral toPid, -aNorm)]
                                [cancel]
 
             (False, False) ->
-                -- Case D: re-route demand between two dep DBs; root x unchanged.
-                case findStaticCrossDBLink db consumerPid fromDb fromUUIDs of
+                -- Case D: re-route demand between two other DBs; this-DB x unchanged.
+                case findStaticCrossDBLink thisDb consumerPid fromDb fromUUIDs of
                     Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
                     Just staticLk ->
                         let aRaw   = cdlCoefficient staticLk
                             cancel = staticLk { cdlCoefficient = -aRaw }
-                            newLk  = mkVirtualLink db consumerPid toDbObj toDb toUUIDs toPid aRaw
-                        in applyRankOne mFact x consumerPid [] [cancel, newLk]
+                            newLk  = mkVirtualLink thisDb consumerPid toDbObj toDb toUUIDs toPid aRaw
+                        in applyRankOne mFact xs consumerPid [] [cancel, newLk]
 
-    applyRankOne mFact x consumerPid perturb extra = do
-        r <- shermanMorrisonVariant db mFact x (fromIntegral consumerPid) perturb
-        pure $ case r of
-            Left msg -> Left (MatrixError msg)
-            Right x' -> Right (x', extra)
+    applyRankOne mFact xs consumerPid perturb extra = do
+        -- Apply the same rank-1 update to each of the K vectors. z depends
+        -- only on u (not x); a future optimization can compute z once.
+        results <- mapM
+            (\x -> shermanMorrisonVariant thisDb mFact x (fromIntegral consumerPid) perturb)
+            xs
+        pure $ case sequence results of
+            Left msg  -> Left (MatrixError msg)
+            Right xs' -> Right (xs', extra)
 
     noTechLinkErr sub consumerPid = pure $ Left $ MatrixError $
-        "No technosphere link from " <> processIdToText db consumerPid
+        "No technosphere link from " <> processIdToText thisDb consumerPid
         <> " to supplier " <> subFrom sub
 
     noStaticLinkErr sub consumerPid fromDb fromPid = pure $ Left $ MatrixError $
-        "no cross-DB link from " <> processIdToText db consumerPid
+        "no cross-DB link from " <> processIdToText thisDb consumerPid
         <> " to " <> fromDb <> "::" <> T.pack (show fromPid)
         <> " (requested by substitution " <> subFrom sub <> " -> " <> subTo sub <> ")"
 
     resolveRef :: Text -> Text -> IO (Either ServiceError (Text, ProcessId, (UUID, UUID), Database))
     resolveRef refDb pidText
-      | refDb == rootDbName = case resolveActivityAndProcessId db pidText of
+      | refDb == thisDbName = case resolveActivityAndProcessId thisDb pidText of
           Left e        -> pure (Left e)
           Right (p, _)  ->
-              let uuids = dbProcessIdTable db V.! fromIntegral p
-              in pure (Right (refDb, p, uuids, db))
+              let uuids = dbProcessIdTable thisDb V.! fromIntegral p
+              in pure (Right (refDb, p, uuids, thisDb))
       | otherwise = do
           mPair <- depLookup refDb
           case mPair of
