@@ -8,6 +8,7 @@ import qualified Progress
 import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, shermanMorrisonVariant, toList)
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
+import qualified SharedSolver
 import Database (findActivitiesByFields, findFlowsBySynonym)
 import qualified Search.BM25 as BM25
 import qualified Search.Normalize as Normalize
@@ -1377,6 +1378,33 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
         case result of
             Left err -> return $ Left err
             Right x' -> foldSubstitutions x' ss f
+
+-- | What-if inventory with substitutions applied to the root DB's scaling
+-- vector, then propagated across the dep graph. Mirrors the GET-path
+-- 'inventoryWithDeps' but seeds the recursion with the substituted
+-- scaling so dep DBs solve against the modified supply chain.
+--
+-- Phase 2 will extend this signature with virtual cross-DB links returned
+-- by 'computeScalingVectorWithSubstitutions' for cross-DB substitution
+-- targeting; Phase 1 passes @[]@.
+inventoryWithSubsAndDeps
+    :: UnitConfig
+    -> SharedSolver.DepSolverLookup
+    -> Database
+    -> SharedSolver
+    -> ProcessId
+    -> [Substitution]
+    -> IO (Either ServiceError Inventory)
+inventoryWithSubsAndDeps unitCfg depLookup db solver pid subs = do
+    eScaling <- computeScalingVectorWithSubstitutions db solver pid subs
+    case eScaling of
+        Left e  -> pure (Left e)
+        Right x -> do
+            eInv <- SharedSolver.goWithDepsFromScalings unitCfg depLookup db [] [x] 0
+            case eInv of
+                Left err    -> pure (Left (MatrixError err))
+                Right (inv:_) -> pure (Right inv)
+                Right []    -> pure (Right M.empty)  -- unreachable: batch non-empty
 
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
 findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double

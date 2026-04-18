@@ -6,7 +6,6 @@
 
 module API.Routes where
 
-import qualified Matrix
 import Matrix (Inventory)
 import SharedSolver (SharedSolver)
 import qualified SharedSolver
@@ -667,14 +666,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
     postActivityLCIA dbName processIdText _collectionName methodIdText subReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        requireFullyLinked dbName db
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
-        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
-        case scalingResult of
-            Left err -> throwServiceError err
-            Right scalingVec -> do
-                let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                liftIO $ computeCategoryResult dbName db activity 5 inventory method
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        eInv <- liftIO $ Service.inventoryWithSubsAndDeps
+            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+        inventory <- either throwServiceError pure eInv
+        liftIO $ computeCategoryResult dbName db activity 5 inventory method
 
     -- Batch LCIA endpoint (all methods in a collection)
     getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
@@ -751,46 +750,46 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
     postActivityLCIABatch dbName processIdText collectionName subReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        requireFullyLinked dbName db
         (processId, activity) <- resolveOrThrow db processIdText
         (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
         let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
             mNW = case nwSets of { (nw:_) -> Just nw; [] -> Nothing }
-        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
-        case scalingResult of
-            Left err -> throwServiceError err
-            Right scalingVec -> do
-                let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                rawResults <- liftIO $ mapConcurrently (computeCategoryResult dbName db activity 5 inventory) methods
-                let results = map (enrichWithNW dcLookup mNW) rawResults
-                    rawScoreMap = M.fromList
-                        [(lrCategory r, lrScore r) | r <- rawResults]
-                    scoringResults = M.fromList
-                        [ (ssName ss, scores)
-                        | ss <- scoringSets
-                        , Right scores <- [computeFormulaScores ss rawScoreMap]
-                        ]
-                return LCIABatchResult
-                    { lbrResults = results
-                    , lbrSingleScore = Nothing
-                    , lbrSingleScoreUnit = Nothing
-                    , lbrNormWeightSetName = nwName <$> mNW
-                    , lbrAvailableNWsets = map nwName nwSets
-                    , lbrScoringResults = scoringResults
-                    , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
-                    }
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        eInv <- liftIO $ Service.inventoryWithSubsAndDeps
+            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+        inventory <- either throwServiceError pure eInv
+        rawResults <- liftIO $ mapConcurrently (computeCategoryResult dbName db activity 5 inventory) methods
+        let results = map (enrichWithNW dcLookup mNW) rawResults
+            rawScoreMap = M.fromList
+                [(lrCategory r, lrScore r) | r <- rawResults]
+            scoringResults = M.fromList
+                [ (ssName ss, scores)
+                | ss <- scoringSets
+                , Right scores <- [computeFormulaScores ss rawScoreMap]
+                ]
+        return LCIABatchResult
+            { lbrResults = results
+            , lbrSingleScore = Nothing
+            , lbrSingleScoreUnit = Nothing
+            , lbrNormWeightSetName = nwName <$> mNW
+            , lbrAvailableNWsets = map nwName nwSets
+            , lbrScoringResults = scoringResults
+            , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
+            }
 
     -- POST: Inventory with substitutions
     postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
     postActivityInventory dbName processIdText subReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        requireFullyLinked dbName db
         (processId, activity) <- resolveOrThrow db processIdText
-        scalingResult <- liftIO $ Service.computeScalingVectorWithSubstitutions db sharedSolver processId (srSubstitutions subReq)
-        case scalingResult of
-            Left err -> throwServiceError err
-            Right scalingVec -> do
-                let inventory = Matrix.applyBiosphereMatrix db scalingVec
-                    inventoryExport = Service.convertToInventoryExport db (dbFlows db) (dbUnits db) processId activity inventory
-                return inventoryExport
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        eInv <- liftIO $ Service.inventoryWithSubsAndDeps
+            unitCfg (DM.mkDepSolverLookup dbManager) db sharedSolver processId (srSubstitutions subReq)
+        inventory <- either throwServiceError pure eInv
+        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity inventory
 
     -- POST: Supply chain with substitutions
     postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
@@ -865,7 +864,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     throwServiceError :: Service.ServiceError -> Handler a
     throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
     throwServiceError (Service.InvalidProcessId msg) = throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-    throwServiceError (Service.MatrixError msg) = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+    -- MatrixError covers singular Sherman-Morrison, missing technosphere links,
+    -- and cross-DB unit-conversion failures — all client-submitted invariant
+    -- breakages. Surface as 422 like the rest of the cross-DB pipeline.
+    throwServiceError (Service.MatrixError msg) = throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
     throwServiceError _ = throwError err500{errBody = "Internal server error"}
 
     -- Log a single category result in the batch

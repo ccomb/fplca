@@ -21,6 +21,7 @@ import qualified TreeSpec
 import qualified ServiceSpec
 import qualified CrossLinkingSpec
 import qualified CrossDBInventorySpec
+import qualified SubstitutionSpec
 import qualified SharedSolverSpec
 import qualified FlowResolverSpec
 import qualified PluginConfigSpec
@@ -52,6 +53,7 @@ main = hspec $ do
         describe "Service Layer" ServiceSpec.spec
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
+        describe "Substitutions" SubstitutionSpec.spec
         describe "Shared Solver" SharedSolverSpec.spec
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec

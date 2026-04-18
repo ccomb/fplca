@@ -31,6 +31,7 @@ module SharedSolver (
     DepSolverLookup,
     computeInventoryMatrixWithDepsCached,
     computeInventoryMatrixBatchWithDepsCached,
+    goWithDepsFromScalings,
     crossDBProcessContributions
 ) where
 
@@ -49,6 +50,7 @@ import Matrix
     ( Vector
     , Inventory
     , accumulateDepDemands
+    , accumulateDepDemandsWith
     , applyBiosphereMatrix
     , buildDemandVectorFromIndex
     , computeInventoryMatrixBatch
@@ -213,17 +215,37 @@ goWithDeps
     -> IO (Either Text [Inventory])
 goWithDeps unitConfig depLookup db solver demands depth = do
     scalings <- solveMultiWithSharedSolver solver demands
+    goWithDepsFromScalings unitConfig depLookup db [] scalings depth
+
+-- | Propagate pre-computed root scalings into the dep-DB graph. Same body as
+-- the dep-propagation half of 'goWithDeps' but skips the root solve — the
+-- caller supplies the root scaling vectors (e.g. after a Sherman-Morrison
+-- substitution update) and an optional list of synthesized 'CrossDBLink'
+-- entries to fold into 'accumulateDepDemands' at this level only.
+--
+-- Extra links are applied at the root DB only; recursive calls into dep DBs
+-- use their static 'dbCrossDBLinks'. Supporting nested substitutions would
+-- require threading per-DB extras through 'resolveDep' — out of scope.
+goWithDepsFromScalings
+    :: UnitConfig
+    -> DepSolverLookup
+    -> Database
+    -> [CrossDBLink]   -- ^ virtual links to inject at this level (root only)
+    -> [Vector]        -- ^ K pre-computed root scaling vectors
+    -> Int             -- ^ recursion depth
+    -> IO (Either Text [Inventory])
+goWithDepsFromScalings unitConfig depLookup db extraLinks scalings depth = do
     let localInvs = map (applyBiosphereMatrix db) scalings
     if depth >= maxDepsDepth
         then pure (Right localInvs)
         else do
-            let perRootDepDemands = map (accumulateDepDemands db) scalings
+            let perRootDepDemands = map (accumulateDepDemandsWith db extraLinks) scalings
                 allDepDbs = S.toList $ S.unions $ map M.keysSet perRootDepDemands
             if null allDepDbs
                 then pure (Right localInvs)
                 else do
                     depResults <- mapConcurrently
-                        (resolveDep unitConfig depLookup perRootDepDemands depth (length demands))
+                        (resolveDep unitConfig depLookup perRootDepDemands depth (length scalings))
                         allDepDbs
                     pure $ case sequence depResults of
                         Left err             -> Left err

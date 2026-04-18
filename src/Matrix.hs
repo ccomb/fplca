@@ -35,6 +35,7 @@ module Matrix (
     applyBiosphereMatrix,
     computeInventoryMatrix,
     accumulateDepDemands,
+    accumulateDepDemandsWith,
     depDemandsToVector,
     computeProcessLCIAContributions,
     shermanMorrisonVariant,
@@ -426,8 +427,23 @@ accumulateDepDemands
     :: Database
     -> Vector
     -> M.Map Text (M.Map (UUID, UUID) (Double, Text))
-accumulateDepDemands db scalingVec =
-    foldr step M.empty (dbCrossDBLinks db)
+accumulateDepDemands db = accumulateDepDemandsWith db []
+
+-- | Same as 'accumulateDepDemands' but folds over an additional list of
+-- synthesized 'CrossDBLink' records (e.g. virtual links emitted by a
+-- what-if substitution that re-routes a consumer to a dep-DB supplier).
+-- Negative 'cdlCoefficient' is allowed: it cancels a static link at the
+-- same supplier key because the inner 'M.unionWith mergeEntry' sums
+-- amounts. A 0-net entry remains in the map and becomes a zero in
+-- 'depDemandsToVector' — silently dropped is never correct (it would
+-- hide a bug); a zero is.
+accumulateDepDemandsWith
+    :: Database
+    -> [CrossDBLink]
+    -> Vector
+    -> M.Map Text (M.Map (UUID, UUID) (Double, Text))
+accumulateDepDemandsWith db extraLinks scalingVec =
+    foldr step M.empty (dbCrossDBLinks db ++ extraLinks)
   where
     actIdx     = dbActivityIndex db
     procLookup = dbProcessIdLookup db
