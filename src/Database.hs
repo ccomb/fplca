@@ -9,6 +9,7 @@ import Types
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
+import Data.Either (lefts, rights)
 import Data.List (sort)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -99,14 +100,14 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                                     Just pid -> (Just pid, [])
                                     Nothing ->
                                         -- Only warn if exchange has non-zero amount (zero-amount are placeholders)
-                                        let warning = if abs (exchangeAmount ex) > 1e-15
-                                                     then [ "Missing activity-product pair referenced by exchange:\n"
-                                                            ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
-                                                            ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
-                                                            ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
-                                                            ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
-                                                            ++ "  This exchange will be skipped." ]
-                                                     else []
+                                        let warning = [ "Missing activity-product pair referenced by exchange:\n"
+                                                        ++ "  Activity UUID: " ++ T.unpack (UUID.toText actUUID) ++ "\n"
+                                                        ++ "  Product UUID: " ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ "\n"
+                                                        ++ "  Consumer: " ++ T.unpack (activityName consumerActivity) ++ "\n"
+                                                        ++ "  Expected file: " ++ T.unpack (UUID.toText actUUID) ++ "_" ++ T.unpack (UUID.toText (exchangeFlowId ex)) ++ ".spold\n"
+                                                        ++ "  This exchange will be skipped."
+                                                      | abs (exchangeAmount ex) > 1e-15
+                                                      ]
                                         in (Nothing, warning)
                             Nothing -> (Nothing, [])
                     (producerPid, warnings) = producerResult
@@ -178,17 +179,17 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                 buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                 results = map buildNormalizedTechTriple (exchanges consumerActivity)
                 -- Short-circuit on first Left (unit conversion error)
-             in case [e | Left e <- results] of
+             in case lefts results of
                     (err:_) -> Left err
-                    []      -> Right (concatMap fst [r | Right r <- results], concatMap snd [r | Right r <- results])
+                    []      -> let rs = rights results in Right (concatMap fst rs, concatMap snd rs)
 
     -- Collect results, failing on first unit conversion error
     let activityRange = [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1 :: ProcessId]]
         activityResults = map buildActivityTriplets activityRange
-    case [e | Left e <- activityResults] of
+    case lefts activityResults of
         (err:_) -> return $ Left err
         [] -> do
-            let allResults = [r | Right r <- activityResults]
+            let allResults = rights activityResults
                 !techTriples = VU.fromList $ concatMap fst allResults
                 techWarnings = concatMap snd allResults
 
@@ -271,6 +272,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                 , dbFlowsByCAS = M.empty
                 , dbSearchIndex = M.empty
                 , dbProductSearchIndex = M.empty
+                , dbBM25Index = Nothing
                 }
 
 -- | Build indexes with ProcessIds
@@ -454,6 +456,6 @@ findFlowsBySynonym db query =
         flows = M.elems (dbFlows db)
      in [ f | f <- flows, T.isInfixOf queryLower (T.toLower (flowName f))
                             || any
-                                (\synonyms -> any (T.isInfixOf queryLower . T.toLower) (S.toList synonyms))
+                                (any (T.isInfixOf queryLower . T.toLower) . S.toList)
                                 (M.elems (flowSynonyms f))
         ]

@@ -29,6 +29,8 @@ import qualified UploadedDatabaseSpec
 import qualified ProgressSpec
 import qualified EcoSpold1Spec
 import qualified MCPSchemaSpec
+import qualified NormalizeSpec
+import qualified BM25Spec
 
 main :: IO ()
 main = hspec $ do
@@ -57,3 +59,5 @@ main = hspec $ do
         describe "Progress Formatting" ProgressSpec.spec
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec
         describe "MCP Tool Schemas" MCPSchemaSpec.spec
+        describe "Search.Normalize" NormalizeSpec.spec
+        describe "Search.BM25" BM25Spec.spec

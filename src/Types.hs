@@ -34,6 +34,7 @@ import GHC.Generics (Generic)
 import Data.List (foldl', nub)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
+import Search.BM25.Types (BM25Index)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -129,18 +130,18 @@ exchangeIsInput (BiosphereExchange _ _ _ isInp _) = isInp
 
 exchangeIsReference :: Exchange -> Bool
 exchangeIsReference (TechnosphereExchange _ _ _ _ isRef _ _ _) = isRef
-exchangeIsReference (BiosphereExchange _ _ _ _ _) = False -- Biosphere exchanges are never reference products
+exchangeIsReference BiosphereExchange{} = False -- Biosphere exchanges are never reference products
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
 exchangeActivityLinkId (TechnosphereExchange _ _ _ _ _ linkId _ _) =
     if linkId == UUID.nil then Nothing else Just linkId
-exchangeActivityLinkId (BiosphereExchange _ _ _ _ _) = Nothing
+exchangeActivityLinkId BiosphereExchange{} = Nothing
 
 -- | Get process link ID (new field)
 exchangeProcessLinkId :: Exchange -> Maybe ProcessId
 exchangeProcessLinkId (TechnosphereExchange _ _ _ _ _ _ processLinkId _) = processLinkId
-exchangeProcessLinkId (BiosphereExchange _ _ _ _ _) = Nothing
+exchangeProcessLinkId BiosphereExchange{} = Nothing
 
 -- | Get exchange location (for EcoSpold1 supplier lookup)
 exchangeLocation :: Exchange -> Text
@@ -149,8 +150,8 @@ exchangeLocation (BiosphereExchange _ _ _ _ loc) = loc
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
-isTechnosphereExchange (TechnosphereExchange _ _ _ _ _ _ _ _) = True
-isTechnosphereExchange (BiosphereExchange _ _ _ _ _) = False
+isTechnosphereExchange TechnosphereExchange{} = True
+isTechnosphereExchange BiosphereExchange{} = False
 
 -- | Check if exchange is biosphere
 isBiosphereExchange :: Exchange -> Bool
@@ -163,9 +164,7 @@ getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB
 -- | Get unit name for an exchange (fallback to "unknown" if not found)
 getUnitNameForExchange :: UnitDB -> Exchange -> Text
 getUnitNameForExchange unitDB exchange =
-    case getUnitForExchange unitDB exchange of
-        Just unit -> unitName unit
-        Nothing -> "unknown"
+    maybe "unknown" unitName (getUnitForExchange unitDB exchange)
 
 -- | Get unit information for a flow
 getUnitForFlow :: UnitDB -> Flow -> Maybe Unit
@@ -174,9 +173,7 @@ getUnitForFlow unitDB flow = M.lookup (flowUnitId flow) unitDB
 -- | Get unit name for a flow (fallback to "unknown" if not found)
 getUnitNameForFlow :: UnitDB -> Flow -> Text
 getUnitNameForFlow unitDB flow =
-    case getUnitForFlow unitDB flow of
-        Just unit -> unitName unit
-        Nothing -> "unknown"
+    maybe "unknown" unitName (getUnitForFlow unitDB flow)
 
 -- | Base LCA activity
 -- Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
@@ -392,6 +389,8 @@ data Database = Database
     , dbSearchIndex :: !(M.Map Text IS.IntSet)
     -- Product name search index: word token → ProcessId set (built at runtime)
     , dbProductSearchIndex :: !(M.Map Text IS.IntSet)
+    -- BM25 ranking index (built at runtime, not serialized)
+    , dbBM25Index :: !(Maybe BM25Index)
     }
     deriving (Generic, NFData)
 
@@ -486,6 +485,7 @@ instance Store Database where
             , dbFlowsByCAS = M.empty
             , dbSearchIndex = M.empty
             , dbProductSearchIndex = M.empty
+            , dbBM25Index = Nothing
             }
 
 -- | Helper functions for ProcessId and Database operations
@@ -601,8 +601,8 @@ addFlowNameIndexToDatabase db =
 -- Tokenizes activity names and locations so search can intersect word sets
 -- instead of scanning all activities.
 buildSearchIndex :: V.Vector Activity -> M.Map Text IS.IntSet
-buildSearchIndex activities =
-    V.ifoldl' addActivity M.empty activities
+buildSearchIndex =
+    V.ifoldl' addActivity M.empty
   where
     addActivity !acc i a =
         let pid = fromIntegral i

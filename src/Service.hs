@@ -9,6 +9,8 @@ import Matrix (Inventory, applySparseMatrix, buildDemandVectorFromIndex, compute
 import qualified Matrix.Export as MatrixExport
 import SharedSolver (SharedSolver, solveWithSharedSolver, getFactorization)
 import Database (findActivitiesByFields, findFlowsBySynonym)
+import qualified Search.BM25 as BM25
+import qualified Search.Normalize as Normalize
 import Tree (buildLoopAwareTree)
 import Types
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem(..), ConsumerResult (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..))
@@ -734,16 +736,37 @@ searchFlows db (Just query) langParam limitParam offsetParam sortParam orderPara
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
 
+-- | Sort (processId, activity) pairs by BM25 score descending, using the
+-- activity-name query. Docs with score 0 fall to the end in arbitrary order.
+bm25Order :: Database -> Maybe Text -> [(ProcessId, Activity)] -> [(ProcessId, Activity)]
+bm25Order db mQuery results =
+    case (mQuery, dbBM25Index db) of
+        (Just q, Just idx) ->
+            let scores = BM25.score idx (Normalize.tokenize q)
+                scoreOf (pid, _) = scores U.! fromIntegral pid
+            in L.sortOn (negate . scoreOf) results
+        _ -> results
+
 -- | Search activities (returns same format as API)
 searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Bool -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
 searchActivities db nameParam geoParam productParam classFilters exactMatch limitParam offsetParam sortParam orderParam = do
     startTime <- getCurrentTime
     let rawResults = findActivitiesByFields db nameParam geoParam productParam classFilters exactMatch
         isDesc = orderParam == Just "desc"
+        explicitSort = sortParam == Just "name" || sortParam == Just "location"
+        -- BM25 ranking applies only when the user provided a name query, didn't
+        -- request exact matching, and didn't explicitly pick a column to sort by.
+        useBM25 = not exactMatch
+            && not explicitSort
+            && case (nameParam, dbBM25Index db) of
+                 (Just n, Just _) -> not (T.null (T.strip n))
+                 _                -> False
         actCmp = case sortParam of
             Just "location" -> \(_, a) (_, b) -> compare (activityLocation a) (activityLocation b)
             _               -> \(_, a) (_, b) -> compare (activityName a) (activityName b)
-        allResults = L.sortBy (if isDesc then flip actCmp else actCmp) rawResults
+        allResults
+            | useBM25   = bm25Order db nameParam rawResults
+            | otherwise = L.sortBy (if isDesc then flip actCmp else actCmp) rawResults
         offset = maybe 0 (max 0) offsetParam
         limit = fromMaybe 20 limitParam
         total = length allResults

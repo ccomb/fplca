@@ -109,6 +109,7 @@ import Method.Types (CompartmentMap, buildCompartmentMapFromCSV, compartmentMapS
     )
 import Method.Mapping (MatchStrategy, mapMethodToFlows)
 import Types (Database(..), SparseTriple(..), SimpleDatabase(..), initializeRuntimeFields, toSimpleDatabase, Activity(..), UUID, Flow(..), Unit(..), exchangeFlowId, exchangeIsReference, CrossDBLink(..), CrossDBLinkingStats(..), crossDBBySource, unresolvedCount, LinkBlocker(..), deduplicateFallbacks)
+import qualified Search.BM25 as BM25
 import qualified UnitConversion
 import qualified Database.Loader as Loader
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -753,7 +754,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
                         Left err -> return $ Left err
                         Right dbRebuilt -> do
                             -- Initialize runtime fields (synonym DB and flow name index)
-                            let database = initializeRuntimeFields dbRebuilt synonymDB
+                            let database = BM25.addBM25Index (initializeRuntimeFields dbRebuilt synonymDB)
 
                             -- Create shared solver with lazy factorization (deferred to first query)
                             let techTriples = dbTechnosphereTriples database
@@ -1631,7 +1632,7 @@ finalizeDatabase manager dbName = do
                 -- Use pre-built database from cache, or build matrices from scratch
                 buildResult <- case sdCachedDB staged of
                     Just cachedDb -> do
-                        let db = initializeRuntimeFields cachedDb synonymDB
+                        let db = BM25.addBM25Index (initializeRuntimeFields cachedDb synonymDB)
                         return $ Right (db, True)
                     Nothing -> do
                         unitConfig <- getMergedUnitConfig manager
@@ -1647,7 +1648,7 @@ finalizeDatabase manager dbName = do
                                         , dbDependsOn = sdSelectedDeps staged
                                         , dbLinkingStats = sdLinkingStats staged
                                         }
-                                return $ Right (initializeRuntimeFields dbWithLinks synonymDB, False)
+                                return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), False)
 
                 case buildResult of
                   Left err -> return $ Left err
