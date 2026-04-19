@@ -815,13 +815,11 @@ spec = do
 
         it "produces deterministic UUIDs" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"
-            case parseSimaProMethodCSVBytes csv of
+            case traverse parseSimaProMethodCSVBytes [csv, csv] of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right coll1 ->
-                    case parseSimaProMethodCSVBytes csv of
-                        Left err -> expectationFailure $ "Parse failed: " ++ err
-                        Right coll2 ->
-                            map methodId (mcMethods coll1) `shouldBe` map methodId (mcMethods coll2)
+                Right [coll1, coll2] ->
+                    map methodId (mcMethods coll1) `shouldBe` map methodId (mcMethods coll2)
+                Right _ -> expectationFailure "unreachable"
 
         it "parses 3 damage categories" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"
