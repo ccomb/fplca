@@ -1293,7 +1293,15 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults FlowSearchResult)
     searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
         (db, _) <- requireDatabaseByName dbManager dbName
-        searchFlowsInternal db queryParam langParam limitParam offsetParam sortParam orderParam
+        let ff = Service.FlowFilter
+                 { Service.ffQuery  = queryParam
+                 , Service.ffLang   = langParam
+                 , Service.ffLimit  = limitParam
+                 , Service.ffOffset = offsetParam
+                 , Service.ffSort   = sortParam
+                 , Service.ffOrder  = orderParam
+                 }
+        searchFlowsInternal db ff
 
     -- Search activities by specific fields with pagination and count
     searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
@@ -1305,7 +1313,19 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             explicitFilters = zipWith3 (\s v m -> (s, v, m == "exact")) classSystems classValues
                                (classModes ++ repeat "contains")
             classFilters = presetFilters ++ explicitFilters
-        result <- liftIO $ Service.searchActivities db nameParam geoParam productParam classFilters exactMatch limitParam offsetParam sortParam orderParam
+        let af = Service.ActivityFilter
+                 { Service.afName            = nameParam
+                 , Service.afLocation        = geoParam
+                 , Service.afProduct         = productParam
+                 , Service.afClassifications = classFilters
+                 , Service.afLimit           = limitParam
+                 , Service.afOffset          = offsetParam
+                 , Service.afMaxDepth        = Nothing
+                 , Service.afMinQuantity     = Nothing
+                 , Service.afSort            = sortParam
+                 , Service.afOrder           = orderParam
+                 }
+        result <- liftIO $ Service.searchActivities db af exactMatch
         case result of
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right jsonValue -> case fromJSON jsonValue of
@@ -1410,9 +1430,9 @@ paginateResults results limitParam offsetParam = do
     return $ SearchResults paginatedResults totalCount offset limit hasMore searchTimeMs
 
 -- | Internal helper for flow search with optional language filtering
-searchFlowsInternal :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults FlowSearchResult)
-searchFlowsInternal _ Nothing _ _ _ _ _ = return $ SearchResults [] 0 0 50 False 0.0
-searchFlowsInternal db (Just query) _langParam limitParam offsetParam sortParam orderParam = do
+searchFlowsInternal :: Database -> Service.FlowFilter -> Handler (SearchResults FlowSearchResult)
+searchFlowsInternal _ Service.FlowFilter{Service.ffQuery = Nothing} = return $ SearchResults [] 0 0 50 False 0.0
+searchFlowsInternal db Service.FlowFilter{Service.ffQuery = Just query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam, Service.ffSort = sortParam, Service.ffOrder = orderParam} = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
         allResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]

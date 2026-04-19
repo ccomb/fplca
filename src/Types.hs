@@ -157,6 +157,29 @@ isTechnosphereExchange BiosphereExchange{} = False
 isBiosphereExchange :: Exchange -> Bool
 isBiosphereExchange = not . isTechnosphereExchange
 
+-- | Activity's reference-product amount used to normalize its matrix column.
+-- Net output = sum of reference outputs minus self-loop consumption; falls back
+-- to reference inputs (treatment processes) or 1.0 when nothing else applies.
+-- Self-loops require both activityLinkId == activityUUID AND flowId == productUUID,
+-- so cross-product inputs in multi-output processes are not mistakenly subtracted.
+activityNormFactor :: Activity -> (UUID, UUID) -> Double
+activityNormFactor act (actUUID, prodUUID) =
+    let isSelfLoop ex = case exchangeActivityLinkId ex of
+            Just linkUUID -> linkUUID == actUUID && exchangeFlowId ex == prodUUID
+            Nothing       -> False
+        refOutputs = sum [ exchangeAmount ex
+                         | ex <- exchanges act, exchangeIsReference ex, not (exchangeIsInput ex) ]
+        refInputs  = sum [ abs (exchangeAmount ex)
+                         | ex <- exchanges act, exchangeIsReference ex, exchangeIsInput ex ]
+        internalConsumption = sum [ exchangeAmount ex
+                                  | ex <- exchanges act
+                                  , isTechnosphereExchange ex, exchangeIsInput ex
+                                  , not (exchangeIsReference ex), isSelfLoop ex ]
+        netOutput = if refOutputs > 1e-15 then refOutputs - internalConsumption else 0.0
+    in if netOutput > 1e-15 then netOutput
+       else if refInputs > 1e-15 then refInputs
+       else 1.0
+
 -- | Get unit information for an exchange
 getUnitForExchange :: UnitDB -> Exchange -> Maybe Unit
 getUnitForExchange unitDB exchange = M.lookup (exchangeUnitId exchange) unitDB

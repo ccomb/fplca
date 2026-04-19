@@ -120,6 +120,7 @@ library
                      , haskeline
                      , megaparsec
                      , unicode-transforms
+                     , transformers
 
   default-language:    Haskell2010
 

@@ -321,7 +321,15 @@ fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
             (M.size dsIndex)
 
     -- Count and report statistics
-    let (fixedActivities, summary) = fixAllActivities locationAliases supplierIndex nameIndex dsIndex supplierLinks (sdbFlows db) (sdbActivities db)
+    let ctx = ExchangeLinkContext
+                { elcLocationAliases = locationAliases
+                , elcSupplierIndex   = supplierIndex
+                , elcNameIndex       = nameIndex
+                , elcDatasetIndex    = dsIndex
+                , elcSupplierLinks   = supplierLinks
+                , elcFlowDB          = sdbFlows db
+                }
+        (fixedActivities, summary) = fixAllActivities ctx (sdbActivities db)
 
     reportProgress Info $
         printf
@@ -336,19 +344,33 @@ fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
 
     return $ db{sdbActivities = fixedActivities}
 
+-- | Bundle of lookup tables threaded through EcoSpold1 activity-link resolution.
+-- Previously these six fields were passed as positional parameters through
+-- 'fixAllActivities' -> 'fixActivityExchanges' -> 'fixExchangeLink', each call
+-- re-forwarding the same values. The record collapses the cascade to a single
+-- argument and makes the dependencies explicit.
+data ExchangeLinkContext = ExchangeLinkContext
+    { elcLocationAliases :: !(M.Map T.Text T.Text)
+    , elcSupplierIndex   :: !SupplierIndex
+    , elcNameIndex       :: !SupplierByNameWithLocation
+    , elcDatasetIndex    :: !DatasetNumberIndex
+    , elcSupplierLinks   :: !(M.Map UUID.UUID Int)
+    , elcFlowDB          :: !FlowDB
+    }
+
 -- | Fix all activities and return statistics with unlinked summary
-fixAllActivities :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
-fixAllActivities locationAliases idx nameIdx dsIndex supplierLinks flowDb activities =
-    let results = M.map (fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb) activities
+fixAllActivities :: ExchangeLinkContext -> ActivityMap -> (ActivityMap, UnlinkedSummary)
+fixAllActivities ctx activities =
+    let results = M.map (fixActivityExchanges ctx) activities
         summaries = map snd $ M.elems results
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
 -- | Fix activity exchanges and return (fixed activity, UnlinkedSummary)
-fixActivityExchanges :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
-fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb act =
-    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb (activityName act)) (exchanges act)
+fixActivityExchanges :: ExchangeLinkContext -> Activity -> (Activity, UnlinkedSummary)
+fixActivityExchanges ctx act =
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink ctx (activityName act)) (exchanges act)
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
@@ -357,42 +379,42 @@ fixActivityExchanges locationAliases idx nameIdx dsIndex supplierLinks flowDb ac
 Unlinked exchanges stay unlinked for cross-DB resolution.
 Returns (fixed exchange, UnlinkedSummary)
 -}
-fixExchangeLink :: M.Map T.Text T.Text -> SupplierIndex -> SupplierByNameWithLocation -> DatasetNumberIndex -> M.Map UUID.UUID Int -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLink locationAliases idx nameIdx dsIndex supplierLinks flowDb consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
+fixExchangeLink :: ExchangeLinkContext -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
+fixExchangeLink ExchangeLinkContext{..} consumerName ex@(TechnosphereExchange fid amt uid isInp isRef _ procLink loc)
     | isInp =
         let linked actUUID prodUUID = (TechnosphereExchange prodUUID amt uid isInp isRef actUUID procLink loc, UnlinkedSummary M.empty 1 1 0)
             unlinked flow lookupLoc =
                 let ue = UnlinkedExchange (flowName flow) lookupLoc
                 in (ex, UnlinkedSummary (M.singleton consumerName [ue]) 1 0 1)
-        in case M.lookup fid flowDb of
+        in case M.lookup fid elcFlowDB of
             Just flow ->
                 -- Tier 1: dataset-number lookup with name validation
-                case M.lookup fid supplierLinks >>= \dsNum -> M.lookup dsNum dsIndex of
+                case M.lookup fid elcSupplierLinks >>= \dsNum -> M.lookup dsNum elcDatasetIndex of
                     Just (actUUID, prodUUID)
-                        | Just supplierFlow <- M.lookup prodUUID flowDb
+                        | Just supplierFlow <- M.lookup prodUUID elcFlowDB
                         , normalizeText (flowName supplierFlow) == normalizeText (flowName flow)
                         -> linked actUUID prodUUID
                     _ ->
                         -- Tier 2: name + location lookup
-                        let normalizedLoc = fromMaybe loc (M.lookup loc locationAliases)
+                        let normalizedLoc = fromMaybe loc (M.lookup loc elcLocationAliases)
                             lookupLoc
                                 | T.null normalizedLoc =
-                                    case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                    case M.lookup (normalizeText (flowName flow)) elcNameIndex of
                                         Just (_, _, actLoc) -> actLoc
                                         Nothing -> normalizedLoc
                                 | otherwise = normalizedLoc
                             key = (normalizeText (flowName flow), lookupLoc)
-                        in case M.lookup key idx of
+                        in case M.lookup key elcSupplierIndex of
                             Just (actUUID, prodUUID) -> linked actUUID prodUUID
                             Nothing ->
                                 -- Tier 3: name-only fallback (safe for EcoSpold1 where names include {LOCATION})
-                                case M.lookup (normalizeText (flowName flow)) nameIdx of
+                                case M.lookup (normalizeText (flowName flow)) elcNameIndex of
                                     Just (actUUID, prodUUID, _) -> linked actUUID prodUUID
                                     Nothing -> unlinked flow lookupLoc
             Nothing ->
                 (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, emptyUnlinkedSummary)
-fixExchangeLink _ _ _ _ _ _ _ ex = (ex, emptyUnlinkedSummary)
+fixExchangeLink _ _ ex = (ex, emptyUnlinkedSummary)
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -795,73 +817,22 @@ loadCachedDatabaseWithMatrices :: T.Text -> FilePath -> IO (Maybe Database)
 loadCachedDatabaseWithMatrices dbName dataDir = do
     cacheFile <- generateMatrixCacheFilename dbName dataDir
     let zstdFile = cacheFile ++ ".zst"
-
     zstdExists <- doesFileExist zstdFile
     if not zstdExists
         then do
             reportCacheOperation "No matrix cache found"
             return Nothing
         else do
-            reportCacheInfo zstdFile
-            -- Wrap cache loading in exception handler to prevent crashes
-            catch
-                ( withProgressTiming Cache "Matrix cache load with zstd decompression" $ do
-                    contents <- BS.readFile zstdFile
-                    -- Check header: magic (8 bytes) + signature (8 bytes)
-                    let headerSize = 16
-                    if BS.length contents < headerSize
-                        then do
-                            reportCacheOperation "Cache file too small, rebuilding"
-                            removeFile zstdFile
-                            return Nothing
-                        else do
-                            let (header, payload) = BS.splitAt headerSize contents
-                            let (magic, sigBytes) = BS.splitAt 8 header
-                            -- Check magic bytes
-                            if magic /= cacheMagic
-                                then do
-                                    reportCacheOperation "Cache file has invalid magic (old format?), rebuilding"
-                                    removeFile zstdFile
-                                    return Nothing
-                                else do
-                                    -- Check schema signature
-                                    let storedSig = decodeEx sigBytes :: Word64
-                                    if storedSig /= schemaSignature
-                                        then do
-                                            reportCacheOperation $ "Schema signature mismatch (stored: " ++ show storedSig ++ ", current: " ++ show schemaSignature ++ "), rebuilding"
-                                            removeFile zstdFile
-                                            return Nothing
-                                        else do
-                                            -- Decompress and decode
-                                            case Zstd.decompress payload of
-                                                Zstd.Skip -> do
-                                                    reportError "Zstd decompression failed: Skip"
-                                                    return Nothing
-                                                Zstd.Error err -> do
-                                                    reportError $ "Zstd decompression failed: " ++ show err
-                                                    return Nothing
-                                                Zstd.Decompress decompressed -> do
-                                                    let !db = decodeEx decompressed
-                                                    -- Force full evaluation to prevent lazy thunk buildup
-                                                    db' <- evaluate (force db)
-                                                    reportCacheOperation $
-                                                        "Matrix cache loaded: "
-                                                            ++ show (dbActivityCount db')
-                                                            ++ " activities, "
-                                                            ++ show (VU.length $ dbTechnosphereTriples db')
-                                                            ++ " tech entries, "
-                                                            ++ show (VU.length $ dbBiosphereTriples db')
-                                                            ++ " bio entries (decompressed)"
-                                                    return (Just db')
-                )
-                ( \(e :: SomeException) -> do
-                    reportError $ "Cache load failed: " ++ show e
-                    reportCacheOperation "The cache file is corrupted or incompatible"
+            -- Delegate to the shared reader; a Nothing here means the cache
+            -- is corrupted/incompatible and should be rebuilt from source.
+            result <- loadCompressedCacheFile zstdFile
+            case result of
+                Just _  -> return result
+                Nothing -> do
                     reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
                     removeFile zstdFile
                     reportCacheOperation "Will rebuild database from source files"
                     return Nothing
-                )
 
 {- |
 Load Database directly from a specified cache file.

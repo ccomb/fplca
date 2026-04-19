@@ -4,6 +4,7 @@
 module Search.Normalize
     ( normalize
     , tokenize
+    , caseInsensitiveInfixOf
     ) where
 
 import Data.Char (generalCategory, GeneralCategory(NonSpacingMark), isAlphaNum)
@@ -23,3 +24,9 @@ normalize =
 
 tokenize :: Text -> [Text]
 tokenize = filter (not . T.null) . T.words . normalize
+
+-- | Case-insensitive substring test using Unicode case folding.
+-- @needle `caseInsensitiveInfixOf` haystack@ mirrors 'T.isInfixOf' semantics.
+caseInsensitiveInfixOf :: Text -> Text -> Bool
+caseInsensitiveInfixOf needle haystack =
+    T.toCaseFold needle `T.isInfixOf` T.toCaseFold haystack

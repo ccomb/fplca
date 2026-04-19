@@ -261,11 +261,19 @@ executeFlowActivitiesCommand registry fmt database flowId =
 -- | Execute search activities command
 executeSearchActivitiesCommand :: PluginRegistry -> OutputFormat -> Database -> SearchActivitiesOptions -> IO ()
 executeSearchActivitiesCommand registry fmt database opts = do
-  searchResult <- Service.searchActivities database
-         (searchName opts) (searchGeo opts) (searchProduct opts)
-         []  -- classification filter (CLI doesn't expose yet)
-         False  -- exact match (CLI doesn't expose yet)
-         (searchLimit opts) (searchOffset opts) Nothing Nothing
+  let af = Service.ActivityFilter
+         { Service.afName            = searchName opts
+         , Service.afLocation        = searchGeo opts
+         , Service.afProduct         = searchProduct opts
+         , Service.afClassifications = []
+         , Service.afLimit           = searchLimit opts
+         , Service.afOffset          = searchOffset opts
+         , Service.afMaxDepth        = Nothing
+         , Service.afMinQuantity     = Nothing
+         , Service.afSort            = Nothing
+         , Service.afOrder           = Nothing
+         }
+  searchResult <- Service.searchActivities database af False
   case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result
@@ -273,9 +281,15 @@ executeSearchActivitiesCommand registry fmt database opts = do
 -- | Execute search flows command
 executeSearchFlowsCommand :: PluginRegistry -> OutputFormat -> Database -> SearchFlowsOptions -> IO ()
 executeSearchFlowsCommand registry fmt database opts = do
-  searchResult <- Service.searchFlows database
-         (searchQuery opts) (searchLang opts)
-         (searchFlowsLimit opts) (searchFlowsOffset opts) Nothing Nothing
+  let ff = Service.FlowFilter
+         { Service.ffQuery  = searchQuery opts
+         , Service.ffLang   = searchLang opts
+         , Service.ffLimit  = searchFlowsLimit opts
+         , Service.ffOffset = searchFlowsOffset opts
+         , Service.ffSort   = Nothing
+         , Service.ffOrder  = Nothing
+         }
+  searchResult <- Service.searchFlows database ff
   case searchResult of
     Left err -> reportServiceError err
     Right result -> outputResult registry fmt result

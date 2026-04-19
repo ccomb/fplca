@@ -145,40 +145,8 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
 
         buildActivityTriplets (j, consumerPid) =
             let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                -- Get activity UUID from ProcessId table
-                (activityUUID, productUUID) = dbProcessIdTable V.! fromIntegral consumerPid
-
-                -- For normalization, only use reference OUTPUTS (not treatment inputs)
-                -- Treatment inputs have negative amounts and would incorrectly inflate the normalization factor
-                refOutputs = [ exchangeAmount ex | ex <- exchanges consumerActivity, exchangeIsReference ex, not (exchangeIsInput ex) ]
-                -- If no outputs (pure treatment), use abs of reference input
-                refInputs = [ abs (exchangeAmount ex) | ex <- exchanges consumerActivity, exchangeIsReference ex, exchangeIsInput ex ]
-
-                -- Calculate internal consumption (self-loops): technosphere inputs that link back to the
-                -- EXACT same (activity, product) pair. Must check both activityLinkId == activityUUID AND
-                -- flowId == productUUID, to avoid counting cross-product inputs in multi-output processes
-                -- (e.g., coal gas input linking to the same coke production plant is NOT a sulfur self-loop).
-                internalConsumption = sum [ exchangeAmount ex
-                                          | ex <- exchanges consumerActivity
-                                          , isTechnosphereExchange ex
-                                          , exchangeIsInput ex
-                                          , not (exchangeIsReference ex)  -- Don't count reference products
-                                          , case exchangeActivityLinkId ex of
-                                                Just linkUUID -> linkUUID == activityUUID && exchangeFlowId ex == productUUID
-                                                Nothing -> False
-                                          ]
-
-                normalizationFactor =
-                    let grossOutput = sum refOutputs
-                        grossInput = sum refInputs
-                        -- Net output = gross output - internal consumption
-                        -- This matches Ecoinvent's normalization convention for market activities
-                        netOutput = if grossOutput > 1e-15
-                                   then grossOutput - internalConsumption
-                                   else 0.0
-                    in if netOutput > 1e-15 then netOutput
-                       else if grossInput > 1e-15 then grossInput
-                       else 1.0  -- Fallback for activities with no reference products (shouldn't happen)
+                consumerKey = dbProcessIdTable V.! fromIntegral consumerPid
+                normalizationFactor = activityNormFactor consumerActivity consumerKey
                 buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
                 results = map buildNormalizedTechTriple (exchanges consumerActivity)
                 -- Short-circuit on first Left (unit conversion error)
@@ -223,21 +191,8 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
 
                         buildActivityBioTriplets (j, pid) =
                             let activity = dbActivities V.! fromIntegral pid
-                                (activityUUID, productUUID) = dbProcessIdTable V.! fromIntegral pid
-                                refOutputs = [ exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex, not (exchangeIsInput ex) ]
-                                refInputs = [ abs (exchangeAmount ex) | ex <- exchanges activity, exchangeIsReference ex, exchangeIsInput ex ]
-                                internalConsumption = sum [ exchangeAmount ex
-                                                          | ex <- exchanges activity
-                                                          , isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)
-                                                          , case exchangeActivityLinkId ex of
-                                                                Just linkUUID -> linkUUID == activityUUID && exchangeFlowId ex == productUUID
-                                                                Nothing -> False ]
-                                normalizationFactor =
-                                    let grossOutput = sum refOutputs
-                                        grossInput = sum refInputs
-                                        netOutput = if grossOutput > 1e-15 then grossOutput - internalConsumption else 0.0
-                                    in if netOutput > 1e-15 then netOutput
-                                       else if grossInput > 1e-15 then grossInput else 1.0
+                                activityKey = dbProcessIdTable V.! fromIntegral pid
+                                normalizationFactor = activityNormFactor activity activityKey
                              in concatMap (buildBioTriple normalizationFactor j activity) (exchanges activity)
 
                      in VU.fromList $ concatMap buildActivityBioTriplets activityRange

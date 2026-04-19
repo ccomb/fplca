@@ -50,6 +50,17 @@ data ActivityFilter = ActivityFilter
     , afOrder           :: Maybe Text
     }
 
+-- | Filter parameters for flow search. Mirrors the ActivityFilter shape for the
+-- flow endpoints so callers don't juggle positional Maybe arguments.
+data FlowFilter = FlowFilter
+    { ffQuery  :: Maybe Text
+    , ffLang   :: Maybe Text
+    , ffLimit  :: Maybe Int
+    , ffOffset :: Maybe Int
+    , ffSort   :: Maybe Text
+    , ffOrder  :: Maybe Text
+    }
+
 -- | Match an activity against classification filters.
 -- Semantics: OR within the same classification system, AND across different systems.
 -- This matches the documented behaviour in volca.toml classification-presets.
@@ -563,8 +574,7 @@ getActivityTree db queryText maxDepth nameFilter = do
 filterTreeExport :: Text -> TreeExport -> TreeExport
 filterTreeExport pat export =
     let nodes = teNodes export
-        textMatches p n = T.toCaseFold p `T.isInfixOf` T.toCaseFold n
-        matchingIds = M.keysSet $ M.filter (textMatches pat . enName) nodes
+        matchingIds = M.keysSet $ M.filter (Normalize.caseInsensitiveInfixOf pat . enName) nodes
         ancestorsOf nId = case enParentId =<< M.lookup nId nodes of
             Nothing  -> S.empty
             Just pid -> S.insert pid (ancestorsOf pid)
@@ -721,12 +731,12 @@ getActivityFlowSummaries db activity =
         | otherwise = OutputFlow
 
 -- | Search flows (returns same format as API)
-searchFlows :: Database -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
-searchFlows _ Nothing _ _ _ _ _ = return $ Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False 0.0
-searchFlows db (Just query) langParam limitParam offsetParam sortParam orderParam = do
+searchFlows :: Database -> FlowFilter -> IO (Either ServiceError Value)
+searchFlows _ FlowFilter{ffQuery = Nothing} =
+    return $ Right $ toJSON $ SearchResults ([] :: [FlowSearchResult]) 0 0 50 False 0.0
+searchFlows db FlowFilter{ffQuery = Just query, ffLimit = limitParam, ffOffset = offsetParam, ffSort = sortParam, ffOrder = orderParam} = do
     startTime <- getCurrentTime
-    let _lang = fromMaybe "en" langParam
-        limit = maybe 50 (min 1000) limitParam
+    let limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
         rawResults = findFlowsBySynonym db query
         isDesc = orderParam == Just "desc"
@@ -784,9 +794,18 @@ nameFilterSet db mq = do
     q <- mq
     if T.null (T.strip q) then Nothing else bm25MatchingPids db q
 
--- | Search activities (returns same format as API)
-searchActivities :: Database -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text, Bool)] -> Bool -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> IO (Either ServiceError Value)
-searchActivities db nameParam geoParam productParam classFilters exactMatch limitParam offsetParam sortParam orderParam = do
+-- | Search activities (returns same format as API). 'exactMatch' is the search-only
+-- flag that toggles token-containment vs. exact-equality name matching.
+searchActivities :: Database -> ActivityFilter -> Bool -> IO (Either ServiceError Value)
+searchActivities db af exactMatch = do
+    let nameParam     = afName af
+        geoParam      = afLocation af
+        productParam  = afProduct af
+        classFilters  = afClassifications af
+        limitParam    = afLimit af
+        offsetParam   = afOffset af
+        sortParam     = afSort af
+        orderParam    = afOrder af
     startTime <- getCurrentTime
     let isDesc = orderParam == Just "desc"
         explicitSort = sortParam == Just "name" || sortParam == Just "location"
@@ -1176,12 +1195,10 @@ getPathTo db solver pidText target = do
                         Left err -> return $ Left err
                         Right supplyVec ->
                             let rootRefAmount = getReferenceProductAmount rootAct
-                                adj = U.foldl' (\acc (SparseTriple row col _) ->
-                                          IM.insertWith (++) (fromIntegral col) [fromIntegral row] acc
-                                      ) IM.empty (dbTechnosphereTriples db)
+                                adj = buildAdjacencyFromTriples (dbTechnosphereTriples db)
                                 mPath = bfsToPattern (fromIntegral rootPid)
-                                            (\i -> T.toCaseFold target `T.isInfixOf`
-                                                   T.toCaseFold (activityName (dbActivities db V.! i)))
+                                            (\i -> Normalize.caseInsensitiveInfixOf target
+                                                       (activityName (dbActivities db V.! i)))
                                             adj
                             in return $ case mPath of
                                 Nothing -> Left $ ActivityNotFound $
@@ -1268,7 +1285,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec af includeEdges qualifyPi
             Just rp -> bfsDepth (fromIntegral rp) adjacency
             Nothing -> bfsDepthMulti [ fromIntegral pid | (pid, _) <- allEntries ] adjacency
 
-        textMatches pat txt = T.toCaseFold pat `T.isInfixOf` T.toCaseFold txt
+        textMatches = Normalize.caseInsensitiveInfixOf
 
         -- BM25/fuzzy membership set for afName, computed once per request so
         -- /supply-chain matches whatever /activities already found for the
@@ -1491,6 +1508,17 @@ resolveOneDep unitCfg depLookup af includeEdges depth visited (depDbName, demand
                                   , localEntries ++ deeperEntries
                                   , localEdges   ++ deeperEdges )
 
+-- | Build reverse adjacency (consumer -> [supplier]) from a vector of
+-- technosphere sparse triplets. Each triplet @(row=supplier, col=consumer)@
+-- contributes one edge into @col@'s neighbour list. Supplies BFS callers
+-- that don't also need a fused pass (see 'collectSupplyChainEntries' for
+-- the fused variant that computes counts in the same traversal).
+buildAdjacencyFromTriples :: U.Vector SparseTriple -> IM.IntMap [Int]
+buildAdjacencyFromTriples =
+    U.foldl' (\acc (SparseTriple row col _) ->
+                 IM.insertWith (++) (fromIntegral col) [fromIntegral row] acc)
+             IM.empty
+
 -- | BFS from a set of starting nodes (all at depth 0), returning node ->
 -- shortest distance. Used at dep levels where every entry activity that
 -- received direct cross-DB demand is a potential starting point.
@@ -1508,19 +1536,10 @@ bfsDepthMulti roots adj =
                 ) (queue, visited) neighbors
         in go queue' visited'
 
--- | BFS from root on adjacency list, returns IntMap of node -> shortest depth
+-- | BFS from a single root on adjacency list, returns IntMap of node ->
+-- shortest depth. Specialization of 'bfsDepthMulti'.
 bfsDepth :: Int -> IM.IntMap [Int] -> IM.IntMap Int
-bfsDepth root adj = go (Empty |> root) (IM.singleton root 0)
-  where
-    go Empty visited = visited
-    go (node :<| queue) visited =
-        let depth = visited IM.! node
-            neighbors = IM.findWithDefault [] node adj
-            (queue', visited') = L.foldl' (\(q, v) n ->
-                if IM.member n v then (q, v)
-                else (q |> n, IM.insert n (depth + 1) v)
-                ) (queue, visited) neighbors
-        in go queue' visited'
+bfsDepth root = bfsDepthMulti [root]
 
 -- | BFS from root; stop at the first node (other than root) satisfying a predicate.
 -- Returns the path from root to that node (inclusive), or Nothing.
@@ -2026,11 +2045,11 @@ getConsumers db processIdText af = do
 
         locationMatches activity = case afLocation af of
             Nothing  -> True
-            Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold (activityLocation activity)
+            Just pat -> Normalize.caseInsensitiveInfixOf pat (activityLocation activity)
 
         productMatches prodName = case afProduct af of
             Nothing  -> True
-            Just pat -> T.toCaseFold pat `T.isInfixOf` T.toCaseFold prodName
+            Just pat -> Normalize.caseInsensitiveInfixOf pat prodName
 
         classMatches activity = matchClassifications activity (afClassifications af)
 

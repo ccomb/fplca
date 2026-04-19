@@ -493,30 +493,12 @@ consumerNormFactors db =
                  ]
 
 -- | Activity's reference-product amount used to normalize its matrix column.
--- Net output = sum of reference outputs minus self-loop consumption; falls back
--- to reference inputs (treatment) or 1.0. Duplicates the logic inlined in
--- 'Database.buildActivityTriplets'.
+-- Thin wrapper around 'activityNormFactor' that resolves the activity and
+-- its (actUUID, prodUUID) key from the database by 'ProcessId'.
 activityNormalizationFactor :: Database -> ProcessId -> Double
 activityNormalizationFactor db pid =
-    let act                  = dbActivities db V.! fromIntegral pid
-        (actUUID, prodUUID)  = dbProcessIdTable db V.! fromIntegral pid
-        isSelfLoop ex        = case exchangeActivityLinkId ex of
-                                  Just linkUUID -> linkUUID == actUUID && exchangeFlowId ex == prodUUID
-                                  Nothing       -> False
-        refOutputs           = sum [ exchangeAmount ex
-                                   | ex <- exchanges act, exchangeIsReference ex, not (exchangeIsInput ex) ]
-        refInputs            = sum [ abs (exchangeAmount ex)
-                                   | ex <- exchanges act, exchangeIsReference ex, exchangeIsInput ex ]
-        internalConsumption  = sum [ exchangeAmount ex
-                                   | ex <- exchanges act
-                                   , isTechnosphereExchange ex, exchangeIsInput ex
-                                   , not (exchangeIsReference ex), isSelfLoop ex ]
-        netOutput            = if refOutputs > 1e-15
-                                 then refOutputs - internalConsumption
-                                 else 0.0
-    in if netOutput > 1e-15 then netOutput
-       else if refInputs > 1e-15 then refInputs
-       else 1.0
+    activityNormFactor (dbActivities db V.! fromIntegral pid)
+                       (dbProcessIdTable db V.! fromIntegral pid)
 
 {- |
 Convert a sparse supplier-demand map into a length-@n_dep@ demand vector for

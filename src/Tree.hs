@@ -1,87 +1,91 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Tree (buildLoopAwareTree) where
 
 import Types
 import UnitConversion (UnitConfig, convertExchangeAmount)
+import Control.Monad.Trans.State.Strict (State, evalState, get, modify)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-
-
--- | Nouvelle version optimisée avec les variants Exchange
 isTechnosphereInput :: FlowDB -> Exchange -> Bool
 isTechnosphereInput _ ex =
     case ex of
         TechnosphereExchange _ _ _ isInput isRef _ _ _ -> isInput && not isRef
         BiosphereExchange _ _ _ _ _ -> False
 
--- | Get converted exchange amount ensuring unit compatibility
--- Converts exchange amount to the target activity's reference unit for proper scaling
+-- | Get converted exchange amount ensuring unit compatibility.
+-- Converts exchange amount to the target activity's reference unit for proper scaling.
 getConvertedExchangeAmount :: UnitConfig -> Database -> Exchange -> UUID -> Double
 getConvertedExchangeAmount unitCfg db exchange targetActivityUUID =
     let originalAmount = exchangeAmount exchange
-        -- Get exchange unit name
         exchangeUnitName = case M.lookup (exchangeUnitId exchange) (dbUnits db) of
             Just unit -> unitName unit
             Nothing -> "unknown"
-        -- Get target activity's reference unit (lookup by activity UUID for backward compat)
         targetReferenceUnit = case findActivityByActivityUUID db targetActivityUUID of
             Just targetActivity -> activityUnit targetActivity
             Nothing -> "unknown"
     in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
-       then originalAmount  -- No conversion possible, use original
+       then originalAmount
        else convertExchangeAmount unitCfg exchangeUnitName targetReferenceUnit originalAmount
 
--- | Build loop-aware tree for SVG export with maximum depth limit
+-- | Read-only context threaded through tree construction. Replaces the
+-- previous three anonymous 'Int' parameters (depth / maxDepth / budget) by
+-- naming the only one that is truly configurable (maxDepth); depth is local
+-- to the recursion and the node budget now lives in a 'State'.
+data TreeConfig = TreeConfig
+    { tcUnitConfig :: !UnitConfig
+    , tcDatabase   :: !Database
+    , tcMaxDepth   :: !Int
+    }
+
+-- | Build loop-aware tree for SVG export with maximum depth and a fixed
+-- per-tree node budget (300) to keep export latency bounded.
 buildLoopAwareTree :: UnitConfig -> Database -> UUID -> Int -> LoopAwareTree
 buildLoopAwareTree unitCfg db rootUUID maxDepth =
-    let maxNodes = 300  -- Maximum total nodes to prevent performance issues
-        (tree, _) = buildLoopAwareTreeWithVisited unitCfg db rootUUID S.empty 0 maxDepth maxNodes
-    in tree
+    let cfg      = TreeConfig unitCfg db maxDepth
+        maxNodes = 300
+    in evalState (buildNode cfg rootUUID S.empty 0) maxNodes
 
--- | Helper function with visited set, depth tracking, and node count limit
--- Returns (tree, remainingNodeBudget)
-buildLoopAwareTreeWithVisited :: UnitConfig -> Database -> UUID -> S.Set UUID -> Int -> Int -> Int -> (LoopAwareTree, Int)
-buildLoopAwareTreeWithVisited unitCfg db activityUUID visited depth maxDepth remainingNodes
-    -- Stop if node budget exhausted
-    | remainingNodes <= 0 =
-        case findActivityByActivityUUID db activityUUID of
-            Nothing -> (TreeLoop activityUUID "Missing Activity (node limit)" depth, 0)
-            Just activity -> (TreeLoop activityUUID (activityName activity) depth, 0)
-    -- Stop at maximum depth
-    | depth >= maxDepth =
-        case findActivityByActivityUUID db activityUUID of
-            Nothing -> (TreeLoop activityUUID "Missing Activity" depth, remainingNodes - 1)
-            Just activity -> (TreeLoop activityUUID (activityName activity) depth, remainingNodes - 1)
-    -- Detect loop
-    | activityUUID `S.member` visited =
-        case findActivityByActivityUUID db activityUUID of
-            Nothing -> (TreeLoop activityUUID "Missing Activity" depth, remainingNodes - 1)
-            Just activity -> (TreeLoop activityUUID (activityName activity) depth, remainingNodes - 1)
-    -- Build subtree
-    | otherwise =
-        case findActivityByActivityUUID db activityUUID of
-            Nothing -> (TreeLoop activityUUID "Missing Activity" depth, remainingNodes - 1)
-            Just activity ->
-                let visited' = S.insert activityUUID visited
+-- | Recursive tree builder running in 'State Int' for the node budget.
+-- Every visit that produces a node (loop, leaf, missing, or branch)
+-- decrements the budget by one; when the budget hits zero further
+-- exploration is cut off and a truncation leaf is emitted.
+buildNode :: TreeConfig -> UUID -> S.Set UUID -> Int -> State Int LoopAwareTree
+buildNode cfg activityUUID visited depth = do
+    budget <- get
+    let mActivity = findActivityByActivityUUID (tcDatabase cfg) activityUUID
+        name      = maybe "Missing Activity" activityName mActivity
+    if budget <= 0
+      then pure (TreeLoop activityUUID name depth)
+      else do
+        modify (subtract 1)
+        if depth >= tcMaxDepth cfg || activityUUID `S.member` visited
+          then pure (TreeLoop activityUUID name depth)
+          else case mActivity of
+            Nothing -> pure (TreeLoop activityUUID "Missing Activity" depth)
+            Just activity -> do
+                let visited'   = S.insert activityUUID visited
                     techInputs = [ ex | ex <- exchanges activity
-                                     , isTechnosphereInput (dbFlows db) ex ]
-                    -- Build children with node budget tracking
-                    (children, finalBudget) = buildChildrenWithBudget techInputs visited' (depth + 1) maxDepth (remainingNodes - 1)
-                    buildChildrenWithBudget :: [Exchange] -> S.Set UUID -> Int -> Int -> Int -> ([(Double, Flow, LoopAwareTree)], Int)
-                    buildChildrenWithBudget [] _ _ _ budget = ([], budget)
-                    buildChildrenWithBudget (ex:exs) vis d maxD budget
-                        | budget <= 0 = ([], 0)  -- Stop if budget exhausted
-                        | otherwise =
-                            case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows db)) of
-                                (Just targetUUID, Just flow) ->
-                                    let convertedAmount = getConvertedExchangeAmount unitCfg db ex targetUUID
-                                        (subtree, budget') = buildLoopAwareTreeWithVisited unitCfg db targetUUID vis d maxD budget
-                                        (restChildren, finalBudget') = buildChildrenWithBudget exs vis d maxD budget'
-                                    in ((convertedAmount, flow, subtree) : restChildren, finalBudget')
-                                _ -> buildChildrenWithBudget exs vis d maxD budget
-                in if null children
-                   then (TreeLeaf activity, finalBudget)
-                   else (TreeNode activity children, finalBudget)
+                                      , isTechnosphereInput (dbFlows (tcDatabase cfg)) ex ]
+                children <- buildChildren cfg techInputs visited' (depth + 1)
+                pure $ if null children
+                         then TreeLeaf activity
+                         else TreeNode activity children
+
+-- | Fold over technosphere input exchanges, pairing each resolvable child
+-- with its converted amount and recursing. Bails out early when the node
+-- budget runs out so the tree stays within the 300-node envelope.
+buildChildren :: TreeConfig -> [Exchange] -> S.Set UUID -> Int -> State Int [(Double, Flow, LoopAwareTree)]
+buildChildren _   []       _        _     = pure []
+buildChildren cfg (ex:exs) visited  depth = do
+    budget <- get
+    if budget <= 0
+      then pure []
+      else case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows (tcDatabase cfg))) of
+        (Just targetUUID, Just flow) -> do
+            let amount = getConvertedExchangeAmount (tcUnitConfig cfg) (tcDatabase cfg) ex targetUUID
+            subtree <- buildNode cfg targetUUID visited depth
+            rest    <- buildChildren cfg exs visited depth
+            pure ((amount, flow, subtree) : rest)
+        _ -> buildChildren cfg exs visited depth
