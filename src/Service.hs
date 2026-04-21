@@ -2376,6 +2376,7 @@ getConsumers db processIdText cnf = do
                 prodAmount
                 prodUnit
                 depth
+                (activityClassification activity)
             | (pid, depth) <- M.toAscList allConsumers
             , nameMatches pid
             , let activity = dbActivities db V.! fromIntegral pid

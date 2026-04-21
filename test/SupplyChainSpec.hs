@@ -212,6 +212,16 @@ spec = do
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
                 Right sr -> length (srResults sr) `shouldBe` 2
 
+    describe "Classifications on consumers" $ do
+        let loadWithIndex = fmap BM25.addBM25Index (loadSampleDatabase "SAMPLE.min3")
+
+        it "populates crClassifications from the consumer's activityClassification" $ do
+            db <- loadWithIndex
+            let pidZ = processIdToText db 2
+            case getConsumers db pidZ emptyConsumer of
+                Left err -> expectationFailure $ "getConsumers failed: " ++ show err
+                Right sr -> all (not . M.null . crClassifications) (srResults sr) `shouldBe` True
+
     -- -----------------------------------------------------------------------
     -- filterTreeExport
     -- -----------------------------------------------------------------------

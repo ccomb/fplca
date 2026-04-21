@@ -63,6 +63,7 @@ class ConsumerResult(FromJson):
     product_amount: float
     product_unit: str
     depth: int  # hops from the queried supplier (1 = direct consumer)
+    classifications: dict[str, str] = field(default_factory=dict)  # ISIC / CPC / Category, mirrors SupplyChainEntry
 
 
 @dataclass

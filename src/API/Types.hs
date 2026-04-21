@@ -46,6 +46,7 @@ data ConsumerResult = ConsumerResult
     , crProductAmount :: Double
     , crProductUnit :: Text
     , crDepth :: Int -- hops from the queried supplier (1 = direct consumer)
+    , crClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, Category, etc.), mirrors SupplyChainEntry
     }
     deriving (Generic)
 
