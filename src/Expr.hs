@@ -7,10 +7,12 @@ module Expr (
     evaluate,
     normalizeExpr,
     isExpression,
+    collectIdentifiers,
 ) where
 
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)
@@ -131,6 +133,30 @@ Used to detect allocation fields vs waste type descriptions in SimaPro CSV.
 isExpression :: Char -> Text -> Bool
 isExpression decimalSep input =
     isRight $ parse (sc *> pSynExpr <* eof) "" (T.strip (normalizeExpr decimalSep input))
+
+{- | Collect all variable identifiers referenced in an expression.
+Built-in function names (abs, sqrt, log, exp, ln, min, max) are excluded.
+Returns the empty list if the expression cannot be tokenized.
+-}
+collectIdentifiers :: Char -> Text -> [Text]
+collectIdentifiers decimalSep input =
+    case parse (sc *> pCollect <* eof) "" (T.strip (normalizeExpr decimalSep input)) of
+        Right names -> filter (`notElem` reservedFuncs) names
+        Left _ -> []
+  where
+    reservedFuncs = ["abs", "sqrt", "log", "exp", "ln", "min", "max"]
+
+pCollect :: Parser [Text]
+pCollect = catMaybes <$> many pToken
+
+pToken :: Parser (Maybe Text)
+pToken =
+    try (Just <$> pIdentTok)
+        <|> (Nothing <$ try (lexeme pNumber))
+        <|> (Nothing <$ anySingle)
+
+pIdentTok :: Parser Text
+pIdentTok = lexeme (T.pack <$> ((:) <$> (letterChar <|> char '_') <*> many (alphaNumChar <|> char '_')))
 
 -- Syntax-only parsers: mirror pExpr structure but discard values, accept any identifier
 pSynExpr :: Parser ()

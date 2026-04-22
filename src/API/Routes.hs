@@ -32,6 +32,7 @@ import qualified Data.Vector as V
 import Database
 import Database.Manager (DatabaseManager (..), DatabaseSetupInfo (..), LoadedDatabase (..), MethodCollectionStatus (..), getDatabase, getMergedUnitConfig)
 import qualified Database.Manager as DM
+import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory)
@@ -1683,15 +1684,19 @@ computeAllScoringSets scoringSets rawScoreMap = do
         indicators = M.fromList [(ssName ss, toIndicators ss e) | (ss, e) <- ok]
     pure (scores, indicators)
   where
+    -- Only emit rows for variables that actually contribute to a score formula.
+    -- Intermediate helpers (consumed by `computed` but not referenced in any
+    -- `scores.*` formula) are hidden from the breakdown.
     toIndicators ss e =
-        M.mapWithKey
-            ( \var val ->
-                ScoringIndicator
-                    { siCategory = M.findWithDefault var var (ssVariables ss)
-                    , siValue = val
-                    }
-            )
-            (seNwEnv e)
+        let displayed = S.fromList (concatMap (Expr.collectIdentifiers '.') (M.elems (ssScores ss)))
+         in M.mapWithKey
+                ( \var val ->
+                    ScoringIndicator
+                        { siCategory = M.findWithDefault var var (ssVariables ss)
+                        , siValue = val
+                        }
+                )
+                (M.filterWithKey (\var _ -> S.member var displayed) (seNwEnv e))
 
 -- | Helper function to apply pagination to search results
 paginateResults :: [a] -> Maybe Int -> Maybe Int -> IO (SearchResults a)
