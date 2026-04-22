@@ -52,7 +52,7 @@ class DatabaseInfo(FromJson):
 
 @dataclass
 class ScoringIndicator(FromJson):
-    """One per-variable entry inside ``LCIABatchResult.scoringIndicators``.
+    """One per-variable entry inside ``LCIABatchResult.scoring_indicators``.
 
     ``value`` is pre-multiplied by the scoring set's ``displayMultiplier``
     (configured in the scoring TOML) and expressed in the set's display unit.
@@ -61,6 +61,101 @@ class ScoringIndicator(FromJson):
 
     category: str
     value: float
+
+
+@dataclass
+class FlowContribution(FromJson):
+    """Top contributing elementary flow for an impact category.
+
+    Emitted inside ``LCIAResult.top_contributors``.
+    """
+
+    flow_name: str
+    contribution: float  # in the impact unit
+    share_pct: float  # 0..100
+    flow_id: str
+    category: str  # e.g. "air/urban air"
+    cf_value: float = 0.0  # raw characterization factor
+    compartment: str | None = None
+
+
+@dataclass
+class LCIAResult:
+    """LCIA score for one impact category on one activity.
+
+    Returned directly by :meth:`Client.get_impacts`, and nested inside
+    :class:`LCIABatchResult.results` (one entry per impact category).
+    """
+
+    method_id: str
+    method_name: str
+    category: str
+    damage_category: str
+    score: float
+    unit: str
+    mapped_flows: int
+    functional_unit: str
+    normalized_score: float | None = None
+    weighted_score: float | None = None  # in Pt
+    top_contributors: list[FlowContribution] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "LCIAResult":
+        return cls(
+            method_id=d["methodId"],
+            method_name=d["methodName"],
+            category=d["category"],
+            damage_category=d["damageCategory"],
+            score=d["score"],
+            unit=d["unit"],
+            mapped_flows=d["mappedFlows"],
+            functional_unit=d["functionalUnit"],
+            normalized_score=d.get("normalizedScore"),
+            weighted_score=d.get("weightedScore"),
+            top_contributors=[FlowContribution.from_json(c) for c in d.get("topContributors", [])],
+        )
+
+
+@dataclass
+class LCIABatchResult:
+    """Batch LCIA: every impact category in a method collection, for one activity.
+
+    Returned by :meth:`Client.get_impacts_batch`. Carries the per-method
+    impact results plus any formula-based scoring sets configured in the
+    engine TOML (PEF, ECS, or any named set).
+
+    ``scoring_indicators`` gives the per-variable normalized-weighted
+    breakdown of each scoring set — already multiplied by the set's
+    ``displayMultiplier`` and expressed in its display unit (see
+    :class:`ScoringIndicator`). Lets callers render per-indicator charts
+    alongside the aggregate ``scoring_results``.
+    """
+
+    results: list[LCIAResult]
+    single_score: float | None = None  # sum of weighted scores, in Pt
+    single_score_unit: str | None = None
+    norm_weight_set_name: str | None = None
+    available_nw_sets: list[str] = field(default_factory=list)
+    scoring_results: dict[str, dict[str, float]] = field(default_factory=dict)
+    scoring_units: dict[str, str] = field(default_factory=dict)
+    scoring_indicators: dict[str, dict[str, ScoringIndicator]] = field(default_factory=dict)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "LCIABatchResult":
+        raw_indicators = d.get("scoringIndicators", {})
+        return cls(
+            results=[LCIAResult.from_json(r) for r in d.get("results", [])],
+            single_score=d.get("singleScore"),
+            single_score_unit=d.get("singleScoreUnit"),
+            norm_weight_set_name=d.get("normWeightSetName"),
+            available_nw_sets=d.get("availableNWsets", []),
+            scoring_results=d.get("scoringResults", {}),
+            scoring_units=d.get("scoringUnits", {}),
+            scoring_indicators={
+                set_name: {var: ScoringIndicator.from_json(si) for var, si in per_set.items()}
+                for set_name, per_set in raw_indicators.items()
+            },
+        )
 
 
 @dataclass

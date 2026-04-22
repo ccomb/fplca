@@ -12,6 +12,21 @@ import pytest
 from volca.client import Client, VoLCAError, _candidate_wire_names, _Operation, _parse_spec, _resolve_wire_name
 
 
+def _minimal_lcia_result() -> dict:
+    """Minimal wire payload accepted by :meth:`LCIAResult.from_json`."""
+    return {
+        "methodId": "00000000-0000-0000-0000-000000000001",
+        "methodName": "Climate change",
+        "category": "Climate change",
+        "damageCategory": "Climate change",
+        "score": 1.23,
+        "unit": "kg CO2 eq",
+        "mappedFlows": 0,
+        "functionalUnit": "1.0 kg",
+        "topContributors": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers — no mocking required
 # ---------------------------------------------------------------------------
@@ -180,14 +195,15 @@ class TestDispatcher:
 
     def test_get_impacts_uses_all_four_path_captures(self, mocked_client, make_response):
         client, session = mocked_client
-        session.get.return_value = make_response({"score": 1.0})
-        client.get_impacts("abc_def", method_id="method-uuid", collection="EF3.1")
+        session.get.return_value = make_response(_minimal_lcia_result())
+        result = client.get_impacts("abc_def", method_id="method-uuid", collection="EF3.1")
         called_url = session.get.call_args[0][0]
         assert called_url == "http://test.local/api/v1/db/testdb/activity/abc_def/impacts/EF3.1/method-uuid"
+        assert result.score == 1.23
 
     def test_substitutions_upgrade_to_post(self, mocked_client, make_response):
         client, session = mocked_client
-        session.post.return_value = make_response({"score": 2.0})
+        session.post.return_value = make_response(_minimal_lcia_result())
         client.get_impacts(
             "abc_def",
             method_id="method-uuid",
@@ -199,6 +215,57 @@ class TestDispatcher:
         assert body == {
             "srSubstitutions": [{"subFrom": "a", "subTo": "b", "subConsumer": "c"}]
         }
+
+    def test_get_impacts_batch_parses_scoring_indicators(self, mocked_client, make_response):
+        """Batch endpoint has no operationId; ensure direct-HTTP call hits the
+        right URL and the typed result exposes the new per-indicator map.
+        """
+        client, session = mocked_client
+        session.get.return_value = make_response({
+            "results": [_minimal_lcia_result()],
+            "singleScore": 1.5,
+            "singleScoreUnit": "Pt",
+            "normWeightSetName": "PEF",
+            "availableNWsets": ["PEF", "ECS"],
+            "scoringResults": {"PEF": {"score": 1.5}},
+            "scoringUnits": {"PEF": "mPt"},
+            "scoringIndicators": {
+                "ECS": {"climate": {"category": "Climate change", "value": 1.42e-6}},
+            },
+        })
+        result = client.get_impacts_batch("abc_def", collection="EF3.1")
+        called_url = session.get.call_args[0][0]
+        assert called_url == "http://test.local/api/v1/db/testdb/activity/abc_def/impacts/EF3.1"
+        assert result.single_score == 1.5
+        assert result.available_nw_sets == ["PEF", "ECS"]
+        assert result.scoring_indicators["ECS"]["climate"].category == "Climate change"
+        assert result.scoring_indicators["ECS"]["climate"].value == 1.42e-6
+
+    def test_get_impacts_batch_substitutions_post(self, mocked_client, make_response):
+        client, session = mocked_client
+        session.post.return_value = make_response({
+            "results": [],
+            "availableNWsets": [],
+            "scoringResults": {},
+            "scoringUnits": {},
+            "scoringIndicators": {},
+        })
+        client.get_impacts_batch(
+            "abc_def",
+            substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
+        )
+        session.post.assert_called_once()
+        session.get.assert_not_called()
+        body = session.post.call_args[1]["json"]
+        assert body == {
+            "srSubstitutions": [{"subFrom": "a", "subTo": "b", "subConsumer": "c"}]
+        }
+
+    def test_get_impacts_batch_requires_db(self, fixture_spec, make_response):
+        client = Client(base_url="http://test.local", db="")
+        client._operations = _parse_spec(fixture_spec)
+        with pytest.raises(VoLCAError, match="requires a database"):
+            client.get_impacts_batch("abc_def")
 
     def test_unknown_operation_raises(self, mocked_client):
         client, _ = mocked_client

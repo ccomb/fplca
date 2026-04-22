@@ -52,6 +52,8 @@ from .types import (
     ConsumersResponse,
     DatabaseInfo,
     Exchange,
+    LCIABatchResult,
+    LCIAResult,
     PathResult,
     SupplyChain,
     parse_exchange_detail,
@@ -748,11 +750,11 @@ class Client:
         collection: str = "methods",
         top_flows: int | None = None,
         substitutions: list[dict] | None = None,
-    ) -> dict:
-        """Compute impact assessment (LCIA) scores for an activity.
+    ) -> LCIAResult:
+        """Compute the LCIA score for a single impact category on an activity.
 
-        Historically called ``get_lcia``. Internal types still use the LCIA
-        acronym.
+        Use :meth:`get_impacts_batch` to retrieve every category in a method
+        collection at once (and any configured scoring sets).
 
         Args:
             collection: Method collection name. Defaults to ``"methods"`` for
@@ -760,14 +762,48 @@ class Client:
                 single collection.
             top_flows: Max top contributing flows to return (default 5).
         """
-        return self._call(
-            "get_impacts",
-            process_id=process_id,
-            collection=collection,
-            method_id=method_id,
-            top_flows=top_flows,
-            substitutions=substitutions,
+        return LCIAResult.from_json(
+            self._call(
+                "get_impacts",
+                process_id=process_id,
+                collection=collection,
+                method_id=method_id,
+                top_flows=top_flows,
+                substitutions=substitutions,
+            )
         )
+
+    def get_impacts_batch(
+        self,
+        process_id: str,
+        *,
+        collection: str = "methods",
+        substitutions: list[dict] | None = None,
+    ) -> LCIABatchResult:
+        """Compute LCIA for every impact category in a collection, in one call.
+
+        The response carries the per-method :class:`LCIAResult` list plus any
+        formula-based scoring sets declared in the engine config (PEF, ECS…).
+        ``scoring_indicators`` gives the per-variable breakdown of each
+        scoring set, pre-multiplied by the set's ``displayMultiplier``.
+
+        Uses a direct HTTP call: the batch endpoint has no operationId in the
+        OpenAPI spec (the dispatcher primary is the single-method variant), so
+        this wrapper bypasses ``_call`` and builds the URL itself.
+        """
+        if not self.db:
+            raise VoLCAError(
+                "get_impacts_batch requires a database; construct Client(db=...)."
+            )
+        url = (
+            f"{self.base_url}/api/v1/db/{self.db}/activity/{process_id}"
+            f"/impacts/{collection}"
+        )
+        if substitutions:
+            r = self._session.post(url, json=_substitution_body(substitutions))
+        else:
+            r = self._session.get(url)
+        return LCIABatchResult.from_json(self._json(r))
 
     # -- Methods --
 
