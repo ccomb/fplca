@@ -29,6 +29,8 @@ module UnitConversion (
     unitsCompatible,
     convertUnit,
     lookupUnitDef,
+    canonicalUnitFor,
+    normalizeToCanonical,
 
     -- * Backward compatibility
     convertExchangeAmount,
@@ -114,6 +116,32 @@ convertUnit cfg fromUnit toUnit amount = do
     if dimFrom == dimTo && factorTo /= 0
         then Just (amount * factorFrom / factorTo)
         else Nothing
+
+{- | Canonical (base) unit name for the dimension of a given unit.
+The base unit is the one whose factor to SI is 1.0. Returns 'Nothing' if the
+input unit is unknown or if no base unit is defined for its dimension.
+-}
+canonicalUnitFor :: UnitConfig -> Text -> Maybe Text
+canonicalUnitFor cfg unitText = do
+    UnitDef dim _ <- lookupUnitDef cfg unitText
+    case [ normKey
+         | (normKey, UnitDef d f) <- M.toList (ucUnits cfg)
+         , d == dim
+         , f == 1.0
+         ] of
+        (normKey : _) -> Just $ M.findWithDefault normKey normKey (ucOriginalKeys cfg)
+        [] -> Nothing
+
+{- | Convert an amount to the canonical base unit of its dimension.
+Returns '(canonicalUnitName, convertedAmount)'. 'Nothing' if the input unit is
+unknown or its dimension has no base unit defined — callers must surface this
+as a load-time failure (no silent fallback).
+-}
+normalizeToCanonical :: UnitConfig -> Text -> Double -> Maybe (Text, Double)
+normalizeToCanonical cfg unitText amount = do
+    canonical <- canonicalUnitFor cfg unitText
+    converted <- convertUnit cfg unitText canonical amount
+    Just (canonical, converted)
 
 -- | Parse a dimension expression like "mass*length/time" into an exponent vector.
 parseDimension :: [Text] -> Text -> Either Text Dimension

@@ -136,10 +136,21 @@ mergeFlows a b = a{flowSynonyms = M.unionWith S.union (flowSynonyms a) (flowSyno
 {- |
 Schema signature automatically derived from the Database type structure.
 
-This signature changes when:
+Automatically changes when:
 - Fields are added/removed from Database or nested types
 - Type names change
 - Type structure changes
+
+The trailing 'xor' constant is a manual cache-busting salt — bump it (e.g.
+4 → 5) when the semantics of the cached matrices change without any type
+change, so existing caches are treated as incompatible and rebuilt on the
+next load instead of silently returning stale numbers.
+
+History of manual bumps:
+- 5: reference-product amounts normalized to canonical base unit at ingest
+     (SimaPro CSV parser); matrices built before this bump divided by the
+     raw amount regardless of unit, so e.g. a 1-ton reference yielded
+     impacts 1000× too large.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -147,7 +158,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 4
+     in hi `xor` lo `xor` 5
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -448,21 +459,24 @@ Performance characteristics:
 
 Used when no cache exists or caching is disabled.
 -}
-loadDatabase :: FilePath -> IO (Either T.Text SimpleDatabase)
-loadDatabase = loadDatabaseWithLocationAliases M.empty
+loadDatabase :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadDatabase unitConfig = loadDatabaseWithLocationAliases unitConfig M.empty
 
 {- | Load all EcoSpold files with location aliases
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
+
+The 'UnitConfig' is passed down to parsers so reference-product amounts can be
+normalized to the canonical base unit of their dimension at ingest time.
 -}
-loadDatabaseWithLocationAliases :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadDatabaseWithLocationAliases locationAliases path = do
+loadDatabaseWithLocationAliases :: UC.UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadDatabaseWithLocationAliases unitConfig locationAliases path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
     isFile <- doesFileExist path
     isDir <- doesDirectoryExist path
 
     if isFile
         then case map toLower (takeExtension path) of
-            ".csv" -> loadSimaProCSV path
+            ".csv" -> loadSimaProCSV unitConfig path
             ".xml" -> loadSingleEcoSpold1File locationAliases path
             _ -> return $ Left $ T.pack $ "Unsupported file type: " ++ path
         else
@@ -475,9 +489,9 @@ loadDatabaseWithLocationAliases locationAliases path = do
                 else return $ Left $ T.pack $ "Path does not exist: " ++ path
 
 -- | Load SimaPro CSV file
-loadSimaProCSV :: FilePath -> IO (Either T.Text SimpleDatabase)
-loadSimaProCSV csvPath = do
-    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvPath
+loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadSimaProCSV unitConfig csvPath = do
+    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
 
     if null activities
         then return $ Left "No activities found in SimaPro CSV file."
@@ -1038,7 +1052,7 @@ loadDatabaseWithCrossDBLinking ::
     FilePath ->
     IO (Either T.Text (SimpleDatabase, CrossDBLinkingStats))
 loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier path = do
-    result <- loadDatabaseWithLocationAliases locationAliases path
+    result <- loadDatabaseWithLocationAliases unitConfig locationAliases path
     case result of
         Left err -> return $ Left err
         Right simpleDb -> do

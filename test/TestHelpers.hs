@@ -33,7 +33,7 @@ loadSampleDatabase sampleName = loadSampleDatabaseWithPath sampleName
 -- | Load database from a specific path
 loadSampleDatabaseWithPath :: String -> IO Database
 loadSampleDatabaseWithPath path = do
-    loadResult <- loadDatabase ("test-data/" ++ path)
+    loadResult <- loadDatabase defaultUnitConfig ("test-data/" ++ path)
     case loadResult of
         Left err -> error $ "Failed to load test database: " ++ show err
         Right simpleDb -> do

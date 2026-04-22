@@ -1068,7 +1068,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                     if noCache
                         then do
                             reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                            (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                            (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
                             reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                             let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                             linkedDb <- Loader.fixSimaProActivityLinks simpleDb
@@ -1086,7 +1086,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases path noCache synonymDB unitCon
                                     return $ Right db
                                 Nothing -> do
                                     reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                                    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV csvFile
+                                    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
                                     reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                                     let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
                                     linkedDb <- Loader.fixSimaProActivityLinks simpleDb

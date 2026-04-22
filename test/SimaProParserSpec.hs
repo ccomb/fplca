@@ -27,7 +27,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (Activity (..), Exchange (..), Flow, UUID, Unit (..))
-import UnitConversion (defaultUnitConfig, isKnownUnit)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
 
 -- | Test CSV content with a quoted product name containing the delimiter (;)
 testCSV :: BS.ByteString
@@ -82,7 +82,7 @@ parseTestCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseTestCSV = withSystemTempFile "test.csv" $ \path handle -> do
     BS.hPut handle testCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- | Test CSV with waste treatment process and waste-to-treatment demand
 wasteTestCSV :: BS.ByteString
@@ -169,14 +169,14 @@ parseWasteNoAllocCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseWasteNoAllocCSV = withSystemTempFile "waste-noalloc-test.csv" $ \path handle -> do
     BS.hPut handle wasteNoAllocCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- | Parse the waste test CSV via a temp file
 parseWasteCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseWasteCSV = withSystemTempFile "waste-test.csv" $ \path handle -> do
     BS.hPut handle wasteTestCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- ============================================================================
 -- Expression evaluator tests
@@ -227,7 +227,7 @@ parseParamCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
     BS.hPut handle paramTestCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- | Test CSV with database-level parameters
 dbParamTestCSV :: BS.ByteString
@@ -267,7 +267,7 @@ parseDbParamCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseDbParamCSV = withSystemTempFile "dbparam-test.csv" $ \path handle -> do
     BS.hPut handle dbParamTestCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- | Test CSV with yield chain formula (most common pattern in Agribalyse)
 yieldChainTestCSV :: BS.ByteString
@@ -311,7 +311,7 @@ parseYieldChainCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     BS.hPut handle yieldChainTestCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
 
 -- Helper: find technosphere input by name
 findInput :: Activity -> T.Text -> Maybe Exchange
@@ -726,6 +726,34 @@ spec = do
             length activities `shouldBe` 1
             activityName (head activities) `shouldBe` "Comma Product"
 
+    describe "Reference product unit normalization" $ do
+        -- Regression for a SimaPro export (e.g. Agribalyse 3.2 "Alfalfa, hay, ... {FR} U")
+        -- declaring a reference product as "1 ton" instead of the canonical "kg". The
+        -- in-memory reference amount must be converted to 1000 kg, otherwise the
+        -- technosphere column normalization divides by 1 instead of 1000 and every
+        -- impact score for that activity comes back 1000× too large.
+        it "converts a 1-ton reference to 1000 kg at ingest (canonical base)" $ do
+            (activities, _, _) <- parseTonRefCSV
+            length activities `shouldBe` 1
+            let act = head activities
+                refExs =
+                    [ ex
+                    | ex <- exchanges act
+                    , techIsReference ex
+                    , not (techIsInput ex)
+                    ]
+            length refExs `shouldBe` 1
+            let ex = head refExs
+            techAmount ex `shouldBe` 1000.0
+            activityUnit act `shouldBe` "kg"
+
+        it "leaves an already-canonical kg reference unchanged" $ do
+            (activities, _, _) <- parseTestCSV
+            let steel = head [a | a <- activities, activityName a == "Steel"]
+                refExs = [ex | ex <- exchanges steel, techIsReference ex, not (techIsInput ex)]
+            techAmount (head refExs) `shouldBe` 1.0
+            activityUnit steel `shouldBe` "kg"
+
 -- ---------------------------------------------------------------------------
 -- Helpers for section tests
 -- ---------------------------------------------------------------------------
@@ -765,7 +793,7 @@ parseNamedCSV procName sectionLines =
                            ]
         BS.hPut handle content
         hClose handle
-        parseSimaProCSV path
+        parseSimaProCSV defaultUnitConfig path
 
 -- | CSV with comma as separator
 commaCSV :: BS.ByteString
@@ -797,7 +825,52 @@ parseCommaCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
 parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     BS.hPut handle commaCSV
     hClose handle
-    parseSimaProCSV path
+    parseSimaProCSV defaultUnitConfig path
+
+-- | Unit config that knows about "ton" (1000 kg) in addition to kg.
+tonUnitConfig :: UnitConfig
+tonUnitConfig =
+    UnitConfig
+        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        , ucUnits =
+            M.fromList
+                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)
+                ]
+        , ucOriginalKeys = M.fromList [("kg", "kg"), ("ton", "ton")]
+        }
+
+-- | A minimal SimaPro CSV declaring a reference product of "1 ton" (mass).
+tonRefCSV :: BS.ByteString
+tonRefCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Alfalfa, hay {FR} U"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Alfalfa, hay {FR} U;ton;1.0;100;not defined;material;"
+        , ""
+        , "End"
+        ]
+
+parseTonRefCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
+    BS.hPut handle tonRefCSV
+    hClose handle
+    parseSimaProCSV tonUnitConfig path
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True

@@ -302,7 +302,7 @@ spec = do
 
 loadMin3IndexedDB :: IO IndexedDatabase
 loadMin3IndexedDB = do
-    result <- loadDatabase "test-data/SAMPLE.min3"
+    result <- loadDatabase defaultUnitConfig "test-data/SAMPLE.min3"
     case result of
         Left err -> error $ "Failed to load SAMPLE.min3: " ++ show err
         Right simpleDb -> return $ buildIndexedDatabase "SAMPLE.min3" emptySynonymDB simpleDb

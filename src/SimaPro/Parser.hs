@@ -55,6 +55,7 @@ import GHC.Generics (Generic)
 import Progress (ProgressLevel (..), reportProgress)
 import Text.Printf (printf)
 import Types
+import qualified UnitConversion
 
 -- ============================================================================
 -- Configuration Types
@@ -703,10 +704,11 @@ This matches EcoSpold behavior where multi-product processes create multiple act
 Global params (db + project level) are passed in and combined with process-level params.
 -}
 processBlockToActivity ::
+    UnitConversion.UnitConfig ->
     ([(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)]) ->
     ProcessBlock ->
     [(Activity, [Flow], [Unit])]
-processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
+processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
     let
         -- Build parameter environment: input params first, then calculated params
         evalParam acc (name, rawVal) = case Expr.evaluate acc rawVal of
@@ -739,7 +741,7 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
         location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
 
         -- Convert all rows in one pass, collecting exchanges/flows/units together
-        avoidedTriples = map (productToExchange env False) pbAvoidedProducts
+        avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
         techTriples = map (techRowToExchange env True) (pbMaterials ++ pbElectricity)
         wasteTriples = map (techRowToExchange env True) pbWasteToTreatment
         bioTriples =
@@ -771,7 +773,8 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
         -- Create one activity per product
         makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
         makeActivity prod =
-            let (productExchange, productFlow, _) = productToExchange env True prod
+            let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
+                effUnitName = unitName productUnit
                 allocFraction = resolveAmount env (prAllocRaw prod) (prAllocation prod) / 100.0
                 (cleanProductName, locFromProduct) = extractLocation (prName prod)
                 effectiveLoc = if T.null location then locFromProduct else location
@@ -788,7 +791,7 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
                                     , ("Category", prCategory prod)
                                     ]
                         , activityLocation = effectiveLoc
-                        , activityUnit = prUnit prod
+                        , activityUnit = effUnitName
                         , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
                         , activityParams = env
                         , activityParamExprs = exprMap
@@ -797,7 +800,7 @@ processBlockToActivity (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlo
                 allUnits =
                     map
                         (\name -> Unit (generateUnitUUID name) name name "")
-                        (S.toList . S.fromList $ prUnit prod : sharedUnits)
+                        (S.toList . S.fromList $ effUnitName : sharedUnits)
              in (activity, allFlows, allUnits)
      in
         map makeActivity pbProducts
@@ -807,13 +810,30 @@ scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex * factor}
 scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
 
--- | Convert product row to exchange, flow, and unit in one pass
-productToExchange :: M.Map Text Double -> Bool -> ProductRow -> (Exchange, Flow, Unit)
-productToExchange env isRef ProductRow{..} =
+{- | Convert product row to exchange, flow, and unit in one pass.
+
+For reference products ('isRef == True'), the declared amount is converted to
+the canonical base unit of its dimension (kg for mass, MJ for energy, m³ for
+volume, …). This ensures 'activityNormFactor' and the resulting matrix column
+are expressed per 1 base unit, matching Brightway conventions — otherwise a
+reference declared as "1 ton" would produce impacts 1000× too large.
+
+If the unit is unknown to the config or its dimension has no base unit, the
+raw values are kept (the downstream matrix builder in 'Database.hs' surfaces
+unknown-unit errors with a clear message).
+-}
+productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, Flow, Unit)
+productToExchange unitCfg env isRef ProductRow{..} =
     let cleanName = fst (extractLocation prName)
-        flowUUID = generateFlowUUID cleanName "" prUnit
-        unitUUID = generateUnitUUID prUnit
-        amount = resolveAmount env prAmountRaw prAmount
+        rawAmount = resolveAmount env prAmountRaw prAmount
+        (effUnitName, amount) =
+            if isRef
+                then case UnitConversion.normalizeToCanonical unitCfg prUnit rawAmount of
+                    Just canonical -> canonical
+                    Nothing -> (prUnit, rawAmount)
+                else (prUnit, rawAmount)
+        flowUUID = generateFlowUUID cleanName "" effUnitName
+        unitUUID = generateUnitUUID effUnitName
         exchange =
             TechnosphereExchange
                 { techFlowId = flowUUID
@@ -837,7 +857,7 @@ productToExchange env isRef ProductRow{..} =
                 , flowCAS = Nothing
                 , flowSubstanceId = Nothing
                 }
-        unit = Unit{unitId = unitUUID, unitName = prUnit, unitSymbol = prUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
 
 {- | Convert technosphere row to exchange (if non-zero), flow, and unit.
@@ -1049,10 +1069,14 @@ parseWorkerLines cfg ls =
 -- ============================================================================
 
 {- | Parse a SimaPro CSV file
-Handles Windows-1252/Latin-1 encoding common in SimaPro exports
+Handles Windows-1252/Latin-1 encoding common in SimaPro exports.
+
+Reference-product amounts are normalized to the canonical base unit of their
+dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
+construction yields per-base-unit columns — matching Brightway conventions.
 -}
-parseSimaProCSV :: FilePath -> IO ([Activity], FlowDB, UnitDB)
-parseSimaProCSV path = do
+parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], FlowDB, UnitDB)
+parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
 
@@ -1081,7 +1105,7 @@ parseSimaProCSV path = do
             )
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
-    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity globalParams) allBlocks
+    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
     let activities = map (\(a, _, _) -> a) converted
         allFlows = concatMap (\(_, f, _) -> f) converted
         allUnits = concatMap (\(_, _, u) -> u) converted
