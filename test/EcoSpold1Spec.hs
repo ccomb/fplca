@@ -107,6 +107,39 @@ minimalXml =
         , "</ecoSpold>"
         ]
 
+{- | Fixture exercising per-exchange `generalComment` attribute.
+Exchange #1 (reference) carries a comment, #2 has none. The
+referenceFunction also carries an activity-level generalComment to
+regression-check that the two paths don't cross-contaminate.
+-}
+commentXml :: BC.ByteString
+commentXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"99\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"steel mill\" category=\"metals\""
+        , "                           subCategory=\"steel\" unit=\"kg\""
+        , "                           generalComment=\"Process-level note\"/>"
+        , "        <geography location=\"GLO\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"1\" name=\"steel\" category=\"metals\" unit=\"kg\""
+        , "                meanValue=\"1.0\" generalComment=\"Global&#10;\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"2\" name=\"iron ore\" category=\"resource\""
+        , "                subCategory=\"in ground\" unit=\"kg\" meanValue=\"1.5\">"
+        , "        <inputGroup>4</inputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 -- | Multi-dataset EcoSpold1 XML
 multiDatasetXml :: BC.ByteString
 multiDatasetXml =
@@ -323,6 +356,18 @@ spec = do
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right (act, _, _, _, _) ->
                     M.lookup "Category" (activityClassification act) `shouldBe` Just "Energy"
+
+        it "captures per-exchange generalComment as exchangeComment" $
+            case parseWithXeno commentXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) ->
+                    map exchangeComment (exchanges act) `shouldBe` [Just "Global", Nothing]
+
+        it "still routes referenceFunction generalComment to activity description" $
+            case parseWithXeno commentXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) ->
+                    activityDescription act `shouldBe` ["Process-level note"]
 
     -- -----------------------------------------------------------------------
     -- parseAllWithXeno — multi-dataset

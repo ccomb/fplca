@@ -8,6 +8,7 @@ module EcoSpold.Common (
     bsToInt,
     isElement,
     distributeFiles,
+    nonEmptyText,
 ) where
 
 import qualified Data.ByteString as BS
@@ -21,7 +22,10 @@ bsToText :: BS.ByteString -> Text
 bsToText = decodeXmlEntities . TE.decodeUtf8
 
 {- | Decode common XML entities that Xeno doesn't decode
-Xeno is a fast SAX parser but doesn't handle entity references
+Xeno is a fast SAX parser but doesn't handle entity references.
+We also decode the two numeric character references (line feed and
+carriage return) that frequently appear inside attribute values in
+EcoSpold exports (e.g. `generalComment="text&#10;"`).
 -}
 decodeXmlEntities :: Text -> Text
 decodeXmlEntities =
@@ -30,6 +34,8 @@ decodeXmlEntities =
         . T.replace "&amp;" "&"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
+        . T.replace "&#10;" "\n"
+        . T.replace "&#13;" "\r"
 
 -- | ByteString to Double conversion (strict - errors on parse failure)
 bsToDouble :: BS.ByteString -> Double
@@ -49,6 +55,12 @@ Handles both "tagName" and "prefix:tagName" forms
 isElement :: BS.ByteString -> BS.ByteString -> Bool
 isElement tagName expected =
     tagName == expected || BS.isSuffixOf (":" `BS.append` expected) tagName
+
+-- | Drop empty / whitespace-only text. Single normalisation point.
+nonEmptyText :: Text -> Maybe Text
+nonEmptyText t =
+    let s = T.strip t
+     in if T.null s then Nothing else Just s
 
 -- | Distribute a list evenly across N buckets (for parallel workers)
 distributeFiles :: Int -> [a] -> [[a]]

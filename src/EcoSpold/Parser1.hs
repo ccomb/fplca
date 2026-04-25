@@ -33,7 +33,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement)
+import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement, nonEmptyText)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
 import qualified Xeno.SAX as X
@@ -94,12 +94,13 @@ data ExchangeData = ExchangeData
     , exCASNumber :: !Text -- CAS number (optional)
     , exFormula :: !Text -- Chemical formula (optional)
     , exInfrastructure :: !Bool -- Infrastructure process flag
+    , exComment :: !Text -- Free-text comment from `generalComment` attribute
     }
     deriving (Eq)
 
 -- | Initial exchange data
 emptyExchangeData :: ExchangeData
-emptyExchangeData = ExchangeData 0 "" "" "" "" "" 0.0 "" "" "" "" False
+emptyExchangeData = ExchangeData 0 "" "" "" "" "" 0.0 "" "" "" "" False ""
 
 -- | Parsing state accumulator
 data ParseState = ParseState
@@ -217,6 +218,7 @@ parseWithXeno xmlContent =
                                 if isElement name "infrastructureProcess"
                                     then bsToText value == "true"
                                     else exInfrastructure edata
+                            , exComment = if isElement name "generalComment" then bsToText value else exComment edata
                             }
                  in state{psContext = InExchange updated}
             _ ->
@@ -357,7 +359,7 @@ parseWithXeno xmlContent =
                             , bioUnitId = unitId
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
-                            , bioComment = Nothing
+                            , bioComment = nonEmptyText (exComment edata)
                             }
                     else
                         TechnosphereExchange
@@ -369,7 +371,7 @@ parseWithXeno xmlContent =
                             , techActivityLinkId = UUID.nil -- Will be resolved in Loader.fixEcoSpold1ActivityLinks
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
-                            , techComment = Nothing
+                            , techComment = nonEmptyText (exComment edata)
                             }
 
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
@@ -548,6 +550,7 @@ parseAllWithXeno xmlContent =
                                 if isElement name "infrastructureProcess"
                                     then bsToText value == "true"
                                     else exInfrastructure edata
+                            , exComment = if isElement name "generalComment" then bsToText value else exComment edata
                             }
                  in state{psContext = InExchange updated}
             _ ->
@@ -667,7 +670,7 @@ parseAllWithXeno xmlContent =
                             , bioUnitId = unitId
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
-                            , bioComment = Nothing
+                            , bioComment = nonEmptyText (exComment edata)
                             }
                     else
                         TechnosphereExchange
@@ -679,7 +682,7 @@ parseAllWithXeno xmlContent =
                             , techActivityLinkId = UUID.nil
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
-                            , techComment = Nothing
+                            , techComment = nonEmptyText (exComment edata)
                             }
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
             flow = Flow flowId (exName edata) category Nothing unitId flowType M.empty cas Nothing
