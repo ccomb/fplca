@@ -49,6 +49,7 @@ activityWithRefExchange fid =
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
+                , techComment = Nothing
                 }
             ]
         , activityParams = M.empty
@@ -75,6 +76,7 @@ activityWithInputExchange fid =
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
+                , techComment = Nothing
                 }
             ]
         , activityParams = M.empty

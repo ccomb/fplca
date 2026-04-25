@@ -104,6 +104,7 @@ data Exchange
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
+        , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
@@ -111,6 +112,7 @@ data Exchange
         , bioUnitId :: !UUID -- Unit of measurement
         , bioIsInput :: !Bool -- True for resource extraction, False for emissions
         , bioLocation :: !Text -- Exchange location (EcoSpold1) or "" (EcoSpold2)
+        , bioComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         }
     deriving (Generic, NFData, Store)
 
@@ -150,6 +152,11 @@ exchangeProcessLinkId BiosphereExchange{} = Nothing
 exchangeLocation :: Exchange -> Text
 exchangeLocation TechnosphereExchange{techLocation = loc} = loc
 exchangeLocation BiosphereExchange{bioLocation = loc} = loc
+
+-- | Get free-text comment attached to the exchange by the source dataset
+exchangeComment :: Exchange -> Maybe Text
+exchangeComment TechnosphereExchange{techComment = c} = c
+exchangeComment BiosphereExchange{bioComment = c} = c
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool

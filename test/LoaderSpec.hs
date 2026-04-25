@@ -61,6 +61,7 @@ refExchange fid =
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = "GLO"
+        , techComment = Nothing
         }
 
 inputExchange :: UUID.UUID -> Text -> Exchange
@@ -74,6 +75,7 @@ inputExchange fid loc =
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = loc
+        , techComment = Nothing
         }
 
 -- ---------------------------------------------------------------------------
@@ -264,6 +266,7 @@ spec = do
                         , bioUnitId = UUID.nil
                         , bioIsInput = False
                         , bioLocation = ""
+                        , bioComment = Nothing
                         }
                 (fixed, summary) = fixExchangeLinkByName idx flows "act" bioEx
             -- BiosphereExchange is returned unchanged: verify it is still biosphere

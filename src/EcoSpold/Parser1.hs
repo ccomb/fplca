@@ -357,6 +357,7 @@ parseWithXeno xmlContent =
                             , bioUnitId = unitId
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
+                            , bioComment = Nothing
                             }
                     else
                         TechnosphereExchange
@@ -368,6 +369,7 @@ parseWithXeno xmlContent =
                             , techActivityLinkId = UUID.nil -- Will be resolved in Loader.fixEcoSpold1ActivityLinks
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
+                            , techComment = Nothing
                             }
 
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
@@ -665,6 +667,7 @@ parseAllWithXeno xmlContent =
                             , bioUnitId = unitId
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
+                            , bioComment = Nothing
                             }
                     else
                         TechnosphereExchange
@@ -676,6 +679,7 @@ parseAllWithXeno xmlContent =
                             , techActivityLinkId = UUID.nil
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
+                            , techComment = Nothing
                             }
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
             flow = Flow flowId (exName edata) category Nothing unitId flowType M.empty cas Nothing

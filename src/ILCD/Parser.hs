@@ -469,6 +469,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , bioUnitId = fUnitId
                         , bioIsInput = isInput
                         , bioLocation = ierLocation raw
+                        , bioComment = Nothing
                         }
                 else
                     TechnosphereExchange
@@ -480,6 +481,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
                         , techLocation = ierLocation raw
+                        , techComment = Nothing
                         }
 
 --------------------------------------------------------------------------------

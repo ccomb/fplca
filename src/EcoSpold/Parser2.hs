@@ -259,6 +259,7 @@ parseWithXeno xmlContent processId =
                                 , techActivityLinkId = linkUUID
                                 , techProcessLinkId = Nothing
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
+                                , techComment = Nothing
                                 }
                         flow =
                             Flow
@@ -338,6 +339,7 @@ parseWithXeno xmlContent processId =
                                 , bioUnitId = unitUUID
                                 , bioIsInput = isInput
                                 , bioLocation = "" -- EcoSpold2: no per-exchange location
+                                , bioComment = Nothing
                                 }
                         -- Get subcompartment from the list (first entry if any)
                         subcompartment = case edSubcompartments edata of

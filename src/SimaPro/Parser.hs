@@ -859,6 +859,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
+                , techComment = Nothing
                 }
         flow =
             Flow
@@ -898,6 +899,7 @@ techRowToExchange env isInput TechExchangeRow{..} =
                             , techActivityLinkId = UUID.nil
                             , techProcessLinkId = Nothing
                             , techLocation = location
+                            , techComment = Nothing
                             }
         flow =
             Flow
@@ -935,6 +937,7 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 , bioUnitId = unitUUID
                 , bioIsInput = isInput
                 , bioLocation = ""
+                , bioComment = Nothing
                 }
         flow =
             Flow

@@ -41,6 +41,7 @@ mkOutput fid amt =
         , techActivityLinkId = nil
         , techProcessLinkId = Nothing
         , techLocation = ""
+        , techComment = Nothing
         }
 
 -- | A reference output exchange
@@ -60,6 +61,7 @@ mkBio fid amt =
         , bioUnitId = nil
         , bioIsInput = False
         , bioLocation = ""
+        , bioComment = Nothing
         }
 
 fid1, fid2, fid3 :: UUID

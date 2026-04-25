@@ -46,6 +46,7 @@ mkRefOutput fid =
         , techActivityLinkId = nil
         , techProcessLinkId = Nothing
         , techLocation = ""
+        , techComment = Nothing
         }
 
 mkFlow :: UUID -> Text -> Flow
