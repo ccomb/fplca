@@ -312,6 +312,21 @@ spec = do
                 [ex] -> ierAmount ex `shouldBe` 42.0
                 _ -> expectationFailure "expected one exchange"
 
+    describe "per-exchange common:generalComment" $ do
+        it "captures exchange-level comment, leaves comment-less exchange Nothing, prefers English" $ do
+            let Just raw = parseProcessXML ilcdProcessWithExchangeComments
+            map ierComment (iprExchanges raw)
+                `shouldBe` [ Just "Reference output of the process"
+                           , Nothing
+                           , Just "English text wins"
+                           ]
+
+        it "does not leak the process-level <common:generalComment> into any exchange" $ do
+            let Just raw = parseProcessXML ilcdProcessWithExchangeComments
+                processNote = "Process-level note that must not leak"
+            all (\ex -> ierComment ex /= Just processNote) (iprExchanges raw)
+                `shouldBe` True
+
         it "parses multiple exchanges preserving order" $ do
             xml <- BS.readFile "test-data/SAMPLE.ilcd/processes/aaaaaaaa-0000-0000-0000-000000000005.xml"
             let Just raw = parseProcessXML xml
@@ -377,6 +392,50 @@ ilcdProcessWithTwoClassifications =
     \<referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
     \<exchangeDirection>Output</exchangeDirection>\
     \<resultingAmount>1.0</resultingAmount>\
+    \</exchange>\
+    \</exchanges>\
+    \</processDataSet>"
+
+{- | Three exchanges with different comment configurations:
+* dataSetInternalID="0": top-level English `<common:generalComment>` only
+* dataSetInternalID="1": no comment (sibling of a process-level
+  `<common:generalComment>` that must NOT leak in)
+* dataSetInternalID="2": both English and German translations; English wins
+-}
+ilcdProcessWithExchangeComments :: BS.ByteString
+ilcdProcessWithExchangeComments =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+    \<processDataSet xmlns=\"http://lca.jrc.it/ILCD/Process\" \
+    \xmlns:common=\"http://lca.jrc.it/ILCD/Common\">\
+    \<processInformation>\
+    \<dataSetInformation>\
+    \<common:UUID>42345678-1234-1234-1234-123456789abc</common:UUID>\
+    \<name><baseName>Process with exchange comments</baseName></name>\
+    \<common:generalComment xml:lang=\"en\">Process-level note that must not leak</common:generalComment>\
+    \</dataSetInformation>\
+    \<geography location=\"GLO\"/>\
+    \<quantitativeReference>\
+    \<referenceToReferenceFlow>0</referenceToReferenceFlow>\
+    \</quantitativeReference>\
+    \</processInformation>\
+    \<exchanges>\
+    \<exchange dataSetInternalID=\"0\">\
+    \<referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
+    \<exchangeDirection>Output</exchangeDirection>\
+    \<resultingAmount>1.0</resultingAmount>\
+    \<common:generalComment xml:lang=\"en\">Reference output of the process</common:generalComment>\
+    \</exchange>\
+    \<exchange dataSetInternalID=\"1\">\
+    \<referenceToFlowDataSet refObjectId=\"bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
+    \<exchangeDirection>Input</exchangeDirection>\
+    \<resultingAmount>0.5</resultingAmount>\
+    \</exchange>\
+    \<exchange dataSetInternalID=\"2\">\
+    \<referenceToFlowDataSet refObjectId=\"cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
+    \<exchangeDirection>Input</exchangeDirection>\
+    \<resultingAmount>0.25</resultingAmount>\
+    \<common:generalComment xml:lang=\"de\">Deutscher Text zuerst</common:generalComment>\
+    \<common:generalComment xml:lang=\"en\">English text wins</common:generalComment>\
     \</exchange>\
     \</exchanges>\
     \</processDataSet>"

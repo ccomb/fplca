@@ -45,12 +45,27 @@ data ILCDProcessRaw = ILCDProcessRaw
     , iprClassifications :: !(M.Map Text Text)
     }
 
+{- | Update a comment slot with a newly-seen `<common:generalComment>`.
+Prefer English; otherwise keep the first non-empty translation.
+-}
+pickILCDComment :: Maybe (Text, Text) -> Text -> Text -> Maybe (Text, Text)
+pickILCDComment existing lang txt =
+    let s = T.strip txt
+     in if T.null s
+            then existing
+            else case existing of
+                Just ("en", _) -> existing
+                _ | lang == "en" -> Just ("en", s)
+                Nothing -> Just (lang, s)
+                Just _ -> existing
+
 data ILCDExchangeRaw = ILCDExchangeRaw
     { ierInternalId :: !Int
     , ierFlowRef :: !UUID
     , ierDirection :: !Text -- "Input" / "Output"
     , ierAmount :: !Double
     , ierLocation :: !Text
+    , ierComment :: !(Maybe Text) -- per-exchange <common:generalComment>
     }
 
 {- | Parse an ILCD directory into a SimpleDatabase.
@@ -269,6 +284,14 @@ data ProcState = ProcState
     , psExDirection :: !Text
     , psExAmount :: !Double
     , psExLocation :: !Text
+    , psExComment :: !(Maybe (Text, Text))
+    {- ^ (xml:lang, comment text) for the open `<exchange>`. English wins;
+    otherwise first non-empty. Reset on each `<exchange>` open.
+    -}
+    , psPendingCommentLang :: !Text
+    {- ^ xml:lang on the currently-open `<common:generalComment>`. Reset
+    on every comment open.
+    -}
     , psTextAccum :: ![BS.ByteString]
     , psInName :: !Bool
     , psClassifications :: !(M.Map Text Text)
@@ -285,7 +308,27 @@ parseProcessXML bytes =
         txt
         closeTag
         cdata
-        (ProcState "" "" "" 0 [] False (-1) "" "" 0 "" [] False M.empty "" False)
+        ( ProcState
+            { psUUID = ""
+            , psBaseName = ""
+            , psLocation = ""
+            , psRefFlowIdx = 0
+            , psExchanges = []
+            , psInExchange = False
+            , psExInternalId = -1
+            , psExFlowRef = ""
+            , psExDirection = ""
+            , psExAmount = 0
+            , psExLocation = ""
+            , psExComment = Nothing
+            , psPendingCommentLang = ""
+            , psTextAccum = []
+            , psInName = False
+            , psClassifications = M.empty
+            , psPendingClassName = ""
+            , psInClass = False
+            }
+        )
         bytes of
         Left _ -> Nothing
         Right s -> buildProcess s
@@ -300,7 +343,10 @@ parseProcessXML bytes =
                 , psExDirection = ""
                 , psExAmount = 0
                 , psExLocation = ""
+                , psExComment = Nothing
                 }
+        | isElement tag "generalComment" =
+            s{psPendingCommentLang = "", psTextAccum = []}
         | isElement tag "name" && not (psInExchange s) =
             s{psInName = True, psTextAccum = []}
         | isElement tag "class" && not (psInExchange s) =
@@ -318,6 +364,11 @@ parseProcessXML bytes =
             s{psLocation = bsToText value}
         | isElement name "name" && not (psInExchange s) && not (psInName s) =
             s{psPendingClassName = bsToText value}
+        | isElement name "xml:lang" && psInExchange s =
+            -- Capture lang on `<common:generalComment>` (and other tags), only
+            -- inside an exchange. We use it at closeTag time to pick the best
+            -- comment translation.
+            s{psPendingCommentLang = bsToText value}
         | otherwise = s
 
     endOpen s _ = s
@@ -327,6 +378,15 @@ parseProcessXML bytes =
          in if BS.null trimmed then s else s{psTextAccum = trimmed : psTextAccum s}
 
     closeTag s tag
+        | isElement tag "generalComment" && psInExchange s =
+            -- Capture per-exchange comment only. Process-level
+            -- <generalComment> (inside processInformation, NOT inside an
+            -- exchange) hits the `otherwise` branch and is harmlessly dropped.
+            s
+                { psExComment = pickILCDComment (psExComment s) (psPendingCommentLang s) (accum s)
+                , psPendingCommentLang = ""
+                , psTextAccum = []
+                }
         | isElement tag "UUID" && T.null (psUUID s) =
             s{psUUID = accum s, psTextAccum = []}
         | isElement tag "baseName" && psInName s =
@@ -368,6 +428,7 @@ parseProcessXML bytes =
                         , ierDirection = psExDirection s
                         , ierAmount = psExAmount s
                         , ierLocation = psExLocation s
+                        , ierComment = snd <$> psExComment s
                         }
              in s{psInExchange = False, psExchanges = ex : psExchanges s, psTextAccum = []}
         | otherwise = s{psTextAccum = []}
@@ -469,7 +530,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , bioUnitId = fUnitId
                         , bioIsInput = isInput
                         , bioLocation = ierLocation raw
-                        , bioComment = Nothing
+                        , bioComment = ierComment raw
                         }
                 else
                     TechnosphereExchange
@@ -481,7 +542,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
                         , techLocation = ierLocation raw
-                        , techComment = Nothing
+                        , techComment = ierComment raw
                         }
 
 --------------------------------------------------------------------------------
