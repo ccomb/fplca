@@ -151,6 +151,10 @@ History of manual bumps:
      (SimaPro CSV parser); matrices built before this bump divided by the
      raw amount regardless of unit, so e.g. a 1-ton reference yielded
      impacts 1000× too large.
+- 6: SimaPro CSV parser now extracts location from the older "name//[XX]"
+     pattern (ecoinvent 3.9.1 export). Caches built before this bump have
+     empty activityLocation for every activity in such databases, which
+     breaks geography-aware supplier lookups.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -158,7 +162,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 5
+     in hi `xor` lo `xor` 6
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
