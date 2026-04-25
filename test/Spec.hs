@@ -12,6 +12,7 @@ import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
 import qualified DatabaseStatusSpec
 import qualified EcoSpold1Spec
+import qualified EcoSpold2Spec
 import qualified FlowResolverSpec
 import qualified FuzzySpec
 import qualified HotspotSpec
@@ -68,6 +69,7 @@ main = hspec $ do
         describe "Uploaded Database" UploadedDatabaseSpec.spec
         describe "Progress Formatting" ProgressSpec.spec
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec
+        describe "EcoSpold2 Parser" EcoSpold2Spec.spec
         describe "MCP Tool Schemas" MCPSchemaSpec.spec
         describe "Search.Normalize" NormalizeSpec.spec
         describe "Search.BM25" BM25Spec.spec

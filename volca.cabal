@@ -178,6 +178,7 @@ test-suite lca-tests
                      , UploadedDatabaseSpec
                      , ProgressSpec
                      , EcoSpold1Spec
+                     , EcoSpold2Spec
                      , MCPSchemaSpec
                      , NormalizeSpec
                      , BM25Spec

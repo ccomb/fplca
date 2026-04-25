@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecoSpold xmlns="http://www.EcoInvent.org/EcoSpold02">
+  <activityDataset>
+    <activityDescription>
+      <activity id="12345678-1234-5678-9abc-12345678aaaa" activityNameId="anid">
+        <activityName xml:lang="en">sawnwood test</activityName>
+      </activity>
+      <classification classificationId="c1">
+        <classificationSystem>CPC</classificationSystem>
+        <classificationValue>31100</classificationValue>
+      </classification>
+      <geography geographyId="g1">
+        <shortname xml:lang="en">RER</shortname>
+      </geography>
+      <technology technologyLevel="3"/>
+      <timePeriod startDate="2020-01-01" endDate="2020-12-31" isDataValidForEntirePeriod="true"/>
+      <macroEconomicScenario macroEconomicScenarioId="m1">
+        <name xml:lang="en">Business-as-Usual</name>
+      </macroEconomicScenario>
+    </activityDescription>
+    <flowData>
+      <!-- Reference output: sawnwood, with NO exchange-level comment but
+           several <property> children that DO carry their own comments. -->
+      <intermediateExchange id="ex1" unitId="11111111-1111-1111-1111-111111111111"
+                            amount="1.0"
+                            intermediateExchangeId="22222222-2222-2222-2222-222222222222">
+        <name xml:lang="en">sawnwood, board</name>
+        <unitName xml:lang="en">m3</unitName>
+        <property propertyId="p1" amount="0.494" unitId="33333333-3333-3333-3333-333333333333">
+          <name xml:lang="en">carbon content</name>
+          <unitName xml:lang="en">dimensionless</unitName>
+          <comment xml:lang="en">fossil carbon content on a dry matter basis</comment>
+        </property>
+        <property propertyId="p2" amount="614.4" unitId="44444444-4444-4444-4444-444444444444">
+          <name xml:lang="en">dry mass</name>
+          <unitName xml:lang="en">kg</unitName>
+          <comment xml:lang="en">kg oven-dry matter/wet volume</comment>
+        </property>
+        <outputGroup>0</outputGroup>
+      </intermediateExchange>
+      <!-- Input: WITH a top-level exchange comment AND a property comment.
+           The exchange comment must win; the property comment must not leak. -->
+      <intermediateExchange id="ex2" unitId="11111111-1111-1111-1111-111111111111"
+                            amount="0.1"
+                            intermediateExchangeId="55555555-5555-5555-5555-555555555555"
+                            activityLinkId="66666666-6666-6666-6666-666666666666">
+        <name xml:lang="en">glue</name>
+        <unitName xml:lang="en">kg</unitName>
+        <comment xml:lang="en">Adhesive applied during pressing</comment>
+        <property propertyId="p3" amount="1.0" unitId="33333333-3333-3333-3333-333333333333">
+          <name xml:lang="en">dry mass</name>
+          <unitName xml:lang="en">dimensionless</unitName>
+          <comment xml:lang="en">noisy property comment that must not leak</comment>
+        </property>
+        <inputGroup>5</inputGroup>
+      </intermediateExchange>
+    </flowData>
+  </activityDataset>
+</ecoSpold>

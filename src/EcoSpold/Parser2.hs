@@ -89,6 +89,7 @@ data IntermediateData = IntermediateData
     , idOutputGroup :: !Text
     , idActivityLinkId :: !Text
     , idSynonyms :: !(M.Map Text (S.Set Text))
+    , idComment :: !(Maybe (Text, Text)) -- (xml:lang, comment text) — English wins
     }
     deriving (Eq)
 
@@ -105,8 +106,24 @@ data ElementaryData = ElementaryData
     , edSubcompartments :: ![Text]
     , edSynonyms :: !(M.Map Text (S.Set Text))
     , edCAS :: !(Maybe Text)
+    , edComment :: !(Maybe (Text, Text))
     }
     deriving (Eq)
+
+{- | Update a comment slot with a newly seen `<comment xml:lang="…">` text.
+Prefer English; otherwise keep the first non-empty entry. Empty / blank
+incoming text never overwrites an existing slot.
+-}
+pickComment :: Maybe (Text, Text) -> Text -> Text -> Maybe (Text, Text)
+pickComment existing lang txt =
+    let s = T.strip txt
+     in if T.null s
+            then existing
+            else case existing of
+                Just ("en", _) -> existing
+                _ | lang == "en" -> Just ("en", s)
+                Nothing -> Just (lang, s)
+                Just _ -> existing
 
 -- | Parsing state accumulator for SAX parsing
 data ParseState = ParseState
@@ -125,6 +142,7 @@ data ParseState = ParseState
     , psWarnings :: ![String] -- Accumulated warnings (emitted in IO after fold)
     , psClassifications :: !(M.Map Text Text) -- Classification system -> value
     , psPendingClassSystem :: !Text -- Current classification system name
+    , psPendingCommentLang :: !Text -- xml:lang on the currently-open <comment>
     }
 
 -- | Initial parsing state
@@ -146,6 +164,7 @@ initialParseState =
         , psWarnings = []
         , psClassifications = M.empty
         , psPendingClassSystem = ""
+        , psPendingCommentLang = ""
         }
 
 -- | Xeno SAX parser implementation
@@ -160,17 +179,19 @@ parseWithXeno xmlContent processId =
     -- Open tag handler - update path and context
     openTag state tagName =
         let newPath = tagName : psPath state
-            cleanState =
-                if isElement tagName "intermediateExchange" || isElement tagName "elementaryExchange"
-                    then state{psPendingInputGroup = "", psPendingOutputGroup = ""}
-                    else state
+            cleanState
+                | isElement tagName "intermediateExchange" || isElement tagName "elementaryExchange" =
+                    state{psPendingInputGroup = "", psPendingOutputGroup = ""}
+                | isElement tagName "comment" =
+                    state{psPendingCommentLang = ""}
+                | otherwise = state
             newContext
                 | isElement tagName "activityName" = InActivityName
                 | isElement tagName "shortname" && any (isElement "geography") (psPath cleanState) = InGeographyShortname
                 | isElement tagName "intermediateExchange" =
-                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty)
+                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing)
                 | isElement tagName "elementaryExchange" =
-                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing)
+                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing Nothing)
                 | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
                 -- Classification elements: don't switch context. Handled via psTextAccum + psPendingClassSystem.
                 -- Switching context here would destroy InIntermediateExchange when classifications appear inside exchanges.
@@ -183,6 +204,15 @@ parseWithXeno xmlContent processId =
         let isInsideProperty = case psPath state of
                 [] -> False
                 (current : _) -> isElement current "property"
+            isOnComment = case psPath state of
+                [] -> False
+                (current : _) -> isElement current "comment"
+            -- xml:lang on the currently-open <comment>; remembered until closeTag.
+            -- Attribute order is not significant for entity ref selection — we
+            -- only need the lang at close-time.
+            withLang st
+                | isOnComment && isElement name "xml:lang" = st{psPendingCommentLang = bsToText value}
+                | otherwise = st
          in case psContext state of
                 InIntermediateExchange idata ->
                     let updated
@@ -193,7 +223,7 @@ parseWithXeno xmlContent processId =
                             | isElement name "outputGroup" = idata{idOutputGroup = bsToText value}
                             | isElement name "activityLinkId" = idata{idActivityLinkId = bsToText value}
                             | otherwise = idata
-                     in state{psContext = InIntermediateExchange updated}
+                     in withLang state{psContext = InIntermediateExchange updated}
                 InElementaryExchange edata ->
                     let updated
                             | isElement name "elementaryExchangeId" = edata{edFlowId = bsToText value}
@@ -203,11 +233,11 @@ parseWithXeno xmlContent processId =
                             | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
                             | isElement name "casNumber" = edata{edCAS = Just (normalizeCAS (bsToText value))}
                             | otherwise = edata
-                     in state{psContext = InElementaryExchange updated}
+                     in withLang state{psContext = InElementaryExchange updated}
                 InGeneralCommentText _ ->
                     let idx = if isElement name "index" then bsToInt value else 0
-                     in state{psContext = InGeneralCommentText idx}
-                _ -> state
+                     in withLang state{psContext = InGeneralCommentText idx}
+                _ -> withLang state
 
     -- End of opening tag - no action needed for SAX
     endOpen state _tagName = state
@@ -224,6 +254,24 @@ parseWithXeno xmlContent processId =
         | isElement tagName "activityName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
              in state{psActivityName = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+        | isElement tagName "comment" =
+            -- Capture <comment> text only when the immediate parent is the
+            -- exchange itself, not a nested <property>. Property comments
+            -- describe the property (e.g. "carbon content"), not the exchange.
+            let parent = case drop 1 (psPath state) of
+                    (p : _) -> p
+                    [] -> ""
+                txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+                lang = psPendingCommentLang state
+                popPath = state{psPath = tail (psPath state), psTextAccum = [], psPendingCommentLang = ""}
+             in case psContext state of
+                    InIntermediateExchange idata
+                        | isElement parent "intermediateExchange" ->
+                            popPath{psContext = InIntermediateExchange idata{idComment = pickComment (idComment idata) lang txt}}
+                    InElementaryExchange edata
+                        | isElement parent "elementaryExchange" ->
+                            popPath{psContext = InElementaryExchange edata{edComment = pickComment (edComment edata) lang txt}}
+                    _ -> popPath
         | isElement tagName "shortname" && psContext state == InGeographyShortname =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
              in state{psLocation = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
@@ -259,7 +307,7 @@ parseWithXeno xmlContent processId =
                                 , techActivityLinkId = linkUUID
                                 , techProcessLinkId = Nothing
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
-                                , techComment = Nothing
+                                , techComment = snd <$> idComment idata
                                 }
                         flow =
                             Flow
@@ -339,7 +387,7 @@ parseWithXeno xmlContent processId =
                                 , bioUnitId = unitUUID
                                 , bioIsInput = isInput
                                 , bioLocation = "" -- EcoSpold2: no per-exchange location
-                                , bioComment = Nothing
+                                , bioComment = snd <$> edComment edata
                                 }
                         -- Get subcompartment from the list (first entry if any)
                         subcompartment = case edSubcompartments edata of
