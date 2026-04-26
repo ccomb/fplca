@@ -399,10 +399,17 @@ cabal build -j
             log_info "After strip: $STRIPPED_SIZE"
 
             # UPX compression (Linux/macOS only — Windows Defender flags UPX binaries
-            # as malicious, causing "Error opening file for writing" during NSIS install)
+            # as malicious, causing "Error opening file for writing" during NSIS install).
+            # macOS Mach-O support in UPX 5.x is gated behind --force-macos: it works
+            # for unsigned binaries but the loader stub may invalidate code-signing /
+            # notarization, which is something to revisit when shipping a signed .dmg.
             if [[ "$OS" != "windows" ]]; then
                 log_info "Compressing with UPX..."
-                if upx -1 "$VOLCA_BIN_PATH"; then
+                UPX_FLAGS=(-1)
+                if [[ "$OS" == "macos" ]]; then
+                    UPX_FLAGS+=(--force-macos)
+                fi
+                if upx "${UPX_FLAGS[@]}" "$VOLCA_BIN_PATH"; then
                     FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
                     log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped) -> $FINAL_SIZE (compressed)"
                 else
