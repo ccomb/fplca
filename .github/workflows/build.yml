@@ -47,6 +47,9 @@ jobs:
           msystem: UCRT64
           update: true
           cache: true
+          # Inherit the runner's Windows PATH so /c/ghcup/bin (added to
+          # GITHUB_PATH after the GHCup install) is visible inside MSYS2.
+          path-type: inherit
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-gcc-fortran
