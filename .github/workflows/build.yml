@@ -132,15 +132,14 @@ jobs:
             cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-
 
       - name: Build and test
-        env:
-          # Per-spec timeout so a Windows test hang becomes a clear failure
-          # instead of stalling the runner for hours.
-          VOLCA_TEST_OPTS: '--timeout=300'
         run: |
           # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
           # does not inherit PATH from the previous step.
           [[ -f /c/ghcup/env ]] && source /c/ghcup/env
-          ./build.sh --test
+          # Bound the whole build+test phase: hspec has no CLI per-spec
+          # timeout, so wrap with `timeout` (POSIX coreutils, also in MSYS2)
+          # to convert any hang into a recognizable signal kill (exit 124).
+          timeout --foreground 1500 ./build.sh --test
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
