@@ -10,6 +10,7 @@ import Data.List (dropWhileEnd)
 import Network.HTTP.Client (Manager, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
 import System.Directory (doesFileExist, getTemporaryDirectory, removeFile)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (IOMode (..), hClose, openFile)
@@ -18,14 +19,22 @@ import Test.Hspec
 
 {- | Find the volca executable in the build directory.
 
-`cabal list-bin exe:volca` is portable across architectures (x86_64-linux,
-aarch64-osx, x86_64-windows…). Hardcoding `dist-newstyle/build/x86_64-linux/…`
-breaks every non-Linux-amd64 test run.
+Prefer the VOLCA_EXE env var when set — build.sh exports it after
+`cabal list-bin` so the test does not have to spawn cabal again. The
+fallback to `cabal list-bin exe:volca` keeps `cabal test` from the
+project root working without extra setup. The shell-out path is the
+one that hangs on Windows: cabal sees the project files as modified
+and tries to re-configure under a build lock the parent `cabal test`
+already holds, deadlocking until the runner kills the job.
 -}
 findVolcaExe :: IO FilePath
 findVolcaExe = do
-    raw <- readProcess "cabal" ["list-bin", "exe:volca"] ""
-    let exe = dropWhileEnd isSpace raw
+    envExe <- lookupEnv "VOLCA_EXE"
+    exe <- case envExe of
+        Just p | not (null p) -> return p
+        _ -> do
+            raw <- readProcess "cabal" ["list-bin", "exe:volca"] ""
+            return (dropWhileEnd isSpace raw)
     exists <- doesFileExist exe
     if exists
         then return exe
