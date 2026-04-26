@@ -136,13 +136,19 @@ jobs:
           # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
           # does not inherit PATH from the previous step.
           [[ -f /c/ghcup/env ]] && source /c/ghcup/env
-          # Windows is the only platform exhibiting indefinite test hangs
-          # (waitForProcess never reaping volca.exe). Wrap with GNU `timeout`
-          # (available in MSYS2 coreutils) to convert hangs into exit 124.
-          # macOS / Linux ship without GNU timeout by default and do not
-          # need it, so just call build.sh directly.
+          # Per-platform behaviour:
+          # - Windows: only platform with indefinite test hangs
+          #   (waitForProcess never reaping volca.exe). Wrap with GNU
+          #   `timeout` (in MSYS2 coreutils) so a hang exits 124.
+          # - macOS: UPX --force-macos rewrites the Mach-O header and the
+          #   resulting binary will not exec on arm64 even after ad-hoc
+          #   sign, so any test that spawns volca times out. Skip strip+UPX
+          #   for the CI test run (the artifact is larger but usable).
+          # - Linux: nothing special needed.
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             timeout --foreground 1500 ./build.sh --test
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            ./build.sh --test --no-optimize
           else
             ./build.sh --test
           fi
