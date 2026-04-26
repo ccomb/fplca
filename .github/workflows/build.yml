@@ -106,7 +106,10 @@ jobs:
           cabal update
 
       - name: Save GHCup install (Windows)
-        if: always() && matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
+        # No always() here on purpose: a partial /c/ghcup from a failed
+        # install would otherwise be cached and silently reused for ~7 days.
+        # GHCup install is short (~5 min); losing it on failure is fine.
+        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: C:\ghcup
