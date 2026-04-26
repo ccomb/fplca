@@ -51,7 +51,6 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-openblas
-            mingw-w64-ucrt-x86_64-mumps
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-python
@@ -81,7 +80,7 @@ jobs:
 
       - name: Install build dependencies (macOS)
         if: matrix.os == 'macos'
-        run: brew install gcc mumps openblas upx
+        run: brew install gcc openblas upx
 
       - name: Setup GHC + Cabal (Linux/macOS)
         if: matrix.os == 'linux' || matrix.os == 'macos'
