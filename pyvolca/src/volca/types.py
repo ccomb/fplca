@@ -315,6 +315,21 @@ class ConsumersResponse:
 # Exchanges (typed)
 # ---------------------------------------------------------------------------
 
+def _exchange_comment(ewu: dict | None, inner: dict) -> str | None:
+    """Pick the per-exchange free-text comment.
+
+    The wire exposes it in two places: ``exComment`` flat on the
+    ``ExchangeWithUnit`` envelope, and ``comment`` inside the inner
+    ``Exchange`` (mirrored from the source format's free-text field).
+    Prefer the flat one when present; fall back to inner.
+    """
+    if ewu is not None:
+        flat = ewu.get("exComment")
+        if flat is not None:
+            return flat
+    return inner.get("comment")
+
+
 @dataclass
 class TechnosphereExchange:
     """An exchange with another activity (input or output of an intermediate product).
@@ -332,6 +347,7 @@ class TechnosphereExchange:
     target_activity: str | None
     target_location: str | None
     target_process_id: str | None
+    comment: str | None = None
 
     is_biosphere: bool = False  # discriminator for callers using duck typing
 
@@ -348,6 +364,7 @@ class TechnosphereExchange:
             target_activity=ewu.get("targetActivity"),
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
+            comment=_exchange_comment(ewu, inner),
         )
 
 
@@ -360,6 +377,7 @@ class BiosphereExchange:
     amount: float
     unit: str
     is_input: bool  # True = resource extraction, False = emission
+    comment: str | None = None
 
     is_biosphere: bool = True  # discriminator for callers using duck typing
 
@@ -372,6 +390,7 @@ class BiosphereExchange:
             amount=inner["amount"],
             unit=ewu["unitName"],
             is_input=inner["isInput"],
+            comment=_exchange_comment(ewu, inner),
         )
 
 
@@ -405,6 +424,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
     flow_name = flow.get("name", "")
     flow_category = flow.get("category", "")
     unit = ed.get("exchangeUnitName", "")
+    comment = _exchange_comment(ed, inner)
     tag = inner.get("tag")
     if tag == "TechnosphereExchange":
         target = ed.get("targetActivity") or {}
@@ -418,6 +438,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             target_activity=target.get("name"),
             target_location=target.get("location"),
             target_process_id=target.get("processId"),
+            comment=comment,
         )
     if tag == "BiosphereExchange":
         return BiosphereExchange(
@@ -426,6 +447,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             amount=inner["amount"],
             unit=unit,
             is_input=inner["isInput"],
+            comment=comment,
         )
     raise ValueError(f"Unknown exchange variant tag: {tag!r}")
 
