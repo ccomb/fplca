@@ -412,6 +412,15 @@ cabal build -j
                 if upx "${UPX_FLAGS[@]}" "$VOLCA_BIN_PATH"; then
                     FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
                     log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped) -> $FINAL_SIZE (compressed)"
+                    # macOS arm64 refuses to launch executables without at
+                    # least an ad-hoc signature. UPX rewrites the Mach-O
+                    # headers and invalidates whatever signature the linker
+                    # emitted, which silently kills the process at fork
+                    # (the symptom is "Server failed to start within timeout"
+                    # from any test that spawns volca). Re-sign in place.
+                    if [[ "$OS" == "macos" ]]; then
+                        codesign --force --sign - "$VOLCA_BIN_PATH"
+                    fi
                 else
                     log_warn "UPX compression failed — using stripped binary ($STRIPPED_SIZE)"
                 fi
