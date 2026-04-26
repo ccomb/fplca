@@ -115,17 +115,21 @@ jobs:
           ghc-version: ${{ steps.versions.outputs.ghc }}
           cabal-version: latest
 
-      - name: Cache MUMPS local build
-        uses: actions/cache@v4
+      # Cache restore + save are split (instead of using actions/cache@v4
+      # with save-always, which is deprecated). The save step runs with
+      # `if: always()` so a downstream test failure or hang does not
+      # discard a 30-min cold cabal compile that did succeed.
+
+      - name: Restore MUMPS local build
+        id: cache-mumps
+        uses: actions/cache/restore@v4
         with:
           path: deps/mumps
           key: mumps-${{ matrix.name }}-${{ steps.versions.outputs.mumps }}
-          # Save even when later steps fail — MUMPS source build is the
-          # same output regardless of whether tests pass downstream.
-          save-always: true
 
-      - name: Cache Cabal store
-        uses: actions/cache@v4
+      - name: Restore Cabal store
+        id: cache-cabal
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cabal/store
@@ -133,9 +137,6 @@ jobs:
           key: cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-${{ hashFiles('volca.cabal', 'mumps-hs/mumps-hs.cabal', 'cabal.project') }}
           restore-keys: |
             cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-
-          # Save even on test failure so a Windows test hang does not
-          # discard a 30-min cold cabal compile that did succeed.
-          save-always: true
 
       - name: Build and test
         run: |
@@ -158,6 +159,22 @@ jobs:
           else
             ./build.sh --test
           fi
+
+      - name: Save MUMPS local build
+        if: always() && steps.cache-mumps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/mumps
+          key: ${{ steps.cache-mumps.outputs.cache-primary-key }}
+
+      - name: Save Cabal store
+        if: always() && steps.cache-cabal.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ steps.cache-cabal.outputs.cache-primary-key }}
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
