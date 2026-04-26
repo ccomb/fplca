@@ -124,7 +124,7 @@ class TestDispatcher:
 
     def test_search_activities_sends_query_params(self, mocked_client, make_response):
         client, session = mocked_client
-        session.get.return_value = make_response({"srResults": []})
+        session.get.return_value = make_response({"results": []})
         client.search_activities(name="wheat", geo="FR", limit=5)
         called = session.get.call_args
         assert called[0][0] == "http://test.local/api/v1/db/testdb/activities"
@@ -138,7 +138,7 @@ class TestDispatcher:
 
     def test_search_activities_drops_none_kwargs(self, mocked_client, make_response):
         client, session = mocked_client
-        session.get.return_value = make_response({"srResults": []})
+        session.get.return_value = make_response({"results": []})
         client.search_activities(name="wheat")  # geo, limit, etc. left at None
         params = dict(session.get.call_args[1]["params"])
         assert "name" in params
@@ -281,14 +281,14 @@ class TestDispatcher:
     def test_auto_injects_db_name_from_instance(self, mocked_client, make_response):
         """Client(db='testdb') should inject db_name without the caller passing it."""
         client, session = mocked_client
-        session.get.return_value = make_response({"srResults": []})
+        session.get.return_value = make_response({"results": []})
         client.search_activities(name="x")
         called_url = session.get.call_args[0][0]
         assert "/db/testdb/" in called_url
 
     def test_db_name_override(self, mocked_client, make_response):
         client, session = mocked_client
-        session.get.return_value = make_response({"srResults": []})
+        session.get.return_value = make_response({"results": []})
         client.call("search_activities", db_name="other", name="x")
         called_url = session.get.call_args[0][0]
         assert "/db/other/" in called_url
