@@ -33,6 +33,11 @@ jobs:
             os: macos
     env:
       MACOSX_DEPLOYMENT_TARGET: '13.0'
+      # Skip the brew formula refresh and post-install cleanup on every
+      # invocation — the runner image is ephemeral, the disk savings
+      # do not matter, and the refresh alone can add 30-60s.
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
     defaults:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
