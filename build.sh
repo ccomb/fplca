@@ -502,6 +502,16 @@ if [[ "$RUN_TESTS" == "true" ]]; then
         if [[ -n "${VOLCA_TEST_OPTS:-}" ]]; then
             EXTRA_TEST_OPTS=(--test-options="$VOLCA_TEST_OPTS")
         fi
+        # Resolve the volca exe path now and export it so test/ServerSpec.hs
+        # does not spawn its own `cabal list-bin` from inside `cabal test` —
+        # that re-config attempt deadlocks against the parent's project lock
+        # on Windows and the run hangs until the runner timeout.
+        if [[ -z "${VOLCA_EXE:-}" ]]; then
+            VOLCA_EXE_RESOLVED=$(cabal list-bin exe:volca 2>/dev/null || true)
+            if [[ -n "$VOLCA_EXE_RESOLVED" && -f "$VOLCA_EXE_RESOLVED" ]]; then
+                export VOLCA_EXE="$VOLCA_EXE_RESOLVED"
+            fi
+        fi
         cabal test --test-show-details=streaming "${EXTRA_TEST_OPTS[@]}"
     fi
     log_success "Tests passed"
