@@ -163,7 +163,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: deps/mumps
-          key: mumps-${{ matrix.name }}-${{ steps.versions.outputs.mumps }}
+          # Hashing build-mumps.sh in addition to MUMPS_VERSION so an edit
+          # to the build recipe invalidates the cache (e.g., new gfortran
+          # detection logic, additional flags). Without this the old build
+          # is silently reused even when its inputs no longer match.
+          key: mumps-${{ matrix.name }}-${{ steps.versions.outputs.mumps }}-${{ hashFiles('build-mumps.sh') }}
 
       - name: Restore Cabal store
         id: cache-cabal
