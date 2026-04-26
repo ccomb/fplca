@@ -59,6 +59,13 @@ set +a
 # Detect OS
 OS=$(detect_os)
 
+# On macOS, pin the deployment target floor for every link step so binaries
+# produced on a recent Mac still run on Ventura (13.0). GHC, rustc, clang,
+# and Homebrew gcc all honor this env var natively.
+if [[ "$OS" == "macos" ]]; then
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+fi
+
 # Defaults
 FORCE_REBUILD=false
 RUN_TESTS=false
@@ -345,6 +352,12 @@ if [[ "$OS" == "windows" ]]; then
     export MUMPS_LIB_DIR=$(win_path "$MUMPS_LIB_DIR")
     export MUMPS_INCLUDE_DIR=$(win_path "$MUMPS_INCLUDE_DIR")
     export MSYS2_LIB_DIR GCC_LIB_DIR
+elif [[ "$OS" == "macos" ]] && [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
+    # Darwin's ld64 doesn't support GNU -Wl,-Bstatic / -Bdynamic, so the static
+    # mode below can't be used as-is. Use a Darwin-specific mode that picks .a
+    # libs from extra-lib-dirs (ld64's natural fallback) and pulls Fortran
+    # runtime + openblas via -L/-l flags.
+    LINK_MODE="darwin"
 elif [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # Static linking required when using locally-built MUMPS (only .a libs available)
     LINK_MODE="static"
