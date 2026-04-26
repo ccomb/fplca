@@ -345,9 +345,13 @@ BUILD_TARGET="$OS" ./gen-version.sh
 # Write cabal.project.local with library paths
 if [[ "$OS" == "windows" ]]; then
     LINK_MODE="windows"
-    MSYS2_LIB_DIR="C:/msys64/ucrt64/lib"
+    # Resolve MSYS2 paths dynamically via cygpath so the build works on any
+    # installation root (default C:/msys64, GitHub Actions D:/a/_temp/msys64,
+    # custom locations). cygpath -m emits Windows paths with forward slashes,
+    # which both Cabal and clang/lld accept.
+    MSYS2_LIB_DIR=$(cygpath -m /ucrt64/lib)
     GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
-    GCC_LIB_DIR="C:/msys64${GCC_LIB_DIR}"
+    GCC_LIB_DIR=$(cygpath -m "$GCC_LIB_DIR")
     win_path() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
     export MUMPS_LIB_DIR=$(win_path "$MUMPS_LIB_DIR")
     export MUMPS_INCLUDE_DIR=$(win_path "$MUMPS_INCLUDE_DIR")
