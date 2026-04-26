@@ -473,6 +473,15 @@ Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
 ./build.sh --test       # Build and run tests
 ```
 
+`build.sh` also accepts:
+
+- `--clean` / `--all` — discard `dist-newstyle/` before building
+- `--coverage` — run tests with coverage and emit an HTML report
+- `--static` — produce a statically-linked binary (Linux only)
+- `--no-optimize` — skip `strip` and UPX. Use this when downstream
+  tooling needs to rewrite the binary's dynamic load commands
+  (`dylibbundler`, `install_name_tool` for the macOS `.app`).
+
 ### macOS (Apple Silicon)
 
 Tested on macOS 13 Ventura and later, arm64 only. The build pins
@@ -509,12 +518,20 @@ into `deps/mumps/` (cached across runs).
 1. Install [MSYS2](https://www.msys2.org/) and open the "MSYS2 UCRT64" terminal
 2. Install dependencies:
    ```bash
-   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-mumps make python git
+   pacman -S \
+     mingw-w64-ucrt-x86_64-gcc \
+     mingw-w64-ucrt-x86_64-gcc-fortran \
+     mingw-w64-ucrt-x86_64-openblas \
+     mingw-w64-ucrt-x86_64-cmake \
+     mingw-w64-ucrt-x86_64-make \
+     mingw-w64-ucrt-x86_64-python \
+     mingw-w64-ucrt-x86_64-upx \
+     make python git curl tar
    ```
 3. Install [GHCup](https://www.haskell.org/ghcup/) for the compiler toolchain
 4. Run:
    ```bash
-   ./build.sh            # Same script as Linux/macOS
+   ./build.sh            # Same script as Linux/macOS — builds MUMPS from source
    ```
 
 ### Docker
