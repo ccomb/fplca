@@ -168,9 +168,23 @@ jobs:
         if: (matrix.os == 'linux' || matrix.os == 'macos') && steps.cache-ghcup-unix.outputs.cache-hit == 'true'
         shell: bash
         run: |
+          # haskell-actions/setup@v2 makes a GHC active by prepending its
+          # version-specific bindir to PATH, NOT by running `ghcup set`. So
+          # ~/.ghcup/bin/ghc may point to whatever was active before (on
+          # ubuntu-latest the runner image preinstalls a newer GHC; the
+          # symlink survives in the cache and silently shadows our pinned
+          # version on warm runs). Reset it explicitly.
+          GHCUP="$HOME/.ghcup/bin/ghcup"
+          GHC_VER="${{ steps.versions.outputs.ghc }}"
+          if [[ ! -d "$HOME/.ghcup/ghc/$GHC_VER" ]]; then
+            echo "::error::Cached ~/.ghcup is missing GHC $GHC_VER (stale cache key?)"
+            ls -la "$HOME/.ghcup/ghc/" || true
+            exit 1
+          fi
+          "$GHCUP" set ghc "$GHC_VER"
           echo "$HOME/.ghcup/bin" >> "$GITHUB_PATH"
-          "$HOME/.ghcup/bin/ghc" --version
-          "$HOME/.ghcup/bin/cabal" --version
+          "$HOME/.ghcup/bin/ghc" --numeric-version
+          "$HOME/.ghcup/bin/cabal" --numeric-version
           # ~/.cabal/packages (Hackage index) lives outside ~/.ghcup and is
           # not in the cache; refresh it so cabal solve has a current view.
           "$HOME/.ghcup/bin/cabal" update
@@ -257,11 +271,14 @@ jobs:
           key: ${{ steps.cache-mumps.outputs.cache-primary-key }}
 
       - name: Save GHCup install (Linux/macOS)
-        # No always() here — same reasoning as the Windows save step above:
-        # a partial ~/.ghcup from a failed install would otherwise be cached
-        # and silently reused. Re-installing GHC takes ~3–4 min on a cache
-        # miss; losing the cache on failure is the safe default.
-        if: (matrix.os == 'linux' || matrix.os == 'macos') && steps.cache-ghcup-unix.outputs.cache-hit != 'true'
+        # always() so a downstream test or optimize failure doesn't discard
+        # the GHC install we just paid 3–4 minutes for. The install completes
+        # in a single `Setup GHC + Cabal (Linux/macOS, cold)` step; if THAT
+        # step fails, the workflow halts before this save runs anyway, so
+        # there's no risk of caching a partial ~/.ghcup. (Contrast with the
+        # Windows pattern, which is split across multiple steps and prefers
+        # the safer no-always policy.)
+        if: always() && (matrix.os == 'linux' || matrix.os == 'macos') && steps.cache-ghcup-unix.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.ghcup
