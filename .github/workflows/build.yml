@@ -1,0 +1,234 @@
+name: Build
+
+on:
+  pull_request:
+    branches: [main]
+
+# Cancel any older in-flight runs for the same PR when a new commit is
+# pushed. Keeps queue depth bounded — Windows cold builds are 30 min
+# and there is no point burning runners on superseded code.
+concurrency:
+  group: build-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            os: linux
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+          - name: windows-amd64
+            runner: windows-latest
+            os: windows
+          - name: macos-arm64
+            runner: macos-15
+            os: macos
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      # Skip the brew formula refresh and post-install cleanup on every
+      # invocation — the runner image is ephemeral, the disk savings
+      # do not matter, and the refresh alone can add 30-60s.
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pinned versions
+        id: versions
+        shell: bash
+        run: |
+          source versions.env
+          echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Setup MSYS2 (Windows)
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-openblas
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-upx
+            make
+            python
+            git
+            curl
+            tar
+
+      - name: Restore GHCup install (Windows)
+        id: cache-ghcup
+        if: matrix.os == 'windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\ghcup
+          key: ghcup-windows-ghc${{ steps.versions.outputs.ghc }}
+
+      - name: Install GHC via ghcup (Windows MSYS2)
+        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
+            | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
+              BOOTSTRAP_HASKELL_GHC_VERSION=${{ steps.versions.outputs.ghc }} \
+              BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
+              sh
+
+      - name: Verify GHC + Cabal (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          # GHCup on Windows installs to /c/ghcup. Subsequent MSYS2 steps
+          # need to source this themselves — GITHUB_PATH does not propagate
+          # into the msys2.CMD wrapper.
+          source /c/ghcup/env
+          ghc --version
+          cabal --version
+          # The Hackage package index lives under C:\cabal\packages and is
+          # NOT inside the cached /c/ghcup tree. Run an explicit update so
+          # cache-hit runs (where the install step is skipped) still have
+          # a populated index. setup-haskell does this for us on Linux/macOS.
+          cabal update
+
+      - name: Save GHCup install (Windows)
+        # No always() here on purpose: a partial /c/ghcup from a failed
+        # install would otherwise be cached and silently reused for ~7 days.
+        # GHCup install is short (~5 min); losing it on failure is fine.
+        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\ghcup
+          key: ${{ steps.cache-ghcup.outputs.cache-primary-key }}
+
+      - name: Install build dependencies (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gfortran cmake python3 curl \
+            zlib1g-dev liblapack-dev libblas-dev upx-ucl
+          # gcc's gfortran spec auto-adds -lquadmath when linking
+          # gfortran archives (libdmumps_seq.a). amd64 ships
+          # /usr/lib/x86_64-linux-gnu/libquadmath.so; arm64 noble ships
+          # no libquadmath at all and the link fails with
+          # "ld: cannot find -lquadmath". Symlink to the runtime if
+          # present, otherwise generate an empty stub — MUMPS in
+          # double-precision does not call __quadmath_* at runtime.
+          LIBDIR=/usr/lib/$(gcc -print-multiarch)
+          [[ -d "$LIBDIR" ]] || LIBDIR=/usr/lib
+          if [[ ! -e "$LIBDIR/libquadmath.so" ]]; then
+            if [[ -e "$LIBDIR/libquadmath.so.0" ]]; then
+              sudo ln -s libquadmath.so.0 "$LIBDIR/libquadmath.so"
+              echo "Symlinked $LIBDIR/libquadmath.so -> libquadmath.so.0"
+            else
+              echo 'void __libquadmath_stub(void) {}' \
+                | sudo gcc -shared -x c -o "$LIBDIR/libquadmath.so" -
+              echo "Stubbed $LIBDIR/libquadmath.so (empty)"
+            fi
+          fi
+
+      - name: Install build dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: brew install gcc openblas upx
+
+      - name: Setup GHC + Cabal (Linux/macOS)
+        if: matrix.os == 'linux' || matrix.os == 'macos'
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ steps.versions.outputs.ghc }}
+          cabal-version: latest
+
+      # Cache restore + save are split (instead of using actions/cache@v4
+      # with save-always, which is deprecated). The save step runs with
+      # `if: always()` so a downstream test failure or hang does not
+      # discard a 30-min cold cabal compile that did succeed.
+
+      - name: Restore MUMPS local build
+        id: cache-mumps
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/mumps
+          # Hashing build-mumps.sh in addition to MUMPS_VERSION so an edit
+          # to the build recipe invalidates the cache (e.g., new gfortran
+          # detection logic, additional flags). Without this the old build
+          # is silently reused even when its inputs no longer match.
+          key: mumps-${{ matrix.name }}-${{ steps.versions.outputs.mumps }}-${{ hashFiles('build-mumps.sh') }}
+
+      - name: Restore Cabal store
+        id: cache-cabal
+        uses: actions/cache/restore@v4
+        with:
+          # GHCup-installed cabal on Windows uses C:\cabal\store, not the
+          # MSYS2 ~/.cabal/store path. Listing both is safe — actions/cache
+          # silently skips paths that do not exist on the running OS.
+          path: |
+            ~/.cabal/store
+            C:\cabal\store
+            dist-newstyle
+          key: cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-${{ hashFiles('volca.cabal', 'mumps-hs/mumps-hs.cabal', 'cabal.project') }}
+          restore-keys: |
+            cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-
+
+      - name: Build and test
+        run: |
+          # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
+          # does not inherit PATH from the previous step.
+          [[ -f /c/ghcup/env ]] && source /c/ghcup/env
+          # Per-platform behaviour:
+          # - Windows: only platform with indefinite test hangs
+          #   (waitForProcess never reaping volca.exe). Wrap with GNU
+          #   `timeout` (in MSYS2 coreutils) so a hang exits 124.
+          # - macOS: UPX --force-macos rewrites the Mach-O header and the
+          #   resulting binary will not exec on arm64 even after ad-hoc
+          #   sign, so any test that spawns volca times out. Skip strip+UPX
+          #   for the CI test run (the artifact is larger but usable).
+          # - Linux: nothing special needed.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            timeout --foreground 1500 ./build.sh --test
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            ./build.sh --test --no-optimize
+          else
+            ./build.sh --test
+          fi
+
+      - name: Save MUMPS local build
+        if: always() && steps.cache-mumps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/mumps
+          key: ${{ steps.cache-mumps.outputs.cache-primary-key }}
+
+      - name: Save Cabal store
+        if: always() && steps.cache-cabal.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cabal/store
+            C:\cabal\store
+            dist-newstyle
+          key: ${{ steps.cache-cabal.outputs.cache-primary-key }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: volca-${{ matrix.name }}
+          # The penultimate segment is `opt/build/` with optimization: 2,
+          # `build/` without it; ** absorbs both layouts.
+          path: dist-newstyle/build/*/ghc-*/volca-*/x/volca/**/build/volca/volca*
+          if-no-files-found: error
+          retention-days: 14

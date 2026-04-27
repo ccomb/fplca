@@ -45,6 +45,8 @@ pyvolca/build/
 !.gitignore
 !.gitmodules
 !.python-version
+!.github
+!.github/**
 
 # debug stuff
 debug/

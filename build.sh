@@ -16,6 +16,9 @@
 #   --test              Run tests after building
 #   --coverage          Run tests with coverage and generate HTML report (implies --test)
 #   --static            Build a statically-linked binary
+#   --no-optimize       Skip strip + UPX (preserves dylib load commands so
+#                       downstream tooling like dylibbundler / install_name_tool
+#                       can rewrite them — required for the macOS .app)
 #
 # Examples:
 #   ./build.sh                      # Build
@@ -59,12 +62,20 @@ set +a
 # Detect OS
 OS=$(detect_os)
 
+# On macOS, pin the deployment target floor for every link step so binaries
+# produced on a recent Mac still run on Ventura (13.0). GHC, rustc, clang,
+# and Homebrew gcc all honor this env var natively.
+if [[ "$OS" == "macos" ]]; then
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+fi
+
 # Defaults
 FORCE_REBUILD=false
 RUN_TESTS=false
 CLEAN_BUILD=false
 COVERAGE=false
 STATIC_BUILD=false
+SKIP_OPTIMIZE=false
 
 # -----------------------------------------------------------------------------
 # Parse arguments
@@ -94,6 +105,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --static)
             STATIC_BUILD=true
+            shift
+            ;;
+        --no-optimize)
+            SKIP_OPTIMIZE=true
             shift
             ;;
         *)
@@ -215,8 +230,8 @@ else
     fi
 fi
 
-# Linux/Windows fallback: build MUMPS from source
-if [[ "$MUMPS_FOUND" != "true" ]] && [[ "$OS" == "linux" || "$OS" == "windows" ]]; then
+# Source build fallback when no system/brew/MSYS2 package is found
+if [[ "$MUMPS_FOUND" != "true" ]]; then
     log_info "MUMPS not found; building ${MUMPS_VERSION} from source (this may take a few minutes)..."
     if [[ "$OS" == "windows" ]]; then
         # Ensure Fortran compiler is present (build tool, not the library we're compiling)
@@ -234,6 +249,20 @@ if [[ "$MUMPS_FOUND" != "true" ]] && [[ "$OS" == "linux" || "$OS" == "windows" ]
             pacman -S --noconfirm mingw-w64-ucrt-x86_64-openblas
             BLAS_FLAGS="-lopenblas"
         fi
+    elif [[ "$OS" == "macos" ]]; then
+        # gfortran ships with the Homebrew gcc package
+        if ! command -v gfortran &>/dev/null; then
+            log_info "gfortran not found, installing gcc via brew..."
+            brew install gcc
+        fi
+        # Use Homebrew openblas — works uniformly on Intel and Apple Silicon
+        if ! brew --prefix openblas &>/dev/null; then
+            log_info "openblas not found, installing via brew..."
+            brew install openblas
+        fi
+        OPENBLAS_PREFIX=$(brew --prefix openblas)
+        BLAS_FLAGS="-L${OPENBLAS_PREFIX}/lib -lopenblas"
+        export CPPFLAGS="-I${OPENBLAS_PREFIX}/include ${CPPFLAGS:-}"
     else
         BLAS_FLAGS="-llapack -lblas"
     fi
@@ -324,13 +353,23 @@ BUILD_TARGET="$OS" ./gen-version.sh
 # Write cabal.project.local with library paths
 if [[ "$OS" == "windows" ]]; then
     LINK_MODE="windows"
-    MSYS2_LIB_DIR="C:/msys64/ucrt64/lib"
+    # Resolve MSYS2 paths dynamically via cygpath so the build works on any
+    # installation root (default C:/msys64, GitHub Actions D:/a/_temp/msys64,
+    # custom locations). cygpath -m emits Windows paths with forward slashes,
+    # which both Cabal and clang/lld accept.
+    MSYS2_LIB_DIR=$(cygpath -m /ucrt64/lib)
     GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
-    GCC_LIB_DIR="C:/msys64${GCC_LIB_DIR}"
+    GCC_LIB_DIR=$(cygpath -m "$GCC_LIB_DIR")
     win_path() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
     export MUMPS_LIB_DIR=$(win_path "$MUMPS_LIB_DIR")
     export MUMPS_INCLUDE_DIR=$(win_path "$MUMPS_INCLUDE_DIR")
     export MSYS2_LIB_DIR GCC_LIB_DIR
+elif [[ "$OS" == "macos" ]] && [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
+    # Darwin's ld64 doesn't support GNU -Wl,-Bstatic / -Bdynamic, so the static
+    # mode below can't be used as-is. Use a Darwin-specific mode that picks .a
+    # libs from extra-lib-dirs (ld64's natural fallback) and pulls Fortran
+    # runtime + openblas via -L/-l flags.
+    LINK_MODE="darwin"
 elif [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # Static linking required when using locally-built MUMPS (only .a libs available)
     LINK_MODE="static"
@@ -343,14 +382,29 @@ MUMPS_INCLUDE_DIR="$MUMPS_INCLUDE_DIR" \
 LINK_MODE="$LINK_MODE" \
 ./gen-cabal-config.sh
 
+# If --no-optimize was requested but a previous build left a UPX'd binary
+# in dist-newstyle, delete it so cabal re-links a clean (decompressible)
+# copy. cabal-install caches the link product and would otherwise re-use
+# the compressed one as-is.
+if [[ "$SKIP_OPTIMIZE" == "true" ]]; then
+    PREV_BIN=$(cabal list-bin exe:volca 2>/dev/null || true)
+    if [[ -n "$PREV_BIN" && -f "$PREV_BIN" ]] && upx -t "$PREV_BIN" &>/dev/null; then
+        log_info "--no-optimize: removing previously UPX'd binary to force re-link"
+        rm -f "$PREV_BIN"
+    fi
+fi
+
 cabal build -j
 
 # Strip and compress the binary
 {
     VOLCA_BIN_PATH=$(cabal list-bin exe:volca 2>/dev/null || true)
     if [[ -n "$VOLCA_BIN_PATH" && -f "$VOLCA_BIN_PATH" ]]; then
+        if [[ "$SKIP_OPTIMIZE" == "true" ]]; then
+            FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
+            log_info "--no-optimize: leaving binary unstripped/uncompressed ($FINAL_SIZE)"
         # Skip if already UPX-compressed (from a previous build)
-        if upx -t "$VOLCA_BIN_PATH" &>/dev/null; then
+        elif upx -t "$VOLCA_BIN_PATH" &>/dev/null; then
             FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
             log_info "Binary already optimized ($FINAL_SIZE), skipping strip/UPX"
         else
@@ -368,12 +422,28 @@ cabal build -j
             log_info "After strip: $STRIPPED_SIZE"
 
             # UPX compression (Linux/macOS only — Windows Defender flags UPX binaries
-            # as malicious, causing "Error opening file for writing" during NSIS install)
+            # as malicious, causing "Error opening file for writing" during NSIS install).
+            # macOS Mach-O support in UPX 5.x is gated behind --force-macos: it works
+            # for unsigned binaries but the loader stub may invalidate code-signing /
+            # notarization, which is something to revisit when shipping a signed .dmg.
             if [[ "$OS" != "windows" ]]; then
                 log_info "Compressing with UPX..."
-                if upx -1 "$VOLCA_BIN_PATH"; then
+                UPX_FLAGS=(-1)
+                if [[ "$OS" == "macos" ]]; then
+                    UPX_FLAGS+=(--force-macos)
+                fi
+                if upx "${UPX_FLAGS[@]}" "$VOLCA_BIN_PATH"; then
                     FINAL_SIZE=$(du -h "$VOLCA_BIN_PATH" | cut -f1)
                     log_success "Binary optimized: $ORIGINAL_SIZE -> $STRIPPED_SIZE (stripped) -> $FINAL_SIZE (compressed)"
+                    # macOS arm64 refuses to launch executables without at
+                    # least an ad-hoc signature. UPX rewrites the Mach-O
+                    # headers and invalidates whatever signature the linker
+                    # emitted, which silently kills the process at fork
+                    # (the symptom is "Server failed to start within timeout"
+                    # from any test that spawns volca). Re-sign in place.
+                    if [[ "$OS" == "macos" ]]; then
+                        codesign --force --sign - "$VOLCA_BIN_PATH"
+                    fi
                 else
                     log_warn "UPX compression failed — using stripped binary ($STRIPPED_SIZE)"
                 fi
@@ -425,7 +495,24 @@ if [[ "$RUN_TESTS" == "true" ]]; then
             log_warn "No .tix file found — coverage report not generated"
         fi
     else
-        cabal test --test-show-details=streaming
+        # VOLCA_TEST_OPTS forwards args to the Hspec executable. CI uses it
+        # to set a per-spec timeout (--timeout=300) so a hang becomes a
+        # readable failure instead of an indefinite stall.
+        EXTRA_TEST_OPTS=()
+        if [[ -n "${VOLCA_TEST_OPTS:-}" ]]; then
+            EXTRA_TEST_OPTS=(--test-options="$VOLCA_TEST_OPTS")
+        fi
+        # Resolve the volca exe path now and export it so test/ServerSpec.hs
+        # does not spawn its own `cabal list-bin` from inside `cabal test` —
+        # that re-config attempt deadlocks against the parent's project lock
+        # on Windows and the run hangs until the runner timeout.
+        if [[ -z "${VOLCA_EXE:-}" ]]; then
+            VOLCA_EXE_RESOLVED=$(cabal list-bin exe:volca 2>/dev/null || true)
+            if [[ -n "$VOLCA_EXE_RESOLVED" && -f "$VOLCA_EXE_RESOLVED" ]]; then
+                export VOLCA_EXE="$VOLCA_EXE_RESOLVED"
+            fi
+        fi
+        cabal test --test-show-details=streaming "${EXTRA_TEST_OPTS[@]}"
     fi
     log_success "Tests passed"
     echo ""

@@ -5,20 +5,37 @@ module ServerSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, bracket, try)
+import Data.Char (isSpace)
+import Data.List (dropWhileEnd)
 import Network.HTTP.Client (Manager, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestHeaders, responseStatus)
 import Network.HTTP.Types (statusCode)
 import System.Directory (doesFileExist, getTemporaryDirectory, removeFile)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (IOMode (..), hClose, openFile)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, interruptProcessGroupOf, proc, waitForProcess)
+import qualified System.Info as Info
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, interruptProcessGroupOf, proc, readProcess, waitForProcess)
 import Test.Hspec
 
--- | Find the volca executable in the build directory
+{- | Find the volca executable in the build directory.
+
+Prefer the VOLCA_EXE env var when set — build.sh exports it after
+`cabal list-bin` so the test does not have to spawn cabal again. The
+fallback to `cabal list-bin exe:volca` keeps `cabal test` from the
+project root working without extra setup. The shell-out path is the
+one that hangs on Windows: cabal sees the project files as modified
+and tries to re-configure under a build lock the parent `cabal test`
+already holds, deadlocking until the runner kills the job.
+-}
 findVolcaExe :: IO FilePath
 findVolcaExe = do
-    -- The executable is at a known location relative to the project root
-    let exe = "dist-newstyle/build/x86_64-linux/ghc-9.6.7/volca-0.6.0/x/volca/opt/build/volca/volca"
+    envExe <- lookupEnv "VOLCA_EXE"
+    exe <- case envExe of
+        Just p | not (null p) -> return p
+        _ -> do
+            raw <- readProcess "cabal" ["list-bin", "exe:volca"] ""
+            return (dropWhileEnd isSpace raw)
     exists <- doesFileExist exe
     if exists
         then return exe
@@ -99,8 +116,21 @@ postEndpoint mgr path = do
     resp <- httpLbs req mgr
     return $ statusCode (responseStatus resp)
 
+{- | These specs spawn volca as a subprocess and tear it down with
+interruptProcessGroupOf + waitForProcess. On Windows the terminate
+signal does not unblock the running RTS reliably, so cleanup waits
+forever and the whole suite stalls until the runner kills the job.
+Skip the spawn-based specs there.
+-}
 spec :: Spec
-spec = do
+spec
+    | Info.os == "mingw32" =
+        describe "Server lifecycle (skipped on Windows)" $
+            it "subprocess teardown deadlocks on this platform" pending
+    | otherwise = serverSpecs
+
+serverSpecs :: Spec
+serverSpecs = do
     describe "Server shutdown endpoint" $ do
         it "POST /api/v1/shutdown stops the server" $ do
             withMinimalConfig $ \cfgPath ->

@@ -451,22 +451,19 @@ All API routes are prefixed with `/api/v1/`. A dash (—) means the feature is o
 
 ## Building
 
-### Linux / macOS
+### Linux
 
-Install the MUMPS sparse solver and other dependencies, then build:
+Install dependencies, then build. MUMPS is built from source by `build-mumps.sh` if no system package is found:
 
 ```bash
 # Debian/Ubuntu
-sudo apt install build-essential python3 curl zlib1g-dev libmumps-seq-dev
-
-# macOS
-brew install gcc python3 curl mumps
+sudo apt install build-essential gfortran python3 curl zlib1g-dev libblas-dev liblapack-dev upx-ucl
 
 # Fedora
-sudo dnf install gcc gcc-c++ make python3 curl zlib-devel MUMPS-devel
+sudo dnf install gcc gcc-c++ gcc-gfortran make python3 curl zlib-devel blas-devel lapack-devel
 
 # Arch Linux
-sudo pacman -S base-devel python curl zlib mumps
+sudo pacman -S base-devel gcc-fortran python curl zlib blas lapack
 ```
 
 Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
@@ -476,17 +473,65 @@ Install the [Haskell toolchain via GHCup](https://www.haskell.org/ghcup/), then:
 ./build.sh --test       # Build and run tests
 ```
 
+`build.sh` also accepts:
+
+- `--clean` / `--all` — discard `dist-newstyle/` before building
+- `--coverage` — run tests with coverage and emit an HTML report
+- `--static` — produce a statically-linked binary (Linux only)
+- `--no-optimize` — skip `strip` and UPX. Use this when downstream
+  tooling needs to rewrite the binary's dynamic load commands
+  (`dylibbundler`, `install_name_tool` for the macOS `.app`).
+
+### macOS (Apple Silicon)
+
+Tested on macOS 13 Ventura and later, arm64 only. The build pins
+`MACOSX_DEPLOYMENT_TARGET=13.0` so binaries produced on a recent macOS still
+load on Ventura.
+
+```bash
+# Xcode Command Line Tools (provides clang, ld64, the macOS SDK)
+xcode-select --install
+
+# Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# Native deps. gcc brings gfortran + libgfortran/libquadmath; openblas
+# provides BLAS/LAPACK (Accelerate.framework's LAPACK ABI does not match
+# what MUMPS emits). dylibbundler is needed only for the Tauri desktop bundle.
+brew install ghcup gcc openblas python3 curl node rust elm upx
+
+# Haskell toolchain
+ghcup install ghc 9.6.7 --set
+ghcup install cabal latest
+source ~/.ghcup/env
+
+./build.sh              # Build (sources MUMPS 5.8.1, ~3 min one-time)
+./build.sh --test       # Build and run tests
+```
+
+MUMPS sources are pinned via `MUMPS_VERSION` in `versions.env` and built
+into `deps/mumps/` (cached across runs).
+
 ### Windows (MSYS2)
 
 1. Install [MSYS2](https://www.msys2.org/) and open the "MSYS2 UCRT64" terminal
 2. Install dependencies:
    ```bash
-   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-mumps make python git
+   pacman -S \
+     mingw-w64-ucrt-x86_64-gcc \
+     mingw-w64-ucrt-x86_64-gcc-fortran \
+     mingw-w64-ucrt-x86_64-openblas \
+     mingw-w64-ucrt-x86_64-cmake \
+     mingw-w64-ucrt-x86_64-make \
+     mingw-w64-ucrt-x86_64-python \
+     mingw-w64-ucrt-x86_64-upx \
+     make python git curl tar
    ```
 3. Install [GHCup](https://www.haskell.org/ghcup/) for the compiler toolchain
 4. Run:
    ```bash
-   ./build.sh            # Same script as Linux/macOS
+   ./build.sh            # Same script as Linux/macOS — builds MUMPS from source
    ```
 
 ### Docker
