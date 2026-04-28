@@ -200,15 +200,21 @@ jobs:
         if: (matrix.os == 'linux' || matrix.os == 'macos') && steps.cache-ghcup-unix.outputs.cache-hit == 'true'
         shell: bash
         run: |
+          # The runner image exports GHCUP_INSTALL_BASE_PREFIX=/usr/local
+          # globally; without overriding it here, `ghcup set ghc` would look
+          # for our pinned version under /usr/local/.ghcup/ghc/ and fail with
+          # "version 9.6.7 of the tool ghc is not installed". Match the cold
+          # step's override.
+          export GHCUP_INSTALL_BASE_PREFIX="$HOME"
           GHC_VER="${{ steps.versions.outputs.ghc }}"
           if [[ ! -d "$HOME/.ghcup/ghc/$GHC_VER" ]]; then
             echo "::error::Cached ~/.ghcup is missing GHC $GHC_VER (stale cache key?)"
             ls -la "$HOME/.ghcup/" "$HOME/.ghcup/ghc/" 2>&1 || true
             exit 1
           fi
-          # Force the bare `ghc` symlink to our pinned version — ghcup-install
-          # auto-sets it but we re-assert here in case the cache snapshot was
-          # taken in a state where another version was active.
+          # Force the bare `ghc` symlink to our pinned version — bootstrap
+          # auto-sets it but we re-assert here in case the cache snapshot
+          # was taken in a state where another version was active.
           "$HOME/.ghcup/bin/ghcup" set ghc "$GHC_VER"
           echo "$HOME/.ghcup/bin" >> "$GITHUB_PATH"
           "$HOME/.ghcup/bin/ghc" --numeric-version
