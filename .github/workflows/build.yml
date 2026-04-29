@@ -3,6 +3,13 @@ name: Build
 on:
   pull_request:
     branches: [main]
+    # Skip the Haskell build matrix on PRs that only touch the Python
+    # client. pyvolca dispatches dynamically against the engine's
+    # OpenAPI spec, so its changes don't affect the Haskell build —
+    # running the full 4-platform cabal compile (~30 min on Windows
+    # cold) is pure waste. Pyvolca has its own CI in pyvolca.yml.
+    paths-ignore:
+      - 'pyvolca/**'
 
 # Cancel any older in-flight runs for the same PR when a new commit is
 # pushed. Keeps queue depth bounded — Windows cold builds are 30 min
