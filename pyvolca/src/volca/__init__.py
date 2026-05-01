@@ -3,6 +3,7 @@
 See https://volca.run/docs/guides/pyvolca/ for the full guide.
 """
 
+from ._download import DownloadError, Installed, download
 from .client import Client, VoLCAError
 from .compare import ActivityDiff, ActivityDiffRow, compare_activities
 from .server import Server
@@ -42,8 +43,10 @@ __all__ = [
     "ConsumerResult",
     "ConsumersResponse",
     "DatabaseInfo",
+    "DownloadError",
     "Exchange",
     "FlowContribution",
+    "Installed",
     "LCIABatchResult",
     "LCIAResult",
     "PathResult",
@@ -56,4 +59,5 @@ __all__ = [
     "TechnosphereExchange",
     "VoLCAError",
     "compare_activities",
+    "download",
 ]
