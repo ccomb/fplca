@@ -84,16 +84,15 @@ jobs:
             curl
             tar
 
-      - name: Restore GHCup install (Windows)
-        id: cache-ghcup
-        if: matrix.os == 'windows'
-        uses: actions/cache/restore@v4
-        with:
-          path: C:\ghcup
-          key: ghcup-windows-ghc${{ steps.versions.outputs.ghc }}
-
+      # GHCup on Windows: install fresh every run. We previously cached
+      # C:\ghcup with actions/cache, but the Save step took ~26 minutes
+      # (tar + zstd + upload of ~2.5 GB across thousands of small NTFS
+      # files) — vs. ~2 minutes for the install itself. Even on cache-hit
+      # runs the saving was net-negative once 7-day eviction + per-branch
+      # scoping were factored in. The Linux/macOS cache is fine; only
+      # Windows is pathologically slow.
       - name: Install GHC via ghcup (Windows MSYS2)
-        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
+        if: matrix.os == 'windows'
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
             | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
@@ -110,21 +109,7 @@ jobs:
           source /c/ghcup/env
           ghc --version
           cabal --version
-          # The Hackage package index lives under C:\cabal\packages and is
-          # NOT inside the cached /c/ghcup tree. Run an explicit update so
-          # cache-hit runs (where the install step is skipped) still have
-          # a populated index. setup-haskell does this for us on Linux/macOS.
           cabal update
-
-      - name: Save GHCup install (Windows)
-        # No always() here on purpose: a partial /c/ghcup from a failed
-        # install would otherwise be cached and silently reused for ~7 days.
-        # GHCup install is short (~5 min); losing it on failure is fine.
-        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: C:\ghcup
-          key: ${{ steps.cache-ghcup.outputs.cache-primary-key }}
 
       - name: Install build dependencies (Linux)
         if: matrix.os == 'linux'
