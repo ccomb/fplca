@@ -1,0 +1,81 @@
+name: Release
+
+# Tag-driven engine release. Triggered by `v[0-9]*` tags pushed to main.
+# Calls the reusable _build-matrix.yml in release mode, then publishes a
+# GH Release with all platform tarballs + SHA256SUMS.
+#
+# The matrix is the same one PRs run, so what users download is bit-for-bit
+# what merged into main — no separate "release-only" build path that could
+# drift.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  verify-tag:
+    name: Verify tag matches volca.cabal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare tag against cabal version
+        run: |
+          cabal_ver=$(awk '/^version:/ {print $2; exit}' volca.cabal)
+          tag_ver="${GITHUB_REF_NAME#v}"
+          if [[ "$cabal_ver" != "$tag_ver" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match volca.cabal version ${cabal_ver}."
+            echo "::error::Cut releases from a 'Release v${tag_ver}' PR that bumps volca.cabal first."
+            exit 1
+          fi
+
+  matrix:
+    needs: verify-tag
+    uses: ./.github/workflows/_build-matrix.yml
+    with:
+      release: true
+
+  publish:
+    name: Publish GitHub Release
+    needs: matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all matrix artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          # Flatten every artefact dir into dist/, so dist/ ends up with
+          # one tarball/zip per platform plus nothing else.
+          merge-multiple: true
+
+      - name: Package data bundle
+        # Reference data (flows, compartments, units, geographies) ships as
+        # a separate, platform-independent tarball with its own version in
+        # data/VERSION. Engines find it via VOLCA_DATA_DIR (see Config.hs's
+        # resolveDataPath); install.sh and pyvolca.download() set that env
+        # var to the extracted bundle. Always rebuild and upload, even when
+        # data/VERSION is unchanged — dedup is not worth the complexity.
+        run: |
+          DATA_VER=$(cat data/VERSION)
+          tar -czf "dist/volca-data-${DATA_VER}.tar.gz" -C data .
+          ls -lh "dist/volca-data-${DATA_VER}.tar.gz"
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum volca-*.tar.gz volca-*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            volca-*.tar.gz volca-*.zip SHA256SUMS

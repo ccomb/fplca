@@ -7,6 +7,7 @@ import Test.Hspec
 -- Import test modules (will be created)
 
 import qualified BM25Spec
+import qualified ConfigSpec
 import qualified CrossDBInventorySpec
 import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
@@ -64,6 +65,7 @@ main = hspec $ do
         describe "Shared Solver" SharedSolverSpec.spec
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec
+        describe "VOLCA_DATA_DIR resolution" ConfigSpec.spec
         describe "Loader" LoaderSpec.spec
         describe "Method Mapping" MappingSpec.spec
         describe "Uploaded Database" UploadedDatabaseSpec.spec
