@@ -251,13 +251,44 @@ jobs:
       # `if: always()` so a downstream test failure or hang does not
       # discard a 30-min cold cabal compile that did succeed.
 
+      - name: Stage system MUMPS as deps/mumps (Linux)
+        if: matrix.os == 'linux'
+        # Use the static archives shipped by libmumps-seq-dev (installed
+        # above) as if they were a local source build. Why deps/mumps/ and
+        # not the system path:
+        #
+        # mumps-hs.cabal declares `extra-libraries: dmumps_seq, ...`. Cabal
+        # injects `-ldmumps_seq -lmumps_common_seq -lpord_seq -lmpiseq_seq`
+        # into the link line. If we point cabal at /usr/lib/<multiarch>
+        # directly, the linker sees both .a and .so for each name and
+        # prefers .so → DT_NEEDED dynamic dep on libdmumps_seq.so.5,
+        # breaking the standalone-binary UX. Copying only the .a files
+        # to a private dir leaves the linker no choice but static.
+        #
+        # Populating deps/mumps/ also makes build.sh's existing detection
+        # at line ~282 hit MUMPS_BUILT_LOCALLY=true → LINK_MODE=static,
+        # so no extra build.sh flag is needed.
+        run: |
+          LIBDIR=/usr/lib/$(gcc -print-multiarch)
+          mkdir -p deps/mumps/lib deps/mumps/include
+          cp "$LIBDIR/libdmumps_seq.a" \
+             "$LIBDIR/libmumps_common_seq.a" \
+             "$LIBDIR/libpord_seq.a" \
+             "$LIBDIR/libmpiseq_seq.a" \
+             deps/mumps/lib/
+          # mumps-hs/cbits/mumps_wrapper.c #includes <dmumps_c.h>; copy
+          # the whole MUMPS header set + the libseq mpi.h stub liberally
+          # so transitive includes resolve regardless of Debian's exact
+          # header layout (which has shifted between releases).
+          find /usr/include -maxdepth 2 \
+            \( -name '*mumps*' -o -name 'mpi.h' \) \
+            -exec cp -r {} deps/mumps/include/ \;
+          ls -la deps/mumps/lib/ deps/mumps/include/
+
       - name: Restore MUMPS local build
         id: cache-mumps
-        # Linux uses the apt package libmumps-seq-dev (installed in the
-        # build-deps step). Skip the local-build cache so build.sh's
-        # detection chain (which prefers $LOCAL_MUMPS_DIR over the system
-        # path) sees the empty deps/mumps and falls through to the system
-        # libraries. macOS and Windows still build from source.
+        # Linux is staged from the apt package (step above), no source-build
+        # cache. macOS and Windows still build from source.
         if: matrix.os != 'linux'
         uses: actions/cache/restore@v4
         with:
@@ -312,14 +343,32 @@ jobs:
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             ./build.sh --test --no-optimize
           else
-            # Linux: --static keeps the same statically-linked-MUMPS profile
-            # we had when CI built MUMPS from source. Without --static, system
-            # MUMPS would be detected and dynamically linked, leaving an
-            # `libdmumps_seq.so.5` runtime dep on the shipped tarball — a UX
-            # regression. The .a archives ship in the libmumps-seq-dev apt
-            # package alongside the .so, so static linking still works.
-            ./build.sh --test --static
+            ./build.sh --test
           fi
+
+      - name: Verify static MUMPS link (Linux)
+        # Regression guard: the shipped tarball must not depend on
+        # libdmumps_seq.so / libmumps_common_seq.so / libpord_seq.so /
+        # libmpiseq_seq.so at runtime — end users would have to apt-install
+        # libmumps-seq separately, which breaks the standalone-binary UX.
+        # Catches the case where a future change reintroduces dynamic
+        # MUMPS linking (e.g. by pointing extra-lib-dirs at /usr/lib/<arch>
+        # which has both .a and .so).
+        if: matrix.os == 'linux'
+        run: |
+          VOLCA_BIN=$(cabal list-bin exe:volca)
+          # Decompress UPX wrapper if present so ldd can read the dynamic
+          # section (UPX strips section headers; ldd then says "not a
+          # dynamic executable" regardless of actual linkage).
+          cp "$VOLCA_BIN" /tmp/volca-ldd-check
+          upx -d /tmp/volca-ldd-check >/dev/null 2>&1 || true
+          deps=$(ldd /tmp/volca-ldd-check 2>/dev/null | grep -E 'libdmumps_seq|libmumps_common_seq|libpord_seq|libmpiseq_seq' || true)
+          if [[ -n "$deps" ]]; then
+            echo "::error::Binary has dynamic MUMPS dependencies — static link failed:"
+            echo "$deps"
+            exit 1
+          fi
+          echo "OK: no MUMPS shared library dependencies in the shipped binary."
 
       - name: Optimize macOS binary (strip + ad-hoc sign)
         # Tests above ran on the unstripped binary because UPX'd Mach-O on
