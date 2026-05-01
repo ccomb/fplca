@@ -86,6 +86,33 @@ Pick the next patch (e.g. `0.7.1-dev`) or next minor (`0.8.0-dev`)
 depending on what's planned. The point is that `main` is never sitting
 on a released version — the `-dev` suffix marks "in flight".
 
+## One-liner installers
+
+After a `v*` release lands, end users can install with one line.
+Both installers fetch the platform tarball + data bundle from the GH
+Release, verify SHA256, and drop a shim that sets `VOLCA_DATA_DIR`.
+
+**Linux + macOS (bash):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ccomb/volca/main/install.sh | sh
+```
+
+Pin a specific version:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ccomb/volca/main/install.sh | sh -s -- v0.7.0
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/ccomb/volca/main/install.ps1 | iex
+```
+
+Both write to `~/.local/share/volca/` (Unix) or `%LOCALAPPDATA%\volca\`
+(Windows) and add a shim at `~/.local/bin/volca` / `%LOCALAPPDATA%\volca\bin\volca.cmd`.
+
 ## Why explicit tags, not auto-release-on-merge?
 
 Tags are durable handles for what shipped. Tagging is a deliberate,
