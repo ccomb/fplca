@@ -84,47 +84,64 @@ jobs:
             curl
             tar
 
-      - name: Restore GHCup install (Windows)
-        id: cache-ghcup
+      # Redirect C:\cabal -> D:\cabal via NTFS directory junction. Cabal
+      # on Windows defaults CABAL_DIR to C:\cabal (store, packages
+      # index, config). C: is a slow Azure managed disk on GH-hosted
+      # runners (~4k IOPS); D: is local temp storage (~83k IOPS, 20×).
+      #
+      # Using a junction instead of CABAL_DIR=D:\cabal lets us keep the
+      # existing cabal-store-prebuilt tarball working unchanged: its
+      # .conf files have absolute C:\cabal\store\... paths baked in
+      # (cabal-install on Windows doesn't use ${pkgroot}), so any other
+      # approach would force a re-prebuild + CABAL_PREBUILT_REVISION
+      # bump. The junction is filesystem-level and transparent — every
+      # C:\cabal\* read/write hits D: at the OS layer.
+      - name: Redirect C:\cabal to D:\cabal (Windows IOPS)
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@v4
-        with:
-          path: C:\ghcup
-          key: ghcup-windows-ghc${{ steps.versions.outputs.ghc }}
+        shell: cmd
+        run: |
+          if exist C:\cabal rmdir /s /q C:\cabal
+          mkdir D:\cabal
+          mklink /J C:\cabal D:\cabal
 
+      # GHCup on Windows: install fresh every run, into D:\ghcup.
+      #
+      # Two things going on:
+      #
+      # 1. We previously cached C:\ghcup with actions/cache, but the Save
+      #    step took ~26 min (tar + zstd + upload of ~2.5 GB across
+      #    thousands of small NTFS files) — vs. ~2 min for the install
+      #    itself. Even on cache-hit runs the saving was net-negative once
+      #    7-day eviction + per-branch scoping were factored in. The
+      #    Linux/macOS cache is fine; only Windows is pathologically slow.
+      #
+      # 2. GitHub-hosted Windows runners are Azure VMs where C: is a remote
+      #    managed disk (~4k IOPS) while D: is local temp storage
+      #    (~83k IOPS, 20× faster). GHCup defaults to C:\ghcup; pinning it
+      #    to D:\ghcup via GHCUP_INSTALL_BASE_PREFIX puts every subsequent
+      #    ghc/cabal read on the fast disk for the rest of the job. D: is
+      #    ephemeral (lost on VM redeploy) but GH runners are ephemeral
+      #    too, so that doesn't matter.
       - name: Install GHC via ghcup (Windows MSYS2)
-        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
+        if: matrix.os == 'windows'
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
             | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
               BOOTSTRAP_HASKELL_GHC_VERSION=${{ steps.versions.outputs.ghc }} \
               BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
+              GHCUP_INSTALL_BASE_PREFIX=/d \
               sh
 
       - name: Verify GHC + Cabal (Windows)
         if: matrix.os == 'windows'
         run: |
-          # GHCup on Windows installs to /c/ghcup. Subsequent MSYS2 steps
-          # need to source this themselves — GITHUB_PATH does not propagate
-          # into the msys2.CMD wrapper.
-          source /c/ghcup/env
+          # GHCup on Windows installs to /d/ghcup (see comment above).
+          # Subsequent MSYS2 steps need to source this themselves — the
+          # msys2.CMD wrapper does not propagate GITHUB_PATH.
+          source /d/ghcup/env
           ghc --version
           cabal --version
-          # The Hackage package index lives under C:\cabal\packages and is
-          # NOT inside the cached /c/ghcup tree. Run an explicit update so
-          # cache-hit runs (where the install step is skipped) still have
-          # a populated index. setup-haskell does this for us on Linux/macOS.
           cabal update
-
-      - name: Save GHCup install (Windows)
-        # No always() here on purpose: a partial /c/ghcup from a failed
-        # install would otherwise be cached and silently reused for ~7 days.
-        # GHCup install is short (~5 min); losing it on failure is fine.
-        if: matrix.os == 'windows' && steps.cache-ghcup.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: C:\ghcup
-          key: ${{ steps.cache-ghcup.outputs.cache-primary-key }}
 
       - name: Install build dependencies (Linux)
         if: matrix.os == 'linux'
@@ -279,11 +296,16 @@ jobs:
             echo "populated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh release download "$TAG" -R "${GITHUB_REPOSITORY}" -p "$ASSET" -p SHA256SUMS
-          grep " $ASSET\$" SHA256SUMS | sha256sum -c -
+          # Download into a step-local dir so this step's SHA256SUMS doesn't
+          # collide with the one downloaded by the cabal-store step below.
+          DL=mumps-dl
+          rm -rf "$DL" && mkdir -p "$DL"
+          gh release download "$TAG" -R "${GITHUB_REPOSITORY}" -p "$ASSET" -p SHA256SUMS -D "$DL"
+          (cd "$DL" && grep " $ASSET\$" SHA256SUMS | sha256sum -c -)
           mkdir -p deps
-          tar xzf "$ASSET" -C deps
+          tar xzf "$DL/$ASSET" -C deps
           test -f deps/mumps/lib/libdmumps_seq.a
+          rm -rf "$DL"
           echo "Prebuilt MUMPS $TAG/$ASSET extracted to deps/mumps/"
           echo "populated=true" >> "$GITHUB_OUTPUT"
 
@@ -334,17 +356,22 @@ jobs:
             echo "populated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh release download "$TAG" -R "${GITHUB_REPOSITORY}" -p "$ASSET" -p SHA256SUMS
-          grep " $ASSET\$" SHA256SUMS | sha256sum -c -
+          # Download into a step-local dir to avoid SHA256SUMS collision with
+          # the MUMPS download step above.
+          DL=cabal-dl
+          rm -rf "$DL" && mkdir -p "$DL"
+          gh release download "$TAG" -R "${GITHUB_REPOSITORY}" -p "$ASSET" -p SHA256SUMS -D "$DL"
+          (cd "$DL" && grep " $ASSET\$" SHA256SUMS | sha256sum -c -)
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             mkdir -p /c/cabal
-            tar xzf "$ASSET" -C /c/cabal
+            tar xzf "$DL/$ASSET" -C /c/cabal
             test -d /c/cabal/store
           else
             mkdir -p "$HOME/.cabal"
-            tar xzf "$ASSET" -C "$HOME/.cabal"
+            tar xzf "$DL/$ASSET" -C "$HOME/.cabal"
             test -d "$HOME/.cabal/store"
           fi
+          rm -rf "$DL"
           echo "Prebuilt cabal store $TAG/$ASSET extracted."
           echo "populated=true" >> "$GITHUB_OUTPUT"
 
@@ -378,7 +405,7 @@ jobs:
         run: |
           # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
           # does not inherit PATH from the previous step.
-          [[ -f /c/ghcup/env ]] && source /c/ghcup/env
+          [[ -f /d/ghcup/env ]] && source /d/ghcup/env
           # Per-platform behaviour:
           # - Windows: only platform with indefinite test hangs
           #   (waitForProcess never reaping volca.exe). Wrap with GNU
@@ -485,7 +512,7 @@ jobs:
         # Same `cabal list-bin` trick the macOS optimize step uses — handles
         # both opt/build and build paths regardless of optimization level.
         run: |
-          [[ -f /c/ghcup/env ]] && source /c/ghcup/env
+          [[ -f /d/ghcup/env ]] && source /d/ghcup/env
           VOLCA_BIN=$(cabal list-bin exe:volca)
           VERSION='${{ steps.cabal-version.outputs.version }}'
           NAME='${{ matrix.name }}'
