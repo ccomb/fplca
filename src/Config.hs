@@ -18,6 +18,10 @@ module Config (
     loadConfig,
     loadConfigFile,
 
+    -- * VOLCA_DATA_DIR resolution
+    redirectIntoDataDir,
+    applyDataDir,
+
     -- * Default values
     defaultServerConfig,
     defaultConfig,
@@ -31,6 +35,7 @@ module Config (
 ) where
 
 import Control.Monad (forM_, when)
+import Data.List (isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -41,6 +46,7 @@ import Database.Upload (DatabaseFormat (..))
 import GHC.Generics (Generic)
 import Plugin.Config (PluginConfig)
 import System.Directory (doesFileExist)
+import System.Environment (lookupEnv)
 import System.FilePath (takeFileName)
 import TOML (DecodeTOML (..), decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith)
 
@@ -280,13 +286,54 @@ loadConfigFile path = do
                 Right cfg -> pure $ Right cfg
                 Left err -> pure $ Left $ "TOML parse error: " <> T.pack (show err)
 
--- | Load configuration, with validation
+{- | Load configuration, with validation. Honours VOLCA_DATA_DIR: when set,
+any reference-data path beginning with "data/" (e.g. "data/flows.csv")
+is rewritten to "$VOLCA_DATA_DIR/<rest>". This decouples the shipped
+data bundle from the binary so they can be versioned independently.
+Database and method paths (user content) are unaffected.
+-}
 loadConfig :: FilePath -> IO (Either Text Config)
 loadConfig path = do
     result <- loadConfigFile path
+    mDataDir <- lookupEnv "VOLCA_DATA_DIR"
     case result of
         Left err -> pure $ Left err
-        Right cfg -> pure $ validateConfig cfg
+        Right cfg -> pure $ validateConfig (applyDataDir mDataDir cfg)
+
+{- | Redirect a "data/<rest>" path to "$VOLCA_DATA_DIR/<rest>".
+Returns the input unchanged when the env var is unset, or when the path
+has no "data/" prefix. Pure: no IO. Accepts both Unix and Windows path
+separators on the prefix so configs authored on either platform work.
+The output always uses '/' — file APIs on Windows accept it, and it
+keeps the path predictable for downstream string-based consumers.
+-}
+redirectIntoDataDir :: Maybe FilePath -> FilePath -> FilePath
+redirectIntoDataDir Nothing p = p
+redirectIntoDataDir (Just dataDir) p
+    | "data/" `isPrefixOf` p = joinSlash dataDir (drop 5 p)
+    | "data\\" `isPrefixOf` p = joinSlash dataDir (drop 5 p)
+    | otherwise = p
+  where
+    joinSlash d r
+        | null d = r
+        | last d == '/' || last d == '\\' = d ++ r
+        | otherwise = d ++ "/" ++ r
+
+{- | Apply redirectIntoDataDir to every reference-data path on the Config.
+Other fields (databases, methods, plugins) are user content that lives
+outside the shipped data bundle and is left untouched.
+-}
+applyDataDir :: Maybe FilePath -> Config -> Config
+applyDataDir mDataDir cfg =
+    cfg
+        { cfgGeographies = fmap resolve (cfgGeographies cfg)
+        , cfgFlowSynonyms = map (mapPath resolve) (cfgFlowSynonyms cfg)
+        , cfgCompartmentMappings = map (mapPath resolve) (cfgCompartmentMappings cfg)
+        , cfgUnits = map (mapPath resolve) (cfgUnits cfg)
+        }
+  where
+    resolve = redirectIntoDataDir mDataDir
+    mapPath f r = r{rdPath = f (rdPath r)}
 
 -- | Validate configuration
 validateConfig :: Config -> Either Text Config

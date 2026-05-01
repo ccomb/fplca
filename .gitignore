@@ -32,6 +32,7 @@ cache/
 *.md
 !README.md
 !CHANGELOG.md
+!docs/**/*.md
 
 # temporary python stuff (not pyvolca/)
 /pyproject.toml

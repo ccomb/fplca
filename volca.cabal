@@ -173,6 +173,7 @@ test-suite lca-tests
                      , SharedSolverSpec
                      , FlowResolverSpec
                      , PluginConfigSpec
+                     , ConfigSpec
                      , LoaderSpec
                      , MappingSpec
                      , UploadedDatabaseSpec
