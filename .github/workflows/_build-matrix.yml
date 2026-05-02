@@ -492,20 +492,33 @@ jobs:
           key: ${{ steps.cache-ghcup-unix.outputs.cache-primary-key }}
 
       - name: Save Cabal store
-        # Skip when the prebuilt download wins — the prebuilt is already
-        # the durable source of truth, and dist-newstyle without a matching
-        # ~/.cabal/store would poison future cache restores.
-        if: |
-          always() &&
-          steps.download-cabal.outputs.populated != 'true' &&
-          steps.cache-cabal.outputs.cache-hit != 'true'
+        # Save even when the prebuilt download wins. Two reasons:
+        #
+        # 1. dist-newstyle (volca's own object files) is built fresh by
+        #    every run and is in the cache path. Skipping Save means
+        #    every same-hash PR rebuilds volca's own modules from
+        #    scratch instead of incrementally — kills the "only
+        #    recompile our own code" property.
+        # 2. The cache also serves as fallback for PRs whose cabal
+        #    config hash doesn't match any existing prebuilt release.
+        #    Without saving on the prebuilt-win path, main's own runs
+        #    leave no cache for those PRs to inherit.
+        #
+        # Skipping when an exact cache key already hit is still right —
+        # actions/cache/save with an existing key is a no-op (logs a
+        # warning) but we save the tar/upload work anyway.
+        #
+        # Key is inlined (not steps.cache-cabal.outputs.cache-primary-key)
+        # because Restore Cabal store is skipped on the prebuilt-win path,
+        # so its outputs are unset and we'd save with an empty key.
+        if: always() && steps.cache-cabal.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             ~/.cabal/store
             C:\cabal\store
             dist-newstyle
-          key: ${{ steps.cache-cabal.outputs.cache-primary-key }}
+          key: cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-${{ hashFiles('volca.cabal', 'mumps-hs/mumps-hs.cabal', 'cabal.project') }}-v2
 
       - name: Package release tarball
         if: inputs.release
