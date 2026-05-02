@@ -13,7 +13,44 @@ pip install pyvolca
 
 Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run one as a child process, or point `Client` at any reachable instance.
 
-## Quick start
+## First choose: connect to an existing server, or start one locally
+
+`pyvolca` is only the Python client library. It does not contain the VoLCA databases and it does not install the VoLCA engine binary.
+
+Most users should start with one of these two modes:
+
+- **You already have access to a VoLCA server** (for example a hosted server prepared by someone else): use `Client` only. You do not need `volca.toml`, and you do not need to install the VoLCA server locally.
+- **You want Python to start a local VoLCA engine process for you**: use `Server`. In that case you need the `volca` binary available on your machine, and `volca.toml` is just a normal file path passed to `Server(config=...)`; put it in your project directory, or pass an absolute path. Do not put it inside your virtualenv or inside `site-packages`.
+
+For a hosted server, the minimal connection looks like this:
+
+```python
+# no-test  — replace with your real hosted VoLCA server URL and credentials.
+from volca import Client
+
+c = Client(
+    base_url="https://your-volca-server.example.com",
+    db="agribalyse-3.2",
+    password="your-api-token-or-password",
+)
+
+print(c.list_databases())
+```
+
+Use the `Server` helper only when you deliberately want to launch the engine from Python:
+
+```python
+# no-test  — needs a local volca binary and a real engine config.
+from volca import Client, Server
+
+with Server(config="./volca.toml") as srv:
+    c = Client(base_url=srv.base_url, db="agribalyse-3.2", password=srv.password)
+    print(c.list_databases())
+```
+
+In this local mode, `Server(config="./volca.toml")` means “read `./volca.toml` relative to the current working directory”.
+
+## Local managed-server quick start
 
 ```python
 # no-test  — needs a real engine; the snippets below run against a mocked Client.
@@ -26,7 +63,7 @@ with Server(config="volca.toml") as srv:
     score = c.get_impacts(plants[0].process_id, method_id=c.list_methods()[0]["methodId"])
 ```
 
-`Server` reads `port` and `password` from the TOML config. The engine self-stops after `idle_timeout` seconds without traffic (default 5 min).
+This example starts a local engine process from Python. `Server` reads `port` and `password` from the TOML config. The engine self-stops after `idle_timeout` seconds without traffic (default 5 min).
 
 > Examples below assume `c` is a `Client` instance — construct it with the snippet above, or against an already-running server: `c = Client(base_url="http://localhost:8080", db="agribalyse-3.2", password="…")`.
 
@@ -324,6 +361,10 @@ Usage::
 
 ## Exceptions
 
+### `DownloadError`
+
+Raised when the download or verification fails.
+
 ### `VoLCAError`
 
 Error from the VoLCA API.
@@ -512,6 +553,17 @@ Emitted inside ``LCIAResult.top_contributors``.
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
 
+### `Installed`
+
+Result of :func:`download`.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `binary` | `Path` | — |
+| `data_dir` | `Path` | — |
+| `version` | `str` | — |
+| `data_version` | `str` | — |
+
 ### `LCIABatchResult`
 
 Batch LCIA: every impact category in a method collection, for one activity.
@@ -666,6 +718,21 @@ Returns three lists:
 Default ``is_input=True`` restricts the comparison to inputs, which is the
 common case for "what does this variant consume differently?". Pass
 ``is_input=None`` to include outputs as well.
+
+### `download(version: Optional[str] = None, repo: str = 'ccomb/volca', *, force: bool = False) -> Installed`
+
+Download the volca binary + data bundle for the current platform.
+
+Idempotent: if both artefacts are already extracted under the expected
+cache paths and ``force=False``, returns immediately without network.
+
+Args:
+    version: GH Release tag (``v0.7.0``); ``None`` resolves the latest.
+    repo: GitHub repo slug. Default ``ccomb/volca``.
+    force: Re-download even if the cache looks complete.
+
+Returns:
+    :class:`Installed` with the resolved paths and versions.
 
 ## Type aliases
 
