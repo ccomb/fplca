@@ -1,5 +1,6 @@
 """Server lifecycle management for VoLCA."""
 
+import os
 import shutil
 import subprocess
 import time
@@ -11,6 +12,8 @@ try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
+
+from . import _download
 
 
 class Server:
@@ -62,20 +65,46 @@ class Server:
         return {}
 
     def _find_binary(self) -> str:
-        """Find the volca binary: explicit path, package bin/, or PATH."""
+        """Find the volca binary.
+
+        Resolution order:
+          1. ``self.binary`` if it is an existing path.
+          2. The most recent download cached by :func:`volca.download` —
+             so a script can ``volca.download()`` then ``Server()`` and
+             have the spawn pick up the cached engine without extra wiring.
+          3. ``shutil.which(self.binary)`` — PATH lookup, including the
+             ``~/.local/bin/volca`` shim that ``install.sh`` drops.
+          4. ``./volca`` / ``./dist/volca`` for ad-hoc dev trees.
+        """
         if Path(self.binary).exists():
             return self.binary
+        cached = _download.cached_binary()
+        if cached is not None:
+            return str(cached)
         found = shutil.which(self.binary)
         if found:
             return found
-        # Try common locations
         for candidate in ["./volca", "./dist/volca"]:
             if Path(candidate).exists():
                 return candidate
         raise FileNotFoundError(
             f"Cannot find '{self.binary}' binary. "
-            "Set binary= parameter or add volca to PATH."
+            "Run volca.download(), set binary= parameter, or add volca to PATH."
         )
+
+    def _subprocess_env(self) -> dict:
+        """Subprocess env for the spawned engine.
+
+        When the data bundle has been downloaded into the pyvolca cache,
+        export VOLCA_DATA_DIR so the engine resolves "data/flows.csv" and
+        friends against the cached bundle instead of the engine's CWD.
+        """
+        env = os.environ.copy()
+        if "VOLCA_DATA_DIR" not in env:
+            cached = _download.cached_data_dir()
+            if cached is not None:
+                env["VOLCA_DATA_DIR"] = str(cached)
+        return env
 
     def is_alive(self) -> bool:
         """Health check — GET /api/v1/db, return True if 200."""
@@ -115,6 +144,7 @@ class Server:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=self._subprocess_env(),
         )
 
         # Poll until server is ready

@@ -1,12 +1,15 @@
 [project]
 name = "pyvolca"
-version = "0.3.0"
+version = "0.3.1"
 description = "Python client for VoLCA — Life Cycle Assessment engine"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 readme = "README.md"
 authors = [{name = "Christophe Combelles", email = "ccomb@free.fr"}]
-dependencies = ["requests>=2.28"]
+dependencies = [
+    "requests>=2.28",
+    "platformdirs>=4.0",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Topic :: Scientific/Engineering",
