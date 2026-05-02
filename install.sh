@@ -158,6 +158,34 @@ exec "$SHARE_DIR/$PLAIN_VERSION/volca" "\$@"
 EOF
 chmod +x "$SHIM"
 
+# --- Runtime-deps probe (Linux only) ----------------------------------------
+#
+# The Linux binary dynamically links libgfortran, libopenblas, and liblapack —
+# the standard BLAS/LAPACK/Fortran toolchain. Debian-slim containers, Alpine,
+# and minimal cloud images don't carry these by default. Probe by running the
+# binary; if its loader complains about a missing shared object, print the
+# per-distro install command. We print rather than auto-install: piping a
+# curl'd script into `sudo apt install …` is the kind of surprise behaviour we
+# don't want.
+
+if [ "$OS" = linux ]; then
+    PROBE_OUT=$("$SHIM" --version 2>&1) || PROBE_FAILED=1
+    if [ "${PROBE_FAILED:-0}" = 1 ] && \
+       printf '%s' "$PROBE_OUT" | grep -q 'cannot open shared object file'; then
+        cat <<EOF
+
+WARN: volca couldn't load. It needs the BLAS/LAPACK/Fortran runtime libs:
+    Debian/Ubuntu: sudo apt install -y liblapack3 libopenblas0-pthread libgfortran5
+    Fedora/RHEL:   sudo dnf install -y lapack openblas libgfortran
+    Arch:          sudo pacman -S --needed lapack openblas gcc-fortran
+    Alpine:        sudo apk add lapack openblas gfortran
+
+Loader said:
+$(printf '%s' "$PROBE_OUT" | sed 's/^/    /')
+EOF
+    fi
+fi
+
 # --- Post-install guidance ---------------------------------------------------
 
 case ":${PATH:-}:" in
