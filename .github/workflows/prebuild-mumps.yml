@@ -49,10 +49,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read pinned versions
-        id: versions
-        uses: ./.github/actions/read-versions
-
       - name: Setup build environment (no GHC)
         uses: ./.github/actions/setup-haskell-env
         with:
@@ -62,9 +58,9 @@ jobs:
           # only build the MUMPS solver here, never invoke cabal.
 
       - name: Build MUMPS
-        env:
-          MUMPS_VERSION: ${{ steps.versions.outputs.mumps }}
         run: |
+          source versions.env
+          export MUMPS_VERSION
           # Per-platform BLAS hints — mirror what build.sh chooses for the
           # source-build fallback path so the prebuilt archives are bit-for-bit
           # what an in-CI source build would produce.
@@ -101,14 +97,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Read pinned versions
-        id: versions
-        uses: ./.github/actions/read-versions
+        id: v
+        run: |
+          source versions.env
+          echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
+          echo "rev=${MUMPS_PREBUILT_REVISION:-1}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/publish-prebuilt-release
         with:
-          tag: mumps-prebuilt-${{ steps.versions.outputs.mumps }}-r${{ steps.versions.outputs.mumps_rev }}
-          title: MUMPS ${{ steps.versions.outputs.mumps }} prebuilt (revision ${{ steps.versions.outputs.mumps_rev }})
-          notes: "Prebuilt MUMPS_SEQ ${{ steps.versions.outputs.mumps }} (PORD ordering, double precision, static archives) for use by _build-matrix.yml. Source: build-mumps.sh."
+          tag: mumps-prebuilt-${{ steps.v.outputs.mumps }}-r${{ steps.v.outputs.rev }}
+          title: MUMPS ${{ steps.v.outputs.mumps }} prebuilt (revision ${{ steps.v.outputs.rev }})
+          notes: "Prebuilt MUMPS_SEQ ${{ steps.v.outputs.mumps }} (PORD ordering, double precision, static archives) for use by _build-matrix.yml. Source: build-mumps.sh."
           asset-glob: mumps-prebuilt-*.tar.gz
           bump-hint: MUMPS_PREBUILT_REVISION
           github-token: ${{ secrets.GITHUB_TOKEN }}

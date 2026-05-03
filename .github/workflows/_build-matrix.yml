@@ -61,7 +61,11 @@ jobs:
 
       - name: Read pinned versions
         id: versions
-        uses: ./.github/actions/read-versions
+        shell: bash
+        run: |
+          source versions.env
+          echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Read engine version from cabal
         id: cabal-version

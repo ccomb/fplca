@@ -56,7 +56,10 @@ jobs:
 
       - name: Read pinned versions
         id: versions
-        uses: ./.github/actions/read-versions
+        shell: bash
+        run: |
+          source versions.env
+          echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Haskell build environment
         uses: ./.github/actions/setup-haskell-env
@@ -155,23 +158,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read pinned versions
-        id: versions
-        uses: ./.github/actions/read-versions
-
-      - name: Compute cabal store hash
-        id: hash
-        # Hash inputs identical to _build-matrix.yml's actions/cache key
-        # for the cabal store, so a content change there always implies a
-        # new prebuilt release.
+      - name: Read versions + cabal hash
+        id: meta
+        # Hash inputs identical to _build-matrix.yml's cabal-store cache
+        # key, so content change there always implies a new prebuilt.
         shell: bash
-        run: echo "hash=$(cat volca.cabal mumps-hs/mumps-hs.cabal cabal.project | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
+        run: |
+          source versions.env
+          echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "rev=${CABAL_PREBUILT_REVISION:-1}" >> "$GITHUB_OUTPUT"
+          echo "hash=$(cat volca.cabal mumps-hs/mumps-hs.cabal cabal.project | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/publish-prebuilt-release
         with:
-          tag: cabal-store-prebuilt-ghc${{ steps.versions.outputs.ghc }}-${{ steps.hash.outputs.hash }}-r${{ steps.versions.outputs.cabal_rev }}
-          title: Cabal store prebuilt — GHC ${{ steps.versions.outputs.ghc }}, hash ${{ steps.hash.outputs.hash }} (revision ${{ steps.versions.outputs.cabal_rev }})
-          notes: Prebuilt cabal store (~/.cabal/store) for use by _build-matrix.yml. Hash ${{ steps.hash.outputs.hash }} = first 8 chars of sha256(volca.cabal + mumps-hs/mumps-hs.cabal + cabal.project).
+          tag: cabal-store-prebuilt-ghc${{ steps.meta.outputs.ghc }}-${{ steps.meta.outputs.hash }}-r${{ steps.meta.outputs.rev }}
+          title: Cabal store prebuilt — GHC ${{ steps.meta.outputs.ghc }}, hash ${{ steps.meta.outputs.hash }} (revision ${{ steps.meta.outputs.rev }})
+          notes: Prebuilt cabal store (~/.cabal/store) for use by _build-matrix.yml. Hash ${{ steps.meta.outputs.hash }} = first 8 chars of sha256(volca.cabal + mumps-hs/mumps-hs.cabal + cabal.project).
           asset-glob: cabal-store-*.tar.gz
           bump-hint: CABAL_PREBUILT_REVISION
           github-token: ${{ secrets.GITHUB_TOKEN }}
