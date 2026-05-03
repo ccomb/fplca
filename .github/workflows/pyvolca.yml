@@ -61,17 +61,13 @@ jobs:
             exit 0
           fi
           echo "Downloading engine artefact from build.yml run $RUN_ID."
-          gh run download "$RUN_ID" --name volca-linux-amd64 --dir engine-dl
-          # The artefact preserves dist-newstyle/build/.../volca path
-          # structure from the upload glob in _build-matrix.yml.
-          if [[ ! -d engine-dl/dist-newstyle ]]; then
-            echo "::warning::Downloaded artefact has unexpected layout — listing for diagnostics:"
-            find engine-dl -maxdepth 4 -print
-            exit 0
-          fi
-          mv engine-dl/dist-newstyle .
-          rm -rf engine-dl
-          # Restore +x — gh run download does not preserve POSIX mode.
+          # actions/upload-artifact@v4 strips the longest common parent
+          # path, so the engine binary lands at <arch>/ghc-*/volca-*/...
+          # rather than the dist-newstyle/build/<arch>/... that
+          # conftest.py's live_spec fixture rglobs for. Recreate the
+          # parent prefix so the fixture finds the binary.
+          mkdir -p dist-newstyle/build
+          gh run download "$RUN_ID" --name volca-linux-amd64 --dir dist-newstyle/build
           find dist-newstyle -name volca -type f -exec chmod +x {} +
 
       - name: Run tests
