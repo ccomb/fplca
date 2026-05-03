@@ -29,18 +29,40 @@ EOF
         ;;
 
     static)
-        # Static linking: embed MUMPS/BLAS/LAPACK, keep gfortran/libc dynamic
-        STATIC_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-Wl,-Bstatic -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-Wl,--end-group -optl-Wl,-Bdynamic -optl-llapack -optl-lblas -optl-lgfortran -optl-lquadmath -optl-lpthread -optl-lm -optl-ldl"
+        # Fully static link for Linux glibc: MUMPS + BLAS/LAPACK + Fortran
+        # runtime all baked in. `executable-static` + `shared: False` make
+        # cabal build every dep as `.a` and link the exe with `-static` —
+        # no intermediate libHS*.so means non-PIC libgfortran.a never gets
+        # pulled into a shared object (the original PR #20 TPOFF32 trigger).
+        # `-no-pie` keeps Debian's non-PIC Fortran/BLAS archives linkable
+        # into the final non-PIE exe. `--start-group`/`--end-group`
+        # resolves the cyclic refs between MUMPS / LAPACK / BLAS / Fortran.
+        #
+        # cbits/static-shims.c provides __xmknod / __xmknodat, removed
+        # from glibc 2.32+ public ABI but still referenced by the unix
+        # package shipped with ghcup's GHC 9.6 (compiled against older
+        # glibc headers that inlined to those symbols).
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        SHIM_SRC="$SCRIPT_DIR/cbits/static-shims.c"
+        SHIM_OBJ="$SCRIPT_DIR/cbits/static-shims.o"
+        if [[ ! -f "$SHIM_OBJ" || "$SHIM_SRC" -nt "$SHIM_OBJ" ]]; then
+            cc -fno-pie -O2 -c "$SHIM_SRC" -o "$SHIM_OBJ"
+        fi
+        # libquadmath is x86-only (__float128). aarch64's gcc has no
+        # libquadmath.{a,so} and libgfortran.a doesn't pull it in there.
+        case "$(uname -m)" in
+            x86_64|amd64) QUADMATH_FLAG="-optl-lquadmath" ;;
+            *)            QUADMATH_FLAG="" ;;
+        esac
+        STATIC_LINK_FLAGS="-optl-no-pie -optc-no-pie -optl-L$MUMPS_LIB_DIR -optl$SHIM_OBJ -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-llapack -optl-lblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm -optl-ldl"
         cat > "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
+shared: False
+executable-static: True
 
 extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
-
-package mumps-hs
-  extra-lib-dirs: $MUMPS_LIB_DIR
-  ghc-options: $STATIC_LINK_FLAGS
 
 package volca
   ghc-options: $STATIC_LINK_FLAGS
