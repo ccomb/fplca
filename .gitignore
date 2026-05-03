@@ -1,6 +1,7 @@
 dist-newstyle
 weeder.toml
 .hie
+*.o
 *\.bin
 **/*.zst
 uv.lock
