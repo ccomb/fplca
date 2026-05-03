@@ -1,0 +1,62 @@
+name: Publish prebuilt prerelease
+description: >-
+  Tag preflight + SHA256SUMS + `gh release create` shared by the manual
+  prebuild-* workflows. Caller must declare contents:write — composite
+  actions cannot grant their own permissions.
+
+inputs:
+  tag:
+    required: true
+    description: GH Release tag (must not already exist).
+  title:
+    required: true
+    description: Release title.
+  notes:
+    required: true
+    description: Release notes (markdown body).
+  asset-glob:
+    required: true
+    description: Glob (matching files in dist/) for assets to attach. SHA256SUMS appended automatically.
+  bump-hint:
+    required: true
+    description: Env var name to mention in the duplicate-tag error.
+  github-token:
+    required: true
+    description: Pass secrets.GITHUB_TOKEN from the caller — composite actions cannot read secrets directly.
+
+runs:
+  using: composite
+  steps:
+    - name: Fail if release already exists
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        BUMP: ${{ inputs.bump-hint }}
+      run: |
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          echo "::error::Release $TAG already exists. Bump $BUMP in versions.env first."
+          exit 1
+        fi
+
+    - uses: actions/download-artifact@v4
+      with:
+        path: dist
+        merge-multiple: true
+
+    - name: Create release
+      shell: bash
+      # ASSET_GLOB intentionally unquoted so the shell expands it.
+      # Caller strings flow through env (not interpolated into shell
+      # directly) so quotes in titles/notes need no escaping.
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        TITLE: ${{ inputs.title }}
+        NOTES: ${{ inputs.notes }}
+        ASSET_GLOB: ${{ inputs.asset-glob }}
+      run: |
+        cd dist
+        sha256sum $ASSET_GLOB > SHA256SUMS
+        gh release create "$TAG" --title "$TITLE" --notes "$NOTES" --prerelease \
+          $ASSET_GLOB SHA256SUMS
