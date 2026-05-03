@@ -57,10 +57,17 @@ jobs:
           # ghc-version='' skips every Cabal/GHC/libquadmath step — we
           # only build the MUMPS solver here, never invoke cabal.
 
-      - name: Build MUMPS
+      - name: Read pinned MUMPS version
+        id: versions
+        shell: bash
         run: |
           source versions.env
-          export MUMPS_VERSION
+          echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build MUMPS
+        env:
+          MUMPS_VERSION: ${{ steps.versions.outputs.mumps }}
+        run: |
           # Per-platform BLAS hints — mirror what build.sh chooses for the
           # source-build fallback path so the prebuilt archives are bit-for-bit
           # what an in-CI source build would produce.
