@@ -53,10 +53,35 @@ spec = describe "Search.Fuzzy" $ do
         let idx = indexOfNames ["electricity grid"]
         expandTokens idx ["electri"] `shouldBe` [("electricity", 0.7)]
 
-    it "prefers edit-distance over prefix when both could match" $ do
-        -- "electricit" is 1 edit from "electricity" — edit-distance wins.
+    it "merges edit-distance and prefix matches on the same candidate, keeping the higher weight" $ do
+        -- "electricit" reaches "electricity" via both edit-distance (1 char)
+        -- and prefix-coverage. After merge, the prefix weight (0.7) wins.
         let idx = indexOfNames ["electricity grid"]
-        expandTokens idx ["electricit"] `shouldBe` [("electricity", 0.5)]
+        expandTokens idx ["electricit"] `shouldBe` [("electricity", 0.7)]
+
+    it "still expands a short prefix when an edit-distance candidate exists" $ do
+        -- 'elec' has an edit-distance neighbour ('elect') in vocab. Before the
+        -- merge, that short-circuited prefix expansion and 'electricity' was
+        -- never reached, so any user typing 'elec' got zero electricity hits.
+        let idx =
+                indexOfNames
+                    [ "Electricity, high voltage market"
+                    , "elect committee report"
+                    ]
+        map fst (expandTokens idx ["elec"]) `shouldContain` ["electricity"]
+
+    it "keeps long stems like 'electricity' in the prefix expansion of 'elect'" $ do
+        -- With many shorter prefix siblings (electric/election/electron…)
+        -- a topN=3 cutoff dropped 'electricity'. prefixTopN=10 keeps it.
+        let idx =
+                indexOfNames
+                    [ "Electricity, high voltage"
+                    , "election day"
+                    , "electrolyte balance"
+                    , "electron microscope"
+                    , "electric platform"
+                    ]
+        map fst (expandTokens idx ["elect"]) `shouldContain` ["electricity"]
 
     it "drops unmatchable tokens" $ do
         let idx = indexOfNames ["yaourt nature", "lait demi"]
