@@ -2,13 +2,15 @@
 
 Pipeline per query token:
   1. If the token is already in the BM25 vocabulary, include it at weight 1.0.
-  2. Also try edit-distance candidates (weight 0.5) — handles typos and
-     orthographic variants (e.g. trellis ↔ treillis) even when the exact
-     token is in the vocabulary. Exact still ranks first thanks to the
-     2× IDF gap.
-  3. If edit distance finds nothing, try prefix-coverage (weight 0.7) —
-     handles stems like "electr" → "electricity".
-  4. If nothing matches at any stage, the token is dropped.
+  2. Edit-distance candidates (weight 0.5) — typos and orthographic variants
+     (e.g. trellis ↔ treillis).
+  3. Prefix-coverage candidates (weight 0.7) — stems like "elec" →
+     "electricity". Run alongside edit-distance, not as a fallback: a short
+     query like "elec" can have unrelated edit-distance hits ("alec",
+     "elect") that would otherwise mask its real intent (the stem).
+  4. Edit and prefix lists are merged; if a token appears in both, the
+     higher weight wins (prefix > edit).
+  5. If nothing matches at any stage, the token is dropped.
 
 The trigram index on BM25Index acts as a cheap prefilter so we only compute
 edit distance against plausible candidates, not the whole vocabulary.
@@ -37,9 +39,14 @@ fuzzyWeight, prefixWeight :: Double
 fuzzyWeight = 0.5
 prefixWeight = 0.7
 
-minSharedTrigrams, topN, minPrefixLen :: Int
+minSharedTrigrams, topN, prefixTopN, minPrefixLen :: Int
 minSharedTrigrams = 2
 topN = 3
+-- Stem expansions are inherently a long tail (a 4-5 char prefix typically
+-- has 5–30 covering tokens in a real LCA corpus). Keep more than the
+-- edit-distance topN so longer derived forms ("electricity") survive when
+-- many shorter siblings ("elect", "electa", "electro") share the prefix.
+prefixTopN = 10
 minPrefixLen = 4
 
 minJaccard, minCoverage :: Double
@@ -72,9 +79,11 @@ expandTokensGrouped idx = map expand
     expand t =
         let inVocab = t `M.member` bm25Postings idx
             exact = [(t, 1.0) | inVocab]
-            variants = case editCandidates idx t of
-                edits@(_ : _) -> [(c, fuzzyWeight) | c <- take topN edits, c /= t]
-                [] -> [(c, prefixWeight) | c <- take topN (prefixCandidates idx t), c /= t]
+            edits = [(c, fuzzyWeight) | c <- take topN (editCandidates idx t), c /= t]
+            prefixes = [(c, prefixWeight) | c <- take prefixTopN (prefixCandidates idx t), c /= t]
+            -- A candidate can satisfy both edit-distance and prefix-coverage
+            -- (e.g. "electricit" → "electricity"). Keep the higher weight.
+            variants = M.toList (M.fromListWith max (edits ++ prefixes))
          in exact ++ variants
 
 {- | Candidate tokens within the permitted edit distance of the query.
