@@ -20,6 +20,7 @@ import qualified FuzzySpec
 import qualified HotspotSpec
 import qualified ILCDParserSpec
 import qualified InventorySpec
+import qualified LicensesSpec
 import qualified LoaderSpec
 import qualified MCPSchemaSpec
 import qualified MappingSpec
@@ -80,3 +81,4 @@ main = hspec $ do
         describe "Search.Fuzzy" FuzzySpec.spec
         describe "Nested Substitutions" NestedSubstitutionSpec.spec
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
+        describe "Licenses Endpoint" LicensesSpec.spec

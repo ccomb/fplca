@@ -33,6 +33,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Progress
 
 -- For server mode
+import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
 import Data.Aeson (encode)
@@ -257,52 +258,55 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
                                 [(hContentType, "application/json")]
                                 openApiJson
                     else
-                        if path == "/api/v1/docs"
-                            then
-                                respond $
-                                    responseLBS
-                                        status200
-                                        [(hContentType, "text/html; charset=utf-8")]
-                                        swaggerHtml
+                        if path == "/api/v1/licenses"
+                            then respond licensesResponse
                             else
-                                if path == "/api/v1/logs/stream"
-                                    then handleLogStream req respond
+                                if path == "/api/v1/docs"
+                                    then
+                                        respond $
+                                            responseLBS
+                                                status200
+                                                [(hContentType, "text/html; charset=utf-8")]
+                                                swaggerHtml
                                     else
-                                        if C8.pack "/api/" `BS.isPrefixOf` path
-                                            then
-                                                serve lcaAPI (lcaServer dbManager maxTreeDepth password hostingConfig filterPresets) req respond
+                                        if path == "/api/v1/logs/stream"
+                                            then handleLogStream req respond
                                             else
-                                                if C8.pack "/static/" `BS.isPrefixOf` path
+                                                if C8.pack "/api/" `BS.isPrefixOf` path
                                                     then
-                                                        let strippedPath = BS.drop 7 path
-                                                            originalPathInfo = pathInfo req
-                                                            newPathInfo = case originalPathInfo of
-                                                                (segment : rest) | segment == T.pack "static" -> rest
-                                                                other -> other
-                                                            staticReq = req{rawPathInfo = strippedPath, pathInfo = newPathInfo}
-                                                            staticSettings =
-                                                                (defaultWebAppSettings staticDir)
-                                                                    { ssIndices = [unsafeToPiece (T.pack "index.html")]
-                                                                    , ssMaxAge = NoMaxAge
-                                                                    }
-                                                         in staticApp staticSettings staticReq respond
+                                                        serve lcaAPI (lcaServer dbManager maxTreeDepth password hostingConfig filterPresets) req respond
                                                     else
-                                                        let staticSettings =
-                                                                (defaultWebAppSettings staticDir)
-                                                                    { ssIndices = [unsafeToPiece (T.pack "index.html")]
-                                                                    , ssMaxAge = NoMaxAge
-                                                                    }
-                                                            indexReq = req{rawPathInfo = C8.pack "/", pathInfo = []}
-                                                            noCacheRespond res =
-                                                                respond $
-                                                                    mapResponseHeaders
-                                                                        ( \hs ->
-                                                                            (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
-                                                                                : (hPragma, C8.pack "no-cache")
-                                                                                : hs
-                                                                        )
-                                                                        res
-                                                         in staticApp staticSettings indexReq noCacheRespond
+                                                        if C8.pack "/static/" `BS.isPrefixOf` path
+                                                            then
+                                                                let strippedPath = BS.drop 7 path
+                                                                    originalPathInfo = pathInfo req
+                                                                    newPathInfo = case originalPathInfo of
+                                                                        (segment : rest) | segment == T.pack "static" -> rest
+                                                                        other -> other
+                                                                    staticReq = req{rawPathInfo = strippedPath, pathInfo = newPathInfo}
+                                                                    staticSettings =
+                                                                        (defaultWebAppSettings staticDir)
+                                                                            { ssIndices = [unsafeToPiece (T.pack "index.html")]
+                                                                            , ssMaxAge = NoMaxAge
+                                                                            }
+                                                                 in staticApp staticSettings staticReq respond
+                                                            else
+                                                                let staticSettings =
+                                                                        (defaultWebAppSettings staticDir)
+                                                                            { ssIndices = [unsafeToPiece (T.pack "index.html")]
+                                                                            , ssMaxAge = NoMaxAge
+                                                                            }
+                                                                    indexReq = req{rawPathInfo = C8.pack "/", pathInfo = []}
+                                                                    noCacheRespond res =
+                                                                        respond $
+                                                                            mapResponseHeaders
+                                                                                ( \hs ->
+                                                                                    (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
+                                                                                        : (hPragma, C8.pack "no-cache")
+                                                                                        : hs
+                                                                                )
+                                                                                res
+                                                                 in staticApp staticSettings indexReq noCacheRespond
 
 -- | SSE endpoint for real-time log streaming
 handleLogStream :: Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
