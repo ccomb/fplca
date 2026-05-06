@@ -37,7 +37,7 @@ import qualified Database.Manager as DM
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
-import Method.Mapping (MappingStats (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
@@ -863,7 +863,7 @@ callGetImpacts dbManager baseUrl rid args =
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
                 let topN = fromMaybe 5 (intArg "top_flows" args)
                     stats = computeMappingStats mappings
-                    score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                    score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                     (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
                     functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
                     (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1174,7 +1174,7 @@ callGetContributingFlows dbManager baseUrl rid args =
                             (ldSharedSolver ld)
                             (raPid ra)
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                     (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
                     contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                     top = take lim contribs

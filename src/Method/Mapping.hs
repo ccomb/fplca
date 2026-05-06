@@ -485,25 +485,43 @@ lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
 
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
+
+Returns 'LCIAOutcome' carrying the score plus characterized-vs-total
+inventory mass (so callers can detect tail erosion when many small flows
+go uncharacterized). 'loUncharacterized' and 'loUnknownUuids' are empty
+in this commit; the suggester populating them lands separately so this
+change stays bit-equivalent for the score number itself.
 -}
-computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Double
+computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> LCIAOutcome
 computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
-    sum [scoreFlow fid qty | (fid, qty) <- M.toList inventory, qty /= 0]
+    let (!score, !charSum, !invSum) = M.foldlWithKey' step (0, 0, 0) inventory
+     in LCIAOutcome
+            { loScore = score
+            , loCharacterizedSum = charSum
+            , loInventoryAbsSum = invSum
+            , loUncharacterized = []
+            , loUnknownUuids = []
+            }
   where
-    scoreFlow fid qty = case lookupCFForFlow tables fid (M.lookup fid flowDB) of
-        Nothing -> 0
-        Just (cfVal, cfUnit) ->
-            let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                converted =
-                    if flowUnit == cfUnit || T.null cfUnit
-                        then qty
-                        else fromMaybe qty (convertUnit unitConfig flowUnit cfUnit qty)
-             in converted * cfVal
+    step (!s, !cs, !is) fid qty
+        | qty == 0 = (s, cs, is)
+        | otherwise =
+            let !absQty = abs qty
+                !is' = is + absQty
+             in case lookupCFForFlow tables fid (M.lookup fid flowDB) of
+                    Nothing -> (s, cs, is')
+                    Just (cfVal, cfUnit) ->
+                        let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
+                            converted =
+                                if flowUnit == cfUnit || T.null cfUnit
+                                    then qty
+                                    else fromMaybe qty (convertUnit unitConfig flowUnit cfUnit qty)
+                         in (s + converted * cfVal, cs + absQty, is')
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
 -}
-computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
+computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
     computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables mappings)
 

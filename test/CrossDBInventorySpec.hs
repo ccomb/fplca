@@ -201,7 +201,7 @@ spec = do
         it "matches computeLCIAScoreFromTables when no UUIDs are unknown" $ do
             let (contribs, _) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables
                 sumContribs = sum [c | (_, _, c) <- contribs]
-                score = Mapping.computeLCIAScoreFromTables defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables
+                score = Mapping.loScore (Mapping.computeLCIAScoreFromTables defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables)
             abs (sumContribs - score) < 1e-9 `shouldBe` True
 
 -- | Build a deterministic test UUID from a small integer tag.

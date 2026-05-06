@@ -36,7 +36,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory)
-import Method.Mapping (MappingStats (..), MatchStrategy (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
 import Method.Types (DamageCategory (..), FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import Numeric (showFFloat)
 import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
@@ -1111,7 +1111,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                 inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                     (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
                     contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                     topFlows =
@@ -1197,7 +1197,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- Force score evaluation here so mapConcurrently actually parallelizes the work
         -- (without this, lazy thunks are created and forced later in the main thread)
         let stats = computeMappingStats mappings
-        !score <- evaluate $ computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+        !score <- evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables

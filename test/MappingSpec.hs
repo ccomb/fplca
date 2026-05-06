@@ -206,12 +206,12 @@ spec = do
                 inventory = M.singleton fid 100.0
                 flowDB = M.singleton fid flow
                 unitDB = M.singleton nil unit
-                score = computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping)
             score `shouldBe` 100.0
 
         it "returns 0 when inventory is empty" $ do
             let cf = mkCF "co2" Nothing 1.0
-                score = computeLCIAScore defaultUnitConfig M.empty M.empty M.empty [(cf, Nothing)]
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty M.empty M.empty [(cf, Nothing)])
             score `shouldBe` 0.0
 
         it "skips zero-quantity flows" $ do
@@ -220,7 +220,7 @@ spec = do
                 cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 0.0
-                score = computeLCIAScore defaultUnitConfig M.empty (M.singleton fid flow) inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty (M.singleton fid flow) inventory mapping)
             score `shouldBe` 0.0
 
         it "scores via fallback CF (name+medium, empty subcomp)" $ do
@@ -230,7 +230,7 @@ spec = do
                 mapping = [(cf, Nothing)] -- unmatched → name-based lookup
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 25.0
 
         it "scores via exact CF (name+medium+subcomp)" $ do
@@ -240,7 +240,7 @@ spec = do
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 5.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 15.0
 
         it "normalizes 'natural resource' category to 'resource'" $ do
@@ -250,7 +250,7 @@ spec = do
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 4.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 6.0
 
         it "returns 0 for flow not in flowDB" $ do
@@ -258,7 +258,7 @@ spec = do
             let cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
-                score = computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping)
             score `shouldBe` 0.0
 
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
