@@ -173,6 +173,7 @@ test-suite lca-tests
                      , CrossLinkingSpec
                      , CrossDBInventorySpec
                      , SharedSolverSpec
+                     , CoalescingSolverSpec
                      , FlowResolverSpec
                      , PluginConfigSpec
                      , ConfigSpec
