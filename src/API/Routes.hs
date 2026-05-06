@@ -36,7 +36,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector, applyBiosphereMatrix)
-import Method.Mapping (MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions)
 import Method.Types (DamageCategory (..), FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import Numeric (showFFloat)
 import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
@@ -1116,7 +1116,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
             inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
             tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-            let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+            let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                 (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
                 contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                 topFlows =
@@ -1238,7 +1238,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
                 evaluate (0 :: Double)
             Nothing -> if M.null (mtRegionalizedCF tables)
-                then evaluate $ computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                 else do
                     scalingVec <- getScaling
                     hier <- DM.getLocationHierarchy dbManager

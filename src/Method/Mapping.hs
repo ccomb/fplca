@@ -543,38 +543,55 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
 
+Returns 'LCIAOutcome' carrying the score plus characterized-vs-total
+inventory mass (so callers can detect tail erosion when many small flows
+go uncharacterized).
+
 Uses 'mtBroadcast' (single Map lookup, conversion pre-multiplied) when filled,
 falling back to the legacy UUID→exact→fallback cascade with on-the-fly unit
 conversion when 'mtBroadcast' is empty. Tests and back-compat callers that use
 'buildMethodTables' directly hit the legacy path; the cached
 'mapMethodToTablesCached' fills the broadcast and gets the fast path.
 -}
-computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Double
-computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
-    | M.null (mtBroadcast tables) =
-        M.foldlWithKey' (\acc fid qty -> acc + legacyScore fid qty) 0 inventory
-    | otherwise =
-        M.foldlWithKey' (\acc fid qty -> acc + fastScore fid qty) 0 inventory
+computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> LCIAOutcome
+computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
+    let (!score, !charSum, !invSum) = M.foldlWithKey' step (0, 0, 0) inventory
+     in LCIAOutcome
+            { loScore = score
+            , loCharacterizedSum = charSum
+            , loInventoryAbsSum = invSum
+            , loUncharacterized = []
+            , loUnknownUuids = []
+            }
   where
-    fastScore fid qty
-        | qty == 0 = 0
-        | otherwise = case M.lookup fid (mtBroadcast tables) of
-            Just cf -> qty * cf
+    useFast = not (M.null (mtBroadcast tables))
+
+    step (!s, !cs, !is) fid qty
+        | qty == 0 = (s, cs, is)
+        | otherwise =
+            let !absQty = abs qty
+                !is' = is + absQty
+             in case scoreFlow fid qty of
+                    Nothing -> (s, cs, is')
+                    Just contribution -> (s + contribution, cs + absQty, is')
+
+    scoreFlow fid qty
+        | useFast = case M.lookup fid (mtBroadcast tables) of
+            Just cf -> Just (qty * cf)
             -- Inventory may reference flows not in the broadcast (e.g. cross-DB
             -- merged flows beyond the original flowDB at build time): fall back
             -- to the cascade so we don't silently drop them.
-            Nothing -> legacyScore fid qty
+            Nothing -> legacyScoreFlow fid qty
+        | otherwise = legacyScoreFlow fid qty
 
-    legacyScore fid qty
-        | qty == 0 = 0
-        | otherwise = case lookupCascadeCF tables flowDB fid of
-            Nothing -> 0
-            Just cfTuple -> convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty
+    legacyScoreFlow fid qty = case lookupCascadeCF tables flowDB fid of
+        Nothing -> Nothing
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty)
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
 -}
-computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
+computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
     computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
 
@@ -606,7 +623,7 @@ computeLCIAScoreAuto ::
     Either Text Double
 computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier tables
     | M.null (mtRegionalizedCF tables) =
-        Right (computeLCIAScoreFromTables unitCfg unitDB flowDB inventory tables)
+        Right (loScore (computeLCIAScoreFromTables unitCfg unitDB flowDB inventory tables))
     | otherwise =
         computeRegionalizedLCIAScore unitCfg unitDB flowDB db scalingVec hier tables
 

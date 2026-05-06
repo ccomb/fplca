@@ -152,9 +152,9 @@ spec = do
                 inv = M.fromList [(fid1, 4.0), (fid2, 0.1)]
 
                 -- Per-method legacy scores (golden)
-                sA = computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tA
-                sB = computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tB
-                sC = computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tC
+                sA = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tA)
+                sB = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tB)
+                sC = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tC)
 
                 -- Batched scores via the set path
                 results =

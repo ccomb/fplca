@@ -224,12 +224,12 @@ spec = do
                 inventory = M.singleton fid 100.0
                 flowDB = M.singleton fid flow
                 unitDB = M.singleton nil unit
-                score = computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping)
             score `shouldBe` 100.0
 
         it "returns 0 when inventory is empty" $ do
             let cf = mkCF "co2" Nothing 1.0
-                score = computeLCIAScore defaultUnitConfig M.empty M.empty M.empty [(cf, Nothing)]
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty M.empty M.empty [(cf, Nothing)])
             score `shouldBe` 0.0
 
         it "skips zero-quantity flows" $ do
@@ -238,7 +238,7 @@ spec = do
                 cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 0.0
-                score = computeLCIAScore defaultUnitConfig M.empty (M.singleton fid flow) inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty (M.singleton fid flow) inventory mapping)
             score `shouldBe` 0.0
 
         it "scores via fallback CF (name+medium, empty subcomp)" $ do
@@ -248,7 +248,7 @@ spec = do
                 mapping = [(cf, Nothing)] -- unmatched → name-based lookup
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 25.0
 
         it "scores via exact CF (name+medium+subcomp)" $ do
@@ -258,7 +258,7 @@ spec = do
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 5.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 15.0
 
         it "normalizes 'natural resource' category to 'resource'" $ do
@@ -268,7 +268,7 @@ spec = do
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 4.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty flowDB inventory mapping)
             score `shouldBe` 6.0
 
         it "returns 0 for flow not in flowDB" $ do
@@ -276,7 +276,7 @@ spec = do
             let cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
-                score = computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping)
             score `shouldBe` 0.0
 
     describe "buildMethodTables compartment normalization" $ do
@@ -290,7 +290,7 @@ spec = do
                 tables = buildMethodTables M.empty [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+                score = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables)
             score `shouldBe` 0.0
 
         it "bridges 'emissions to air' → 'air' via a medium-only rule" $ do
@@ -301,7 +301,7 @@ spec = do
                 tables = buildMethodTables cmap [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+                score = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables)
             score `shouldBe` 7.47
 
         it "bridges full (medium, sub, qual) triples for subcompartment rewrites" $ do
@@ -316,7 +316,7 @@ spec = do
                 tables = buildMethodTables cmap [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
-                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+                score = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables)
             score `shouldBe` 7.47
 
         -- Regression: a failed unit conversion used to fall back to the
@@ -330,7 +330,7 @@ spec = do
                 inventory = M.singleton fid 100.0
                 flowDB = M.singleton fid flow
                 unitDB = M.singleton nil (unitNamed "m") -- length, not mass
-                score = computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping
+                score = loScore (computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping)
             score `shouldBe` 0.0
 
         it "applies conversion factor when units differ but are compatible (g→kg)" $ do
@@ -341,7 +341,7 @@ spec = do
                 inventory = M.singleton fid 1000.0 -- 1000 g
                 flowDB = M.singleton fid flow
                 unitDB = M.singleton nil (unitNamed "g")
-                score = computeLCIAScore gKgUnitConfig unitDB flowDB inventory mapping
+                score = loScore (computeLCIAScore gKgUnitConfig unitDB flowDB inventory mapping)
             -- 1000 g → 1.0 kg, * cf 2.0 = 2.0
             score `shouldBe` 2.0
 
@@ -437,10 +437,10 @@ spec = do
                 unitDB = M.singleton uidKg (mkUnit uidKg "kg")
                 inv = M.fromList [(fid, 4.0 :: Double)]
                 -- empty broadcast → legacy path
-                legacyScore = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv rawTables
+                legacyScore = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv rawTables)
                 -- filled broadcast → fast path
                 filled = fillBroadcastVector defaultUnitConfig unitDB flowDB rawTables
-                fastScore = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
+                fastScore = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled)
             legacyScore `shouldBe` (4.0 * 2.5 :: Double)
             fastScore `shouldBe` legacyScore
 
@@ -464,8 +464,8 @@ spec = do
                 unitDB = M.singleton uidKg (mkUnit uidKg "kg")
                 inv = M.fromList [(fid, 1.0 :: Double)]
                 filled = fillBroadcastVector cfg unitDB flowDB tables0
-                fast = computeLCIAScoreFromTables cfg unitDB flowDB inv filled
-                legacy = computeLCIAScoreFromTables cfg unitDB flowDB inv tables0
+                fast = loScore (computeLCIAScoreFromTables cfg unitDB flowDB inv filled)
+                legacy = loScore (computeLCIAScoreFromTables cfg unitDB flowDB inv tables0)
             -- Parity: pre-multiplication must match the on-the-fly path.
             fast `shouldBe` legacy
             -- 1 kg × convert(kg→g, 1) × 1e-3 (CF) = 1 × 1000 × 1e-3 = 1.0.
@@ -483,8 +483,8 @@ spec = do
                 unitDB = M.singleton uidKg (mkUnit uidKg "kg")
                 inv = M.fromList [(fid, 2.0 :: Double)]
                 filled = fillBroadcastVector defaultUnitConfig unitDB flowDB tables0
-                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
-                legacy = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0
+                fast = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled)
+                legacy = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0)
             fast `shouldBe` legacy
             fast `shouldBe` (2.0 * 3.0 :: Double)
 
@@ -499,8 +499,8 @@ spec = do
                 unitDB = M.singleton uidKg (mkUnit uidKg "kg")
                 inv = M.fromList [(fid, 1.0 :: Double)]
                 filled = fillBroadcastVector defaultUnitConfig unitDB flowDB tables0
-                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
-                legacy = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0
+                fast = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled)
+                legacy = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0)
             fast `shouldBe` legacy
             fast `shouldBe` (5.0 :: Double)
 
@@ -516,7 +516,7 @@ spec = do
                 filled = fillBroadcastVector defaultUnitConfig unitDB flowDBAtBuild tables0
                 -- Scoring time: inventory has fidExtra (cross-DB flow added later)
                 inv = M.fromList [(fidLocal, 2.0 :: Double), (fidExtra, 7.0)]
-                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDBAtBuild inv filled
+                fast = loScore (computeLCIAScoreFromTables defaultUnitConfig unitDB flowDBAtBuild inv filled)
             -- fidLocal contributes 2.0 * 1.5 = 3.0; fidExtra has no CF → 0.
             -- The fallback path must NOT crash on the unknown UUID.
             fast `shouldBe` (3.0 :: Double)
