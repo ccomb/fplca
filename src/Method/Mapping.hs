@@ -57,7 +57,7 @@ import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
 import SynonymDB
 import Types (Activity (..), Database (..), Flow (..), FlowDB, ProcessId, SparseTriple (..), Unit (..), UnitDB)
-import UnitConversion (UnitConfig, convertUnit)
+import UnitConversion (UnitConfig, convertUnit, isKnownUnit)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -327,6 +327,24 @@ buildMethodTables cmap mappings =
         | m == "natural resource" = "resource"
         | otherwise = m
 
+{- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
+
+Bypass cases (returns @qty@ unchanged):
+  * Units match by name, or either side has no unit metadata.
+  * Either unit is unknown to the 'UnitConfig' (e.g. LCIA result expressions
+    like "kg CO2 eq"). The CF author already chose values consistent with
+    their declared unit; we trust them rather than penalize.
+
+Hard fail (returns @0@): both units are known to the 'UnitConfig' but
+dimensionally incompatible (e.g. flow in @m@, CF in @kg@). Silently using
+@qty@ here would inject wrong-dimension data into the score; we refuse.
+-}
+convertForCharacterization :: UnitConfig -> Text -> Text -> Double -> Double
+convertForCharacterization cfg flowUnit cfUnit qty
+    | flowUnit == cfUnit || T.null cfUnit || T.null flowUnit = qty
+    | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
+    | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
 -}
@@ -338,10 +356,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
         Nothing -> 0
         Just (cfVal, cfUnit) ->
             let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                converted =
-                    if flowUnit == cfUnit || T.null cfUnit
-                        then qty
-                        else fromMaybe qty (convertUnit unitConfig flowUnit cfUnit qty)
+                converted = convertForCharacterization unitConfig flowUnit cfUnit qty
              in converted * cfVal
 
     lookupCF fid = case M.lookup fid (mtUuidCF tables) of
@@ -592,10 +607,7 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
                 Just (cfVal, cfUnit) ->
                     let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                        converted =
-                            if flowUnit == cfUnit || T.null cfUnit
-                                then qty
-                                else fromMaybe qty (convertUnit unitConfig flowUnit cfUnit qty)
+                        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
                         !contribution = converted * cfVal
                      in ((flow, cfVal, contribution) : contribs, unknowns)
 
@@ -653,10 +665,7 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
                     Nothing -> 0
                     Just (cfVal, cfUnit) ->
                         let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                            factor =
-                                if flowUnit == cfUnit || T.null cfUnit
-                                    then 1.0
-                                    else fromMaybe 1.0 (convertUnit unitConfig flowUnit cfUnit 1.0)
+                            factor = convertForCharacterization unitConfig flowUnit cfUnit 1.0
                          in factor * cfVal
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
