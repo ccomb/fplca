@@ -84,6 +84,7 @@ module Database.Manager (
     mapMethodToFlowsCached,
     mapMethodToTablesCached,
     mapMethodSetToTablesCached,
+    mapMethodToIndexCached,
 
     -- * Internal (for Main.hs to load database)
     loadDatabaseFromConfig,
@@ -122,8 +123,10 @@ import qualified Database.Loader as Loader
 import Matrix (clearCachedSolver)
 import Method.Mapping (
     MatchStrategy,
+    MethodIndex,
     MethodSetTables,
     MethodTables,
+    buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
     fillBroadcastVector,
@@ -445,6 +448,12 @@ data DatabaseManager = DatabaseManager
     Purged together with 'dmMethodTablesCache' on any reload that
     invalidates the per-method cache (collection / synonym / DB load).
     -}
+    , dmMethodIndexCache :: !(TVar (Map (Text, UUID) MethodIndex))
+    {- ^ Cached inverted indices over a method (CF tokens, by-medium, by-CAS).
+    Used by the post-scoring suggester to surface candidate matches for
+    uncharacterized flows. Keyed identically to the tables cache and
+    invalidated on the same conditions.
+    -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (FlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
@@ -507,6 +516,22 @@ mapMethodSetToTablesCached manager dbName db methods = do
             atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
             pure mst
 
+{- | Cached method index (CF tokens, by-medium, by-CAS): built once per
+(db, method), reused by the post-scoring suggester. Doesn't depend on the
+'Database' itself — only on the method's CF list — but keyed by (dbName,
+methodId) to share lifetime semantics with the tables cache.
+-}
+mapMethodToIndexCached :: DatabaseManager -> Text -> Method -> IO MethodIndex
+mapMethodToIndexCached manager dbName method = do
+    let key = (dbName, methodId method)
+    cache <- readTVarIO (dmMethodIndexCache manager)
+    case M.lookup key cache of
+        Just idx -> pure idx
+        Nothing -> do
+            let !idx = buildMethodIndex method
+            atomically $ modifyTVar' (dmMethodIndexCache manager) (M.insert key idx)
+            pure idx
+
 {- | Clear all cached flow mappings (call when databases, methods, or synonyms change).
 Also drops the merged flow/unit snapshots — both caches depend on the loaded-DB set.
 -}
@@ -515,6 +540,7 @@ clearMethodMappingCache manager = atomically $ do
     writeTVar (dmMethodMappingCache manager) M.empty
     writeTVar (dmMethodTablesCache manager) M.empty
     writeTVar (dmMethodSetTablesCache manager) M.empty
+    writeTVar (dmMethodIndexCache manager) M.empty
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
 
@@ -527,6 +553,7 @@ clearMethodMappingCacheForDb manager dbName = atomically $ do
     modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
 
@@ -589,6 +616,7 @@ initDatabaseManager config noCache configPath = do
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
     methodSetTablesCacheVar <- newTVarIO M.empty
+    methodIndexCacheVar <- newTVarIO M.empty
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -613,6 +641,7 @@ initDatabaseManager config noCache configPath = do
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
                 , dmMethodSetTablesCache = methodSetTablesCacheVar
+                , dmMethodIndexCache = methodIndexCacheVar
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }
