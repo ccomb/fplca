@@ -31,6 +31,9 @@ module Method.Mapping (
     buildMethodIndex,
     computeLCIAScore,
     computeLCIAScoreFromTables,
+    computeLCIAScoreWithDiagnostics,
+    findUncharacterized,
+    findSimilarCFs,
     inventoryContributions,
     processContributionsFromTables,
 
@@ -51,9 +54,10 @@ module Method.Mapping (
 
 import Control.DeepSeq (NFData)
 import Data.Aeson (ToJSON)
-import Data.List (find)
+import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
+import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -65,6 +69,7 @@ import GHC.Generics (Generic)
 
 import Matrix (Inventory)
 import qualified Matrix
+import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
 import SynonymDB
@@ -641,3 +646,178 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
                                 let scale = scalingVec U.! colI
                                     pid' = fromIntegral pid :: ProcessId
                                  in M.insertWith (+) pid' (bioVal * scale * cf) acc
+
+-- ──────────────────────────────────────────────
+-- Post-scoring suggester
+-- ──────────────────────────────────────────────
+
+{- | Find the top-N method CFs that most resemble a database flow.
+
+Three signals are stacked, the highest-scoring reason wins:
+
+1. Plain Jaccard on normalized-name tokens (cheap baseline; catches
+   word-order and punctuation variants).
+2. Jaccard after expanding tokens via the PubChem snapshot
+   ('expandedTokens'). This is what bridges \"CO2\" and
+   \"Carbon dioxide\" — pure tokenization can never see they relate.
+3. CAS bridge: when the flow's CAS matches a CF's CAS, the candidate is
+   surfaced at score 0.95 regardless of name overlap. Highest-confidence
+   reason; catches cases where one side has CAS and the other doesn't,
+   so the existing CAS-cascade match already failed.
+
+Candidate space is pre-filtered to the same compartment medium when the
+flow has one (via 'miByMedium'), plus any CAS-bridge hits. This keeps the
+scan cheap even on methods with thousands of CFs.
+
+Empty result list = no signal above zero. Caller should treat that as
+\"this flow is genuinely uncharacterized by the method\", not a bug.
+-}
+findSimilarCFs :: ChemSynonyms -> MethodIndex -> Flow -> Int -> [SimilarCF]
+findSimilarCFs syns idx flow maxN
+    | maxN <= 0 = []
+    | otherwise =
+        let flowName' = flowName flow
+            flowCAS' = flowCAS flow
+            flowMedium = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
+
+            flowRawTokens = S.fromList (T.words (normalizeName flowName'))
+            flowExpTokens = expandedTokens syns flowName'
+
+            -- Same-medium candidates (cheap scan); fall back to whole index
+            -- only when we have no medium info to filter by.
+            mediumIdxs = case M.lookup flowMedium (miByMedium idx) of
+                Just is -> is
+                Nothing -> [0 .. V.length (miCFs idx) - 1]
+
+            casBridgeIdxs = case flowCAS' of
+                Nothing -> []
+                Just cas -> M.findWithDefault [] cas (miByCAS idx)
+
+            -- Score one CF index. Two Jaccards: raw (plain tokens) vs
+            -- expanded (synonyms folded in). The reason follows whichever
+            -- signal won, so the audit JSON tells the reviewer what to
+            -- verify.
+            scoreCandidate i =
+                let cfRawTokens = miCFTokens idx V.! i
+                    cf = miCFs idx V.! i
+                    cfExpTokens = expandedTokens syns (mcfFlowName cf)
+                    rawJ = jaccard flowRawTokens cfRawTokens
+                    expJ = jaccard flowExpTokens cfExpTokens
+                 in if expJ > rawJ
+                        then (i, expJ, SimBySynonymExpansion)
+                        else (i, rawJ, SimByJaccard)
+
+            mediumScored = map scoreCandidate mediumIdxs
+            casScored = [(i, 0.95, SimByCASBridge) | i <- casBridgeIdxs]
+
+            -- Merge: same CF can be in both lists (medium hit AND CAS hit);
+            -- keep the higher-scoring entry so we don't show duplicates.
+            mergedMap =
+                M.fromListWith
+                    pickHigher
+                    [(i, (s, r)) | (i, s, r) <- mediumScored ++ casScored]
+
+            ranked =
+                take maxN $
+                    sortOn (\(_, (s, _)) -> Down s) $
+                        filter (\(_, (s, _)) -> s > 0) $
+                            M.toList mergedMap
+         in [ SimilarCF
+                { scfMethodFlowName = mcfFlowName cf
+                , scfCAS = mcfCAS cf
+                , scfCompartment = mcfCompartment cf
+                , scfScore = s
+                , scfReason = r
+                , scfCfValue = mcfValue cf
+                , scfCfUnit = mcfUnit cf
+                }
+            | (i, (s, r)) <- ranked
+            , let cf = miCFs idx V.! i
+            ]
+  where
+    pickHigher (s1, r1) (s2, r2) = if s1 >= s2 then (s1, r1) else (s2, r2)
+
+    jaccard :: S.Set Text -> S.Set Text -> Double
+    jaccard a b
+        | S.null a || S.null b = 0
+        | otherwise =
+            let inter = S.size (S.intersection a b)
+                uni = S.size (S.union a b)
+             in fromIntegral inter / fromIntegral uni
+
+{- | Collect uncharacterized flows from an inventory, ranked by their share of
+total inventory mass. For each, surface the top-N similar CFs from the
+method (so the caller can tell genuine method gaps from mapping bugs).
+
+This walks the inventory once for the totals and once for the unmatched
+collection — two cheap O(|inventory|) passes. The expensive part (the
+suggester) only runs on the surviving flows after weight filtering and
+'uoMaxFlows' truncation.
+
+Returns @[]@ when no flow exceeds 'uoMinAbsWeight' or when the method's
+diagnostics are disabled (@uoMaxFlows == 0@ / @uoMaxSimilar == 0@).
+-}
+findUncharacterized ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Inventory ->
+    MethodTables ->
+    ChemSynonyms ->
+    MethodIndex ->
+    UncharacterizedOpts ->
+    [UncharacterizedFlow]
+findUncharacterized _ unitDB flowDB inventory tables syns idx opts
+    | uoMaxFlows opts <= 0 = []
+    | totalAbs == 0 = []
+    | otherwise =
+        let unmatched =
+                [ (flow, qty, w)
+                | (fid, qty) <- M.toList inventory
+                , qty /= 0
+                , Just flow <- [M.lookup fid flowDB]
+                , isNothing (lookupCFForFlow tables fid (Just flow))
+                , let w = abs qty / totalAbs
+                , w >= uoMinAbsWeight opts
+                ]
+            ranked =
+                take (uoMaxFlows opts) $
+                    sortOn (\(_, _, w) -> Down w) unmatched
+         in [ UncharacterizedFlow
+                { ucfFlowId = flowId flow
+                , ucfFlowName = flowName flow
+                , ucfCategory = flowCategory flow
+                , ucfSubcomp = flowSubcompartment flow
+                , ucfFlowUnit = flowUnitText flow
+                , ucfQuantity = qty
+                , ucfAbsWeight = w
+                , ucfSimilarCFs = findSimilarCFs syns idx flow (uoMaxSimilar opts)
+                }
+            | (flow, qty, w) <- ranked
+            ]
+  where
+    !totalAbs = M.foldr (\q s -> s + abs q) 0 inventory
+    flowUnitText flow = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
+
+{- | Score an inventory and attach diagnostics in one call.
+
+Convenience wrapper that runs 'computeLCIAScoreFromTables' and then
+'findUncharacterized' on the same inputs, splicing the results into one
+'LCIAOutcome'. Use this on the diagnostics path; stick to
+'computeLCIAScoreFromTables' on the hot scoring path where the extra
+suggester work is wasted.
+-}
+computeLCIAScoreWithDiagnostics ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Inventory ->
+    MethodTables ->
+    ChemSynonyms ->
+    MethodIndex ->
+    UncharacterizedOpts ->
+    LCIAOutcome
+computeLCIAScoreWithDiagnostics unitConfig unitDB flowDB inventory tables syns idx opts =
+    let outcome = computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
+        diagnostics = findUncharacterized unitConfig unitDB flowDB inventory tables syns idx opts
+     in outcome{loUncharacterized = diagnostics}

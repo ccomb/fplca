@@ -4,12 +4,14 @@ module MappingSpec (spec) where
 
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.UUID (UUID, nil)
 import Data.UUID.V4 (nextRandom)
 import Test.Hspec
 
+import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
-import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
+import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..))
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Types (Flow (..), FlowType (..), Unit (..))
 import UnitConversion (defaultUnitConfig)
@@ -302,3 +304,148 @@ spec = do
                 byName = M.singleton "nox" [fWater, fUrbanAir]
                 comp = Compartment "air" "urban" ""
             fmap flowId (findFlowByNameComp byName "nox" (Just comp)) `shouldBe` Just fid1
+
+    describe "findSimilarCFs (post-scoring suggester)" $ do
+        let mkMethod cfs =
+                Method
+                    { methodId = nil
+                    , methodName = "Test"
+                    , methodDescription = Nothing
+                    , methodUnit = "kg eq"
+                    , methodCategory = "Climate change"
+                    , methodMethodology = Nothing
+                    , methodFactors = cfs
+                    }
+            airComp = Just (Compartment "air" "" "")
+
+        it "returns no candidates from an empty method" $ do
+            fid <- nextRandom
+            let flow = (mkFlow fid "Carbon dioxide" "air" Nothing){flowCAS = Nothing}
+                idx = buildMethodIndex (mkMethod [])
+            findSimilarCFs emptyChemSynonyms idx flow 3 `shouldBe` []
+
+        it "matches CO2 to Carbon dioxide via PubChem synonym expansion" $ do
+            fid <- nextRandom
+            let csv =
+                    "cas;canonical_name;synonyms...\n\
+                    \124-38-9;Carbon dioxide;CO2;Carbonic anhydride\n"
+                Right syns = parseChemSynonymsCSV csv
+                co2 = (mkCFComp "CO2" "air" "" 1.0){mcfCompartment = airComp}
+                ch4 = (mkCFComp "Methane" "air" "" 27.0){mcfCompartment = airComp}
+                idx = buildMethodIndex (mkMethod [co2, ch4])
+                flow = (mkFlow fid "Carbon dioxide" "air" Nothing){flowCAS = Nothing}
+                cands = findSimilarCFs syns idx flow 3
+            -- The CO2 candidate must be present, with the synonym-expansion reason.
+            let names = map scfMethodFlowName cands
+            names `shouldSatisfy` ("CO2" `elem`)
+            let co2Cand = head [c | c <- cands, scfMethodFlowName c == "CO2"]
+            scfReason co2Cand `shouldBe` SimBySynonymExpansion
+            scfScore co2Cand `shouldSatisfy` (> 0)
+
+        it "matches via CAS bridge when names diverge entirely" $ do
+            fid <- nextRandom
+            let oddName =
+                    (mkCFComp "Some weird IUPAC name" "air" "" 1.0)
+                        { mcfCAS = Just "124-38-9"
+                        , mcfCompartment = airComp
+                        }
+                idx = buildMethodIndex (mkMethod [oddName])
+                flow =
+                    (mkFlow fid "Random unrelated text" "air" Nothing)
+                        { flowCAS = Just "124-38-9"
+                        }
+                cands = findSimilarCFs emptyChemSynonyms idx flow 3
+            map scfReason cands `shouldBe` [SimByCASBridge]
+            map scfScore cands `shouldBe` [0.95]
+
+        it "ranks the higher-similarity candidate first" $ do
+            fid <- nextRandom
+            let close = mkCFComp "Methane biogenic" "air" "" 27.0
+                far = mkCFComp "Crude oil" "air" "" 0.0
+                idx = buildMethodIndex (mkMethod [far, close])
+                flow = mkFlow fid "Methane, biogenic" "air" Nothing
+                cands = findSimilarCFs emptyChemSynonyms idx flow 2
+            map scfMethodFlowName cands `shouldSatisfy` (\ns -> not (null ns) && head ns == "Methane biogenic")
+
+        it "respects maxN cap" $ do
+            fid <- nextRandom
+            let cfs = [mkCFComp ("foo " <> tShow i) "air" "" 1.0 | i <- [1 .. 10 :: Int]]
+                idx = buildMethodIndex (mkMethod cfs)
+                flow = mkFlow fid "foo bar" "air" Nothing
+                cands = findSimilarCFs emptyChemSynonyms idx flow 3
+            length cands `shouldSatisfy` (<= 3)
+
+    describe "findUncharacterized" $ do
+        let mkMethod cfs =
+                Method
+                    { methodId = nil
+                    , methodName = "Test"
+                    , methodDescription = Nothing
+                    , methodUnit = "kg eq"
+                    , methodCategory = "Climate change"
+                    , methodMethodology = Nothing
+                    , methodFactors = cfs
+                    }
+
+        it "returns [] when uoMaxFlows is 0" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "co2" "air" Nothing
+                inv = M.singleton fid 100.0
+                tables = buildMethodTables []
+                idx = buildMethodIndex (mkMethod [])
+                opts = defaultUncharacterizedOpts{uoMaxFlows = 0}
+            findUncharacterized
+                defaultUnitConfig
+                M.empty
+                (M.singleton fid flow)
+                inv
+                tables
+                emptyChemSynonyms
+                idx
+                opts
+                `shouldBe` []
+
+        it "drops flows below the absolute-weight threshold" $ do
+            big <- nextRandom
+            small <- nextRandom
+            let bigFlow = mkFlow big "tiny stuff" "air" Nothing
+                smallFlow = mkFlow small "huge stuff" "air" Nothing
+                inv = M.fromList [(big, 999.0), (small, 1.0)]
+                flowDB = M.fromList [(big, bigFlow), (small, smallFlow)]
+                tables = buildMethodTables []
+                idx = buildMethodIndex (mkMethod [])
+                opts = defaultUncharacterizedOpts{uoMinAbsWeight = 0.5}
+                result =
+                    findUncharacterized
+                        defaultUnitConfig
+                        M.empty
+                        flowDB
+                        inv
+                        tables
+                        emptyChemSynonyms
+                        idx
+                        opts
+            -- Only the big flow (99.9% of mass) clears the 50% threshold.
+            map ucfFlowName result `shouldBe` ["tiny stuff"]
+
+        it "skips flows that DO have a CF (they're characterized)" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "co2" "air" Nothing
+                cf = (mkCF "co2" Nothing 1.0){mcfFlowRef = fid}
+                tables = buildMethodTables [(cf, Just (flow, ByUUID))]
+                idx = buildMethodIndex (mkMethod [cf])
+                inv = M.singleton fid 100.0
+                flowDB = M.singleton fid flow
+            findUncharacterized
+                defaultUnitConfig
+                M.empty
+                flowDB
+                inv
+                tables
+                emptyChemSynonyms
+                idx
+                defaultUncharacterizedOpts
+                `shouldBe` []
+
+tShow :: (Show a) => a -> Text
+tShow = T.pack . show
