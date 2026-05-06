@@ -464,6 +464,9 @@ params r = case r of
     GetFlowMapping ->
         [ pDatabase
         , pMethodId
+        , Param "verbose" "boolean" Optional "When true, return per-CF and per-flow detail beyond the coverage stats: an unmatched_cfs list (CFs with no DB flow), and an unmatched_db_flows list ranked by inventory contribution to a chosen process when process_id is set."
+        , Param "process_id" "string" Optional "Required for the unmatched_db_flows ranking: ranks unmatched flows by their share of this process's inventory."
+        , Param "max_unmatched" "integer" Optional "Cap on each unmatched list (default 50)"
         ]
     GetCharacterization ->
         [ pDatabase
