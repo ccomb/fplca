@@ -46,7 +46,7 @@ import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
-import Types (Activity (..), Database (..), FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), Database (..), Flow, FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -825,6 +825,76 @@ callGetInventory dbManager rid args =
                             ]
             )
 
+{- | Everything an LCA-impacts handler needs after running the request.
+
+Bundled so that 'callGetImpacts' and the (future) 'callCompareImpacts'
+share one path through the math — there must be no second implementation
+to drift from this one.
+-}
+data ImpactsResult = ImpactsResult
+    { irOutcome :: !LCIAOutcome
+    , irMappingStats :: !MappingStats
+    , irContribs :: ![(Flow, Double, Double)]
+    -- ^ Sorted descending by absolute contribution.
+    , irUnknownUuids :: ![UUID.UUID]
+    , irRefProductName :: !Text
+    , irRefProductAmount :: !Double
+    , irRefProductUnit :: !Text
+    }
+
+{- | Run a fully resolved LCA request: solve inventory, map flows, score.
+
+Pure-data return: the JSON envelope is the caller's job, so different
+audit tools (single-impact, cross-DB compare) can format the same
+underlying numbers differently without duplicating the math.
+-}
+runImpactsRequest ::
+    DatabaseManager ->
+    KeyMap Value ->
+    LcaRequest ->
+    ExceptT Text IO ImpactsResult
+runImpactsRequest dbManager args req = do
+    let ld = lrLoaded req
+        db = ldDatabase ld
+        method = lrMethod req
+        dbName = lrDbName req
+        ra = lrResolved req
+    ExceptT $ pure $ ensureLinked dbName "computing impacts" db
+    subs <- ExceptT $ pure $ parseSubstitutionsArg args
+    unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+    inventory <-
+        ExceptT $
+            if null subs
+                then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) (raPid ra)
+                else
+                    either (Left . T.pack . show) Right
+                        <$> Service.inventoryWithSubsAndDeps
+                            unitCfg
+                            (DM.mkDepSolverLookup dbManager)
+                            db
+                            dbName
+                            (ldSharedSolver ld)
+                            (raPid ra)
+                            subs
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+    let stats = computeMappingStats mappings
+        outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+        contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
+    pure
+        ImpactsResult
+            { irOutcome = outcome
+            , irMappingStats = stats
+            , irContribs = contribs
+            , irUnknownUuids = unknownUuids
+            , irRefProductName = prodName
+            , irRefProductAmount = prodAmount
+            , irRefProductUnit = prodUnit
+            }
+
 {- | Handler for the 'get_impacts' MCP tool (computes LCIA score).
 Historically named 'get_lcia' — the MCP surface now uses 'impacts'
 per the naming audit; internal Haskell types keep the 'LCIA' acronym
@@ -836,41 +906,25 @@ callGetImpacts dbManager baseUrl rid args =
         <$> runExceptT
             ( do
                 req <- loadLcaRequest dbManager args
-                let ld = lrLoaded req
-                    db = ldDatabase ld
+                ir <- runImpactsRequest dbManager args req
+                (_, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+                let topN = fromMaybe 5 (intArg "top_flows" args)
                     method = lrMethod req
                     dbName = lrDbName req
                     ra = lrResolved req
-                ExceptT $ pure $ ensureLinked dbName "computing impacts" db
-                subs <- ExceptT $ pure $ parseSubstitutionsArg args
-                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                inventory <-
-                    ExceptT $
-                        if null subs
-                            then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) (raPid ra)
-                            else
-                                either (Left . T.pack . show) Right
-                                    <$> Service.inventoryWithSubsAndDeps
-                                        unitCfg
-                                        (DM.mkDepSolverLookup dbManager)
-                                        db
-                                        dbName
-                                        (ldSharedSolver ld)
-                                        (raPid ra)
-                                        subs
-                mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let topN = fromMaybe 5 (intArg "top_flows" args)
-                    stats = computeMappingStats mappings
-                    score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                    (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
-                    functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-                    contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                    score = loScore (irOutcome ir)
+                    stats = irMappingStats ir
+                    functionalUnit =
+                        T.pack (showFFloat (Just 2) (irRefProductAmount ir) "")
+                            <> " "
+                            <> irRefProductUnit ir
+                            <> " of "
+                            <> irRefProductName ir
+                    contribs = irContribs ir
                     topFlows = take topN contribs
                     webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
+                    unknownUuids = irUnknownUuids ir
                 liftIO $
                     unless (null unknownUuids) $
                         reportProgress Warning $
