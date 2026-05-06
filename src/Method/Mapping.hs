@@ -17,7 +17,9 @@ module Method.Mapping (
 
     -- * LCIA scoring
     MethodTables (..),
+    MethodIndex (..),
     buildMethodTables,
+    buildMethodIndex,
     computeLCIAScore,
     computeLCIAScoreFromTables,
     inventoryContributions,
@@ -41,6 +43,7 @@ module Method.Mapping (
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
@@ -235,6 +238,48 @@ data MethodTables = MethodTables
     , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
     }
+
+{- | Inverted indices over a 'Method' for the post-scoring suggester.
+
+Built from the raw 'Method' (not 'MethodTables', which has lost the source CF
+metadata after the lookup tables are constructed). Cached separately because
+the suggester is opt-in and only consulted on the small uncharacterized tail.
+
+* 'miCFs' — all CFs in source order; vector-indexed for cheap parallel arrays.
+* 'miCFTokens' — parallel to 'miCFs', each CF's normalized-name tokens.
+* 'miByMedium' — lowercase normalized medium → indices into 'miCFs', for
+  short-circuiting candidate scans to the same compartment medium.
+  Empty key holds CFs without compartment metadata.
+* 'miByCAS' — normalized CAS → indices into 'miCFs'. Multiple CFs can share a
+  CAS (same substance in different compartments); caller picks the best.
+-}
+data MethodIndex = MethodIndex
+    { miCFs :: !(V.Vector MethodCF)
+    , miCFTokens :: !(V.Vector (S.Set Text))
+    , miByMedium :: !(M.Map Text [Int])
+    , miByCAS :: !(M.Map Text [Int])
+    }
+
+-- | Build a 'MethodIndex' from a raw 'Method'. Run once per method, cache.
+buildMethodIndex :: Method -> MethodIndex
+buildMethodIndex method =
+    let cfs = V.fromList (methodFactors method)
+        tokens = V.map cfTokens cfs
+        indexed = zip [0 ..] (methodFactors method)
+     in MethodIndex
+            { miCFs = cfs
+            , miCFTokens = tokens
+            , miByMedium = M.fromListWith (++) [(cfMedium cf, [i]) | (i, cf) <- indexed]
+            , miByCAS = M.fromListWith (++) [(cas, [i]) | (i, cf) <- indexed, Just cas <- [mcfCAS cf]]
+            }
+  where
+    cfTokens :: MethodCF -> S.Set Text
+    cfTokens = S.fromList . T.words . normalizeName . mcfFlowName
+
+    cfMedium :: MethodCF -> Text
+    cfMedium cf = case mcfCompartment cf of
+        Nothing -> ""
+        Just (Compartment med _ _) -> normalizeMedium (T.toLower med)
 
 -- | Build 'MethodTables' from raw mappings. Run once per (db, method).
 buildMethodTables :: [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
