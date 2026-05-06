@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2024-present Christophe Combelles
+ */
+
 #ifndef MUMPS_WRAPPER_H
 #define MUMPS_WRAPPER_H
 
