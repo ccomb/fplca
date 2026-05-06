@@ -62,6 +62,7 @@ data Resource
     | ListClassifications
     | GetPathTo
     | GetConsumers
+    | CompareImpacts
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -136,6 +137,7 @@ apiPath r = case r of
     ListClassifications -> Just (GET, ["db", "{dbName}", "classifications"])
     GetPathTo -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "path-to"])
     GetConsumers -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "consumers"])
+    CompareImpacts -> Nothing -- MCP-only audit tool: cross-DB diff, no canonical HTTP route
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -171,6 +173,7 @@ mcpName r = case r of
     ListClassifications -> "list_classifications"
     GetPathTo -> "get_path_to"
     GetConsumers -> "get_consumers"
+    CompareImpacts -> "compare_impacts"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -202,6 +205,7 @@ cliName r = case r of
     ListClassifications -> "classifications"
     GetPathTo -> "path-to"
     GetConsumers -> "consumers"
+    CompareImpacts -> "compare-impacts"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -315,6 +319,15 @@ description r = case r of
         \consumer, 2 = consumer of consumer, etc. Useful for tracing downstream \
         \use of a raw material — e.g. finding transformed food products in \
         \Agribalyse that use a raw ingredient."
+    CompareImpacts ->
+        "LCA / ACV audit — score the same logical activity on two (database, \
+        \method) pairs and return the per-impact-category delta plus a per-flow \
+        \drill-down. Built for cross-database mapping audits: e.g. compare BAFU + \
+        \EF3.1 vs SimaPro + EF3.1 to surface flows whose contributions diverge \
+        \because of mapping gaps, not because of underlying chemistry. Headline \
+        \field is delta.relative_pct — the metric to drive down by adding \
+        \synonym pairs to data/flows.csv or by regenerating the chem_synonyms \
+        \snapshot."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -482,4 +495,13 @@ params r = case r of
         , pLimit "Max results (default 1000)"
         , Param "max_depth" "integer" Optional "Max hops from supplier (1 = direct consumers only)"
         , Param "include_edges" "boolean" Optional "When true, the response carries every technosphere edge whose endpoints are both reachable from the supplier. Lets callers reconstruct supplier→consumer paths without a second get_path_to call."
+        ]
+    CompareImpacts ->
+        [ Param "database_a" "string" Required "First database name"
+        , Param "process_id_a" "string" Required "Process ID in database_a (activityUUID_productUUID format)"
+        , Param "method_id_a" "string" Required "Method UUID for the A side"
+        , Param "database_b" "string" Required "Second database name"
+        , Param "process_id_b" "string" Required "Process ID in database_b (activityUUID_productUUID format)"
+        , Param "method_id_b" "string" Required "Method UUID for the B side"
+        , Param "top_flows" "integer" Optional "Per-side flow drill-down depth (default 10)"
         ]
