@@ -1,4 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -18,6 +21,12 @@ module Method.Mapping (
     -- * LCIA scoring
     MethodTables (..),
     MethodIndex (..),
+    LCIAOutcome (..),
+    UncharacterizedFlow (..),
+    SimilarCF (..),
+    SimilarReason (..),
+    UncharacterizedOpts (..),
+    defaultUncharacterizedOpts,
     buildMethodTables,
     buildMethodIndex,
     fillBroadcastVector,
@@ -50,6 +59,8 @@ module Method.Mapping (
     computeMappingStats,
 ) where
 
+import Control.DeepSeq (NFData)
+import Data.Aeson (ToJSON)
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
@@ -60,6 +71,7 @@ import Data.UUID (UUID)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
+import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
 import Matrix (Inventory, Vector)
@@ -288,6 +300,108 @@ data MethodIndex = MethodIndex
     , miByMedium :: !(M.Map Text [Int])
     , miByCAS :: !(M.Map Text [Int])
     }
+
+{- | Result of scoring an inventory: the score plus diagnostics.
+
+* 'loScore' — the LCIA score in the method's reference unit. Bit-equivalent
+  to the previous Double-only return.
+* 'loCharacterizedSum' / 'loInventoryAbsSum' — together they reveal how much
+  of the inventory was actually characterized (by absolute mass). The
+  difference is the silent-omission tail; small ratio means the score is
+  trustworthy, large ratio means many flows had no CF.
+* 'loUncharacterized' — flows with non-trivial inventory weight but no
+  matching CF, ranked by 'ucfAbsWeight'. Cap and threshold via
+  'UncharacterizedOpts'. Empty list ⇒ no diagnostics requested OR no flows
+  above threshold.
+* 'loUnknownUuids' — non-zero inventory UUIDs with no record in 'flowDB'.
+  These indicate merged-metadata gaps, not mapping bugs; surface
+  separately so the caller can react (per the "no silent errors" rule).
+-}
+data LCIAOutcome = LCIAOutcome
+    { loScore :: !Double
+    , loCharacterizedSum :: !Double
+    , loInventoryAbsSum :: !Double
+    , loUncharacterized :: ![UncharacterizedFlow]
+    , loUnknownUuids :: ![UUID]
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | A flow that carries inventory weight but found no matching CF.
+
+The 'ucfSimilarCFs' field lets consumers distinguish the two cases:
+
+* @[]@ — the method genuinely has no CF resembling this flow → legitimate gap.
+* non-empty — the method has CFs that look homologous → likely mapping bug,
+  worth a synonym entry in @data/flows.csv@ or a fresh PubChem regen.
+-}
+data UncharacterizedFlow = UncharacterizedFlow
+    { ucfFlowId :: !UUID
+    , ucfFlowName :: !Text
+    , ucfCategory :: !Text
+    , ucfSubcomp :: !(Maybe Text)
+    , ucfFlowUnit :: !Text
+    , ucfQuantity :: !Double
+    , ucfAbsWeight :: !Double
+    -- ^ |qty| / Σ|qty| over the whole inventory, in [0, 1].
+    , ucfSimilarCFs :: ![SimilarCF]
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+-- | A candidate CF flagged by the suggester for an uncharacterized flow.
+data SimilarCF = SimilarCF
+    { scfMethodFlowName :: !Text
+    , scfCAS :: !(Maybe Text)
+    , scfCompartment :: !(Maybe Compartment)
+    , scfScore :: !Double
+    -- ^ Combined similarity in [0, 1] (max of the three signals).
+    , scfReason :: !SimilarReason
+    -- ^ Which signal produced this candidate — guides human validation.
+    , scfCfValue :: !Double
+    , scfCfUnit :: !Text
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | Why a 'SimilarCF' was flagged. Carried through to the audit JSON so a
+human reviewer knows what to verify (formula, CAS, or just the names).
+-}
+data SimilarReason
+    = {- | Token-overlap Jaccard on normalized names. Catches word-order /
+      punctuation variants like "Methane, biogenic" ↔ "Methane biogenic".
+      -}
+      SimByJaccard
+    | {- | Token Jaccard after expanding via PubChem synonyms. Catches
+      formula↔name pairs like "CO2" ↔ "Carbon dioxide".
+      -}
+      SimBySynonymExpansion
+    | {- | The flow's CAS matched a CF's CAS even though names diverged.
+      Highest-confidence reason.
+      -}
+      SimByCASBridge
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | Tunable knobs for uncharacterized-flow diagnostics.
+
+* 'uoMinAbsWeight' — drop flows below this share of total |qty|. Defaults
+  to 0.001 (0.1%) so noise doesn't drown signal.
+* 'uoMaxSimilar' — top-N candidate CFs per uncharacterized flow. 0 disables
+  the similarity scan (useful in hot paths).
+* 'uoMaxFlows' — cap on the diagnostics list size, so payloads stay bounded
+  even on inventories with many tiny gaps.
+-}
+data UncharacterizedOpts = UncharacterizedOpts
+    { uoMinAbsWeight :: !Double
+    , uoMaxSimilar :: !Int
+    , uoMaxFlows :: !Int
+    }
+    deriving (Eq, Show)
+
+defaultUncharacterizedOpts :: UncharacterizedOpts
+defaultUncharacterizedOpts =
+    UncharacterizedOpts
+        { uoMinAbsWeight = 0.001
+        , uoMaxSimilar = 3
+        , uoMaxFlows = 50
+        }
 
 -- | Build a 'MethodIndex' from a raw 'Method'. Run once per method, cache.
 buildMethodIndex :: Method -> MethodIndex
