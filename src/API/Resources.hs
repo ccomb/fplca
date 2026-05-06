@@ -442,6 +442,7 @@ params r = case r of
         , pMethodId
         , Param "top_flows" "integer" Optional "Number of top contributing flows to return (default 5)"
         , pSubstitutions
+        , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge). Lets reviewers tell genuine method gaps from mapping bugs."
         ]
     ComputeSensitivity ->
         [ pDatabase
@@ -475,6 +476,7 @@ params r = case r of
         , pProcessId
         , Param "method_id" "string" Required "Method UUID for the impact category"
         , pLimit "Max flows to return, sorted by contribution (default 20)"
+        , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge)."
         ]
     GetContributingActivities ->
         [ pDatabase

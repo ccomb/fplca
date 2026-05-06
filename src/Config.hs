@@ -78,6 +78,7 @@ data Config = Config
     , cfgPlugins :: ![PluginConfig]
     , cfgHosting :: !(Maybe HostingConfig)
     , cfgGeographies :: !(Maybe FilePath) -- Path to geographies CSV (code,display_name,parents)
+    , cfgChemSynonyms :: !(Maybe FilePath) -- Path to chem_synonyms CSV (PubChem snapshot for the suggester)
     , cfgClassificationPresets :: ![ClassificationPreset]
     }
     deriving (Show, Eq, Generic)
@@ -176,6 +177,7 @@ defaultConfig =
         , cfgPlugins = []
         , cfgHosting = Nothing
         , cfgGeographies = Nothing
+        , cfgChemSynonyms = Nothing
         , cfgClassificationPresets = []
         }
 
@@ -192,6 +194,7 @@ instance DecodeTOML Config where
         cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
         cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         cfgGeographies <- getFieldOpt "geographies"
+        cfgChemSynonyms <- getFieldOpt "chem-synonyms"
         cfgClassificationPresets <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "classification-presets"
         pure Config{..}
 
@@ -327,6 +330,7 @@ applyDataDir :: Maybe FilePath -> Config -> Config
 applyDataDir mDataDir cfg =
     cfg
         { cfgGeographies = fmap resolve (cfgGeographies cfg)
+        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
         , cfgFlowSynonyms = map (mapPath resolve) (cfgFlowSynonyms cfg)
         , cfgCompartmentMappings = map (mapPath resolve) (cfgCompartmentMappings cfg)
         , cfgUnits = map (mapPath resolve) (cfgUnits cfg)
