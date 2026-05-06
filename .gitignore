@@ -12,7 +12,8 @@ cbits/*.o
 
 # Documentation and notes (except README)
 *.txt
-/scripts/
+/scripts/*
+!/scripts/build_chem_synonyms.py
 node_modules/
 
 # Generated source
