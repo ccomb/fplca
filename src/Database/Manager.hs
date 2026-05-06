@@ -116,6 +116,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import Matrix (clearCachedSolver)
+import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import Method.Mapping (MatchStrategy, MethodIndex, MethodTables, buildMethodIndex, buildMethodTables, mapMethodToFlows)
 import Method.Types (
     CompartmentMap,
@@ -431,6 +432,11 @@ data DatabaseManager = DatabaseManager
     uncharacterized flows. Keyed identically to the tables cache and
     invalidated on the same conditions.
     -}
+    , dmChemSynonyms :: !ChemSynonyms
+    {- ^ Vendored PubChem snapshot loaded once at startup. Drives the
+    suggester's synonym-expansion signal. Empty when no path is configured
+    or when the file is missing — suggester degrades to plain Jaccard.
+    -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (FlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
@@ -567,6 +573,15 @@ initDatabaseManager config noCache configPath = do
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
     methodIndexCacheVar <- newTVarIO M.empty
+    chemSyns <- case cfgChemSynonyms config of
+        Nothing -> pure emptyChemSynonyms
+        Just path -> do
+            result <- loadChemSynonyms path
+            case result of
+                Right cs -> pure cs
+                Left err -> do
+                    putStrLn $ "warning: could not load chem synonyms from " <> path <> ": " <> err
+                    pure emptyChemSynonyms
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -591,6 +606,7 @@ initDatabaseManager config noCache configPath = do
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
                 , dmMethodIndexCache = methodIndexCacheVar
+                , dmChemSynonyms = chemSyns
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }
