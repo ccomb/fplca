@@ -7,6 +7,7 @@ import Test.Hspec
 -- Import test modules (will be created)
 
 import qualified BM25Spec
+import qualified ChemSynonymsSpec
 import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
@@ -77,6 +78,7 @@ main = hspec $ do
         describe "Loader" LoaderSpec.spec
         describe "Method Mapping" MappingSpec.spec
         describe "Method Set Tables (multi-method scoring)" MethodSetTablesSpec.spec
+        describe "Chem Synonyms" ChemSynonymsSpec.spec
         describe "Uploaded Database" UploadedDatabaseSpec.spec
         describe "Progress Formatting" ProgressSpec.spec
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec

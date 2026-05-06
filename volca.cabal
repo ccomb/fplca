@@ -43,6 +43,7 @@ library
                      , Method.ParserSimaPro
                      , Method.ParserNW
                      , Method.Mapping
+                     , Method.ChemSynonyms
                      , Method.FlowResolver
                      , API.Routes
                      , API.Types
@@ -181,6 +182,7 @@ test-suite lca-tests
                      , LoaderSpec
                      , MappingSpec
                      , MethodSetTablesSpec
+                     , ChemSynonymsSpec
                      , UploadedDatabaseSpec
                      , ProgressSpec
                      , EcoSpold1Spec
