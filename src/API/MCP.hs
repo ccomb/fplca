@@ -349,6 +349,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "list_classifications" -> withDb dbManager rid args $ callListClassifications rid args
     "get_path_to" -> withDb dbManager rid args $ callGetPathTo rid args
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
+    "compare_impacts" -> callCompareImpacts dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1096,6 +1097,134 @@ callComputeSensitivity dbManager baseUrl rid args =
                             , "web_url" .= webUrl
                             ]
             )
+
+{- | Cross-database impact comparison for mapping audits.
+
+Scores the same logical activity twice — once on @(database_a, method_a)@,
+once on @(database_b, method_b)@ — and reports the per-impact-category
+delta plus a per-flow drill-down. Built for the BAFU+EF3.1 vs SimaPro+EF3.1
+audit: the SimaPro side is the trusted ground truth, the BAFU side is the
+mapping under test, and 'delta.relative_pct' is the headline metric to
+drive down.
+
+Per-flow alignment uses (normalized name, medium, subcompartment) — NOT
+UUIDs — because UUIDs differ across databases by construction (each parser
+generates them in its own namespace), and that's exactly the problem this
+audit is designed to expose.
+-}
+callCompareImpacts :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callCompareImpacts dbManager rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                argsA <- ExceptT . pure $ subArgs "_a" args
+                argsB <- ExceptT . pure $ subArgs "_b" args
+                reqA <- loadLcaRequest dbManager argsA
+                reqB <- loadLcaRequest dbManager argsB
+                irA <- runImpactsRequest dbManager argsA reqA
+                irB <- runImpactsRequest dbManager argsB reqB
+                let topN = fromMaybe 10 (intArg "top_flows" args)
+                    scoreA = loScore (irOutcome irA)
+                    scoreB = loScore (irOutcome irB)
+                    delta = scoreA - scoreB
+                    relPct =
+                        if scoreB /= 0
+                            then abs delta / abs scoreB * 100
+                            else 0
+                    aTop = take topN (irContribs irA)
+                    bTop = take topN (irContribs irB)
+                    aMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irA]
+                    bMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irB]
+                    common =
+                        [ object
+                            [ "flow_name" .= flowName f
+                            , "category" .= flowCategory f
+                            , "compartment" .= flowSubcompartment f
+                            , "a_contrib" .= cA
+                            , "b_contrib" .= cB
+                            , "delta" .= (cA - cB)
+                            ]
+                        | (f, _, cA) <- aTop
+                        , let k = flowKey f
+                        , Just cB <- [M.lookup k bMap]
+                        ]
+                    aOnly =
+                        [ encodeContrib f c
+                        | (f, _, c) <- aTop
+                        , M.notMember (flowKey f) bMap
+                        ]
+                    bOnly =
+                        [ encodeContrib f c
+                        | (f, _, c) <- bTop
+                        , M.notMember (flowKey f) aMap
+                        ]
+                pure $
+                    toolSuccessJson rid $
+                        object
+                            [ "a" .= sideJson reqA irA
+                            , "b" .= sideJson reqB irB
+                            , "delta"
+                                .= object
+                                    [ "absolute" .= delta
+                                    , "relative_pct" .= relPct
+                                    ]
+                            , "common_flows" .= common
+                            , "top_a_only_flows" .= aOnly
+                            , "top_b_only_flows" .= bOnly
+                            ]
+            )
+  where
+    sideJson req ir =
+        let outcome = irOutcome ir
+            characterizedShare =
+                if loInventoryAbsSum outcome > 0
+                    then loCharacterizedSum outcome / loInventoryAbsSum outcome
+                    else 1 :: Double
+         in object
+                [ "database" .= lrDbName req
+                , "process_id" .= raText (lrResolved req)
+                , "method" .= methodName (lrMethod req)
+                , "score" .= loScore outcome
+                , "unit" .= methodUnit (lrMethod req)
+                , "characterized_share" .= characterizedShare
+                ]
+    encodeContrib f c =
+        object
+            [ "flow_name" .= flowName f
+            , "category" .= flowCategory f
+            , "compartment" .= flowSubcompartment f
+            , "contribution" .= c
+            ]
+
+    -- Align flows across databases by (normalized name, medium, subcompartment).
+    -- UUIDs differ across DBs by construction — see Method/Mapping comments.
+    flowKey :: Flow -> (Text, Text, Text)
+    flowKey f =
+        ( T.toLower (T.strip (flowName f))
+        , T.toLower (flowCategory f)
+        , maybe "" T.toLower (flowSubcompartment f)
+        )
+
+{- | Pull side-specific args (suffixed @_a@ / @_b@) up to the standard names
+expected by 'loadLcaRequest'. Errors if any required side arg is missing.
+-}
+subArgs :: Text -> KeyMap Value -> Either Text (KeyMap Value)
+subArgs suffix args = do
+    db <- requireSide "database"
+    pid <- requireSide "process_id"
+    method <- requireSide "method_id"
+    pure $
+        KM.fromList
+            [ (fromText "database", String db)
+            , (fromText "process_id", String pid)
+            , (fromText "method_id", String method)
+            ]
+  where
+    requireSide key =
+        let suffixed = key <> suffix
+         in case textArg suffixed args of
+                Just v -> Right v
+                Nothing -> Left ("Missing required parameter: " <> suffixed)
 
 callListMethods :: DatabaseManager -> Value -> IO Value
 callListMethods dbManager rid = do
