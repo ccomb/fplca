@@ -3,7 +3,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Data.Aeson (Value, object, toJSON, (.=))
@@ -23,7 +23,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
-import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, shermanMorrisonVariant, toList)
+import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, toList)
 import qualified Matrix.Export as MatrixExport
 import Plugin.Types (Severity (..), ValidateContext (..), ValidateHandle (..), ValidationIssue (..), ValidationPhase (..))
 import qualified Progress
@@ -1833,7 +1833,7 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
                         -- Symmetric root-only swap: +a at old supplier, -a at new.
                         let perturb = [(fromIntegral oldPid, a), (fromIntegral newPid, -a)]
                         smResult <-
-                            shermanMorrisonVariant
+                            perturbA
                                 db
                                 mFact
                                 x
@@ -1849,6 +1849,79 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
         case result of
             Left err -> return $ Left err
             Right x' -> foldSubstitutions x' ss f
+
+{- | Run sensitivity analysis on a process: compute the baseline scaling
+vector @x₀@ once, then for each 'Perturbation' compute @x'@ via 'perturbA'
+in parallel via the cached factorization.
+
+The 'perDelta' is __relative__: the resolved coefficient @a@ is multiplied
+by @(1 + delta)@, so the absolute Δ passed to the kernel is @a * delta@.
+
+Per-perturbation errors (missing technosphere link, singular update,
+cross-DB qualified id in V1) are returned alongside the perturbation —
+they do not abort the sweep. Only the baseline solve and the global
+process-id resolution can fail at the outer 'ServiceError' level.
+
+V1: @perConsumer@ and @perSupplier@ must live in the root DB (no
+@\"dbName::pid\"@ form). Cross-DB perturbations require generalizing
+'applySubstitutionsAt' and are out of scope here.
+-}
+computeSensitivities ::
+    Database ->
+    SharedSolver ->
+    ProcessId ->
+    [Perturbation] ->
+    IO (Either ServiceError (U.Vector Double, [(Perturbation, Either Text (U.Vector Double))]))
+computeSensitivities db sharedSolver processId perts = do
+    let activityIndex = dbActivityIndex db
+        demandVec = buildDemandVectorFromIndex activityIndex processId
+    baselineX <- solveWithSharedSolver sharedSolver demandVec
+    mFact <- getFactorization sharedSolver
+    results <- mapConcurrently (runOne mFact baselineX) perts
+    pure $ Right (baselineX, results)
+  where
+    runOne mFact x p = do
+        result <- runOne' mFact x p
+        pure (p, result)
+
+    runOne' mFact x p = case resolvePair p of
+        Left e -> pure (Left e)
+        Right (consumerPid, supplierPid) ->
+            case findTechCoefficient db consumerPid supplierPid of
+                Nothing ->
+                    pure $
+                        Left $
+                            "no technosphere link from consumer "
+                                <> perConsumer p
+                                <> " to supplier "
+                                <> perSupplier p
+                Just a -> do
+                    -- Sign: a positive entry in 'perturb' adds u·e_col^T to (I-A),
+                    -- which DECREASES A_ij by that amount. We want 'delta' to mean
+                    -- "A_ij multiplied by (1+delta)", i.e. A_ij INCREASES by a*delta.
+                    -- So negate to flip the convention.
+                    let deltaAbs = -(a * perDelta p)
+                        perturb = [(fromIntegral supplierPid, deltaAbs)]
+                    sm <- perturbA db mFact x (fromIntegral consumerPid) perturb
+                    case sm of
+                        Left msg -> pure (Left msg)
+                        Right x' -> pure (Right x')
+
+    -- V1: root-DB only — qualified "db::pid" is rejected per perturbation
+    resolvePair p = do
+        cPid <- resolveRootOnly (perConsumer p)
+        sPid <- resolveRootOnly (perSupplier p)
+        Right (cPid, sPid)
+
+    resolveRootOnly t
+        | "::" `T.isInfixOf` t =
+            Left ("cross-DB perturbation not supported in V1: " <> t)
+        | otherwise =
+            case resolveActivityAndProcessId db t of
+                Right (pid, _) -> Right pid
+                Left (InvalidProcessId msg) -> Left msg
+                Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
+                Left e -> Left (T.pack (show e))
 
 -- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
 maxSubsDepth :: Int
@@ -2191,7 +2264,7 @@ applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
         -- only on u (not x); a future optimization can compute z once.
         results <-
             mapM
-                (\x -> shermanMorrisonVariant thisDb mFact x (fromIntegral consumerPid) perturb)
+                (\x -> perturbA thisDb mFact x (fromIntegral consumerPid) perturb)
                 xs
         pure $ case sequence results of
             Left msg -> Left (MatrixError msg)

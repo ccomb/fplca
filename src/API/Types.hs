@@ -1,5 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module API.Types where
@@ -588,6 +590,46 @@ data Substitution = Substitution
     }
     deriving (Generic)
 
+{- | A single rank-1 perturbation of a technosphere coefficient @A_ij@.
+
+@delta@ is __relative__: the resolved coefficient @a@ is multiplied by
+@(1 + delta)@. So @delta = +0.05@ means \"+5%\", and @delta = -1.0@
+removes the link entirely. The kernel passes @a * delta@ to 'perturbA'.
+-}
+data Perturbation = Perturbation
+    { perConsumer :: Text -- Consumer ProcessId (column j of A) — root DB only in V1
+    , perSupplier :: Text -- Supplier ProcessId (row i of A) — root DB only in V1
+    , perDelta :: Double -- Relative perturbation of A_ij (1 + delta)
+    , perLabel :: Maybe Text -- Optional label for response correlation
+    }
+    deriving (Generic)
+
+-- | Request body for POST sensitivity endpoints. Flat list, V1.
+newtype SensitivityRequest = SensitivityRequest
+    { srPerturbations :: [Perturbation]
+    }
+    deriving (Generic)
+
+{- | One result entry per perturbation. On success, @impact@ and @deltaImpact@
+are populated; on failure, @error@ carries the message. The two cases are
+mutually exclusive — Nothing fields are omitted from the JSON payload.
+-}
+data PerturbedEntry = PerturbedEntry
+    { peLabel :: Maybe Text
+    , pePerturbation :: Perturbation
+    , peImpact :: Maybe LCIAResult -- present on success
+    , peDeltaImpact :: Maybe Double -- present on success: impact - baseline
+    , peError :: Maybe Text -- present on failure
+    }
+    deriving (Generic)
+
+-- | Sensitivity response: baseline LCIA + one entry per perturbation (in order).
+data SensitivityResponse = SensitivityResponse
+    { srBaseline :: LCIAResult
+    , srPerturbed :: [PerturbedEntry]
+    }
+    deriving (Generic)
+
 {- | Parse a substitution reference into @(targetDB, bare pid)@. A bare
 @"actUUID_prodUUID"@ resolves in the caller-supplied root DB; a qualified
 @"dbName::actUUID_prodUUID"@ resolves in @dbName@. The @::@ separator is
@@ -802,6 +844,25 @@ instance ToJSON SupplyChainEdge where toJSON = strippedToJSON; toEncoding = stri
 instance FromJSON SupplyChainEdge where parseJSON = strippedParseJSON
 instance FromJSON SubstitutionRequest where parseJSON = strippedParseJSON
 instance FromJSON Substitution where parseJSON = strippedParseJSON
+instance FromJSON SensitivityRequest where parseJSON = strippedParseJSON
+instance FromJSON Perturbation where parseJSON = strippedParseJSON
+instance ToJSON Perturbation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+instance ToJSON SensitivityResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+
+-- Custom ToJSON for PerturbedEntry: omit Nothing fields so the JSON is clean
+-- (success entries have impact+deltaImpact, error entries have error).
+instance ToJSON PerturbedEntry where
+    toJSON e =
+        object $
+            ("perturbation" .= pePerturbation e)
+                : catMaybesPair
+                    [ ("label",) . toJSON <$> peLabel e
+                    , ("impact",) . toJSON <$> peImpact e
+                    , ("deltaImpact",) . toJSON <$> peDeltaImpact e
+                    , ("error",) . toJSON <$> peError e
+                    ]
+      where
+        catMaybesPair = foldr (\m acc -> maybe acc (: acc) m) []
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a) where parseJSON = strippedParseJSON

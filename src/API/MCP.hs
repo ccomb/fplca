@@ -34,7 +34,7 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Substitution (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
 import Method.Mapping (MappingStats (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
@@ -45,6 +45,7 @@ import Plugin.Types ()
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
 import qualified Service.Aggregate as Agg
+import Matrix (applyBiosphereMatrix)
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import Types (Activity (..), Database (..), FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
@@ -337,6 +338,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "aggregate" -> withDb dbManager rid args $ callAggregate dbManager rid args
     "get_inventory" -> callGetInventory dbManager rid args
     "get_impacts" -> callGetImpacts dbManager baseUrl rid args
+    "compute_sensitivity" -> callComputeSensitivity dbManager baseUrl rid args
     "list_methods" -> callListMethods dbManager rid
     "get_flow_mapping" -> callGetFlowMapping dbManager rid args
     "get_characterization" -> callGetCharacterization dbManager rid args
@@ -423,6 +425,35 @@ parseSubstitutionsArg args = case KM.lookup (fromText "substitutions") args of
         _ ->
             Left "each substitution must have string fields 'from', 'to', 'consumer'"
     parseOne _ = Left "each substitution must be an object"
+
+{- | Parse the required 'perturbations' array into '[Perturbation]'.
+Each entry is an object @{consumer, supplier, delta, label?}@. 'delta' is
+RELATIVE: A_ij multiplied by (1+delta). 'label' is optional and echoed back
+in the response. Returns 'Left' on shape mismatch so the caller surfaces a
+422 rather than running an empty sweep silently.
+-}
+parsePerturbationsArg :: KeyMap Value -> Either Text [Perturbation]
+parsePerturbationsArg args = case KM.lookup (fromText "perturbations") args of
+    Nothing -> Left "'perturbations' is required (array of {consumer, supplier, delta, label?})"
+    Just Null -> Left "'perturbations' must not be null"
+    Just (Array xs) -> traverse parseOne (foldr (:) [] xs)
+    Just _ -> Left "'perturbations' must be an array of {consumer, supplier, delta, label?} objects"
+  where
+    parseOne (Object o) = case (KM.lookup "consumer" o, KM.lookup "supplier" o, KM.lookup "delta" o) of
+        (Just (String c), Just (String s), Just (Number d)) ->
+            let lbl = case KM.lookup "label" o of
+                    Just (String t) -> Just t
+                    _ -> Nothing
+             in Right
+                    Perturbation
+                        { perConsumer = c
+                        , perSupplier = s
+                        , perDelta = realToFrac d
+                        , perLabel = lbl
+                        }
+        _ ->
+            Left "each perturbation must have string 'consumer', string 'supplier', number 'delta' (and optional string 'label')"
+    parseOne _ = Left "each perturbation must be an object"
 
 -- ---------------------------------------------------------------------------
 -- Tool implementations
@@ -904,6 +935,75 @@ callGetImpacts dbManager baseUrl rid args =
                                         ]
                                    | (f, cfVal, c) <- topFlows
                                    ]
+                            ]
+            )
+
+{- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
+@POST /sensitivity/{collection}/{methodId}@ endpoint: runs Service.computeSensitivities
+to get baseline + per-perturbation scaling vectors, then computes the LCIA score
+for each via 'computeLCIAScoreFromTables'.
+
+NOTE: same regionalized-method gap as 'callGetImpacts' — the score function
+ignores 'computeLCIAScoreAuto'. Migrating both to the auto-dispatch path is
+the open follow-up of #25.
+-}
+callComputeSensitivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callComputeSensitivity dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                req <- loadLcaRequest dbManager args
+                let ld = lrLoaded req
+                    db = ldDatabase ld
+                    method = lrMethod req
+                    dbName = lrDbName req
+                    ra = lrResolved req
+                ExceptT $ pure $ ensureLinked dbName "computing sensitivity" db
+                perts <- ExceptT $ pure $ parsePerturbationsArg args
+                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+                eRes <-
+                    liftIO $
+                        Service.computeSensitivities db (ldSharedSolver ld) (raPid ra) perts
+                (baselineX, perResults) <- case eRes of
+                    Left err -> throwE (T.pack (show err))
+                    Right v -> pure v
+                let scoreOf x =
+                        let inv = applyBiosphereMatrix db x
+                         in computeLCIAScoreFromTables unitCfg mUnits mFlows inv tables
+                    baselineScore = scoreOf baselineX
+                    webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                    pertEntry (p, eitherX) =
+                        let base =
+                                [ "perturbation"
+                                    .= object
+                                        [ "consumer" .= perConsumer p
+                                        , "supplier" .= perSupplier p
+                                        , "delta" .= perDelta p
+                                        ]
+                                ]
+                            withLabel = case perLabel p of
+                                Just l -> ("label" .= l) : base
+                                Nothing -> base
+                         in case eitherX of
+                                Left err -> object (("error" .= err) : withLabel)
+                                Right x' ->
+                                    let s = scoreOf x'
+                                     in object
+                                            ( ("score" .= s)
+                                                : ("delta_score" .= (s - baselineScore))
+                                                : withLabel
+                                            )
+                pure $
+                    toolSuccessJson rid $
+                        object
+                            [ "method" .= methodName method
+                            , "category" .= methodCategory method
+                            , "unit" .= methodUnit method
+                            , "baseline_score" .= baselineScore
+                            , "perturbed" .= map pertEntry perResults
+                            , "web_url" .= webUrl
                             ]
             )
 
