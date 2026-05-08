@@ -391,7 +391,7 @@ spec = do
             fid <- nextRandom
             let flow = mkFlow fid "co2" "air" Nothing
                 inv = M.singleton fid 100.0
-                tables = buildMethodTables []
+                tables = buildMethodTables M.empty []
                 idx = buildMethodIndex (mkMethod [])
                 opts = defaultUncharacterizedOpts{uoMaxFlows = 0}
             findUncharacterized
@@ -412,7 +412,7 @@ spec = do
                 smallFlow = mkFlow small "huge stuff" "air" Nothing
                 inv = M.fromList [(big, 999.0), (small, 1.0)]
                 flowDB = M.fromList [(big, bigFlow), (small, smallFlow)]
-                tables = buildMethodTables []
+                tables = buildMethodTables M.empty []
                 idx = buildMethodIndex (mkMethod [])
                 opts = defaultUncharacterizedOpts{uoMinAbsWeight = 0.5}
                 result =
@@ -432,7 +432,7 @@ spec = do
             fid <- nextRandom
             let flow = mkFlow fid "co2" "air" Nothing
                 cf = (mkCF "co2" Nothing 1.0){mcfFlowRef = fid}
-                tables = buildMethodTables [(cf, Just (flow, ByUUID))]
+                tables = buildMethodTables M.empty [(cf, Just (flow, ByUUID))]
                 idx = buildMethodIndex (mkMethod [cf])
                 inv = M.singleton fid 100.0
                 flowDB = M.singleton fid flow

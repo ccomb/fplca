@@ -471,7 +471,8 @@ mapMethodToTablesCached manager dbName db method = do
         Just tables -> pure tables
         Nothing -> do
             mappings <- mapMethodToFlowsCached manager dbName db method
-            let !tables = buildMethodTables mappings
+            cmap <- getMergedCompartmentMap manager
+            let !tables = buildMethodTables cmap mappings
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 
