@@ -180,6 +180,7 @@ test-suite lca-tests
                      , ConfigSpec
                      , LoaderSpec
                      , MappingSpec
+                     , MethodSetTablesSpec
                      , UploadedDatabaseSpec
                      , ProgressSpec
                      , EcoSpold1Spec

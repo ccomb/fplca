@@ -28,6 +28,7 @@ import qualified MCPSchemaSpec
 import qualified MappingSpec
 import qualified MatrixConstructionSpec
 import qualified MatrixExportSpec
+import qualified MethodSetTablesSpec
 import qualified MethodSpec
 import qualified NestedSubstitutionSpec
 import qualified NormalizeSpec
@@ -75,6 +76,7 @@ main = hspec $ do
         describe "VOLCA_DATA_DIR resolution" ConfigSpec.spec
         describe "Loader" LoaderSpec.spec
         describe "Method Mapping" MappingSpec.spec
+        describe "Method Set Tables (multi-method scoring)" MethodSetTablesSpec.spec
         describe "Uploaded Database" UploadedDatabaseSpec.spec
         describe "Progress Formatting" ProgressSpec.spec
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec

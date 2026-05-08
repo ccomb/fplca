@@ -83,6 +83,7 @@ module Database.Manager (
     -- * Cached flow mapping
     mapMethodToFlowsCached,
     mapMethodToTablesCached,
+    mapMethodSetToTablesCached,
 
     -- * Internal (for Main.hs to load database)
     loadDatabaseFromConfig,
@@ -119,7 +120,15 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import Matrix (clearCachedSolver)
-import Method.Mapping (MatchStrategy, MethodTables, buildMethodTables, fillBroadcastVector, mapMethodToFlows)
+import Method.Mapping (
+    MatchStrategy,
+    MethodSetTables,
+    MethodTables,
+    buildMethodSetTables,
+    buildMethodTables,
+    fillBroadcastVector,
+    mapMethodToFlows,
+ )
 import Method.Types (
     CompartmentMap,
     Method (..),
@@ -429,6 +438,13 @@ data DatabaseManager = DatabaseManager
     These depend only on (db, method), so building them once per pair
     saves O(n log n) Map constructions on every LCIA call.
     -}
+    , dmMethodSetTablesCache :: !(TVar (Map (Text, [UUID]) MethodSetTables))
+    {- ^ Cached stacked CF tables for multi-method scoring.
+    Key is (dbName, sortedMethodIds) so subset-arbitrary requests share
+    cache entries with named-collection ones whenever the method ids match.
+    Purged together with 'dmMethodTablesCache' on any reload that
+    invalidates the per-method cache (collection / synonym / DB load).
+    -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (FlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
@@ -470,6 +486,27 @@ mapMethodToTablesCached manager dbName db method = do
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 
+{- | Cached stacked CF tables for multi-method scoring. Built once per
+(dbName, sortedMethodIds), so two requests asking for the same method set
+(in any order) share an entry. Per-method 'MethodTables' are sourced via
+'mapMethodToTablesCached' and re-used; the only set-level work is stacking
+broadcasts into a dense matrix when none of the methods are regionalized.
+-}
+mapMethodSetToTablesCached :: DatabaseManager -> Text -> Database -> [Method] -> IO MethodSetTables
+mapMethodSetToTablesCached manager dbName db methods = do
+    -- Canonical key = (dbName, sorted methodIds). Stable regardless of input
+    -- ordering so subset-arbitrary requests don't fragment the cache.
+    let sortedMethods = sortOn methodId methods
+        key = (dbName, map methodId sortedMethods)
+    cache <- readTVarIO (dmMethodSetTablesCache manager)
+    case M.lookup key cache of
+        Just mst -> pure mst
+        Nothing -> do
+            tables <- traverse (mapMethodToTablesCached manager dbName db) sortedMethods
+            let !mst = buildMethodSetTables (zip sortedMethods tables)
+            atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
+            pure mst
+
 {- | Clear all cached flow mappings (call when databases, methods, or synonyms change).
 Also drops the merged flow/unit snapshots — both caches depend on the loaded-DB set.
 -}
@@ -477,6 +514,7 @@ clearMethodMappingCache :: DatabaseManager -> IO ()
 clearMethodMappingCache manager = atomically $ do
     writeTVar (dmMethodMappingCache manager) M.empty
     writeTVar (dmMethodTablesCache manager) M.empty
+    writeTVar (dmMethodSetTablesCache manager) M.empty
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
 
@@ -488,6 +526,7 @@ clearMethodMappingCacheForDb :: DatabaseManager -> Text -> IO ()
 clearMethodMappingCacheForDb manager dbName = atomically $ do
     modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
 
@@ -549,6 +588,7 @@ initDatabaseManager config noCache configPath = do
 
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
+    methodSetTablesCacheVar <- newTVarIO M.empty
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -572,6 +612,7 @@ initDatabaseManager config noCache configPath = do
                 , dmGeographies = geographies
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
+                , dmMethodSetTablesCache = methodSetTablesCacheVar
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }

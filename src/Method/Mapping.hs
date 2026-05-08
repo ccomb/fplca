@@ -27,6 +27,12 @@ module Method.Mapping (
     processContributionsFromTables,
     convertForCharacterization,
 
+    -- * Multi-method scoring
+    MethodSetTables (..),
+    MethodSetEntry (..),
+    buildMethodSetTables,
+    computeLCIAScoreSetFromTables,
+
     -- * Matching strategies
     MatchStrategy (..),
     strategyFromText,
@@ -755,3 +761,160 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
     normalizeMedium m
         | m == "natural resource" = "resource"
         | otherwise = m
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- Multi-method scoring (set-level)
+-- ────────────────────────────────────────────────────────────────────────────
+
+{- | One method's worth of data inside a 'MethodSetTables'. Carries the full
+'MethodTables' plus the original 'Method' so the scoring path can fall back
+to the per-method dispatcher ('computeLCIAScoreAuto') for regionalized
+methods without having to re-look up anything.
+-}
+data MethodSetEntry = MethodSetEntry
+    { mseMethodId :: !UUID
+    , mseMethod :: !Method
+    , mseTables :: !MethodTables
+    }
+
+{- | Stacked CF tables for scoring the same inventory against many methods at
+once. Built once per (db, sortedMethodIds) and cached.
+
+When no method in the set is regionalized ('msAnyRegional == False'), scoring
+collapses to a single dense matrix–vector product: one walk over the
+inventory, m FMAs per non-zero entry, no per-method inventory traversal. For
+PEF (~27 non-regionalized methods) this is the path that wins.
+
+When at least one method is regionalized, the matrix is empty and scoring
+falls back to per-method 'computeLCIAScoreAuto' — the regionalized path
+needs the biosphere-triple stream and the location hierarchy walk, which
+don't compose with the broadcast matvec. Non-regio methods in a mixed set
+still benefit indirectly via 'mtBroadcast' (filled in 'fillBroadcastVector').
+-}
+data MethodSetTables = MethodSetTables
+    { msEntries :: !(V.Vector MethodSetEntry)
+    -- ^ Per-method full data, in canonical (sorted) order.
+    , msAnyRegional :: !Bool
+    -- ^ True if any method has a non-empty 'mtRegionalizedCF'. Disables the
+    -- batched matvec path; per-method dispatch is used instead.
+    , msUuidIndex :: !(M.Map UUID Int)
+    -- ^ Flow UUID → row in 'msBroadcastMat'. Empty when 'msAnyRegional'.
+    , msNFlows :: !Int
+    -- ^ @M.size msUuidIndex@. Cached for the matvec inner loop.
+    , msBroadcastMat :: !(U.Vector Double)
+    -- ^ Flat row-major dense broadcast: @i * msNFlows + j@ holds the
+    -- effective CF for method @i@ at flow @j@. Length @m * msNFlows@.
+    -- Empty when 'msAnyRegional'.
+    }
+
+{- | Build 'MethodSetTables' from per-method 'MethodTables'. The list order
+defines the row order of the broadcast matrix and is preserved in
+'msEntries'. Callers should sort by 'methodId' for cache-key canonicality.
+-}
+buildMethodSetTables :: [(Method, MethodTables)] -> MethodSetTables
+buildMethodSetTables pairs =
+    let entries =
+            V.fromList
+                [MethodSetEntry (methodId m) m t | (m, t) <- pairs]
+        anyRegio = any (not . M.null . mtRegionalizedCF . snd) pairs
+        nMethods = V.length entries
+     in if anyRegio
+            then
+                MethodSetTables
+                    { msEntries = entries
+                    , msAnyRegional = True
+                    , msUuidIndex = M.empty
+                    , msNFlows = 0
+                    , msBroadcastMat = U.empty
+                    }
+            else
+                let -- Union of all UUIDs covered by any method's broadcast,
+                    -- assigned dense Int row indices.
+                    uuidSet =
+                        Set.unions
+                            [Set.fromList (M.keys (mtBroadcast t)) | (_, t) <- pairs]
+                    uuidList = Set.toAscList uuidSet
+                    uuidIndex = M.fromList (zip uuidList [0 ..])
+                    nFlows = length uuidList
+                    -- Pack broadcasts row-major into one flat unboxed Vector.
+                    -- A full m × nFlows allocation is fine (PEF: 27 × ~10k ≈ 2 MB).
+                    mat = U.create $ do
+                        mv <- MU.replicate (nMethods * nFlows) (0.0 :: Double)
+                        V.iforM_ entries $ \i e -> do
+                            let bcast = mtBroadcast (mseTables e)
+                                rowStart = i * nFlows
+                            mapM_
+                                ( \(uuid, cf) -> case M.lookup uuid uuidIndex of
+                                    Just j -> MU.unsafeWrite mv (rowStart + j) cf
+                                    Nothing -> pure ()
+                                )
+                                (M.toList bcast)
+                        pure mv
+                 in MethodSetTables
+                        { msEntries = entries
+                        , msAnyRegional = False
+                        , msUuidIndex = uuidIndex
+                        , msNFlows = nFlows
+                        , msBroadcastMat = mat
+                        }
+
+{- | Score an inventory against every method in a 'MethodSetTables'.
+Returns @(methodId, Right score)@ on success, @(methodId, Left err)@ for a
+regionalized method whose coverage is incomplete (mirrors the existing
+'computeLCIAScoreAuto' contract).
+
+When the set is fully non-regionalized, this collapses to a single dense
+matvec over a stacked broadcast matrix — no per-method inventory walk, no
+per-flow unit conversion (already pre-multiplied in 'mtBroadcast').
+Otherwise dispatches per-method to preserve the regionalized path's
+hierarchy walk + coverage check.
+-}
+computeLCIAScoreSetFromTables ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Database ->
+    Vector ->
+    Inventory ->
+    M.Map Text [Text] ->
+    MethodSetTables ->
+    [(UUID, Either Text Double)]
+computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier mst
+    | msAnyRegional mst = perMethod
+    | otherwise = batched
+  where
+    entries = V.toList (msEntries mst)
+
+    perMethod =
+        [ ( mseMethodId e
+          , computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier (mseTables e)
+          )
+        | e <- entries
+        ]
+
+    batched =
+        let nFlows = msNFlows mst
+            nMethods = V.length (msEntries mst)
+            mat = msBroadcastMat mst
+            invDense = U.create $ do
+                mv <- MU.replicate nFlows (0.0 :: Double)
+                M.foldlWithKey'
+                    ( \act uuid qty -> act >> case M.lookup uuid (msUuidIndex mst) of
+                        Just j | qty /= 0 -> MU.unsafeModify mv (+ qty) j
+                        _ -> pure ()
+                    )
+                    (pure ())
+                    inventory
+                pure mv
+            scores = U.generate nMethods $ \i ->
+                let rowStart = i * nFlows
+                    !s =
+                        U.sum $
+                            U.zipWith
+                                (*)
+                                (U.unsafeSlice rowStart nFlows mat)
+                                invDense
+                 in s
+         in [ (mseMethodId e, Right (scores U.! i))
+            | (i, e) <- zip [0 ..] entries
+            ]
