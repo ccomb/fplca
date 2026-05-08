@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2024-present Christophe Combelles
+ */
+
 #include "mumps_wrapper.h"
 #include <dmumps_c.h>
 #include <stdlib.h>

@@ -2,7 +2,11 @@ cabal-version:  2.4
 name:           mumps-hs
 version:        0.1.0.0
 synopsis:       Haskell bindings for MUMPS sequential sparse direct solver
-license:        AGPL-3.0-or-later
+license:        Apache-2.0
+license-file:   LICENSE
+copyright:      Copyright (c) 2024-present Christophe Combelles
+author:         Christophe Combelles
+maintainer:     ccomb@free.fr
 build-type:     Simple
 
 library
