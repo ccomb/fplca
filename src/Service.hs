@@ -23,7 +23,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
-import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, toList)
+import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, toList)
 import qualified Matrix.Export as MatrixExport
 import Plugin.Types (Severity (..), ValidateContext (..), ValidateHandle (..), ValidationIssue (..), ValidationPhase (..))
 import qualified Progress
@@ -1851,11 +1851,14 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
             Right x' -> foldSubstitutions x' ss f
 
 {- | Run sensitivity analysis on a process: compute the baseline scaling
-vector @x₀@ once, then for each 'Perturbation' compute @x'@ via 'perturbA'
-in parallel via the cached factorization.
+vector @x₀@ once, then resolve every 'Perturbation' to a (consumer column,
+sparse perturbation) spec and dispatch all valid specs to 'perturbABatch'
+in a __single__ MUMPS multi-RHS call.
 
 The 'perDelta' is __relative__: the resolved coefficient @a@ is multiplied
 by @(1 + delta)@, so the absolute Δ passed to the kernel is @a * delta@.
+A positive entry in @perturb@ adds @u·e_col^T@ to @(I-A)@, which decreases
+@A_ij@; we negate to flip the convention so @delta=+0.05@ means \"+5%\".
 
 Per-perturbation errors (missing technosphere link, singular update,
 cross-DB qualified id in V1) are returned alongside the perturbation —
@@ -1877,51 +1880,48 @@ computeSensitivities db sharedSolver processId perts = do
         demandVec = buildDemandVectorFromIndex activityIndex processId
     baselineX <- solveWithSharedSolver sharedSolver demandVec
     mFact <- getFactorization sharedSolver
-    results <- mapConcurrently (runOne mFact baselineX) perts
-    pure $ Right (baselineX, results)
+    -- Resolve each perturbation up-front; valid ones go to the batch as
+    -- (consumerCol, [(supplierIdx, deltaAbs)]). Invalid ones produce a
+    -- placeholder empty spec (no-op in the batch) and the resolution error
+    -- is grafted onto the final result.
+    let resolved = map (resolveSpec db) perts
+        specs = map specOf resolved
+    smResults <- perturbABatch db mFact baselineX specs
+    let combined = zipWith3 combine perts resolved smResults
+    pure $ Right (baselineX, combined)
   where
-    runOne mFact x p = do
-        result <- runOne' mFact x p
-        pure (p, result)
+    specOf (Right (col, perturb)) = (col, perturb)
+    specOf (Left _) = (0, []) -- empty perturb → batch returns Right baselineX
 
-    runOne' mFact x p = case resolvePair p of
-        Left e -> pure (Left e)
-        Right (consumerPid, supplierPid) ->
-            case findTechCoefficient db consumerPid supplierPid of
-                Nothing ->
-                    pure $
-                        Left $
-                            "no technosphere link from consumer "
-                                <> perConsumer p
-                                <> " to supplier "
-                                <> perSupplier p
-                Just a -> do
-                    -- Sign: a positive entry in 'perturb' adds u·e_col^T to (I-A),
-                    -- which DECREASES A_ij by that amount. We want 'delta' to mean
-                    -- "A_ij multiplied by (1+delta)", i.e. A_ij INCREASES by a*delta.
-                    -- So negate to flip the convention.
-                    let deltaAbs = -(a * perDelta p)
-                        perturb = [(fromIntegral supplierPid, deltaAbs)]
-                    sm <- perturbA db mFact x (fromIntegral consumerPid) perturb
-                    case sm of
-                        Left msg -> pure (Left msg)
-                        Right x' -> pure (Right x')
+    combine p (Left e) _ = (p, Left e) -- resolution error wins
+    combine p (Right _) sm = (p, sm) -- otherwise use the SM result
 
-    -- V1: root-DB only — qualified "db::pid" is rejected per perturbation
-    resolvePair p = do
-        cPid <- resolveRootOnly (perConsumer p)
-        sPid <- resolveRootOnly (perSupplier p)
-        Right (cPid, sPid)
+resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
+resolveSpec db p = do
+    consumerPid <- resolveRootOnly db (perConsumer p)
+    supplierPid <- resolveRootOnly db (perSupplier p)
+    case findTechCoefficient db consumerPid supplierPid of
+        Nothing ->
+            Left $
+                "no technosphere link from consumer "
+                    <> perConsumer p
+                    <> " to supplier "
+                    <> perSupplier p
+        Just a ->
+            let deltaAbs = -(a * perDelta p)
+             in Right (fromIntegral consumerPid, [(fromIntegral supplierPid, deltaAbs)])
 
-    resolveRootOnly t
-        | "::" `T.isInfixOf` t =
-            Left ("cross-DB perturbation not supported in V1: " <> t)
-        | otherwise =
-            case resolveActivityAndProcessId db t of
-                Right (pid, _) -> Right pid
-                Left (InvalidProcessId msg) -> Left msg
-                Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
-                Left e -> Left (T.pack (show e))
+-- V1: root-DB only — qualified "db::pid" is rejected per perturbation
+resolveRootOnly :: Database -> Text -> Either Text ProcessId
+resolveRootOnly db t
+    | "::" `T.isInfixOf` t =
+        Left ("cross-DB perturbation not supported in V1: " <> t)
+    | otherwise =
+        case resolveActivityAndProcessId db t of
+            Right (pid, _) -> Right pid
+            Left (InvalidProcessId msg) -> Left msg
+            Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
+            Left e -> Left (T.pack (show e))
 
 -- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
 maxSubsDepth :: Int

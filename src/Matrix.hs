@@ -40,6 +40,7 @@ module Matrix (
     depDemandsToVector,
     computeProcessLCIAContributions,
     perturbA,
+    perturbABatch,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
@@ -443,14 +444,71 @@ perturbA db mFact x col perturb
                     [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
                     (fromIntegral activityCount)
                     u
-        let vtx = x U.! col
-            vtz = z U.! col
-            denom = 1.0 + vtz
-        if abs denom < 1e-12
-            then pure $ Left "Sherman-Morrison update is singular \x2014 perturbation drives (I-A) into a degenerate state"
-            else do
+        pure $ applyShermanMorrison x col z
+
+-- | Apply the Sherman-Morrison rank-1 formula given the precomputed
+-- z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+applyShermanMorrison :: Vector -> Int -> Vector -> Either T.Text Vector
+applyShermanMorrison x col z =
+    let vtx = x U.! col
+        vtz = z U.! col
+        denom = 1.0 + vtz
+     in if abs denom < 1e-12
+            then Left "Sherman-Morrison update is singular \x2014 perturbation drives (I-A) into a degenerate state"
+            else
                 let scale = vtx / denom
-                pure $ Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+                 in Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+
+{- |
+Batched 'perturbA': computes z_k = inv(I-A) * u_k for every non-empty
+perturbation in __one__ MUMPS multi-RHS solve, then applies the
+Sherman-Morrison formula per-k in pure Haskell.
+
+This is the right entry point for sensitivity sweeps — the per-perturbation
+back-substitution is the only thing that touches the global MUMPS lock, so
+batching collapses N serialized back-subs into one chunked multi-RHS call
+(see 'solveSparseLinearSystemWithFactorizationMulti').
+
+Empty perturbations short-circuit to @Right x@ without consuming a solve slot.
+Order of results matches the input.
+-}
+perturbABatch ::
+    Database ->
+    -- | Cached factorization (Nothing = per-spec re-solve, slow path)
+    Maybe MatrixFactorization ->
+    -- | Baseline scaling vector x
+    Vector ->
+    -- | One @(col, perturb)@ per spec, in caller order
+    [(Int, [(Int, Double)])] ->
+    -- | One result per spec, in the same order
+    IO [Either T.Text Vector]
+perturbABatch db mFact x specs = do
+    let n = U.length x
+        indexed = zip [0 :: Int ..] specs
+        nonEmpty =
+            [ (idx, col, U.accum (+) (U.replicate n 0.0) p)
+            | (idx, (col, p)) <- indexed
+            , not (null p)
+            ]
+        us = [u | (_, _, u) <- nonEmpty]
+    zs <- case (mFact, us) of
+        (_, []) -> pure []
+        (Just f, _) -> solveSparseLinearSystemWithFactorizationMulti f us
+        (Nothing, _) -> do
+            let techTriples = dbTechnosphereTriples db
+                activityCount = dbActivityCount db
+                aTriples =
+                    [ (fromIntegral i, fromIntegral j, v)
+                    | SparseTriple i j v <- U.toList techTriples
+                    ]
+            mapM (solveSparseLinearSystem aTriples (fromIntegral activityCount)) us
+    let resultsByIdx :: M.Map Int (Either T.Text Vector)
+        resultsByIdx =
+            M.fromList
+                [ (idx, applyShermanMorrison x col z)
+                | ((idx, col, _), z) <- zip nonEmpty zs
+                ]
+    pure $ map (\(idx, _) -> M.findWithDefault (Right x) idx resultsByIdx) indexed
 
 {- |
 Accumulate cross-database supplier demands for a given root scaling vector.
