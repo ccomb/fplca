@@ -802,9 +802,18 @@ data MethodSetTables = MethodSetTables
     , msNFlows :: !Int
     -- ^ @M.size msUuidIndex@. Cached for the matvec inner loop.
     , msBroadcastMat :: !(U.Vector Double)
-    -- ^ Flat row-major dense broadcast: @i * msNFlows + j@ holds the
-    -- effective CF for method @i@ at flow @j@. Length @m * msNFlows@.
-    -- Empty when 'msAnyRegional'.
+    -- ^ Flat column-major dense broadcast: @j * m + i@ holds the effective
+    -- CF for method @i@ at flow row @j@. Length @msNFlows * m@. Empty when
+    -- 'msAnyRegional'.
+    --
+    -- The layout is chosen to match the scoring access pattern: an
+    -- inventory entry maps to one flow row @j@; reading the @m@ CFs across
+    -- methods for that row is then a contiguous slice. With a sparse
+    -- inventory (typical: hundreds of non-zero flows out of thousands)
+    -- this is far cheaper than a row-major dense matvec, which would
+    -- multiply across every flow regardless.
+    , msNMethods :: !Int
+    -- ^ @V.length msEntries@ cached for the scoring inner loop.
     }
 
 {- | Build 'MethodSetTables' from per-method 'MethodTables'. The list order
@@ -826,6 +835,7 @@ buildMethodSetTables pairs =
                     , msUuidIndex = M.empty
                     , msNFlows = 0
                     , msBroadcastMat = U.empty
+                    , msNMethods = nMethods
                     }
             else
                 let -- Union of all UUIDs covered by any method's broadcast,
@@ -836,19 +846,18 @@ buildMethodSetTables pairs =
                     uuidList = Set.toAscList uuidSet
                     uuidIndex = M.fromList (zip uuidList [0 ..])
                     nFlows = length uuidList
-                    -- Pack broadcasts row-major into one flat unboxed Vector.
-                    -- A full m × nFlows allocation is fine (PEF: 27 × ~10k ≈ 2 MB).
+                    -- Column-major: cell (i, j) = mat[j * nMethods + i].
+                    -- All m CFs for a single flow j are contiguous so the
+                    -- sparse-inventory scoring loop walks contiguous memory.
                     mat = U.create $ do
-                        mv <- MU.replicate (nMethods * nFlows) (0.0 :: Double)
-                        V.iforM_ entries $ \i e -> do
-                            let bcast = mtBroadcast (mseTables e)
-                                rowStart = i * nFlows
+                        mv <- MU.replicate (nFlows * nMethods) (0.0 :: Double)
+                        V.iforM_ entries $ \i e ->
                             mapM_
                                 ( \(uuid, cf) -> case M.lookup uuid uuidIndex of
-                                    Just j -> MU.unsafeWrite mv (rowStart + j) cf
+                                    Just j -> MU.unsafeWrite mv (j * nMethods + i) cf
                                     Nothing -> pure ()
                                 )
-                                (M.toList bcast)
+                                (M.toList (mtBroadcast (mseTables e)))
                         pure mv
                  in MethodSetTables
                         { msEntries = entries
@@ -856,6 +865,7 @@ buildMethodSetTables pairs =
                         , msUuidIndex = uuidIndex
                         , msNFlows = nFlows
                         , msBroadcastMat = mat
+                        , msNMethods = nMethods
                         }
 
 {- | Score an inventory against every method in a 'MethodSetTables'.
@@ -893,28 +903,35 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
         ]
 
     batched =
-        let nFlows = msNFlows mst
-            nMethods = V.length (msEntries mst)
+        let nMethods = msNMethods mst
             mat = msBroadcastMat mst
-            invDense = U.create $ do
-                mv <- MU.replicate nFlows (0.0 :: Double)
-                M.foldlWithKey'
-                    ( \act uuid qty -> act >> case M.lookup uuid (msUuidIndex mst) of
-                        Just j | qty /= 0 -> MU.unsafeModify mv (+ qty) j
-                        _ -> pure ()
+            uuidIdx = msUuidIndex mst
+            -- Sparse walk: for each non-zero (uuid, qty) in the inventory,
+            -- find its dense row j (if any), then accumulate
+            --   scores[i] += qty * mat[j * nMethods + i]
+            -- across the m contiguous CFs at that row. nnz × m FMAs total,
+            -- contiguous reads — vs a dense matvec which would do
+            -- nFlows × m even when the inventory touches a small fraction.
+            scores = U.create $ do
+                mv <- MU.replicate nMethods (0.0 :: Double)
+                mapM_
+                    ( \(uuid, qty) ->
+                        if qty == 0
+                            then pure ()
+                            else case M.lookup uuid uuidIdx of
+                                Nothing -> pure ()
+                                Just j -> do
+                                    let rowStart = j * nMethods
+                                        loop !i
+                                            | i >= nMethods = pure ()
+                                            | otherwise = do
+                                                let !cf = U.unsafeIndex mat (rowStart + i)
+                                                MU.unsafeModify mv (+ qty * cf) i
+                                                loop (i + 1)
+                                    loop 0
                     )
-                    (pure ())
-                    inventory
+                    (M.toList inventory)
                 pure mv
-            scores = U.generate nMethods $ \i ->
-                let rowStart = i * nFlows
-                    !s =
-                        U.sum $
-                            U.zipWith
-                                (*)
-                                (U.unsafeSlice rowStart nFlows mat)
-                                invDense
-                 in s
          in [ (mseMethodId e, Right (scores U.! i))
             | (i, e) <- zip [0 ..] entries
             ]

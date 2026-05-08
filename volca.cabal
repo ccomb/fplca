@@ -221,3 +221,19 @@ test-suite lca-tests
                      , network-uri
 
   default-language:    Haskell2010
+
+benchmark multi-method-bench
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      bench
+  main-is:             MultiMethodBench.hs
+  ghc-options:         -O2 -rtsopts -with-rtsopts=-A32m
+  default-extensions:  NumericUnderscores
+  build-depends:       base >=4.14 && <5
+                     , volca
+                     , criterion
+                     , containers
+                     , text
+                     , uuid
+                     , vector
+                     , random
+  default-language:    Haskell2010
