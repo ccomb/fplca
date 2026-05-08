@@ -24,6 +24,7 @@ module Method.Mapping (
     computeRegionalizedLCIAScore,
     inventoryContributions,
     processContributionsFromTables,
+    convertForCharacterization,
 
     -- * Matching strategies
     MatchStrategy (..),
@@ -492,10 +493,7 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
                                 Right Nothing -> Right running
                                 Right (Just (cfVal, cfUnit)) ->
                                     let flowUnit = maybe "" unitName (M.lookup flowUUID flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                                        converted =
-                                            if flowUnit == cfUnit || T.null cfUnit
-                                                then contribution
-                                                else fromMaybe contribution (convertUnit unitConfig flowUnit cfUnit contribution)
+                                        converted = convertForCharacterization unitConfig flowUnit cfUnit contribution
                                      in Right (running + converted * cfVal)
                                 Left err -> Left err
      in U.foldl' step (Right 0) bioTriples

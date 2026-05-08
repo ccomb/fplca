@@ -359,6 +359,28 @@ spec = do
             unknowns `shouldBe` []
             map (\(_, _, c) -> c) contribs `shouldBe` [0.0]
 
+    describe "convertForCharacterization" $ do
+        it "passes qty through when units match by name" $
+            convertForCharacterization defaultUnitConfig "kg" "kg" 5.0 `shouldBe` 5.0
+
+        it "passes qty through when cfUnit is empty (method without unit)" $
+            convertForCharacterization defaultUnitConfig "kg" "" 7.0 `shouldBe` 7.0
+
+        it "passes qty through when flowUnit is empty (no metadata)" $
+            convertForCharacterization defaultUnitConfig "" "kg" 9.0 `shouldBe` 9.0
+
+        it "passes qty through when cfUnit is an LCIA result expression unknown to UnitConfig" $
+            -- "kg CO2 eq" is not a physical unit; trust the CF author.
+            convertForCharacterization defaultUnitConfig "kg" "kg CO2 eq" 3.0 `shouldBe` 3.0
+
+        it "returns 0 when both units are known but dimensionally incompatible" $
+            -- m (length) → kg (mass): refuse to inject wrong-dimension data.
+            convertForCharacterization defaultUnitConfig "m" "kg" 100.0 `shouldBe` 0.0
+
+        it "applies the conversion factor when units differ but are compatible" $
+            -- 1000 g → 1.0 kg
+            convertForCharacterization gKgUnitConfig "g" "kg" 1000.0 `shouldBe` 1.0
+
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
         it "counts ByFuzzy matches" $ do
             fid <- nextRandom
