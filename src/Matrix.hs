@@ -386,7 +386,7 @@ computeProcessLCIAContributions db scalingVec cfMap =
 Rank-1 perturbation of (I-A) via Sherman-Morrison (~4ms per call).
 
 Given a baseline scaling vector @x@ such that @(I-A) x = d@, this returns
-@x'@ for the perturbed system @(I-A - u·e_col^T) x' = d@, where @u@ is a
+@x'@ for the perturbed system @(I-A + u·e_col^T) x' = d@, where @u@ is a
 sparse vector on the supplier (row) axis and @e_col@ selects a single
 consumer column. The kernel reuses the cached factorization:
 
@@ -394,12 +394,20 @@ consumer column. The kernel reuses the cached factorization:
 
 with @z = inv(I-A) * u@ (one back-substitution) and @v = e_col@.
 
+== Sign convention
+
+A positive entry in @perturb@ adds to @(I-A)@, which __decreases__ @A@ by
+the same amount. So @perturb = [(i, Δ)]@ at @col = j@ encodes
+@A_ij -= Δ@. To __increase__ @A_ij@ by @Δ@, pass @[(i, -Δ)]@.
+
 == Encoding common changes
 
-* __Single matrix entry__ @A_ij += Δ@ — @col = j@, @perturb = [(i, Δ)]@.
+* __Single matrix entry__ @A_ij -= Δ@ — @col = j@, @perturb = [(i, Δ)]@.
 * __Symmetric supplier swap__ at consumer @j@ (drop @old@ at coefficient
   @a@, add @new@ at the same amount) — @col = j@,
-  @perturb = [(old, +a), (new, -a)]@.
+  @perturb = [(old, +a), (new, -a)]@. The @+a@ on @old@ subtracts @a@
+  from @A_(old,j)@ (was @a@, becomes @0@); the @-a@ on @new@ adds @a@
+  to @A_(new,j)@ (was @0@, becomes @a@).
 * __Asymmetric cross-DB substitution__ where one side lives in a dep DB —
   pass only the root-side entry; the dep-side change is carried by a
   virtual 'CrossDBLink'.
