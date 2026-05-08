@@ -612,11 +612,12 @@ newtype SensitivityRequest = SensitivityRequest
 
 {- | One result entry per perturbation. On success, @impact@ and @deltaImpact@
 are populated; on failure, @error@ carries the message. The two cases are
-mutually exclusive — Nothing fields are omitted from the JSON payload.
+mutually exclusive — Nothing fields are omitted from the JSON payload. The
+echoed @perturbation@ carries the @label@ if the caller supplied one, so
+callers don't need to thread an out-of-band identifier.
 -}
 data PerturbedEntry = PerturbedEntry
-    { peLabel :: Maybe Text
-    , pePerturbation :: Perturbation
+    { pePerturbation :: Perturbation
     , peImpact :: Maybe LCIAResult -- present on success
     , peDeltaImpact :: Maybe Double -- present on success: impact - baseline
     , peError :: Maybe Text -- present on failure
@@ -856,8 +857,7 @@ instance ToJSON PerturbedEntry where
         object $
             ("perturbation" .= pePerturbation e)
                 : catMaybesPair
-                    [ ("label",) . toJSON <$> peLabel e
-                    , ("impact",) . toJSON <$> peImpact e
+                    [ ("impact",) . toJSON <$> peImpact e
                     , ("deltaImpact",) . toJSON <$> peDeltaImpact e
                     , ("error",) . toJSON <$> peError e
                     ]

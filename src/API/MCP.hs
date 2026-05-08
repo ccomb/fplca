@@ -37,7 +37,7 @@ import qualified Database.Manager as DM
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
-import Method.Mapping (MappingStats (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (MappingStats (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
@@ -941,11 +941,9 @@ callGetImpacts dbManager baseUrl rid args =
 {- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
 @POST /sensitivity/{collection}/{methodId}@ endpoint: runs Service.computeSensitivities
 to get baseline + per-perturbation scaling vectors, then computes the LCIA score
-for each via 'computeLCIAScoreFromTables'.
-
-NOTE: same regionalized-method gap as 'callGetImpacts' — the score function
-ignores 'computeLCIAScoreAuto'. Migrating both to the auto-dispatch path is
-the open follow-up of #25.
+for each. Uses 'computeLCIAScoreAuto' so regionalized methods route through the
+location-hierarchy walk; non-regionalized methods stay on the classic
+'computeLCIAScoreFromTables' path.
 -}
 callComputeSensitivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callComputeSensitivity dbManager baseUrl rid args =
@@ -963,6 +961,7 @@ callComputeSensitivity dbManager baseUrl rid args =
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+                hier <- liftIO $ DM.getLocationHierarchy dbManager
                 eRes <-
                     liftIO $
                         Service.computeSensitivities db (ldSharedSolver ld) (raPid ra) perts
@@ -971,9 +970,13 @@ callComputeSensitivity dbManager baseUrl rid args =
                     Right v -> pure v
                 let scoreOf x =
                         let inv = applyBiosphereMatrix db x
-                         in computeLCIAScoreFromTables unitCfg mUnits mFlows inv tables
-                    baselineScore = scoreOf baselineX
-                    webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                         in case computeLCIAScoreAuto unitCfg mUnits mFlows db x inv hier tables of
+                                Right s -> Right s
+                                Left e -> Left e
+                baselineScore <- case scoreOf baselineX of
+                    Right s -> pure s
+                    Left e -> throwE ("baseline scoring failed: " <> e)
+                let webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
                     pertEntry (p, eitherX) =
                         let base =
                                 [ "perturbation"
@@ -988,9 +991,10 @@ callComputeSensitivity dbManager baseUrl rid args =
                                 Nothing -> base
                          in case eitherX of
                                 Left err -> object (("error" .= err) : withLabel)
-                                Right x' ->
-                                    let s = scoreOf x'
-                                     in object
+                                Right x' -> case scoreOf x' of
+                                    Left err -> object (("error" .= err) : withLabel)
+                                    Right s ->
+                                        object
                                             ( ("score" .= s)
                                                 : ("delta_score" .= (s - baselineScore))
                                                 : withLabel
