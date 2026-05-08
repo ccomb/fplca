@@ -119,7 +119,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import Matrix (clearCachedSolver)
-import Method.Mapping (MatchStrategy, MethodTables, buildMethodTables, mapMethodToFlows)
+import Method.Mapping (MatchStrategy, MethodTables, buildMethodTables, fillBroadcastVector, mapMethodToFlows)
 import Method.Types (
     CompartmentMap,
     Method (..),
@@ -464,7 +464,9 @@ mapMethodToTablesCached manager dbName db method = do
         Nothing -> do
             mappings <- mapMethodToFlowsCached manager dbName db method
             cmap <- getMergedCompartmentMap manager
-            let !tables = buildMethodTables cmap mappings
+            unitConfig <- getMergedUnitConfig manager
+            (mFlows, mUnits) <- getMergedFlowMetadata manager
+            let !tables = fillBroadcastVector unitConfig mUnits mFlows (buildMethodTables cmap mappings)
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 

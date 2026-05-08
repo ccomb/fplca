@@ -178,6 +178,7 @@ spec = do
                     , mtFallbackCF = M.empty
                     , mtRegionalizedCF = M.empty
                     , mtCompartmentMap = M.empty
+                    , mtBroadcast = M.empty
                     }
 
             inventory = M.fromList [(uuidRoot, 1.0), (uuidDep, 2.0), (uuidGone, 5.0)]

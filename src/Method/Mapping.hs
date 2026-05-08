@@ -18,6 +18,7 @@ module Method.Mapping (
     -- * LCIA scoring
     MethodTables (..),
     buildMethodTables,
+    fillBroadcastVector,
     computeLCIAScore,
     computeLCIAScoreFromTables,
     computeLCIAScoreAuto,
@@ -249,6 +250,13 @@ data MethodTables = MethodTables
     compartments at query time, so both sides converge to the same
     canonical form. Empty map = identity, no normalization.
     -}
+    , mtBroadcast :: !(M.Map UUID Double)
+    {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
+    Collapses the UUID/exact/fallback cascade into a single Map and absorbs unit conversion
+    so the scoring hot path is a pure multiply-accumulate. Empty when 'buildMethodTables' is
+    called directly without DB-level dependencies; fill with 'fillBroadcastVector' to enable
+    the fast path (scoring falls back to the cascade when this Map is empty).
+    -}
     }
 
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
@@ -298,6 +306,7 @@ buildMethodTables cmap mappings =
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
         , mtCompartmentMap = cmap
+        , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
@@ -346,19 +355,62 @@ convertForCharacterization cfg flowUnit cfUnit qty
     | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
     | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
 
+{- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
+to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the
+UUID/exact/fallback cascade into a single Map and absorbs the unit conversion
+so the scoring hot path becomes pure multiply-accumulate.
+
+Walks every flow in @flowDB@ once. Flows with no CF match are not inserted
+(sparse Map). Conversions route through 'convertForCharacterization', so
+dimensionally-incompatible flow/CF unit pairs land an effective CF of @0@
+(matching the per-flow scoring path) rather than silently keeping the
+unconverted quantity and contaminating the score.
+-}
+fillBroadcastVector :: UnitConfig -> UnitDB -> FlowDB -> MethodTables -> MethodTables
+fillBroadcastVector unitConfig unitDB flowDB tables =
+    tables{mtBroadcast = M.mapMaybeWithKey buildEntry flowDB}
+  where
+    buildEntry fid flow = case lookupBroadcastCF tables flowDB fid of
+        Nothing -> Nothing
+        Just (cfVal, cfUnit) ->
+            let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
+                factor = convertForCharacterization unitConfig flowUnit cfUnit 1.0
+             in Just (factor * cfVal)
+
+
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
+
+Uses 'mtBroadcast' (single Map lookup, conversion pre-multiplied) when filled,
+falling back to the legacy UUID→exact→fallback cascade with on-the-fly unit
+conversion when 'mtBroadcast' is empty. Tests and back-compat callers that use
+'buildMethodTables' directly hit the legacy path; the cached
+'mapMethodToTablesCached' fills the broadcast and gets the fast path.
 -}
 computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Double
-computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
-    sum [scoreFlow fid qty | (fid, qty) <- M.toList inventory, qty /= 0]
+computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
+    | M.null (mtBroadcast tables) =
+        M.foldlWithKey' (\acc fid qty -> acc + legacyScore fid qty) 0 inventory
+    | otherwise =
+        M.foldlWithKey' (\acc fid qty -> acc + fastScore fid qty) 0 inventory
   where
-    scoreFlow fid qty = case lookupCF fid of
-        Nothing -> 0
-        Just (cfVal, cfUnit) ->
-            let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                converted = convertForCharacterization unitConfig flowUnit cfUnit qty
-             in converted * cfVal
+    fastScore fid qty
+        | qty == 0 = 0
+        | otherwise = case M.lookup fid (mtBroadcast tables) of
+            Just cf -> qty * cf
+            -- Inventory may reference flows not in the broadcast (e.g. cross-DB
+            -- merged flows beyond the original flowDB at build time): fall back
+            -- to the cascade so we don't silently drop them.
+            Nothing -> legacyScore fid qty
+
+    legacyScore fid qty
+        | qty == 0 = 0
+        | otherwise = case lookupCF fid of
+            Nothing -> 0
+            Just (cfVal, cfUnit) ->
+                let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
+                    converted = convertForCharacterization unitConfig flowUnit cfUnit qty
+                 in converted * cfVal
 
     lookupCF fid = case M.lookup fid (mtUuidCF tables) of
         Just cfv -> Just cfv

@@ -13,6 +13,7 @@ import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Types (Flow (..), FlowType (..), Unit (..))
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
+import qualified UnitConversion
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -422,3 +423,100 @@ spec = do
                 byName = M.singleton "nox" [fWater, fUrbanAir]
                 comp = Compartment "air" "urban" ""
             fmap flowId (findFlowByNameComp byName "nox" (Just comp)) `shouldBe` Just fid1
+
+    describe "fillBroadcastVector + computeLCIAScoreFromTables (Phase 1)" $ do
+        let mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}
+
+        it "scoring with empty broadcast equals scoring with filled broadcast (UUID match)" $ do
+            fid <- nextRandom
+            uidKg <- nextRandom
+            let flow = (mkFlow fid "co2" "air" Nothing){flowUnitId = uidKg}
+                cf = (mkCF "co2" Nothing 2.5){mcfUnit = "kg"}
+                rawTables = buildMethodTables M.empty [(cf, Just (flow, ByUUID))]
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton uidKg (mkUnit uidKg "kg")
+                inv = M.fromList [(fid, 4.0 :: Double)]
+                -- empty broadcast → legacy path
+                legacyScore = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv rawTables
+                -- filled broadcast → fast path
+                filled = fillBroadcastVector defaultUnitConfig unitDB flowDB rawTables
+                fastScore = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
+            legacyScore `shouldBe` (4.0 * 2.5 :: Double)
+            fastScore `shouldBe` legacyScore
+
+        it "pre-multiplied broadcast equals legacy when CF unit absorbs into flow unit" $ do
+            -- Build a custom config with both kg and g (default config only has kg).
+            -- 1 g = 0.001 kg → factor 0.001 against the SI base.
+            let kgDef = UnitConversion.UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0
+                gDef = UnitConversion.UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0e-3
+                cfg =
+                    UnitConversion.UnitConfig
+                        { UnitConversion.ucDimensionOrder = []
+                        , UnitConversion.ucUnits = M.fromList [("kg", kgDef), ("g", gDef)]
+                        , UnitConversion.ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
+                        }
+            fid <- nextRandom
+            uidKg <- nextRandom
+            let flow = (mkFlow fid "co2" "air" Nothing){flowUnitId = uidKg}
+                cf = (mkCF "co2" Nothing 1.0e-3){mcfUnit = "g"}
+                tables0 = buildMethodTables M.empty [(cf, Just (flow, ByUUID))]
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton uidKg (mkUnit uidKg "kg")
+                inv = M.fromList [(fid, 1.0 :: Double)]
+                filled = fillBroadcastVector cfg unitDB flowDB tables0
+                fast = computeLCIAScoreFromTables cfg unitDB flowDB inv filled
+                legacy = computeLCIAScoreFromTables cfg unitDB flowDB inv tables0
+            -- Parity: pre-multiplication must match the on-the-fly path.
+            fast `shouldBe` legacy
+            -- 1 kg × convert(kg→g, 1) × 1e-3 (CF) = 1 × 1000 × 1e-3 = 1.0.
+            fast `shouldSatisfy` (\v -> abs (v - 1.0) < 1.0e-12)
+            -- Broadcast must be filled.
+            M.null (mtBroadcast filled) `shouldBe` False
+
+        it "broadcast covers exact (name, medium, subcomp) cascade" $ do
+            fid <- nextRandom
+            uidKg <- nextRandom
+            let flow = (mkFlow fid "co2" "air" (Just "high pop")){flowUnitId = uidKg}
+                cf = (mkCFComp "co2" "air" "high pop" 3.0){mcfUnit = "kg"}
+                tables0 = buildMethodTables M.empty [(cf, Just (flow, ByName))]
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton uidKg (mkUnit uidKg "kg")
+                inv = M.fromList [(fid, 2.0 :: Double)]
+                filled = fillBroadcastVector defaultUnitConfig unitDB flowDB tables0
+                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
+                legacy = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0
+            fast `shouldBe` legacy
+            fast `shouldBe` (2.0 * 3.0 :: Double)
+
+        it "broadcast covers fallback (name, medium) cascade" $ do
+            fid <- nextRandom
+            uidKg <- nextRandom
+            -- Flow has subcomp "high pop", but CF only has medium-level entry (subcomp "")
+            let flow = (mkFlow fid "co2" "air" (Just "high pop")){flowUnitId = uidKg}
+                cf = (mkCFComp "co2" "air" "" 5.0){mcfUnit = "kg"}
+                tables0 = buildMethodTables M.empty [(cf, Just (flow, ByName))]
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton uidKg (mkUnit uidKg "kg")
+                inv = M.fromList [(fid, 1.0 :: Double)]
+                filled = fillBroadcastVector defaultUnitConfig unitDB flowDB tables0
+                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv filled
+                legacy = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDB inv tables0
+            fast `shouldBe` legacy
+            fast `shouldBe` (5.0 :: Double)
+
+        it "inventory UUID outside broadcast falls back to legacy lookup (cross-DB)" $ do
+            fidLocal <- nextRandom
+            fidExtra <- nextRandom -- in inventory but NOT in flowDB at fill time
+            uidKg <- nextRandom
+            let flowLocal = (mkFlow fidLocal "co2" "air" Nothing){flowUnitId = uidKg}
+                cf = (mkCF "co2" Nothing 1.5){mcfUnit = "kg"}
+                tables0 = buildMethodTables M.empty [(cf, Just (flowLocal, ByUUID))]
+                flowDBAtBuild = M.singleton fidLocal flowLocal
+                unitDB = M.singleton uidKg (mkUnit uidKg "kg")
+                filled = fillBroadcastVector defaultUnitConfig unitDB flowDBAtBuild tables0
+                -- Scoring time: inventory has fidExtra (cross-DB flow added later)
+                inv = M.fromList [(fidLocal, 2.0 :: Double), (fidExtra, 7.0)]
+                fast = computeLCIAScoreFromTables defaultUnitConfig unitDB flowDBAtBuild inv filled
+            -- fidLocal contributes 2.0 * 1.5 = 3.0; fidExtra has no CF → 0.
+            -- The fallback path must NOT crash on the unknown UUID.
+            fast `shouldBe` (3.0 :: Double)
