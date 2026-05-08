@@ -61,7 +61,7 @@ spec = do
                         , subConsumer = qualifiedPid
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "root" solver [baselineX] [sub]
+            res <- applySubstitutionsAt noDeps db "root" "root" solver [baselineX] [sub]
             case res of
                 Right ([x'], links) -> do
                     links `shouldBe` []
@@ -76,7 +76,7 @@ spec = do
                 demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
             baselineX <- solveWithSharedSolver solver demandVec
             let noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "root" solver [baselineX] []
+            res <- applySubstitutionsAt noDeps db "root" "root" solver [baselineX] []
             case res of
                 Right (xs, links) -> do
                     links `shouldBe` []
@@ -100,10 +100,37 @@ spec = do
                         , subConsumer = qualifiedToRoot
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "dep" solver [baselineX, baselineX, baselineX] [sub]
+            res <- applySubstitutionsAt noDeps db "dep" "root" solver [baselineX, baselineX, baselineX] [sub]
             case res of
                 Right (xs, _) -> length xs `shouldBe` 3
                 Left e -> expectationFailure ("K>1 filter failed: " <> show e)
+
+        it "skips bare consumer subs when walker is in a dep DB" $ do
+            -- Regression gate: bare 'subConsumer' means root DB only (per the
+            -- Substitution docstring). Before this fix, the per-level filter
+            -- used 'thisDbName' as the parseSubRef default — so bare consumers
+            -- were treated as living in EVERY DB the walker visited, and the
+            -- subsequent resolve in a dep DB threw "Invalid UUID format".
+            db <- loadSampleDatabase "SAMPLE.min3"
+            solver <- mkSolver db "dep"
+            let pid = 0
+                demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
+            baselineX <- solveWithSharedSolver solver demandVec
+            let bareRootPid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                sub =
+                    Substitution
+                        { subFrom = bareRootPid
+                        , subTo = bareRootPid
+                        , subConsumer = bareRootPid
+                        }
+                noDeps _ = pure Nothing
+            res <- applySubstitutionsAt noDeps db "dep" "root" solver [baselineX] [sub]
+            case res of
+                Right ([x'], links) -> do
+                    links `shouldBe` []
+                    U.toList x' `shouldBe` U.toList baselineX
+                Right other -> expectationFailure ("unexpected shape: " <> show other)
+                Left e -> expectationFailure ("bare consumer must be filtered out at dep level, got: " <> show e)
 
     describe "inventoryWithSubsAndDeps (Phase A recursion)" $ do
         it "with empty subs matches the baseline cross-DB inventory path" $ do

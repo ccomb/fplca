@@ -1879,7 +1879,7 @@ inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
         Left e -> pure (Left e)
         Right () -> do
             let demand = buildDemandVectorFromIndex (dbActivityIndex db) pid
-            res <- goWithSubsAndDeps unitCfg depLookup db rootDbName solver [demand] subs 0
+            res <- goWithSubsAndDeps unitCfg depLookup db rootDbName rootDbName solver [demand] subs 0
             pure $ case res of
                 Left err -> Left err
                 Right (inv : _) -> Right inv
@@ -1954,6 +1954,8 @@ goWithSubsAndDeps ::
     Database ->
     -- | THIS DB's name
     Text ->
+    -- | ROOT DB's name (default for bare consumer/from/to refs)
+    Text ->
     -- | THIS DB's cached solver
     SharedSolver ->
     -- | demand vectors at this level
@@ -1963,9 +1965,9 @@ goWithSubsAndDeps ::
     -- | recursion depth
     Int ->
     IO (Either ServiceError [Inventory])
-goWithSubsAndDeps unitCfg depLookup thisDb thisDbName solver demands allSubs depth = do
+goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDbName solver demands allSubs depth = do
     scalings <- SharedSolver.solveMultiWithSharedSolver solver demands
-    eApply <- applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs
+    eApply <- applySubstitutionsAt depLookup thisDb thisDbName rootDbName solver scalings allSubs
     case eApply of
         Left e -> pure (Left e)
         Right (scalings', virtualLks) -> propagate scalings' virtualLks
@@ -1982,7 +1984,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName solver demands allSubs dep
                     else do
                         depResults <-
                             mapConcurrently
-                                (resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth (length scalings'))
+                                (resolveDepWithSubs unitCfg depLookup rootDbName perRootDepDemands allSubs depth (length scalings'))
                                 allDepDbs
                         pure $ case sequence depResults of
                             Left err -> Left err
@@ -2001,13 +2003,15 @@ recursion. Matches 'SharedSolver.resolveDep' but delegates to
 resolveDepWithSubs ::
     UnitConfig ->
     SharedSolver.DepSolverLookup ->
+    -- | ROOT DB's name (default for bare consumer/from/to refs)
+    Text ->
     [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
     [Substitution] ->
     Int ->
     Int ->
     Text ->
     IO (Either ServiceError [Inventory])
-resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth k depDbName = do
+resolveDepWithSubs unitCfg depLookup rootDbName perRootDepDemands allSubs depth k depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
@@ -2018,7 +2022,7 @@ resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth k depDbName
              in case depVecsE of
                     Left err -> pure (Left (MatrixError err))
                     Right depDemandVecs ->
-                        goWithSubsAndDeps unitCfg depLookup depDb depDbName depSolver depDemandVecs allSubs (depth + 1)
+                        goWithSubsAndDeps unitCfg depLookup depDb depDbName rootDbName depSolver depDemandVecs allSubs (depth + 1)
 
 {- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 
@@ -2048,7 +2052,7 @@ computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid 
         Nothing -> do
             let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
             originalX <- solveWithSharedSolver solver demandVec
-            res <- applySubstitutionsAt depLookup db rootDbName solver [originalX] subs
+            res <- applySubstitutionsAt depLookup db rootDbName rootDbName solver [originalX] subs
             pure $ case res of
                 Left e -> Left e
                 Right ([x'], links) -> Right (x', links)
@@ -2090,7 +2094,9 @@ applySubstitutionsAt ::
     SharedSolver.DepSolverLookup ->
     -- | THIS DB
     Database ->
-    -- | THIS DB's name (for parseSubRef)
+    -- | THIS DB's name (for sub-resolution against the local DB)
+    Text ->
+    -- | ROOT DB's name (default for bare consumer/from/to refs)
     Text ->
     -- | THIS DB's cached solver
     SharedSolver ->
@@ -2099,7 +2105,7 @@ applySubstitutionsAt ::
     -- | full sub list (filtered to consumer==this)
     [Substitution] ->
     IO (Either ServiceError ([U.Vector Double], [CrossDBLink]))
-applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
+applySubstitutionsAt depLookup thisDb thisDbName rootDbName solver scalings allSubs = do
     let localSubs = filter consumerLivesHere allSubs
     case localSubs of
         [] -> pure $ Right (scalings, [])
@@ -2107,8 +2113,13 @@ applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
             mFact <- getFactorization solver
             applyAll mFact scalings [] localSubs
   where
+    -- Bare consumer refs default to the root DB (per Substitution docstring),
+    -- not whichever DB the recursive walker happens to be visiting. Without
+    -- this, an unqualified consumer would be retried in every dep DB and
+    -- fail with a misleading "Invalid UUID format" on the first dep where
+    -- the activity does not exist.
     consumerLivesHere sub =
-        let (cDb, _) = parseSubRef thisDbName (subConsumer sub)
+        let (cDb, _) = parseSubRef rootDbName (subConsumer sub)
          in cDb == thisDbName
 
     applyAll _ xs links [] = pure $ Right (xs, links)
