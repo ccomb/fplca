@@ -729,18 +729,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Activity LCIA endpoint (single method within a collection)
     getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> Handler LCIAResult
-    getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        method <- loadMethodByUUID methodIdText
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, activity) -> do
-                inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
-                result <- liftIO $ computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actProcessId) activity (fromMaybe 5 topFlowsParam) inventory Nothing method
-                liftIO $ logLCIAResult result method
-                return result
+    getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
+        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId activity method -> do
+            inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+            result <- liftIO $ computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actProcessId) activity (fromMaybe 5 topFlowsParam) inventory Nothing method
+            liftIO $ logLCIAResult result method
+            return result
 
     -- POST: LCIA with substitutions
     postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
@@ -1135,94 +1129,82 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Contributing flows: top elementary flows by LCIA contribution for a specific method
     getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> Handler ContributingFlowsResult
-    getContributingFlows dbName processIdText _collectionName methodIdText limitParam = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        method <- loadMethodByUUID methodIdText
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, _) -> do
-                let lim = fromMaybe 20 limitParam
-                unitCfg <- liftIO $ getMergedUnitConfig dbManager
-                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
-                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
-                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-                    contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-                    topFlows =
-                        [ FlowContributionEntry
-                            { fcoFlowName = flowName f
-                            , fcoContribution = c
-                            , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                            , fcoFlowId = UUID.toText (flowId f)
-                            , fcoCategory = flowCategory f
-                            , fcoCompartment = flowSubcompartment f
-                            , fcoCfValue = cfVal
-                            }
-                        | (f, cfVal, c) <- take lim contribs
-                        ]
-                liftIO $
-                    unless (null unknownUuids) $
-                        reportProgress Warning $
-                            "[contributing-flows "
-                                <> T.unpack (methodName method)
-                                <> "] "
-                                <> show (length unknownUuids)
-                                <> " inventory flow UUID(s) absent from merged FlowDB. Samples: "
-                                <> show (take 3 unknownUuids)
-                return
-                    ContributingFlowsResult
-                        { cfrMethod = methodName method
-                        , cfrUnit = methodUnit method
-                        , cfrTotalScore = score
-                        , cfrTopFlows = topFlows
+    getContributingFlows dbName processIdText _collectionName methodIdText limitParam =
+        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+            let lim = fromMaybe 20 limitParam
+            unitCfg <- liftIO $ getMergedUnitConfig dbManager
+            (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+            inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+            tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+            let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+                contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                topFlows =
+                    [ FlowContributionEntry
+                        { fcoFlowName = flowName f
+                        , fcoContribution = c
+                        , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                        , fcoFlowId = UUID.toText (flowId f)
+                        , fcoCategory = flowCategory f
+                        , fcoCompartment = flowSubcompartment f
+                        , fcoCfValue = cfVal
                         }
+                    | (f, cfVal, c) <- take lim contribs
+                    ]
+            liftIO $
+                unless (null unknownUuids) $
+                    reportProgress Warning $
+                        "[contributing-flows "
+                            <> T.unpack (methodName method)
+                            <> "] "
+                            <> show (length unknownUuids)
+                            <> " inventory flow UUID(s) absent from merged FlowDB. Samples: "
+                            <> show (take 3 unknownUuids)
+            return
+                ContributingFlowsResult
+                    { cfrMethod = methodName method
+                    , cfrUnit = methodUnit method
+                    , cfrTotalScore = score
+                    , cfrTopFlows = topFlows
+                    }
 
     -- Contributing activities: top upstream activities by LCIA contribution for a specific method
     getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> Handler ContributingActivitiesResult
-    getContributingActivities dbName processIdText _collectionName methodIdText limitParam = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        method <- loadMethodByUUID methodIdText
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, _) -> do
-                let lim = fromMaybe 10 limitParam
-                requireFullyLinked dbName db
-                unitCfg <- liftIO $ getMergedUnitConfig dbManager
-                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                -- Skip separate inventory compute: contributions sum equals the
-                -- score (same B·scaling·CF sum, just grouped per activity).
-                eContribs <-
-                    liftIO $
-                        SharedSolver.crossDBProcessContributions
-                            unitCfg
-                            mUnits
-                            mFlows
-                            (DM.mkDepSolverLookup dbManager)
-                            db
-                            dbName
-                            sharedSolver
-                            actProcessId
-                            tables
-                case eContribs of
-                    Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-                    Right contributions -> do
-                        let score = sum (M.elems contributions)
-                            sorted = sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
-                            top = take lim sorted
-                        rows <- liftIO $ mapM (mkCrossDBContrib dbManager dbName mFlows mUnits score) top
-                        return
-                            ContributingActivitiesResult
-                                { carMethod = methodName method
-                                , carUnit = methodUnit method
-                                , carTotalScore = score
-                                , carActivities = rows
-                                }
+    getContributingActivities dbName processIdText _collectionName methodIdText limitParam =
+        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+            let lim = fromMaybe 10 limitParam
+            requireFullyLinked dbName db
+            unitCfg <- liftIO $ getMergedUnitConfig dbManager
+            (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+            tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+            -- Skip separate inventory compute: contributions sum equals the
+            -- score (same B·scaling·CF sum, just grouped per activity).
+            eContribs <-
+                liftIO $
+                    SharedSolver.crossDBProcessContributions
+                        unitCfg
+                        mUnits
+                        mFlows
+                        (DM.mkDepSolverLookup dbManager)
+                        db
+                        dbName
+                        sharedSolver
+                        actProcessId
+                        tables
+            case eContribs of
+                Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+                Right contributions -> do
+                    let score = sum (M.elems contributions)
+                        sorted = sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
+                        top = take lim sorted
+                    rows <- liftIO $ mapM (mkCrossDBContrib dbManager dbName mFlows mUnits score) top
+                    return
+                        ContributingActivitiesResult
+                            { carMethod = methodName method
+                            , carUnit = methodUnit method
+                            , carTotalScore = score
+                            , carActivities = rows
+                            }
 
     -- Score every method in a set against one inventory in a single batched
     -- pass. For fully non-regionalized sets (PEF) this is a stacked-broadcast
@@ -1551,6 +1533,23 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 case filter (\m -> methodId m == uuid) allMethods of
                     (m : _) -> return m
                     [] -> throwError err404{errBody = "Method not found"}
+
+    -- Resolve (database, shared solver, ProcessId, Activity, Method) from URL path params
+    -- and dispatch to the continuation. Maps the three Service errors to standard HTTP codes.
+    withActivityAndMethod ::
+        Text ->
+        Text ->
+        Text ->
+        (Database -> SharedSolver -> ProcessId -> Activity -> Method -> Handler a) ->
+        Handler a
+    withActivityAndMethod dbName processIdText methodIdText k = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        method <- loadMethodByUUID methodIdText
+        case Service.resolveActivityAndProcessId db processIdText of
+            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
 
     -- Method collection handlers
     getMethodCollections :: Handler MethodCollectionListResponse
