@@ -338,11 +338,6 @@ buildMethodTables cmap mappings =
         Just (flow, BySynonym) -> flowName flow
         _ -> mcfFlowName cf
 
-    -- Normalize medium names between method CFs and database flows
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
-
 {- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
 
 Bypass cases (returns @qty@ unchanged):
@@ -361,6 +356,7 @@ convertForCharacterization cfg flowUnit cfUnit qty
     | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
     | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
 
+
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the
 UUID/exact/fallback cascade into a single Map and absorbs the unit conversion
@@ -376,7 +372,7 @@ fillBroadcastVector :: UnitConfig -> UnitDB -> FlowDB -> MethodTables -> MethodT
 fillBroadcastVector unitConfig unitDB flowDB tables =
     tables{mtBroadcast = M.mapMaybeWithKey buildEntry flowDB}
   where
-    buildEntry fid flow = case lookupBroadcastCF tables flowDB fid of
+    buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
         Just (cfVal, cfUnit) ->
             let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
@@ -411,45 +407,12 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
 
     legacyScore fid qty
         | qty == 0 = 0
-        | otherwise = case lookupCF fid of
+        | otherwise = case lookupCascadeCF tables flowDB fid of
             Nothing -> 0
             Just (cfVal, cfUnit) ->
                 let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
                     converted = convertForCharacterization unitConfig flowUnit cfUnit qty
                  in converted * cfVal
-
-    lookupCF fid = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing -> case M.lookup fid flowDB of
-            Nothing -> Nothing
-            Just flow ->
-                let name = normalizeName (flowName flow)
-                    -- Build the flow's raw compartment from flowCategory ("medium/sub")
-                    -- and flowSubcompartment, then normalize via the same map applied
-                    -- when buildMethodTables keyed the CF tables. Both sides converge
-                    -- to the canonical form, so a "Emissions to air,,,air,," rule in
-                    -- compartments.csv suffices to bridge BAFU's prefix vs ILCD's bare
-                    -- medium without listing every (medium, sub) pair explicitly.
-                    rawCategory = T.toLower (flowCategory flow)
-                    (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                        (m, rest)
-                            | T.null rest -> (m, T.empty)
-                            | otherwise -> (m, T.drop 1 rest)
-                    rawSub =
-                        let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
-                         in if T.null s then rawSubFromCat else s
-                    Compartment normMedRaw normSub _ =
-                        normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-                    baseMed = normalizeMedium normMedRaw
-                    subcomp = normSub
-                    exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-                 in case exact of
-                        Just _ -> exact
-                        Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
@@ -581,7 +544,7 @@ resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
                 fromParents = firstJust [M.lookup (flowUUID, p) (mtRegionalizedCF tables) | p <- parents]
              in case fromParents of
                     Just v -> Right (Just v)
-                    Nothing -> case lookupBroadcastCF tables flowDB flowUUID of
+                    Nothing -> case lookupCascadeCF tables flowDB flowUUID of
                         Just v -> Right (Just v)
                         Nothing
                             | Set.member flowUUID regionalizedFlows ->
@@ -595,26 +558,47 @@ resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
                                         <> " parent regions) and no universal broadcast."
                             | otherwise -> Right Nothing
 
-{- | Universal CF lookup: same cascade as 'computeLCIAScoreFromTables' uses
-internally, factored out for reuse from 'computeRegionalizedLCIAScore'.
+{- | Cascade CF lookup: UUID → exact (name, medium, subcomp) → fallback (name, medium).
+The same logic is baked into 'mtBroadcast' once unit conversion is available;
+this helper is the source of truth for the legacy / cross-DB / regionalized
+fallback paths that don't go through the broadcast.
+
+Both the CF table keys (built by 'buildMethodTables') and the inventory flow
+compartments are normalized through @tables.'mtCompartmentMap'@ so each side
+converges on the same canonical form — a compartments.csv rule like
+@"Emissions to air,,,air,,"@ then bridges BAFU-style prefixed compartments
+against ILCD-style bare media without requiring an explicit (medium, sub)
+pair for every combination.
 -}
-lookupBroadcastCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
-lookupBroadcastCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
+lookupCascadeCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
+lookupCascadeCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv
     Nothing -> case M.lookup fid flowDB of
         Nothing -> Nothing
         Just flow ->
             let name = normalizeName (flowName flow)
-                baseMed = normalizeMediumNm . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
+                rawCategory = T.toLower (flowCategory flow)
+                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                    (m, rest)
+                        | T.null rest -> (m, T.empty)
+                        | otherwise -> (m, T.drop 1 rest)
+                rawSub =
+                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                     in if T.null s then rawSubFromCat else s
+                Compartment normMedRaw normSub _ =
+                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+                baseMed = normalizeMedium normMedRaw
+                subcomp = normSub
                 exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
              in case exact of
                     Just _ -> exact
                     Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-  where
-    normalizeMediumNm m
-        | m == "natural resource" = "resource"
-        | otherwise = m
+
+-- | Normalize medium names between method CFs and database flows.
+normalizeMedium :: Text -> Text
+normalizeMedium m
+    | m == "natural resource" = "resource"
+    | otherwise = m
 
 firstJust :: [Maybe a] -> Maybe a
 firstJust [] = Nothing
@@ -659,28 +643,13 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
         | qty == 0 = (contribs, unknowns)
         | otherwise = case M.lookup fid flowDB of
             Nothing -> (contribs, fid : unknowns) -- metadata missing — surface it
-            Just flow -> case lookupCF fid flow of
+            Just flow -> case lookupCascadeCF tables flowDB fid of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
                 Just (cfVal, cfUnit) ->
                     let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
                         converted = convertForCharacterization unitConfig flowUnit cfUnit qty
                         !contribution = converted * cfVal
                      in ((flow, cfVal, contribution) : contribs, unknowns)
-
-    lookupCF fid flow = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing ->
-            let name = normalizeName (flowName flow)
-                baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
 'MethodTables' + a merged 'FlowDB'. Mirrors
@@ -717,7 +686,7 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
         let flowUUID = bioFlows V.! i
          in case M.lookup flowUUID flowDB of
                 Nothing -> 0
-                Just flow -> case lookupCF flowUUID flow of
+                Just flow -> case lookupCascadeCF tables flowDB flowUUID of
                     Nothing -> 0
                     Just (cfVal, cfUnit) ->
                         let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
@@ -746,21 +715,6 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
                                 let scale = scalingVec U.! colI
                                     pid' = fromIntegral pid :: ProcessId
                                  in M.insertWith (+) pid' (bioVal * scale * cf) acc
-
-    lookupCF fid flow = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing ->
-            let name = normalizeName (flowName flow)
-                baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- Multi-method scoring (set-level)
