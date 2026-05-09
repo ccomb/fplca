@@ -862,17 +862,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                 <> T.unpack name
                                 <> "': "
                                 <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
-                return
-                    LCIABatchResult
-                        { lbrResults = results
-                        , lbrSingleScore = Nothing
-                        , lbrSingleScoreUnit = Nothing
-                        , lbrNormWeightSetName = nwName <$> mNW
-                        , lbrAvailableNWsets = map nwName nwSets
-                        , lbrScoringResults = scoringResults
-                        , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- mcScoringSets collection]
-                        , lbrScoringIndicators = scoringIndicators
-                        }
+                return (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
 
     -- POST: Batch LCIA with substitutions
     postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
@@ -909,17 +899,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     [(lrCategory r, lrScore r) | r <- rawResults]
         (scoringResults, scoringIndicators) <-
             liftIO $ computeAllScoringSets scoringSets rawScoreMap
-        return
-            LCIABatchResult
-                { lbrResults = results
-                , lbrSingleScore = Nothing
-                , lbrSingleScoreUnit = Nothing
-                , lbrNormWeightSetName = nwName <$> mNW
-                , lbrAvailableNWsets = map nwName nwSets
-                , lbrScoringResults = scoringResults
-                , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
-                , lbrScoringIndicators = scoringIndicators
-                }
+        return (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
 
     -- POST: Inventory with substitutions
     postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
@@ -1715,6 +1695,29 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , birInvalid = invalid
                 }
 
+    -- Build an LCIABatchResult from the post-characterization parts.
+    -- The lbrScoringUnits map is derived from the same [ScoringSet] used to
+    -- evaluate the scoring results; pass it in directly.
+    mkLCIABatchResult ::
+        [LCIAResult] ->
+        Maybe NormWeightSet ->
+        [NormWeightSet] ->
+        M.Map Text (M.Map Text Double) ->
+        [ScoringSet] ->
+        M.Map Text (M.Map Text ScoringIndicator) ->
+        LCIABatchResult
+    mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators =
+        LCIABatchResult
+            { lbrResults = results
+            , lbrSingleScore = Nothing
+            , lbrSingleScoreUnit = Nothing
+            , lbrNormWeightSetName = nwName <$> mNW
+            , lbrAvailableNWsets = map nwName nwSets
+            , lbrScoringResults = scoringResults
+            , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
+            , lbrScoringIndicators = scoringIndicators
+            }
+
     -- Shared post-inventory pipeline: characterize, enrich with NW, compute scoring sets.
     -- Pure IO on its inputs; callers own logging and inventory computation.
     buildLCIABatchResult :: Text -> Database -> SharedSolver -> ProcessId -> Activity -> MethodCollection -> Inventory -> IO LCIABatchResult
@@ -1740,17 +1743,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
         (scoringResults, scoringIndicators) <-
             computeAllScoringSets (mcScoringSets collection) rawScoreMap
-        pure
-            LCIABatchResult
-                { lbrResults = results
-                , lbrSingleScore = Nothing
-                , lbrSingleScoreUnit = Nothing
-                , lbrNormWeightSetName = nwName <$> mNW
-                , lbrAvailableNWsets = map nwName nwSets
-                , lbrScoringResults = scoringResults
-                , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- mcScoringSets collection]
-                , lbrScoringIndicators = scoringIndicators
-                }
+        pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).
