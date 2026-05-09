@@ -778,24 +778,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
       where
         buildEntry db activity method baselineLcia (p, eitherX) = case eitherX of
-            Left err ->
-                pure
-                    PerturbedEntry
-                        { pePerturbation = p
-                        , peImpact = Nothing
-                        , peDeltaImpact = Nothing
-                        , peError = Just err
-                        }
+            Left err -> pure (PerturbedEntry p (Left err))
             Right x' -> do
                 let inv = applyBiosphereMatrix db x'
                 lcia <- computeCategoryResult dbName db (pure x') activity 5 inv method
-                pure
-                    PerturbedEntry
-                        { pePerturbation = p
-                        , peImpact = Just lcia
-                        , peDeltaImpact = Just (lrScore lcia - lrScore baselineLcia)
-                        , peError = Nothing
-                        }
+                pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
     -- Batch LCIA endpoint (all methods in a collection)
     getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult

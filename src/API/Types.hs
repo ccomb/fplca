@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module API.Types where
@@ -610,17 +609,16 @@ newtype SensitivityRequest = SensitivityRequest
     }
     deriving (Generic)
 
-{- | One result entry per perturbation. On success, @impact@ and @deltaImpact@
-are populated; on failure, @error@ carries the message. The two cases are
-mutually exclusive — Nothing fields are omitted from the JSON payload. The
+{- | One result entry per perturbation. The 'peResult' carries either an
+error message ('Left') or the (impact, deltaImpact) pair ('Right'). The
 echoed @perturbation@ carries the @label@ if the caller supplied one, so
-callers don't need to thread an out-of-band identifier.
+callers don't need to thread an out-of-band identifier. The wire format
+flattens the Either: success → @{perturbation, impact, deltaImpact}@,
+failure → @{perturbation, error}@.
 -}
 data PerturbedEntry = PerturbedEntry
     { pePerturbation :: Perturbation
-    , peImpact :: Maybe LCIAResult -- present on success
-    , peDeltaImpact :: Maybe Double -- present on success: impact - baseline
-    , peError :: Maybe Text -- present on failure
+    , peResult :: Either Text (LCIAResult, Double)
     }
     deriving (Generic)
 
@@ -850,19 +848,13 @@ instance FromJSON Perturbation where parseJSON = strippedParseJSON
 instance ToJSON Perturbation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON SensitivityResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 
--- Custom ToJSON for PerturbedEntry: omit Nothing fields so the JSON is clean
--- (success entries have impact+deltaImpact, error entries have error).
+-- Custom ToJSON for PerturbedEntry: flatten the Either so success entries
+-- have impact+deltaImpact and error entries have error.
 instance ToJSON PerturbedEntry where
-    toJSON e =
-        object $
-            ("perturbation" .= pePerturbation e)
-                : catMaybesPair
-                    [ ("impact",) . toJSON <$> peImpact e
-                    , ("deltaImpact",) . toJSON <$> peDeltaImpact e
-                    , ("error",) . toJSON <$> peError e
-                    ]
-      where
-        catMaybesPair = foldr (\m acc -> maybe acc (: acc) m) []
+    toJSON (PerturbedEntry p result) =
+        object $ ("perturbation" .= p) : case result of
+            Left err -> ["error" .= err]
+            Right (lcia, d) -> ["impact" .= lcia, "deltaImpact" .= d]
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a) where parseJSON = strippedParseJSON

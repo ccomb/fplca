@@ -18,11 +18,12 @@ import API.JsonOptions (strippedSchemaOptions)
 import API.Resources (Resource)
 import qualified API.Resources as R
 import API.Types
-import Control.Lens ((%~), (&), (?~), (^.))
+import Control.Lens ((%~), (&), (.~), (?~), (^.))
 import Data.Aeson (Value)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
 import qualified Data.OpenApi.Lens as OA
+import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
@@ -115,7 +116,28 @@ instance ToSchema SubstitutionRequest where declareNamedSchema = genericDeclareN
 instance ToSchema Substitution where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema PerturbedEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+-- Manual schema: the Either inside PerturbedEntry is flattened by ToJSON
+-- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
+-- on failure. The Generic-derived schema would expose the Haskell shape
+-- (a oneOf wrapper around the Either) instead of the flat wire format.
+instance ToSchema PerturbedEntry where
+    declareNamedSchema _ = do
+        pertRef <- declareSchemaRef (Proxy :: Proxy Perturbation)
+        lciaRef <- declareSchemaRef (Proxy :: Proxy LCIAResult)
+        doubleRef <- declareSchemaRef (Proxy :: Proxy Double)
+        textRef <- declareSchemaRef (Proxy :: Proxy Text)
+        pure $
+            NamedSchema (Just "PerturbedEntry") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("perturbation", pertRef)
+                            , ("impact", lciaRef)
+                            , ("deltaImpact", doubleRef)
+                            , ("error", textRef)
+                            ]
+                    & required .~ ["perturbation"]
 instance ToSchema Perturbation where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ExchangeDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ExchangeWithUnit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions

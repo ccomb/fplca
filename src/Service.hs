@@ -7,7 +7,7 @@ import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), Ac
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Data.Aeson (Value, object, toJSON, (.=))
-import Data.Either (lefts, rights)
+import Data.Either (fromRight, lefts, rights)
 import Data.Int (Int32)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
@@ -1880,21 +1880,16 @@ computeSensitivities db sharedSolver processId perts = do
         demandVec = buildDemandVectorFromIndex activityIndex processId
     baselineX <- solveWithSharedSolver sharedSolver demandVec
     mFact <- getFactorization sharedSolver
-    -- Resolve each perturbation up-front; valid ones go to the batch as
-    -- (consumerCol, [(supplierIdx, deltaAbs)]). Invalid ones produce a
-    -- placeholder empty spec (no-op in the batch) and the resolution error
-    -- is grafted onto the final result.
+    -- Resolve each perturbation up-front. Resolution errors graft onto the
+    -- final result; resolved specs go to the batch (a Left becomes a no-op
+    -- empty spec so the batch preserves indexing).
     let resolved = map (resolveSpec db) perts
-        specs = map specOf resolved
-    smResults <- perturbABatch db mFact baselineX specs
-    let combined = zipWith3 combine perts resolved smResults
+    smResults <-
+        perturbABatch db mFact baselineX (map (fromRight (0, [])) resolved)
+    let combined = zipWith3 step perts resolved smResults
+        step p (Left e) _ = (p, Left e)
+        step p (Right _) sm = (p, sm)
     pure $ Right (baselineX, combined)
-  where
-    specOf (Right (col, perturb)) = (col, perturb)
-    specOf (Left _) = (0, []) -- empty perturb → batch returns Right baselineX
-
-    combine p (Left e) _ = (p, Left e) -- resolution error wins
-    combine p (Right _) sm = (p, sm) -- otherwise use the SM result
 
 resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
 resolveSpec db p = do

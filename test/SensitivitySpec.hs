@@ -11,8 +11,13 @@ full re-factorization of @(I - A')@ would produce, where @A'_ij = A_ij *
 -}
 module SensitivitySpec (spec) where
 
-import API.Types (Perturbation (..))
+import API.Types (LCIAResult (..), PerturbedEntry (..), Perturbation (..))
+import Data.Aeson (Value (..), decode, encode)
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector.Unboxed as U
 import Matrix (buildDemandVectorFromIndex, perturbA, solveSparseLinearSystem)
 import Service (computeSensitivities)
@@ -87,6 +92,41 @@ spec = do
                     map (perLabel . fst) results `shouldBe` map perLabel perts
                 Left e -> expectationFailure ("computeSensitivities failed: " <> show e)
 
+    describe "PerturbedEntry JSON wire format" $ do
+        let p = Perturbation{perConsumer = "c", perSupplier = "s", perDelta = 0.05, perLabel = Just "lbl"}
+            dummyLcia =
+                LCIAResult
+                    { lrMethodId = UUID.nil
+                    , lrMethodName = "m"
+                    , lrCategory = "cat"
+                    , lrDamageCategory = "cat"
+                    , lrScore = 1.0
+                    , lrUnit = "u"
+                    , lrNormalizedScore = Nothing
+                    , lrWeightedScore = Nothing
+                    , lrMappedFlows = 0
+                    , lrFunctionalUnit = "fu"
+                    , lrTopContributors = []
+                    }
+            keysOf bs = case decodeBS bs of
+                Just (Object o) -> KM.keys o
+                _ -> []
+            decodeBS = (decode :: BSL.ByteString -> Maybe Value)
+            hasKey k bs = Key.fromText k `elem` keysOf bs
+        it "success entry encodes perturbation + impact + deltaImpact (no error)" $ do
+            let bs = encode (PerturbedEntry p (Right (dummyLcia, 0.42)))
+            hasKey "perturbation" bs `shouldBe` True
+            hasKey "impact" bs `shouldBe` True
+            hasKey "deltaImpact" bs `shouldBe` True
+            hasKey "error" bs `shouldBe` False
+        it "failure entry encodes perturbation + error (no impact/deltaImpact)" $ do
+            let bs = encode (PerturbedEntry p (Left "boom"))
+            hasKey "perturbation" bs `shouldBe` True
+            hasKey "error" bs `shouldBe` True
+            hasKey "impact" bs `shouldBe` False
+            hasKey "deltaImpact" bs `shouldBe` False
+
+    describe "computeSensitivities (continued)" $
         it "matches full re-factorization for a single A_ij perturbation" $ do
             -- The strong correctness check: Sherman-Morrison shortcut must match
             -- a full solve of (I - A') x' = d, where A'_YX = A_YX * (1 + delta).
