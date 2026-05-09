@@ -374,10 +374,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
   where
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just (cfVal, cfUnit) ->
-            let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                factor = convertForCharacterization unitConfig flowUnit cfUnit 1.0
-             in Just (factor * cfVal)
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (Just flow) cfTuple 1.0)
 
 
 {- | Score an inventory against precomputed 'MethodTables'.
@@ -409,10 +406,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
         | qty == 0 = 0
         | otherwise = case lookupCascadeCF tables flowDB fid of
             Nothing -> 0
-            Just (cfVal, cfUnit) ->
-                let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                    converted = convertForCharacterization unitConfig flowUnit cfUnit qty
-                 in converted * cfVal
+            Just cfTuple -> convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
@@ -512,10 +506,8 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
                             loc = activityLocation act
                          in case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
                                 Right Nothing -> Right running
-                                Right (Just (cfVal, cfUnit)) ->
-                                    let flowUnit = maybe "" unitName (M.lookup flowUUID flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                                        converted = convertForCharacterization unitConfig flowUnit cfUnit contribution
-                                     in Right (running + converted * cfVal)
+                                Right (Just cfTuple) ->
+                                    Right (running + convertAndMultiply unitConfig unitDB (M.lookup flowUUID flowDB) cfTuple contribution)
                                 Left err -> Left err
      in U.foldl' step (Right 0) bioTriples
 
@@ -600,6 +592,29 @@ normalizeMedium m
     | m == "natural resource" = "resource"
     | otherwise = m
 
+{- | Apply the flow→CF unit conversion factor and multiply by the CF value.
+
+Delegates to 'convertForCharacterization' for the conversion step, so a
+dimensional mismatch between flow and CF units lands an effective @0@
+(refuse to score wrong-dimension data) rather than silently passing the
+unconverted quantity through. Pass @qty = 1.0@ to obtain the effective-CF
+factor used at build time; pass an actual quantity for inline scoring.
+-}
+convertAndMultiply ::
+    UnitConfig ->
+    UnitDB ->
+    -- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
+    -- the identity factor (no flow record means no flow unit known).
+    Maybe Flow ->
+    -- | (CF value, CF unit)
+    (Double, Text) ->
+    Double ->
+    Double
+convertAndMultiply unitConfig unitDB mflow (cfVal, cfUnit) qty =
+    let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (flowUnitId f) unitDB)
+        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
+     in converted * cfVal
+
 firstJust :: [Maybe a] -> Maybe a
 firstJust [] = Nothing
 firstJust (Just x : _) = Just x
@@ -645,10 +660,8 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
             Nothing -> (contribs, fid : unknowns) -- metadata missing — surface it
             Just flow -> case lookupCascadeCF tables flowDB fid of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
-                Just (cfVal, cfUnit) ->
-                    let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
-                        !contribution = converted * cfVal
+                Just cfTuple@(cfVal, _) ->
+                    let !contribution = convertAndMultiply unitConfig unitDB (Just flow) cfTuple qty
                      in ((flow, cfVal, contribution) : contribs, unknowns)
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
@@ -684,14 +697,12 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
     effectiveCF :: U.Vector Double
     effectiveCF = U.generate nFlows $ \i ->
         let flowUUID = bioFlows V.! i
-         in case M.lookup flowUUID flowDB of
+            mflow = M.lookup flowUUID flowDB
+         in case mflow of
                 Nothing -> 0
-                Just flow -> case lookupCascadeCF tables flowDB flowUUID of
+                Just _ -> case lookupCascadeCF tables flowDB flowUUID of
                     Nothing -> 0
-                    Just (cfVal, cfUnit) ->
-                        let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                            factor = convertForCharacterization unitConfig flowUnit cfUnit 1.0
-                         in factor * cfVal
+                    Just cfTuple -> convertAndMultiply unitConfig unitDB mflow cfTuple 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in
