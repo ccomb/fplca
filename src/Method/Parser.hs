@@ -66,6 +66,7 @@ data ParseState = ParseState
     , psCurrentFlowName :: !Text
     , psCurrentDirection :: !Text
     , psCurrentValue :: !Text
+    , psCurrentLocation :: !Text
     , -- Context tracking
       psPath :: ![BS.ByteString] -- Stack of element names
     , psInFactor :: !Bool
@@ -88,6 +89,7 @@ initialState =
         , psCurrentFlowName = ""
         , psCurrentDirection = ""
         , psCurrentValue = ""
+        , psCurrentLocation = ""
         , psPath = []
         , psInFactor = False
         , psInRefQuantity = False
@@ -150,7 +152,10 @@ closeTag state tagName
                     , mcfCompartment = extractCompartmentFromDesc (psCurrentFlowName state)
                     , mcfCAS = Nothing -- enriched in buildMethod from flow XMLs
                     , mcfUnit = psUnit state
-                    , mcfLocation = Nothing
+                    , mcfLocation =
+                        if T.null (psCurrentLocation state)
+                            then Nothing
+                            else Just (psCurrentLocation state)
                     }
          in state
                 { psPath = dropPath
@@ -161,6 +166,7 @@ closeTag state tagName
                 , psCurrentFlowName = ""
                 , psCurrentDirection = ""
                 , psCurrentValue = ""
+                , psCurrentLocation = ""
                 , psTextAccum = []
                 }
     -- UUID element - capture method UUID (only the first one, not flow UUIDs)
@@ -236,6 +242,13 @@ closeTag state tagName
         state
             { psPath = dropPath
             , psCurrentValue = accumulatedText
+            , psTextAccum = []
+            }
+    -- Per-factor location (geography this CF applies to)
+    | isElement tagName "location" && psInFactor state =
+        state
+            { psPath = dropPath
+            , psCurrentLocation = accumulatedText
             , psTextAccum = []
             }
     -- Default: just pop the path

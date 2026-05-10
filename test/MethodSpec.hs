@@ -49,6 +49,38 @@ spec = do
         it "leaves purely numeric suffixes untouched" $
             splitLocationSuffix "Foo, 12" `shouldBe` ("Foo, 12", Nothing)
 
+    describe "Parser (ILCD) <location>" $ do
+        it "extracts <location> from each <factor>" $ do
+            let xml =
+                    BC.pack $
+                        unlines
+                            [ "<?xml version=\"1.0\"?>"
+                            , "<LCIAMethodDataSet>"
+                            , "<LCIAMethodInformation><dataSetInformation>"
+                            , "<UUID>00000000-0000-0000-0000-000000000001</UUID>"
+                            , "<name>Test</name>"
+                            , "</dataSetInformation></LCIAMethodInformation>"
+                            , "<characterisationFactors>"
+                            , "<factor>"
+                            , "  <referenceToFlowDataSet refObjectId=\"11111111-1111-1111-1111-111111111111\" type=\"flow data set\"/>"
+                            , "  <location>CH</location>"
+                            , "  <exchangeDirection>Output</exchangeDirection>"
+                            , "  <meanValue>0.747</meanValue>"
+                            , "</factor>"
+                            , "<factor>"
+                            , "  <referenceToFlowDataSet refObjectId=\"22222222-2222-2222-2222-222222222222\" type=\"flow data set\"/>"
+                            , "  <exchangeDirection>Output</exchangeDirection>"
+                            , "  <meanValue>1.0</meanValue>"
+                            , "</factor>"
+                            , "</characterisationFactors>"
+                            , "</LCIAMethodDataSet>"
+                            ]
+            case parseMethodBytes xml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right m -> do
+                    let locs = map mcfLocation (methodFactors m)
+                    locs `shouldBe` [Just "CH", Nothing]
+
     describe "SynonymDB" $ do
         describe "normalizeName" $ do
             it "lowercases names" $ do
