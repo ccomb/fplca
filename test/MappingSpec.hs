@@ -44,6 +44,7 @@ mkCF name mCas val =
         , mcfCompartment = Nothing
         , mcfCAS = mCas
         , mcfUnit = "kg"
+        , mcfLocation = Nothing
         }
 
 mkCFComp :: Text -> Text -> Text -> Double -> MethodCF

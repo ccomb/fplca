@@ -173,6 +173,7 @@ step cfg methodologyName st line = case psPhase st of
                                     , mcfCompartment = mkCompartment comp sub
                                     , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
                                     , mcfUnit = decodeBS (BS8.strip cfUnit)
+                                    , mcfLocation = Nothing
                                     }
                          in st{psFactors = cf : psFactors st}
                     _ -> st

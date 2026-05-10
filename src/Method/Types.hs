@@ -78,7 +78,7 @@ data MethodCF = MethodCF
     { mcfFlowRef :: !UUID
     -- ^ ILCD flow UUID from method file
     , mcfFlowName :: !Text
-    -- ^ Flow name (for matching & display)
+    -- ^ Flow name (for matching & display) — stripped of any location suffix
     , mcfDirection :: !FlowDirection
     -- ^ Input (resource) or Output (emission)
     , mcfValue :: !Double
@@ -89,6 +89,12 @@ data MethodCF = MethodCF
     -- ^ CAS number (normalized, no leading zeros)
     , mcfUnit :: !Text
     -- ^ CF reference unit (e.g., "kg", "kBq")
+    , mcfLocation :: !(Maybe Text)
+    {- ^ Location/geography this CF applies to. Sourced from the SimaPro
+    name suffix (@"Ammonia, CH"@ → @Just "CH"@) or the ILCD
+    @\<location\>@ element. @Nothing@ = global / unspecified. Scoring
+    prefers location-matching CFs over global ones when both exist.
+    -}
     }
     deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
 
