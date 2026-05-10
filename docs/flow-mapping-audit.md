@@ -181,7 +181,7 @@ shipped on the `flow-mapping-audit` branch cover both:
 Validated on `Wheat grains IP, at farm {CH}` (BAFU): Climate change
 score matches between adapted and original to 0.09%.
 
-## Known limitation: geolocation-aware CF selection
+## Geolocation-aware CF selection
 
 EF3.1 ships **per-country characterization factors** for many regionalized
 categories (Acidification, Eutrophication, Particulate matter, Land use,
@@ -198,30 +198,22 @@ The CFs differ — e.g. Ammonia Acidification:
 | NO | 11.491 |
 | US | 3.02 |
 
-VoLCA's cascade today **ignores both the suffix and the `<location>`
-element**. It indexes CFs by `(name, medium, sub)` and collapses every
-country into one key — `M.fromListWith preferBetter` picks an arbitrary
-winner. On Swiss wheat (BAFU `... {CH}`), Climate change still works
-because GWP100 is intrinsically global (no `<location>`), but
-Acidification, Eutrophication etc. fall back to whichever country's CF
-the parser inserted last. Adapted scoring picks the no-suffix `Ammonia`
-default (3.02 = US-like); original scoring picks Norway (11.491). Both
-are wrong for CH — the correct value is 0.747.
+VoLCA's cascade resolves this by carrying the geography end-to-end:
 
-Symptom in the audit: cross-method comparisons (`compare_impacts`
-adapted vs original) on regionalized categories show large deltas
-(×3-10) that **do not** indicate mapping bugs — they're the same flow
-matching different per-country CFs on each side.
+1. `MethodCF` records an optional `mcfLocation :: Maybe Text`. The
+   SimaPro CSV parser pulls the trailing ISO suffix from the substance
+   name (`"Ammonia, CH"` → `Just "CH"`); the ILCD parser reads
+   `<location>`. `Nothing` means the CF is global (e.g. GWP100).
+2. `MethodTables` keys exact-match and fallback CFs by `(name, medium,
+   sub, location)` and `(name, medium, location)` respectively, so
+   country variants coexist instead of one arbitrarily winning the
+   `preferBetter` collapse.
+3. `lookupCFForFlowAt` takes the activity's geography (from
+   `activityLocation`) and tries `Just <activityLoc>` first, then falls
+   back to the global `Nothing` entry when the method has no
+   country-specific value.
 
-Fixing this properly is a separate workstream. It needs:
-
-1. `MethodCF` to carry an optional `mcfLocation :: Maybe Text` (parsed
-   from `<location>` in ILCD, from the suffix in SimaPro CSV).
-2. `MethodTables` to index CFs by `(name, medium, sub, location)` with
-   a `Nothing` (global) fallback.
-3. `lookupCFForFlow` to take the activity's geography and prefer the
-   matching location's CF, falling back to global.
-
-Until that lands, treat scores on regionalized impact categories as
-**indicative within one method distribution**, not as cross-method
-ground truth.
+Climate change keeps working because GWP100 CFs never carry a location
+(all 'Nothing' keys). Acidification, Eutrophication etc. now match
+exactly: Swiss wheat (BAFU `... {CH}`) picks `0.747` on both the
+adapted and original EF3.1 distributions.
