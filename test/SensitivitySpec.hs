@@ -19,7 +19,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector.Unboxed as U
-import Matrix (buildDemandVectorFromIndex, perturbA, solveSparseLinearSystem)
+import Matrix (applyShermanMorrison, buildDemandVectorFromIndex, perturbA, solveSparseLinearSystem)
 import Service (computeSensitivities)
 import SharedSolver (getFactorization, solveWithSharedSolver)
 import Test.Hspec
@@ -39,6 +39,34 @@ spec = do
             case r of
                 Right x' -> U.toList x' `shouldBe` U.toList x
                 Left e -> expectationFailure ("perturbA failed: " <> T.unpack e)
+
+    describe "applyShermanMorrison singularity guard" $ do
+        -- Regression gate: the rank-1 update is well-defined iff 1 + v^T z /= 0.
+        -- The function uses |denom| < 1e-12 as the singular threshold; these
+        -- tests pin down both the condition (exact zero) and the boundary.
+        it "returns Left when 1 + z[col] is exactly zero" $ do
+            let x = U.fromList [1.0, 2.0, 3.0]
+                col = 1
+                z = U.fromList [0.5, -1.0, 0.7] -- z[1] = -1 ⇒ denom = 0
+            case applyShermanMorrison x col z of
+                Left msg -> msg `shouldSatisfy` T.isInfixOf "singular"
+                Right _ -> expectationFailure "expected Left on denom == 0"
+
+        it "returns Left when |1 + z[col]| is just below the 1e-12 tolerance" $ do
+            let x = U.fromList [1.0, 2.0, 3.0]
+                col = 1
+                z = U.fromList [0.5, -1.0 + 1e-13, 0.7] -- denom ≈ 1e-13 < 1e-12
+            case applyShermanMorrison x col z of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected Left when denom below tolerance"
+
+        it "returns Right when |1 + z[col]| is just above the 1e-12 tolerance" $ do
+            let x = U.fromList [1.0, 2.0, 3.0]
+                col = 1
+                z = U.fromList [0.5, -1.0 + 1e-11, 0.7] -- denom ≈ 1e-11 > 1e-12
+            case applyShermanMorrison x col z of
+                Right _ -> pure ()
+                Left msg -> expectationFailure ("expected Right above tolerance, got: " <> T.unpack msg)
 
     describe "computeSensitivities" $ do
         it "with empty perturbations list returns baseline only" $ do

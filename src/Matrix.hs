@@ -41,6 +41,7 @@ module Matrix (
     computeProcessLCIAContributions,
     perturbA,
     perturbABatch,
+    applyShermanMorrison,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,

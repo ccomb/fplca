@@ -1,11 +1,13 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Service where
 
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
+import Control.Exception (SomeException, try)
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Either (fromRight, lefts, rights)
 import Data.Int (Int32)
@@ -1878,18 +1880,31 @@ computeSensitivities ::
 computeSensitivities db sharedSolver processId perts = do
     let activityIndex = dbActivityIndex db
         demandVec = buildDemandVectorFromIndex activityIndex processId
-    baselineX <- solveWithSharedSolver sharedSolver demandVec
-    mFact <- getFactorization sharedSolver
-    -- Resolve each perturbation up-front. Resolution errors graft onto the
-    -- final result; resolved specs go to the batch (a Left becomes a no-op
-    -- empty spec so the batch preserves indexing).
-    let resolved = map (resolveSpec db) perts
-    smResults <-
-        perturbABatch db mFact baselineX (map (fromRight (0, [])) resolved)
-    let combined = zipWith3 step perts resolved smResults
-        step p (Left e) _ = (p, Left e)
-        step p (Right _) sm = (p, sm)
-    pure $ Right (baselineX, combined)
+    -- The baseline solve and factorization retrieval hit MUMPS through the FFI
+    -- and can throw via exceptions (singular A, allocation failure, …). Wrap
+    -- them so the documented 'Left' branch of the signature is reachable,
+    -- instead of letting raw exceptions escape to the caller.
+    eBaseline <- try @SomeException $ do
+        baselineX <- solveWithSharedSolver sharedSolver demandVec
+        mFact <- getFactorization sharedSolver
+        pure (baselineX, mFact)
+    case eBaseline of
+        Left ex ->
+            pure $
+                Left $
+                    MatrixError $
+                        "baseline solve failed: " <> T.pack (show ex)
+        Right (baselineX, mFact) -> do
+            -- Resolve each perturbation up-front. Resolution errors graft onto
+            -- the final result; resolved specs go to the batch (a Left becomes
+            -- a no-op empty spec so the batch preserves indexing).
+            let resolved = map (resolveSpec db) perts
+            smResults <-
+                perturbABatch db mFact baselineX (map (fromRight (0, [])) resolved)
+            let combined = zipWith3 step perts resolved smResults
+                step p (Left e) _ = (p, Left e)
+                step p (Right _) sm = (p, sm)
+            pure $ Right (baselineX, combined)
 
 resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
 resolveSpec db p = do
