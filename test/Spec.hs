@@ -7,6 +7,7 @@ import Test.Hspec
 -- Import test modules (will be created)
 
 import qualified BM25Spec
+import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
 import qualified CrossDBSubstitutionSpec
@@ -20,6 +21,7 @@ import qualified FuzzySpec
 import qualified HotspotSpec
 import qualified ILCDParserSpec
 import qualified InventorySpec
+import qualified LicensesSpec
 import qualified LoaderSpec
 import qualified MCPSchemaSpec
 import qualified MappingSpec
@@ -66,6 +68,7 @@ main = hspec $ do
         describe "Sensitivity Analysis" SensitivitySpec.spec
         describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec
         describe "Shared Solver" SharedSolverSpec.spec
+        describe "Coalescing Solver (concurrency)" CoalescingSolverSpec.spec
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec
         describe "VOLCA_DATA_DIR resolution" ConfigSpec.spec
@@ -82,3 +85,4 @@ main = hspec $ do
         describe "Search.Fuzzy" FuzzySpec.spec
         describe "Nested Substitutions" NestedSubstitutionSpec.spec
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
+        describe "Licenses Endpoint" LicensesSpec.spec

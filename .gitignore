@@ -1,4 +1,5 @@
 dist-newstyle
+dist-musl
 weeder.toml
 .hie
 *.o
@@ -34,6 +35,7 @@ cache/
 *.md
 !README.md
 !CHANGELOG.md
+!THIRD_PARTY_LICENSES.md
 !docs/**/*.md
 
 # temporary python stuff (not pyvolca/)

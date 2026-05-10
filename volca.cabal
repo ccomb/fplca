@@ -52,6 +52,7 @@ library
                      , API.MCP
                      , API.OpenApi
                      , API.Resources
+                     , API.Licenses
                      , CLI.Types
                      , CLI.Parser
                      , CLI.Command
@@ -173,6 +174,7 @@ test-suite lca-tests
                      , CrossLinkingSpec
                      , CrossDBInventorySpec
                      , SharedSolverSpec
+                     , CoalescingSolverSpec
                      , FlowResolverSpec
                      , PluginConfigSpec
                      , ConfigSpec
@@ -192,6 +194,7 @@ test-suite lca-tests
                      , CrossDBSubstitutionSpec
                      , DatabaseStatusSpec
                      , OlcaSchemaSpec
+                     , LicensesSpec
   build-depends:       base >=4.14 && <5
                      , volca
                      , hspec

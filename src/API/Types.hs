@@ -629,13 +629,34 @@ data SensitivityResponse = SensitivityResponse
     }
     deriving (Generic)
 
+{- | Name of the request-level "root" database — the DB extracted from the
+URL path and the implicit target of any bare 'ProcessId' (one without the
+@"dbName::"@ qualifier).
+
+The newtype exists so that the recursive substitution walker cannot
+accidentally confuse the *root* DB (where bare refs are resolved, per the
+'Substitution' docstring) with the *current* DB being visited during the
+descent — they are different concepts and were previously both plain
+'Text', which caused a real bug where bare consumers were retried in
+every dep DB.
+-}
+newtype RootDb = RootDb {unRootDb :: Text}
+    deriving (Eq, Show)
+
+{- | Name of the database currently being visited by the recursive
+substitution walker — distinct from 'RootDb' precisely so that the
+@thisDb@/@rootDb@ argument pair cannot be silently swapped.
+-}
+newtype ThisDb = ThisDb {unThisDb :: Text}
+    deriving (Eq, Show)
+
 {- | Parse a substitution reference into @(targetDB, bare pid)@. A bare
 @"actUUID_prodUUID"@ resolves in the caller-supplied root DB; a qualified
 @"dbName::actUUID_prodUUID"@ resolves in @dbName@. The @::@ separator is
 unambiguous because UUIDs contain no colons.
 -}
-parseSubRef :: Text -> Text -> (Text, Text)
-parseSubRef rootDb raw = case T.breakOn (T.pack "::") raw of
+parseSubRef :: RootDb -> Text -> (Text, Text)
+parseSubRef (RootDb rootDb) raw = case T.breakOn (T.pack "::") raw of
     (pid, rest)
         | T.null rest -> (rootDb, pid)
         | otherwise -> (pid, T.drop 2 rest)
