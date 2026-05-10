@@ -86,7 +86,11 @@ EOF
             x86_64|amd64) QUADMATH_FLAG="-optl-lquadmath" ;;
             *)            QUADMATH_FLAG="" ;;
         esac
-        MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
+        # --gc-sections drops unreferenced sections from the final exe.
+        # Effective on the C/Fortran archives that were compiled with
+        # -ffunction-sections / -fdata-sections (OpenBLAS in our pipeline);
+        # harmless on the others.
+        MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--gc-sections -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
         cat > "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
