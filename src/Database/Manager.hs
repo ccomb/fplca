@@ -117,7 +117,7 @@ import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
-import Method.Mapping (MatchStrategy, MethodIndex, MethodTables, buildMethodIndex, buildMethodTables, mapMethodToFlows)
+import Method.Mapping (MatchStrategy, MethodIndex, MethodTables, buildMethodIndex, buildMethodTables, expandSynonymMappings, mapMethodToFlows)
 import Method.Types (
     CompartmentMap,
     Method (..),
@@ -472,7 +472,14 @@ mapMethodToTablesCached manager dbName db method = do
         Nothing -> do
             mappings <- mapMethodToFlowsCached manager dbName db method
             cmap <- getMergedCompartmentMap manager
-            let !tables = buildMethodTables cmap mappings
+            -- Use the database's frozen-at-load-time synonym DB (curated-only;
+            -- auto-extracted method synonyms enter @dmLoadedFlowSyns@ after
+            -- databases are loaded, so 'getMergedSynonymDB' would surface them
+            -- and pollute the fan-out with thousands of generic PubChem
+            -- synonyms like "water" → "4-aminophenol").
+            let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+                expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
+                !tables = buildMethodTables cmap expanded
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 

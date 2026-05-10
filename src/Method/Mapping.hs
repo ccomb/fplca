@@ -38,6 +38,7 @@ module Method.Mapping (
     processContributionsFromTables,
     lookupCFForFlow,
     lookupCFForFlowAt,
+    expandSynonymMappings,
 
     -- * Matching strategies
     MatchStrategy (..),
@@ -423,6 +424,70 @@ compartments at query time and meet at the same canonical keys.
 Pass 'M.empty' for the compartment map when no normalization is desired
 (behaves identically to the pre-CompartmentMap implementation).
 -}
+
+{- | Fan out one-to-many synonym matches: for each CF, look up the
+synonym group of the CF name and emit one extra @(cf, Just (peerFlow,
+BySynonym))@ row per BAFU flow whose name is in the group and whose
+compartment medium matches the CF's compartment. The original mapping
+list is preserved.
+
+This is the missing piece when a method-side CF (e.g. ILCD's bare
+@copper@) covers many inventory-side variants (BAFU's @Copper, 2.19% in
+sulfide, …@, @Copper, 1.18% in sulfide, …@, etc.). Without expansion,
+@buildMethodTables@ would key the CF under a single matched-flow name
+and the other variants would silently look up as @Nothing@. With
+expansion, the CF is keyed under every group member, so every inventory
+variant of the same substance finds the same CF.
+
+Duplicates are harmless — 'buildMethodTables' uses @fromListWith
+preferBetter@.
+-}
+expandSynonymMappings ::
+    SynonymDB ->
+    M.Map Text [Flow] ->
+    [(MethodCF, Maybe (Flow, MatchStrategy))] ->
+    [(MethodCF, Maybe (Flow, MatchStrategy))]
+expandSynonymMappings synDB flowsByName mappings =
+    mappings ++ concatMap expand mappings
+  where
+    -- One-shot inverse index: normalized name → set of direct partners
+    -- (union of all groups containing the name, without recursing). Stays
+    -- inside 'SynonymDB''s star-topology semantics — no chained
+    -- inferences across hubs — but does see every direct pair, which
+    -- 'lookupSynonymGroup' alone misses when many pairs converge on the
+    -- same hub name and @M.fromList@ keeps only the last-inserted group.
+    directPeers :: M.Map Text (S.Set Text)
+    directPeers =
+        M.fromListWith
+            S.union
+            [ (normalizeName m, S.fromList (map normalizeName members))
+            | members <- M.elems (synIdToNames synDB)
+            , m <- members
+            ]
+
+    expand (cf, _) =
+        let cfName = normalizeName (mcfFlowName cf)
+            cfMed = case mcfCompartment cf of
+                Just (Compartment med _ _) -> Just (T.toLower med)
+                Nothing -> Nothing
+            peers = M.findWithDefault S.empty cfName directPeers
+         in [ (cf, Just (flow, BySynonym))
+            | syn <- S.toList peers
+            , flow <- M.findWithDefault [] syn flowsByName
+            , mediumCompat cfMed (flowCategory flow)
+            ]
+
+    -- Loose medium compatibility: empty/None matches anything; otherwise
+    -- check the flow's category starts with the CF medium (e.g. CF medium
+    -- "natural resource" must match flow category "resources/in ground"
+    -- which lowercases to "resources/...").
+    mediumCompat Nothing _ = True
+    mediumCompat (Just med) cat =
+        let lcat = T.toLower cat
+         in med == "natural resource"
+                && ("resource" `T.isPrefixOf` lcat)
+                || (med /= "natural resource" && med `T.isInfixOf` lcat)
+
 buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap mappings =
     MethodTables
