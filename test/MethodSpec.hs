@@ -18,7 +18,7 @@ import Method.Mapping (LCIAOutcome (..), MatchStrategy (..), computeLCIAScore)
 import Method.Parser
 import Method.ParserCSV (parseMethodCSVBytes)
 import Method.ParserNW (parseNormWeightCSVBytes)
-import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
+import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes, splitLocationSuffix)
 import Method.Types
 import Method.Types (Compartment (..))
 import SynonymDB
@@ -27,6 +27,28 @@ import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
 spec = do
+    describe "ParserSimaPro.splitLocationSuffix" $ do
+        it "extracts 2-letter ISO country code" $
+            splitLocationSuffix "Ammonia, NO" `shouldBe` ("Ammonia", Just "NO")
+
+        it "extracts 3-letter region code" $
+            splitLocationSuffix "Water, RER" `shouldBe` ("Water", Just "RER")
+
+        it "extracts region code with hyphen" $
+            splitLocationSuffix "Land, EU-28" `shouldBe` ("Land", Just "EU-28")
+
+        it "leaves lower-case qualifiers untouched" $
+            splitLocationSuffix "Methane, fossil" `shouldBe` ("Methane, fossil", Nothing)
+
+        it "leaves names without a comma untouched" $
+            splitLocationSuffix "Carbon dioxide" `shouldBe` ("Carbon dioxide", Nothing)
+
+        it "leaves names whose suffix is too long untouched" $
+            splitLocationSuffix "Foo, ABCDEFGHIJK" `shouldBe` ("Foo, ABCDEFGHIJK", Nothing)
+
+        it "leaves purely numeric suffixes untouched" $
+            splitLocationSuffix "Foo, 12" `shouldBe` ("Foo, 12", Nothing)
+
     describe "SynonymDB" $ do
         describe "normalizeName" $ do
             it "lowercases names" $ do

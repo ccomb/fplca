@@ -12,11 +12,12 @@ module Method.ParserSimaPro (
     parseSimaProMethodCSV,
     parseSimaProMethodCSVBytes,
     isSimaProMethodCSV,
+    splitLocationSuffix,
 ) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Data.Char (toLower)
+import Data.Char (isAsciiUpper, isDigit, toLower)
 import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -164,16 +165,18 @@ step cfg methodologyName st line = case psPhase st of
             let fields = splitCSV (spDelimiter cfg) line
              in case fields of
                     (comp : sub : name : cas : cfVal : cfUnit : _) ->
-                        let !cf =
+                        let (strippedName, mLoc) =
+                                splitLocationSuffix (decodeBS (BS8.strip name))
+                            !cf =
                                 MethodCF
                                     { mcfFlowRef = makeFlowUUID name comp sub
-                                    , mcfFlowName = decodeBS (BS8.strip name)
+                                    , mcfFlowName = strippedName
                                     , mcfDirection = direction comp
                                     , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                                     , mcfCompartment = mkCompartment comp sub
                                     , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
                                     , mcfUnit = decodeBS (BS8.strip cfUnit)
-                                    , mcfLocation = Nothing
+                                    , mcfLocation = mLoc
                                     }
                          in st{psFactors = cf : psFactors st}
                     _ -> st
@@ -374,6 +377,30 @@ mkCompartment comp sub =
             let s = decodeBS (BS8.strip sub)
              in if s == "(unspecified)" then "" else s
      in Just (Compartment medium subcomp "")
+
+{- | Split a substance name on a trailing location suffix like @"Ammonia, NO"@.
+Returns @(stripped name, Just location)@ when the trailing token after the
+last @", "@ looks like a location code (all uppercase ASCII, digits, or
+hyphen, with at least one letter, length 2..10). Otherwise returns the
+input untouched with @Nothing@.
+
+Conservative on purpose: anything ambiguous (lower-case qualifiers like
+@"Methane, fossil"@) keeps the name as-is.
+-}
+splitLocationSuffix :: Text -> (Text, Maybe Text)
+splitLocationSuffix name =
+    case T.breakOnEnd ", " (T.strip name) of
+        ("", _) -> (name, Nothing)
+        (prefixWithComma, suffix)
+            | isLocationCode suffix ->
+                (T.dropEnd 2 prefixWithComma, Just suffix)
+            | otherwise -> (name, Nothing)
+  where
+    isLocationCode t =
+        let len = T.length t
+            hasLetter = T.any isAsciiUpper t
+            validChar c = isAsciiUpper c || isDigit c || c == '-'
+         in len >= 2 && len <= 10 && hasLetter && T.all validChar t
 
 normalizeCAS :: Text -> Maybe Text
 normalizeCAS cas
