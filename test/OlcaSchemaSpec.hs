@@ -86,5 +86,5 @@ spec = do
                 Left err -> expectationFailure ("parse failed: " ++ err)
                 Right method -> do
                     let mappings = [(cf, Nothing) | cf <- methodFactors method]
-                        tables = buildMethodTables mappings
+                        tables = buildMethodTables M.empty mappings
                     M.size (mtRegionalizedCF tables) `shouldBe` 0

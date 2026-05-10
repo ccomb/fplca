@@ -90,9 +90,10 @@ data MethodCF = MethodCF
     , mcfUnit :: !Text
     -- ^ CF reference unit (e.g., "kg", "kBq")
     , mcfConsumerLocation :: !(Maybe Text)
-    -- ^ Consumer location for regionalized CFs (ISO 2-3 letter code).
-    -- 'Nothing' = universal CF (broadcast on all locations).
-    -- 'Just loc' = single cell of the C matrix at (flow, loc).
+    {- ^ Consumer location for regionalized CFs (ISO 2-3 letter code).
+    'Nothing' = universal CF (broadcast on all locations).
+    'Just loc' = single cell of the C matrix at (flow, loc).
+    -}
     }
     deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
 
@@ -287,11 +288,25 @@ buildCompartmentMapFromCSV csvData =
                     ]
              in Right $ M.fromList pairs
 
--- | Normalize a compartment using the mapping. Returns original if not found.
+{- | Normalize a compartment using the mapping.
+
+Tries the full @(medium, sub, qualifier)@ key first. On miss, falls back to a
+medium-only key — so a single CSV entry like @"Emissions to air,,,air,,"@
+covers every @(emissions to air, *, *)@ variant by remapping just the medium
+and preserving the original sub/qualifier. Returns the input unchanged if
+neither key resolves; callers can use that as a "no rule for this
+compartment" signal.
+-}
 normalizeCompartment :: CompartmentMap -> Compartment -> Compartment
 normalizeCompartment cmap (Compartment med sub qual) =
-    let key = (T.toLower med, T.toLower sub, T.toLower qual)
-     in M.findWithDefault (Compartment med sub qual) key cmap
+    let lmed = T.toLower med
+        lsub = T.toLower sub
+        lqual = T.toLower qual
+     in case M.lookup (lmed, lsub, lqual) cmap of
+            Just c -> c
+            Nothing -> case M.lookup (lmed, T.empty, T.empty) cmap of
+                Just (Compartment med' _ _) -> Compartment med' sub qual
+                Nothing -> Compartment med sub qual
 
 -- | Number of entries in the compartment map.
 compartmentMapSize :: CompartmentMap -> Int
