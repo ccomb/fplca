@@ -5,7 +5,7 @@
 # Optional env vars:
 #   MUMPS_LIB_DIR           Path to MUMPS libraries (default: system)
 #   MUMPS_INCLUDE_DIR       Path to MUMPS headers (default: /usr/include)
-#   LINK_MODE               "dynamic" (default), "static", "darwin", "windows"
+#   LINK_MODE               "dynamic" (default), "static", "musl", "darwin", "windows"
 #   OUTPUT_DIR              Where to write cabal.project.local (default: current dir)
 #
 # Output: writes cabal.project.local in OUTPUT_DIR
@@ -66,6 +66,39 @@ extra-include-dirs: $MUMPS_INCLUDE_DIR
 
 package volca
   ghc-options: $STATIC_LINK_FLAGS
+EOF
+        ;;
+
+    musl)
+        # Fully static link for Linux against musl libc (Alpine). Unlike the
+        # `static` mode above, musl's `dlopen` / `getaddrinfo` / NSS lookups
+        # work in a static binary without dragging in the running glibc, so
+        # the resulting executable is genuinely portable across Linux distros.
+        # The `static-shims.c` glibc workaround is not needed: musl never had
+        # the __xmknod / __xmknodat internal aliases, and the unix package
+        # gets recompiled against musl headers.
+        #
+        # Alpine packages ship LAPACK/BLAS as shared libs only (no .a), so
+        # OpenBLAS — which bundles both BLAS and LAPACK in a single static
+        # archive — must be built from source and pointed at via OPENBLAS_LIB_DIR.
+        : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR is required for musl mode (path to libopenblas.a)}"
+        case "$(uname -m)" in
+            x86_64|amd64) QUADMATH_FLAG="-optl-lquadmath" ;;
+            *)            QUADMATH_FLAG="" ;;
+        esac
+        MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
+        cat > "$OUTPUT" << EOF
+optimization: 2
+split-sections: True
+shared: False
+executable-static: True
+
+extra-lib-dirs: $MUMPS_LIB_DIR
+                $OPENBLAS_LIB_DIR
+extra-include-dirs: $MUMPS_INCLUDE_DIR
+
+package volca
+  ghc-options: $MUSL_LINK_FLAGS
 EOF
         ;;
 
