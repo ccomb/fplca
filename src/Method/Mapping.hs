@@ -320,26 +320,20 @@ expandSynonymMappings synDB flowsByName mappings =
 
     expand (cf, _) =
         let cfName = normalizeName (mcfFlowName cf)
-            cfMed = case mcfCompartment cf of
-                Just (Compartment med _ _) -> Just (T.toLower med)
-                Nothing -> Nothing
             peers = M.findWithDefault S.empty cfName directPeers
          in [ (cf, Just (flow, BySynonym))
             | syn <- S.toList peers
             , flow <- M.findWithDefault [] syn flowsByName
-            , mediumCompat cfMed (flowCategory flow)
             ]
 
-    -- Loose medium compatibility: empty/None matches anything; otherwise
-    -- check the flow's category starts with the CF medium (e.g. CF medium
-    -- "natural resource" must match flow category "resources/in ground"
-    -- which lowercases to "resources/...").
-    mediumCompat Nothing _ = True
-    mediumCompat (Just med) cat =
-        let lcat = T.toLower cat
-         in med == "natural resource"
-                && ("resource" `T.isPrefixOf` lcat)
-                || (med /= "natural resource" && med `T.isInfixOf` lcat)
+-- No compartment filter here on purpose: 'buildMethodTables' keys
+-- entries by the CF's compartment (after 'normalizeCompartment'), and
+-- 'lookupCFForFlowAt' looks up by the inventory flow's compartment, so
+-- mismatched (cf, peer) pairs simply land at keys nothing ever queries.
+-- A pre-filter would have to mirror 'normalizeCompartment' to be
+-- correct (e.g. ILCD's @land occupation@ medium → BAFU's
+-- @resources/land@ via the compartment map), so it's simpler to let
+-- the table keys do the filtering.
 
 buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap mappings =

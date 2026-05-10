@@ -754,3 +754,8 @@ tribenuron,Tribenuron-methyl
 "Gold, Au 1.1E-4%, Ag 4.2E-3%, in ore",gold
 "Gold, Au 1.3E-4%, Ag 4.6E-5%, in ore",gold
 "Gold, Au 7.1E-4%, in ore",gold
+"Occupation, annual crop, non-irrigated","arable, non-irrigated"
+"Transformation, from annual crop, non-irrigated","from arable, non-irrigated"
+"Transformation, to annual crop, non-irrigated","to arable, non-irrigated"
+"Transformation, from pasture, man made",from pasture/meadow
+"Occupation, industrial area, built up",industrial area
