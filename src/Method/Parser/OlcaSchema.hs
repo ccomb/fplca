@@ -150,12 +150,16 @@ parseCompartment :: KM.KeyMap Value -> Maybe Compartment
 parseCompartment flow = do
     cat <- objectField flow "category"
     catName <- lookupText cat "name"
-    let parts = T.splitOn "/" catName
-        med = T.strip (head parts)
-        sub = T.strip (T.intercalate "/" (drop 1 parts))
-    if T.null med
-        then Nothing
-        else Just (Compartment med sub "")
+    -- T.splitOn always returns a non-empty list, so the empty case is
+    -- unreachable; pattern-matching avoids the partial 'head'.
+    case T.splitOn "/" catName of
+        [] -> Nothing
+        (med0 : rest) ->
+            let med = T.strip med0
+                sub = T.strip (T.intercalate "/" rest)
+             in if T.null med
+                    then Nothing
+                    else Just (Compartment med sub "")
 
 -- | Direction is carried by 'ImpactFactor.direction' (Direction enum) when
 -- present, otherwise default to 'Output' since the vast majority of

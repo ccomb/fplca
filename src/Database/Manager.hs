@@ -46,6 +46,9 @@ module Database.Manager (
     addMethodCollection,
     removeMethodCollection,
 
+    -- * Geography
+    parseGeographiesCSV,
+
     -- * Reference Data Operations
     listFlowSynonyms,
     loadFlowSynonyms,
