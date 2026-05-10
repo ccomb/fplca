@@ -264,6 +264,34 @@ spec = do
                 score = loScore (computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping)
             score `shouldBe` 0.0
 
+    describe "location-aware CF lookup" $ do
+        it "prefers the activity's location over the global default" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "Ammonia" "air" Nothing
+                cfGlobal = (mkCFComp "Ammonia" "air" "" 3.02){mcfLocation = Nothing}
+                cfCH = (mkCFComp "Ammonia" "air" "" 0.747){mcfLocation = Just "CH"}
+                cfNO = (mkCFComp "Ammonia" "air" "" 11.491){mcfLocation = Just "NO"}
+                tables = buildMethodTables M.empty [(cfGlobal, Nothing), (cfCH, Nothing), (cfNO, Nothing)]
+                inventory = M.singleton fid 10.0
+                flowDB = M.singleton fid flow
+                scoreCH = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables (Just "CH"))
+                scoreNO = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables (Just "NO"))
+                scoreGlobal = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables Nothing)
+            scoreCH `shouldBe` 7.47
+            scoreNO `shouldBe` 114.91
+            scoreGlobal `shouldBe` 30.2
+
+        it "falls back to the global CF when the activity's location has no specific CF" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "Methane" "air" Nothing
+                cfGlobal = (mkCFComp "Methane" "air" "" 28.0){mcfLocation = Nothing}
+                tables = buildMethodTables M.empty [(cfGlobal, Nothing)]
+                inventory = M.singleton fid 1.0
+                flowDB = M.singleton fid flow
+                -- "ZZ" not represented; should fall back to global.
+                score = loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables (Just "ZZ"))
+            score `shouldBe` 28.0
+
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
         it "counts ByFuzzy matches" $ do
             fid <- nextRandom
@@ -404,6 +432,7 @@ spec = do
                 emptyChemSynonyms
                 idx
                 opts
+                Nothing
                 `shouldBe` []
 
         it "drops flows below the absolute-weight threshold" $ do
@@ -426,6 +455,7 @@ spec = do
                         emptyChemSynonyms
                         idx
                         opts
+                        Nothing
             -- Only the big flow (99.9% of mass) clears the 50% threshold.
             map ucfFlowName result `shouldBe` ["tiny stuff"]
 
@@ -446,6 +476,7 @@ spec = do
                 emptyChemSynonyms
                 idx
                 defaultUncharacterizedOpts
+                Nothing
                 `shouldBe` []
 
 tShow :: (Show a) => a -> Text

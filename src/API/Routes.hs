@@ -1105,14 +1105,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, _) -> do
+            Right (actProcessId, act) -> do
                 let lim = fromMaybe 20 limitParam
                 unitCfg <- liftIO $ getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                 inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+                let locTxt = activityLocation act
+                    activityLoc = if T.null locTxt then Nothing else Just locTxt
+                    score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables activityLoc)
+                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables activityLoc
                     contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                     topFlows =
                         [ FlowContributionEntry
@@ -1197,10 +1199,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- Force score evaluation here so mapConcurrently actually parallelizes the work
         -- (without this, lazy thunks are created and forced later in the main thread)
         let stats = computeMappingStats mappings
-        !score <- evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+            activityLoc =
+                let loc = activityLocation activity
+                 in if T.null loc then Nothing else Just loc
+        !score <- evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables activityLoc)
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables activityLoc
             contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
             topContribs = take topFlows contribs
             topContributors =

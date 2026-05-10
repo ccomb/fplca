@@ -345,9 +345,12 @@ hotspotAnalyzer =
     analyzeMethod flowDB unitDB mapCtx inv topN method = do
         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx method
         let tables = Mapping.buildMethodTables M.empty mappings
-            (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables
+            -- acAnalyze doesn't have an activity in scope (it scores a pre-built
+            -- inventory). Skip location-aware lookup — regionalized CFs will
+            -- fall back to the global ('Nothing') entry.
+            (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables Nothing
             sorted = take topN $ sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-            total = Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables)
+            total = Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables Nothing)
         pure $
             toJSON $
                 M.fromList

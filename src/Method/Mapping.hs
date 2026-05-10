@@ -566,8 +566,8 @@ go uncharacterized). 'loUncharacterized' and 'loUnknownUuids' are empty
 in this commit; the suggester populating them lands separately so this
 change stays bit-equivalent for the score number itself.
 -}
-computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> LCIAOutcome
-computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
+computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Maybe Text -> LCIAOutcome
+computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables activityLoc =
     let (!score, !charSum, !invSum) = M.foldlWithKey' step (0, 0, 0) inventory
      in LCIAOutcome
             { loScore = score
@@ -582,7 +582,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
         | otherwise =
             let !absQty = abs qty
                 !is' = is + absQty
-             in case lookupCFForFlow tables fid (M.lookup fid flowDB) of
+             in case lookupCFForFlowAt tables fid (M.lookup fid flowDB) activityLoc of
                     Nothing -> (s, cs, is')
                     Just (cfVal, cfUnit) ->
                         let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
@@ -597,7 +597,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings) Nothing
 
 {- | Per-flow contributions over an 'Inventory', keyed by flow UUID (possibly
 cross-DB-merged). Walks the inventory directly (not the mappings) so any
@@ -623,8 +623,9 @@ inventoryContributions ::
     FlowDB ->
     Inventory ->
     MethodTables ->
+    Maybe Text ->
     ([(Flow, Double, Double)], [UUID])
-inventoryContributions unitConfig unitDB flowDB inventory tables =
+inventoryContributions unitConfig unitDB flowDB inventory tables activityLoc =
     M.foldlWithKey' step ([], []) inventory
   where
     -- Strict fold over the inventory Map: the old 'foldr' over 'M.toList'
@@ -637,7 +638,7 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
         | qty == 0 = (contribs, unknowns)
         | otherwise = case M.lookup fid flowDB of
             Nothing -> (contribs, fid : unknowns) -- metadata missing — surface it
-            Just flow -> case lookupCFForFlow tables fid (Just flow) of
+            Just flow -> case lookupCFForFlowAt tables fid (Just flow) activityLoc of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
                 Just (cfVal, cfUnit) ->
                     let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
@@ -835,8 +836,9 @@ findUncharacterized ::
     ChemSynonyms ->
     MethodIndex ->
     UncharacterizedOpts ->
+    Maybe Text ->
     [UncharacterizedFlow]
-findUncharacterized _ unitDB flowDB inventory tables syns idx opts
+findUncharacterized _ unitDB flowDB inventory tables syns idx opts activityLoc
     | uoMaxFlows opts <= 0 = []
     | totalAbs == 0 = []
     | otherwise =
@@ -845,7 +847,7 @@ findUncharacterized _ unitDB flowDB inventory tables syns idx opts
                 | (fid, qty) <- M.toList inventory
                 , qty /= 0
                 , Just flow <- [M.lookup fid flowDB]
-                , isNothing (lookupCFForFlow tables fid (Just flow))
+                , isNothing (lookupCFForFlowAt tables fid (Just flow) activityLoc)
                 , let w = abs qty / totalAbs
                 , w >= uoMinAbsWeight opts
                 ]
@@ -885,8 +887,9 @@ computeLCIAScoreWithDiagnostics ::
     ChemSynonyms ->
     MethodIndex ->
     UncharacterizedOpts ->
+    Maybe Text ->
     LCIAOutcome
-computeLCIAScoreWithDiagnostics unitConfig unitDB flowDB inventory tables syns idx opts =
-    let outcome = computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
-        diagnostics = findUncharacterized unitConfig unitDB flowDB inventory tables syns idx opts
+computeLCIAScoreWithDiagnostics unitConfig unitDB flowDB inventory tables syns idx opts activityLoc =
+    let outcome = computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables activityLoc
+        diagnostics = findUncharacterized unitConfig unitDB flowDB inventory tables syns idx opts activityLoc
      in outcome{loUncharacterized = diagnostics}

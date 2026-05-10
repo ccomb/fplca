@@ -182,17 +182,17 @@ spec = do
             inventory = M.fromList [(uuidRoot, 1.0), (uuidDep, 2.0), (uuidGone, 5.0)]
 
         it "returns empty contributions and no unknowns for empty inventory" $ do
-            let (contribs, unknowns) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB M.empty tables
+            let (contribs, unknowns) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB M.empty tables Nothing
             length contribs `shouldBe` 0
             unknowns `shouldBe` []
 
         it "surfaces inventory UUIDs absent from the flowDB (no silent drop)" $ do
-            let (_, unknowns) = inventoryContributions defaultUnitConfig unitDB rootOnlyFlowDB inventory tables
+            let (_, unknowns) = inventoryContributions defaultUnitConfig unitDB rootOnlyFlowDB inventory tables Nothing
             -- Dep-DB UUID is present in inventory but absent from root-only flowDB; same for uuidGone.
             S.fromList unknowns `shouldBe` S.fromList [uuidDep, uuidGone]
 
         it "characterizes dep-DB flows when the merged flowDB is supplied" $ do
-            let (contribs, unknowns) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB inventory tables
+            let (contribs, unknowns) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB inventory tables Nothing
                 namesWithContrib = [(flowName f, c) | (f, _, c) <- contribs]
             -- uuidGone remains unknown (it's in no flowDB at all); uuidRoot and
             -- uuidDep should both produce contributions.
@@ -200,9 +200,9 @@ spec = do
             lookup "Carbon dioxide, fossil" namesWithContrib `shouldBe` Just 2.0 -- 2.0 kg * CF 1.0
             lookup "Methane, biogenic" namesWithContrib `shouldBe` Just 27.0 -- 1.0 kg * CF 27.0
         it "matches computeLCIAScoreFromTables when no UUIDs are unknown" $ do
-            let (contribs, _) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables
+            let (contribs, _) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables Nothing
                 sumContribs = sum [c | (_, _, c) <- contribs]
-                score = Mapping.loScore (Mapping.computeLCIAScoreFromTables defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables)
+                score = Mapping.loScore (Mapping.computeLCIAScoreFromTables defaultUnitConfig unitDB mergedFlowDB (M.delete uuidGone inventory) tables Nothing)
             abs (sumContribs - score) < 1e-9 `shouldBe` True
 
 -- | Build a deterministic test UUID from a small integer tag.

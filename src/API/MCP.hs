@@ -913,8 +913,11 @@ runImpactsRequest dbManager args req = do
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
     tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
     let stats = computeMappingStats mappings
-        baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
-        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+        activityLoc =
+            let loc = activityLocation (raActivity ra)
+             in if T.null loc then Nothing else Just loc
+        baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables activityLoc
+        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables activityLoc
         contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
         (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
     -- Diagnostics path: opt-in via include_diagnostics. Skips the suggester
@@ -935,6 +938,7 @@ runImpactsRequest dbManager args req = do
                             (DM.dmChemSynonyms dbManager)
                             idx
                             opts
+                            activityLoc
                 pure baseOutcome{loUncharacterized = diagnostics, loUnknownUuids = unknownUuids}
             else pure baseOutcome
     pure
@@ -1255,7 +1259,7 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                 Nothing -> pure []
                 Just ld -> case Service.resolveActivityAndProcessId db pidText of
                     Left _ -> pure []
-                    Right (pid, _) -> do
+                    Right (pid, act) -> do
                         unitCfg <- DM.getMergedUnitConfig dbManager
                         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
                         invE <-
@@ -1275,6 +1279,8 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                                             { Mapping.uoMaxFlows = maxN
                                             , Mapping.uoMaxSimilar = 3
                                             }
+                                    locTxt = activityLocation act
+                                    activityLoc = if T.null locTxt then Nothing else Just locTxt
                                     uncharacterized =
                                         Mapping.findUncharacterized
                                             unitCfg
@@ -1285,6 +1291,7 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                                             (DM.dmChemSynonyms dbManager)
                                             idx
                                             opts
+                                            activityLoc
                                 pure (map encodeUncharacterized uncharacterized)
 
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
@@ -1502,9 +1509,12 @@ callGetContributingFlows dbManager baseUrl rid args =
                             (ldSharedSolver ld)
                             (raPid ra)
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                let activityLoc =
+                        let loc = activityLocation (raActivity ra)
+                         in if T.null loc then Nothing else Just loc
+                    outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables activityLoc
                     score = loScore outcome
-                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables activityLoc
                     contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                     top = take lim contribs
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
@@ -1523,6 +1533,7 @@ callGetContributingFlows dbManager baseUrl rid args =
                                         (DM.dmChemSynonyms dbManager)
                                         idx
                                         opts
+                                        activityLoc
                             pure
                                 [ "uncharacterized_flows" .= map encodeUncharacterized uncharacterized
                                 , "characterized_share"
