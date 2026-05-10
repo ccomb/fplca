@@ -217,3 +217,37 @@ Climate change keeps working because GWP100 CFs never carry a location
 (all 'Nothing' keys). Acidification, Eutrophication etc. now match
 exactly: Swiss wheat (BAFU `... {CH}`) picks `0.747` on both the
 adapted and original EF3.1 distributions.
+
+### Known divergence: methods that ship per-country CFs in ILCD but not in adapted
+
+Some EF3.1 methods (most prominently **Land use**) ship the full
+213-country table of CFs in the ILCD XML distribution but were exported
+to the SimaPro CSV with only the global default. For example, ILCD's
+`to arable, non-irrigated` carries:
+
+```xml
+<factor><location>CH</location>     <meanValue>1.2477E+03</meanValue></factor>
+<factor><location>FR</location>     <meanValue>...</meanValue></factor>
+…211 more country entries…
+<factor><location/>                 <meanValue>5.0191E+02</meanValue></factor>
+```
+
+— while the adapted SimaPro CSV contains only the `5.0191E+02` global
+entry. The geolocation cascade does the right thing on each side:
+original picks `1247.7` for Swiss wheat (CH-specific, more accurate),
+adapted falls back to `501.91` (its sole entry). Both numbers are
+internally consistent EF3.1 scores; they just reflect different export
+fidelity.
+
+This is **not** a mapping bug — the same BAFU flows are characterized
+on both sides, and `mappedFlows` is similar between distributions. It
+shows up in `compare_impacts` as a large `delta.relative_pct` on
+Land use only (~25× for Swiss wheat). Treat the original ILCD score as
+the location-aware reference; the adapted score is a less-precise
+approximation that drops country resolution at SimaPro export time.
+
+Do **not** add an "ignore location for method X" knob to bring the
+scores closer — it would silently downgrade the original to match the
+less precise adapted, which is the wrong direction. The right fix
+belongs upstream: re-export the SimaPro CSV with per-country
+granularity preserved.
