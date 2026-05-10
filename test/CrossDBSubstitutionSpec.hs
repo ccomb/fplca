@@ -10,7 +10,7 @@ database under two names via 'DepSolverLookup'.
 -}
 module CrossDBSubstitutionSpec (spec) where
 
-import API.Types (Substitution (..), parseSubRef)
+import API.Types (RootDb (..), Substitution (..), parseSubRef)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
 import Service (
@@ -28,19 +28,19 @@ spec :: Spec
 spec = do
     describe "parseSubRef" $ do
         it "returns (rootDb, pid) for a bare pid" $
-            parseSubRef "root" "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            parseSubRef (RootDb "root") "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
                 `shouldBe` ( "root"
                            , "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
                            )
 
         it "returns (depDb, pid) for a qualified dbName::pid" $
-            parseSubRef "root" "agb-3-2::aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            parseSubRef (RootDb "root") "agb-3-2::aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
                 `shouldBe` ( "agb-3-2"
                            , "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
                            )
 
         it "handles empty raw string" $
-            parseSubRef "root" "" `shouldBe` ("root", "")
+            parseSubRef (RootDb "root") "" `shouldBe` ("root", "")
 
     describe "computeScalingVectorWithSubstitutionsCrossDB" $ do
         it "with empty subs returns baseline scaling and no virtual links" $ do
