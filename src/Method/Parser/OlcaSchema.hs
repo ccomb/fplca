@@ -118,6 +118,7 @@ parseImpactFactor (Object o) = do
                 Nothing -> lookupText l "name"
             Nothing -> Nothing
         direction = directionFromFlow o
+        compartment = parseCompartment flow
     -- A factor without a flow name is unmatchable; drop it. (UUID alone could
     -- in theory match by id, but in practice the name carries the matching
     -- signal too and is required by every fallback strategy.)
@@ -130,16 +131,31 @@ parseImpactFactor (Object o) = do
                     , mcfFlowName = flowName
                     , mcfDirection = direction
                     , mcfValue = value
-                    -- Compartment can live on the openLCA Flow object via its
-                    -- 'category' field (a Ref[Category] hierarchy). Wiring that
-                    -- in is straightforward but not needed yet — UUID-based
-                    -- matching against the DB doesn't use the compartment.
-                    , mcfCompartment = Nothing
+                    , mcfCompartment = compartment
                     , mcfCAS = flowCas
                     , mcfUnit = unitName
                     , mcfConsumerLocation = loc
                     }
 parseImpactFactor _ = Nothing
+
+-- | Read the optional @flow.category@ Ref and turn it into a 'Compartment'.
+-- The category's @name@ is treated as a slash-separated path: the first
+-- segment is the medium ('resource', 'air', 'water', …) and the rest is the
+-- subcompartment ('land', 'urban air close to ground', …). Without this,
+-- VoLCA's matcher cannot disambiguate DB flows that share a name across
+-- compartments (e.g. Agribalyse has 3 flows literally named
+-- @"Occupation, annual crop"@ in @resource@, @resource/land@, and
+-- @resource/biotic@; only the @resource/land@ one is what activities emit).
+parseCompartment :: KM.KeyMap Value -> Maybe Compartment
+parseCompartment flow = do
+    cat <- objectField flow "category"
+    catName <- lookupText cat "name"
+    let parts = T.splitOn "/" catName
+        med = T.strip (head parts)
+        sub = T.strip (T.intercalate "/" (drop 1 parts))
+    if T.null med
+        then Nothing
+        else Just (Compartment med sub "")
 
 -- | Direction is carried by 'ImpactFactor.direction' (Direction enum) when
 -- present, otherwise default to 'Output' since the vast majority of
