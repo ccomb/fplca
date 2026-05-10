@@ -192,14 +192,14 @@ serverParser = Server <$> serverOptionsParser
 serverOptionsParser :: Parser ServerOptions
 serverOptionsParser = do
     serverPort <-
-        option
-            auto
-            ( long "port"
-                <> short 'p'
-                <> value 8080
-                <> metavar "PORT"
-                <> help "Server port (default: 8080)"
-            )
+        optional $
+            option
+                auto
+                ( long "port"
+                    <> short 'p'
+                    <> metavar "PORT"
+                    <> help "Server port (overrides [server].port from config; default: 8080)"
+                )
     serverLoadDbs <-
         optional $
             option

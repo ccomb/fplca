@@ -87,7 +87,7 @@ data UploadArgs = UploadArgs
 
 -- | Server-specific options
 data ServerOptions = ServerOptions
-    { serverPort :: Int -- Server port (--port)
+    { serverPort :: Maybe Int -- Server port (--port); falls back to config [server].port, then 8080
     , serverLoadDbs :: Maybe [Text] -- Databases to load at startup (--load db1,db2)
     , serverDesktopMode :: Bool -- Desktop mode (--desktop): print port and minimize logging
     , serverStaticDir :: Maybe FilePath -- Static directory (--static-dir): override default web/dist
