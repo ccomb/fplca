@@ -11,7 +11,7 @@ rely on the shared classifier body already covered by
 -}
 module NestedSubstitutionSpec (spec) where
 
-import API.Types (Substitution (..), SupplyChainEntry (..), SupplyChainResponse (..))
+import API.Types (RootDb (..), Substitution (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..))
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
@@ -61,7 +61,7 @@ spec = do
                         , subConsumer = qualifiedPid
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "root" "root" solver [baselineX] [sub]
+            res <- applySubstitutionsAt noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] [sub]
             case res of
                 Right ([x'], links) -> do
                     links `shouldBe` []
@@ -76,7 +76,7 @@ spec = do
                 demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
             baselineX <- solveWithSharedSolver solver demandVec
             let noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "root" "root" solver [baselineX] []
+            res <- applySubstitutionsAt noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] []
             case res of
                 Right (xs, links) -> do
                     links `shouldBe` []
@@ -100,7 +100,7 @@ spec = do
                         , subConsumer = qualifiedToRoot
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "dep" "root" solver [baselineX, baselineX, baselineX] [sub]
+            res <- applySubstitutionsAt noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX, baselineX, baselineX] [sub]
             case res of
                 Right (xs, _) -> length xs `shouldBe` 3
                 Left e -> expectationFailure ("K>1 filter failed: " <> show e)
@@ -124,7 +124,7 @@ spec = do
                         , subConsumer = bareRootPid
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db "dep" "root" solver [baselineX] [sub]
+            res <- applySubstitutionsAt noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX] [sub]
             case res of
                 Right ([x'], links) -> do
                     links `shouldBe` []
