@@ -190,6 +190,7 @@ test-suite lca-tests
                      , FuzzySpec
                      , NestedSubstitutionSpec
                      , SubstitutionSpec
+                     , SensitivitySpec
                      , CrossDBSubstitutionSpec
                      , DatabaseStatusSpec
                      , OlcaSchemaSpec

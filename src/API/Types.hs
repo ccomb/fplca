@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module API.Types where
@@ -588,6 +589,46 @@ data Substitution = Substitution
     }
     deriving (Generic)
 
+{- | A single rank-1 perturbation of a technosphere coefficient @A_ij@.
+
+@delta@ is __relative__: the resolved coefficient @a@ is multiplied by
+@(1 + delta)@. So @delta = +0.05@ means \"+5%\", and @delta = -1.0@
+removes the link entirely. The kernel passes @a * delta@ to 'perturbA'.
+-}
+data Perturbation = Perturbation
+    { perConsumer :: Text -- Consumer ProcessId (column j of A) — root DB only in V1
+    , perSupplier :: Text -- Supplier ProcessId (row i of A) — root DB only in V1
+    , perDelta :: Double -- Relative perturbation of A_ij (1 + delta)
+    , perLabel :: Maybe Text -- Optional label for response correlation
+    }
+    deriving (Generic)
+
+-- | Request body for POST sensitivity endpoints. Flat list, V1.
+newtype SensitivityRequest = SensitivityRequest
+    { srPerturbations :: [Perturbation]
+    }
+    deriving (Generic)
+
+{- | One result entry per perturbation. The 'peResult' carries either an
+error message ('Left') or the (impact, deltaImpact) pair ('Right'). The
+echoed @perturbation@ carries the @label@ if the caller supplied one, so
+callers don't need to thread an out-of-band identifier. The wire format
+flattens the Either: success → @{perturbation, impact, deltaImpact}@,
+failure → @{perturbation, error}@.
+-}
+data PerturbedEntry = PerturbedEntry
+    { pePerturbation :: Perturbation
+    , peResult :: Either Text (LCIAResult, Double)
+    }
+    deriving (Generic)
+
+-- | Sensitivity response: baseline LCIA + one entry per perturbation (in order).
+data SensitivityResponse = SensitivityResponse
+    { srBaseline :: LCIAResult
+    , srPerturbed :: [PerturbedEntry]
+    }
+    deriving (Generic)
+
 {- | Name of the request-level "root" database — the DB extracted from the
 URL path and the implicit target of any bare 'ProcessId' (one without the
 @"dbName::"@ qualifier).
@@ -823,6 +864,18 @@ instance ToJSON SupplyChainEdge where toJSON = strippedToJSON; toEncoding = stri
 instance FromJSON SupplyChainEdge where parseJSON = strippedParseJSON
 instance FromJSON SubstitutionRequest where parseJSON = strippedParseJSON
 instance FromJSON Substitution where parseJSON = strippedParseJSON
+instance FromJSON SensitivityRequest where parseJSON = strippedParseJSON
+instance FromJSON Perturbation where parseJSON = strippedParseJSON
+instance ToJSON Perturbation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+instance ToJSON SensitivityResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+
+-- Custom ToJSON for PerturbedEntry: flatten the Either so success entries
+-- have impact+deltaImpact and error entries have error.
+instance ToJSON PerturbedEntry where
+    toJSON (PerturbedEntry p result) =
+        object $ ("perturbation" .= p) : case result of
+            Left err -> ["error" .= err]
+            Right (lcia, d) -> ["impact" .= lcia, "deltaImpact" .= d]
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a) where parseJSON = strippedParseJSON

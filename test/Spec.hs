@@ -38,6 +38,7 @@ import qualified ServerSpec
 import qualified ServiceSpec
 import qualified SharedSolverSpec
 import qualified SimaProParserSpec
+import qualified SensitivitySpec
 import qualified SubstitutionSpec
 import qualified SupplyChainSpec
 import qualified TreeSpec
@@ -64,6 +65,7 @@ main = hspec $ do
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Substitutions" SubstitutionSpec.spec
+        describe "Sensitivity Analysis" SensitivitySpec.spec
         describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec
         describe "Shared Solver" SharedSolverSpec.spec
         describe "Coalescing Solver (concurrency)" CoalescingSolverSpec.spec

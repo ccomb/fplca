@@ -40,7 +40,9 @@ module Matrix (
     activityNormalizationFactor,
     depDemandsToVector,
     computeProcessLCIAContributions,
-    shermanMorrisonVariant,
+    perturbA,
+    perturbABatch,
+    applyShermanMorrison,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
@@ -572,43 +574,54 @@ computeProcessLCIAContributions db scalingVec cfMap =
      in U.foldl' step M.empty bioTriples
 
 {- |
-Sherman-Morrison rank-1 update for ingredient substitution (~4ms per variant).
+Rank-1 perturbation of (I-A) via Sherman-Morrison (~4ms per call).
 
-A substitution applied at technosphere row 'row' (the consumer) is a rank-1
-update to (I-A) represented by a perturbation vector u. Instead of
-re-factorizing (~3s), we reuse the cached factorization:
+Given a baseline scaling vector @x@ such that @(I-A) x = d@, this returns
+@x'@ for the perturbed system @(I-A + u·e_col^T) x' = d@, where @u@ is a
+sparse vector on the supplier (row) axis and @e_col@ selects a single
+consumer column. The kernel reuses the cached factorization:
 
     x' = x - z * (v^T * x) / (1 + v^T * z)
 
-where z = inv(I-A) * u is one back-substitution and v = e_row.
+with @z = inv(I-A) * u@ (one back-substitution) and @v = e_col@.
 
-The perturbation is passed as a sparse list @[(supplierIdx, delta)]@ so both
-symmetric swaps (same-DB oldSup -> newSup: @[(old, +a), (new, -a)]@) and
-asymmetric cross-DB cases work with the same code path:
+== Sign convention
 
-* @[(old, +a)]@ — drop a root-DB supplier (new supplier lives in a dep DB;
-  a virtual 'CrossDBLink' carries the new demand).
-* @[(new, -a)]@ — add a root-DB supplier (old supplier was a dep-DB link;
-  a virtual 'CrossDBLink' with negative coefficient cancels the static one).
-* @[]@ — no root-matrix change (both old and new suppliers live in dep DBs);
-  returns @x@ unchanged, bypassing the singularity check entirely.
+A positive entry in @perturb@ adds to @(I-A)@, which __decreases__ @A@ by
+the same amount. So @perturb = [(i, Δ)]@ at @col = j@ encodes
+@A_ij -= Δ@. To __increase__ @A_ij@ by @Δ@, pass @[(i, -Δ)]@.
 
-Returns Left if the update is singular (|1 + v^T*z| < epsilon).
+== Encoding common changes
+
+* __Single matrix entry__ @A_ij -= Δ@ — @col = j@, @perturb = [(i, Δ)]@.
+* __Symmetric supplier swap__ at consumer @j@ (drop @old@ at coefficient
+  @a@, add @new@ at the same amount) — @col = j@,
+  @perturb = [(old, +a), (new, -a)]@. The @+a@ on @old@ subtracts @a@
+  from @A_(old,j)@ (was @a@, becomes @0@); the @-a@ on @new@ adds @a@
+  to @A_(new,j)@ (was @0@, becomes @a@).
+* __Asymmetric cross-DB substitution__ where one side lives in a dep DB —
+  pass only the root-side entry; the dep-side change is carried by a
+  virtual 'CrossDBLink'.
+* __No-op__ — @perturb = []@ returns @x@ unchanged (bypasses the
+  singularity check).
+
+Returns @Left@ if the update is singular (@|1 + v^T·z| < epsilon@), which
+means the perturbation drives @(I-A)@ into a degenerate state.
 -}
-shermanMorrisonVariant ::
+perturbA ::
     Database ->
     -- | Cached factorization from SharedSolver (Nothing = full re-solve)
     Maybe MatrixFactorization ->
-    -- | Original scaling vector x
+    -- | Baseline scaling vector x
     Vector ->
-    -- | Activity being modified (row = consumer index)
+    -- | Consumer column index (j in @A_ij@)
     Int ->
-    -- | Non-zero entries of the perturbation vector u
+    -- | Sparse perturbation u on the supplier axis: list of (row i, Δ)
     [(Int, Double)] ->
-    -- | Variant scaling vector x'
+    -- | Perturbed scaling vector x'
     IO (Either T.Text Vector)
-shermanMorrisonVariant db mFact x row perturb
-    | null perturb = pure (Right x) -- no root-matrix change (cross-DB-only sub)
+perturbA db mFact x col perturb
+    | null perturb = pure (Right x)
     | otherwise = do
         let n = U.length x
             u = U.accum (+) (U.replicate n 0.0) perturb
@@ -621,14 +634,71 @@ shermanMorrisonVariant db mFact x row perturb
                     [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
                     (fromIntegral activityCount)
                     u
-        let vtx = x U.! row
-            vtz = z U.! row
-            denom = 1.0 + vtz
-        if abs denom < 1e-12
-            then pure $ Left "Sherman-Morrison update is singular \x2014 substitution creates a degenerate supply chain"
-            else do
+        pure $ applyShermanMorrison x col z
+
+-- | Apply the Sherman-Morrison rank-1 formula given the precomputed
+-- z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+applyShermanMorrison :: Vector -> Int -> Vector -> Either T.Text Vector
+applyShermanMorrison x col z =
+    let vtx = x U.! col
+        vtz = z U.! col
+        denom = 1.0 + vtz
+     in if abs denom < 1e-12
+            then Left "Sherman-Morrison update is singular \x2014 perturbation drives (I-A) into a degenerate state"
+            else
                 let scale = vtx / denom
-                pure $ Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+                 in Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+
+{- |
+Batched 'perturbA': computes z_k = inv(I-A) * u_k for every non-empty
+perturbation in __one__ MUMPS multi-RHS solve, then applies the
+Sherman-Morrison formula per-k in pure Haskell.
+
+This is the right entry point for sensitivity sweeps — the per-perturbation
+back-substitution is the only thing that touches the global MUMPS lock, so
+batching collapses N serialized back-subs into one chunked multi-RHS call
+(see 'solveSparseLinearSystemWithFactorizationMulti').
+
+Empty perturbations short-circuit to @Right x@ without consuming a solve slot.
+Order of results matches the input.
+-}
+perturbABatch ::
+    Database ->
+    -- | Cached factorization (Nothing = per-spec re-solve, slow path)
+    Maybe MatrixFactorization ->
+    -- | Baseline scaling vector x
+    Vector ->
+    -- | One @(col, perturb)@ per spec, in caller order
+    [(Int, [(Int, Double)])] ->
+    -- | One result per spec, in the same order
+    IO [Either T.Text Vector]
+perturbABatch db mFact x specs = do
+    let n = U.length x
+        indexed = zip [0 :: Int ..] specs
+        nonEmpty =
+            [ (idx, col, U.accum (+) (U.replicate n 0.0) p)
+            | (idx, (col, p)) <- indexed
+            , not (null p)
+            ]
+        us = [u | (_, _, u) <- nonEmpty]
+    zs <- case (mFact, us) of
+        (_, []) -> pure []
+        (Just f, _) -> solveSparseLinearSystemWithFactorizationMulti f us
+        (Nothing, _) -> do
+            let techTriples = dbTechnosphereTriples db
+                activityCount = dbActivityCount db
+                aTriples =
+                    [ (fromIntegral i, fromIntegral j, v)
+                    | SparseTriple i j v <- U.toList techTriples
+                    ]
+            mapM (solveSparseLinearSystem aTriples (fromIntegral activityCount)) us
+    let resultsByIdx :: M.Map Int (Either T.Text Vector)
+        resultsByIdx =
+            M.fromList
+                [ (idx, applyShermanMorrison x col z)
+                | ((idx, col, _), z) <- zip nonEmpty zs
+                ]
+    pure $ map (\(idx, _) -> M.findWithDefault (Right x) idx resultsByIdx) indexed
 
 {- |
 Accumulate cross-database supplier demands for a given root scaling vector.
