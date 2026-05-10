@@ -164,8 +164,64 @@ pairs like CO2↔Carbon dioxide.
 
 ## Scope note
 
-Today this procedure targets **EF3.1 adapted** — the SimaPro CSV export.
-The corresponding `data/chem_synonyms.csv` and `data/flows.csv` entries
-are scoped to that pair. The **EF3.1 original** (ILCD XMLs) is a
-distinct path with its own UUID-from-XML provenance and is not yet
-covered by this audit workflow.
+This procedure targets BAFU↔EF3.1, both the **adapted** (SimaPro CSV)
+and **original** (ILCD XML) distributions of the method. The fixes
+shipped on the `flow-mapping-audit` branch cover both:
+
+* Wire `normalizeCompartment` into the scoring cascade (otherwise
+  BAFU's `emissions to air/...` compartments never match the method's
+  `air/...` keying — silent score-of-zero bug).
+* Compartment entries bridging BAFU's `low. pop.` / `high. pop.` /
+  `low. pop., long-term` to ILCD's `non-urban air or from high stacks`
+  / `urban air close to ground` / `... (long-term)`.
+* Synonym pair `Dinitrogen monoxide ↔ nitrous oxide` for ILCD, which
+  doesn't carry CAS on BAFU's emissions side so the cascade can't
+  bridge by CAS.
+
+Validated on `Wheat grains IP, at farm {CH}` (BAFU): Climate change
+score matches between adapted and original to 0.09%.
+
+## Known limitation: geolocation-aware CF selection
+
+EF3.1 ships **per-country characterization factors** for many regionalized
+categories (Acidification, Eutrophication, Particulate matter, Land use,
+Water use, …). In SimaPro CSV, country variants appear as
+`Air;low. pop.;Ammonia, CH;...;0.747;kg` (suffix on the substance name).
+In ILCD XML, each `<factor>` carries a `<location>XX</location>` element.
+The CFs differ — e.g. Ammonia Acidification:
+
+| Country | CF (mol H+ eq / kg) |
+|---|---|
+| CH | 0.747 |
+| FR | 0.857 |
+| DE | 4.0 |
+| NO | 11.491 |
+| US | 3.02 |
+
+VoLCA's cascade today **ignores both the suffix and the `<location>`
+element**. It indexes CFs by `(name, medium, sub)` and collapses every
+country into one key — `M.fromListWith preferBetter` picks an arbitrary
+winner. On Swiss wheat (BAFU `... {CH}`), Climate change still works
+because GWP100 is intrinsically global (no `<location>`), but
+Acidification, Eutrophication etc. fall back to whichever country's CF
+the parser inserted last. Adapted scoring picks the no-suffix `Ammonia`
+default (3.02 = US-like); original scoring picks Norway (11.491). Both
+are wrong for CH — the correct value is 0.747.
+
+Symptom in the audit: cross-method comparisons (`compare_impacts`
+adapted vs original) on regionalized categories show large deltas
+(×3-10) that **do not** indicate mapping bugs — they're the same flow
+matching different per-country CFs on each side.
+
+Fixing this properly is a separate workstream. It needs:
+
+1. `MethodCF` to carry an optional `mcfLocation :: Maybe Text` (parsed
+   from `<location>` in ILCD, from the suffix in SimaPro CSV).
+2. `MethodTables` to index CFs by `(name, medium, sub, location)` with
+   a `Nothing` (global) fallback.
+3. `lookupCFForFlow` to take the activity's geography and prefer the
+   matching location's CF, falling back to global.
+
+Until that lands, treat scores on regionalized impact categories as
+**indicative within one method distribution**, not as cross-method
+ground truth.
