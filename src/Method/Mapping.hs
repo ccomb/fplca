@@ -36,6 +36,8 @@ module Method.Mapping (
     findSimilarCFs,
     inventoryContributions,
     processContributionsFromTables,
+    lookupCFForFlow,
+    lookupCFForFlowAt,
 
     -- * Matching strategies
     MatchStrategy (..),
@@ -250,10 +252,15 @@ should be computed once per method and reused across inventories.
 data MethodTables = MethodTables
     { mtUuidCF :: !(M.Map UUID (Double, Text))
     -- ^ UUID-matched CFs: exact flow id → (CF value, CF unit)
-    , mtExactCF :: !(M.Map (Text, Text, Text) (Double, Text))
-    -- ^ (normalized name, medium, subcompartment) → (CF, unit)
-    , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
-    -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
+    , mtExactCF :: !(M.Map (Text, Text, Text, Maybe Text) (Double, Text))
+    {- ^ (normalized name, medium, subcompartment, location) → (CF, unit).
+    Location is 'Nothing' for the method's global default and 'Just XX'
+    for regionalized variants (EF3.1's per-country CFs). Multiple
+    locations coexist as separate keys — the arbitrary-winner collapse
+    that plagued the old @(name, med, sub)@-only key is gone.
+    -}
+    , mtFallbackCF :: !(M.Map (Text, Text, Maybe Text) (Double, Text))
+    -- ^ (normalized name, medium, location) → (CF, unit) for entries with unspecified subcompartment
     , mtCompartmentMap :: !CompartmentMap
     {- ^ Compartment normalization rules (e.g. "Emissions to air" → "air").
     Applied to both CF compartments at build time and database flow
@@ -428,7 +435,7 @@ buildMethodTables cmap mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normMed, normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((nameKey cf mflow, normMed, normSub, mcfLocation cf), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
@@ -439,7 +446,7 @@ buildMethodTables cmap mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((nameKey cf mflow, normMed, mcfLocation cf), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
@@ -491,38 +498,64 @@ Takes 'Maybe Flow' so the UUID hit branch can succeed even when the flow
 metadata isn't loaded (the score-only path doesn't need 'flowDB' for
 UUID-mapped CFs); pass 'Nothing' if you can't resolve the flow.
 
+This shim preserves the pre-location-aware signature and is equivalent
+to @'lookupCFForFlowAt' tables fid mFlow Nothing@ — i.e. it consults
+only the global (location-less) entries in the tables. Callers that can
+supply an activity geography should switch to 'lookupCFForFlowAt'.
+
 The three scoring/contribution helpers below all share this logic; keeping
 it in one place is what guarantees they agree on what "matched" means.
 -}
 lookupCFForFlow :: MethodTables -> UUID -> Maybe Flow -> Maybe (Double, Text)
-lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
-    Just cfv -> Just cfv
-    Nothing -> case mFlow of
-        Nothing -> Nothing
-        Just flow ->
-            let name = normalizeName (flowName flow)
-                -- Build the flow's raw compartment from flowCategory ("medium/sub")
-                -- and flowSubcompartment, then normalize via the same map applied
-                -- when buildMethodTables keyed the CF tables. Both sides converge
-                -- to the canonical form, so a "Emissions to air" rule in
-                -- compartments.csv suffices to bridge BAFU's prefix vs EF's bare
-                -- medium without listing every (medium, sub) pair explicitly.
-                rawCategory = T.toLower (flowCategory flow)
-                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                    (m, rest)
-                        | T.null rest -> (m, T.empty)
-                        | otherwise -> (m, T.drop 1 rest)
-                rawSub =
-                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
-                     in if T.null s then rawSubFromCat else s
-                Compartment normMedRaw normSub _ =
-                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-                baseMed = normalizeMedium normMedRaw
-                subcomp = normSub
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
+lookupCFForFlow tables fid mFlow = lookupCFForFlowAt tables fid mFlow Nothing
+
+{- | Location-aware variant of 'lookupCFForFlow'. Prefers a CF whose
+location matches the supplied activity geography, then falls back to
+the global ('Nothing') entry. Passing @Nothing@ for the activity
+location reproduces the legacy "global only" behaviour.
+-}
+lookupCFForFlowAt ::
+    MethodTables ->
+    UUID ->
+    Maybe Flow ->
+    Maybe Text ->
+    Maybe (Double, Text)
+lookupCFForFlowAt tables fid mFlow activityLoc =
+    case M.lookup fid (mtUuidCF tables) of
+        Just cfv -> Just cfv
+        Nothing -> case mFlow of
+            Nothing -> Nothing
+            Just flow ->
+                let name = normalizeName (flowName flow)
+                    -- Build the flow's raw compartment from flowCategory ("medium/sub")
+                    -- and flowSubcompartment, then normalize via the same map applied
+                    -- when buildMethodTables keyed the CF tables. Both sides converge
+                    -- to the canonical form, so a "Emissions to air" rule in
+                    -- compartments.csv suffices to bridge BAFU's prefix vs EF's bare
+                    -- medium without listing every (medium, sub) pair explicitly.
+                    rawCategory = T.toLower (flowCategory flow)
+                    (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                        (m, rest)
+                            | T.null rest -> (m, T.empty)
+                            | otherwise -> (m, T.drop 1 rest)
+                    rawSub =
+                        let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                         in if T.null s then rawSubFromCat else s
+                    Compartment normMedRaw normSub _ =
+                        normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+                    baseMed = normalizeMedium normMedRaw
+                    subcomp = normSub
+                    -- Location preference: matching loc first, then global ('Nothing').
+                    -- 'Nothing' activity loc still reads only the global entry.
+                    tryExact loc = M.lookup (name, baseMed, subcomp, loc) (mtExactCF tables)
+                    tryFallback loc = M.lookup (name, baseMed, loc) (mtFallbackCF tables)
+                    exact = firstJust (tryExact activityLoc) (tryExact Nothing)
+                 in case exact of
+                        Just _ -> exact
+                        Nothing -> firstJust (tryFallback activityLoc) (tryFallback Nothing)
+  where
+    firstJust (Just x) _ = Just x
+    firstJust Nothing y = y
 
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
