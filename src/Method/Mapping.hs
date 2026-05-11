@@ -1,4 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -17,12 +20,23 @@ module Method.Mapping (
 
     -- * LCIA scoring
     MethodTables (..),
+    MethodIndex (..),
+    LCIAOutcome (..),
+    UncharacterizedFlow (..),
+    SimilarCF (..),
+    SimilarReason (..),
+    UncharacterizedOpts (..),
+    defaultUncharacterizedOpts,
     buildMethodTables,
+    buildMethodIndex,
     fillBroadcastVector,
     computeLCIAScore,
     computeLCIAScoreFromTables,
     computeLCIAScoreAuto,
     computeRegionalizedLCIAScore,
+    computeLCIAScoreWithDiagnostics,
+    findUncharacterized,
+    findSimilarCFs,
     inventoryContributions,
     processContributionsFromTables,
     convertForCharacterization,
@@ -49,20 +63,26 @@ module Method.Mapping (
     computeMappingStats,
 ) where
 
-import Data.List (find)
+import Control.DeepSeq (NFData)
+import Data.Aeson (ToJSON)
+import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
+import Data.Ord (Down (..))
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
+import GHC.Generics (Generic)
 
 import qualified Data.Set as S
 import qualified Data.Set as Set
 import Matrix (Inventory, Vector)
 import qualified Matrix
+import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
 import SynonymDB
@@ -267,6 +287,154 @@ data MethodTables = MethodTables
     -}
     }
 
+{- | Inverted indices over a 'Method' for the post-scoring suggester.
+
+Built from the raw 'Method' (not 'MethodTables', which has lost the source CF
+metadata after the lookup tables are constructed). Cached separately because
+the suggester is opt-in and only consulted on the small uncharacterized tail.
+
+* 'miCFs' — all CFs in source order; vector-indexed for cheap parallel arrays.
+* 'miCFTokens' — parallel to 'miCFs', each CF's normalized-name tokens.
+* 'miByMedium' — lowercase normalized medium → indices into 'miCFs', for
+  short-circuiting candidate scans to the same compartment medium.
+  Empty key holds CFs without compartment metadata.
+* 'miByCAS' — normalized CAS → indices into 'miCFs'. Multiple CFs can share a
+  CAS (same substance in different compartments); caller picks the best.
+-}
+data MethodIndex = MethodIndex
+    { miCFs :: !(V.Vector MethodCF)
+    , miCFTokens :: !(V.Vector (S.Set Text))
+    , miByMedium :: !(M.Map Text [Int])
+    , miByCAS :: !(M.Map Text [Int])
+    }
+
+{- | Result of scoring an inventory: the score plus diagnostics.
+
+* 'loScore' — the LCIA score in the method's reference unit. Bit-equivalent
+  to the previous Double-only return.
+* 'loCharacterizedSum' / 'loInventoryAbsSum' — together they reveal how much
+  of the inventory was actually characterized (by absolute mass). The
+  difference is the silent-omission tail; small ratio means the score is
+  trustworthy, large ratio means many flows had no CF.
+* 'loUncharacterized' — flows with non-trivial inventory weight but no
+  matching CF, ranked by 'ucfAbsWeight'. Cap and threshold via
+  'UncharacterizedOpts'. Empty list ⇒ no diagnostics requested OR no flows
+  above threshold.
+* 'loUnknownUuids' — non-zero inventory UUIDs with no record in 'flowDB'.
+  These indicate merged-metadata gaps, not mapping bugs; surface
+  separately so the caller can react (per the "no silent errors" rule).
+-}
+data LCIAOutcome = LCIAOutcome
+    { loScore :: !Double
+    , loCharacterizedSum :: !Double
+    , loInventoryAbsSum :: !Double
+    , loUncharacterized :: ![UncharacterizedFlow]
+    , loUnknownUuids :: ![UUID]
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | A flow that carries inventory weight but found no matching CF.
+
+The 'ucfSimilarCFs' field lets consumers distinguish the two cases:
+
+* @[]@ — the method genuinely has no CF resembling this flow → legitimate gap.
+* non-empty — the method has CFs that look homologous → likely mapping bug,
+  worth a synonym entry in @data/flows.csv@ or a fresh PubChem regen.
+-}
+data UncharacterizedFlow = UncharacterizedFlow
+    { ucfFlowId :: !UUID
+    , ucfFlowName :: !Text
+    , ucfCategory :: !Text
+    , ucfSubcomp :: !(Maybe Text)
+    , ucfFlowUnit :: !Text
+    , ucfQuantity :: !Double
+    , ucfAbsWeight :: !Double
+    -- ^ |qty| / Σ|qty| over the whole inventory, in [0, 1].
+    , ucfSimilarCFs :: ![SimilarCF]
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+-- | A candidate CF flagged by the suggester for an uncharacterized flow.
+data SimilarCF = SimilarCF
+    { scfMethodFlowName :: !Text
+    , scfCAS :: !(Maybe Text)
+    , scfCompartment :: !(Maybe Compartment)
+    , scfScore :: !Double
+    -- ^ Combined similarity in [0, 1] (max of the three signals).
+    , scfReason :: !SimilarReason
+    -- ^ Which signal produced this candidate — guides human validation.
+    , scfCfValue :: !Double
+    , scfCfUnit :: !Text
+    }
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | Why a 'SimilarCF' was flagged. Carried through to the audit JSON so a
+human reviewer knows what to verify (formula, CAS, or just the names).
+-}
+data SimilarReason
+    = {- | Token-overlap Jaccard on normalized names. Catches word-order /
+      punctuation variants like "Methane, biogenic" ↔ "Methane biogenic".
+      -}
+      SimByJaccard
+    | {- | Token Jaccard after expanding via PubChem synonyms. Catches
+      formula↔name pairs like "CO2" ↔ "Carbon dioxide".
+      -}
+      SimBySynonymExpansion
+    | {- | The flow's CAS matched a CF's CAS even though names diverged.
+      Highest-confidence reason.
+      -}
+      SimByCASBridge
+    deriving (Eq, Show, Generic, NFData, ToJSON)
+
+{- | Tunable knobs for uncharacterized-flow diagnostics.
+
+* 'uoMinAbsWeight' — drop flows below this share of total |qty|. Defaults
+  to 0.001 (0.1%) so noise doesn't drown signal.
+* 'uoMaxSimilar' — top-N candidate CFs per uncharacterized flow. 0 disables
+  the similarity scan (useful in hot paths).
+* 'uoMaxFlows' — cap on the diagnostics list size, so payloads stay bounded
+  even on inventories with many tiny gaps.
+-}
+data UncharacterizedOpts = UncharacterizedOpts
+    { uoMinAbsWeight :: !Double
+    , uoMaxSimilar :: !Int
+    , uoMaxFlows :: !Int
+    }
+    deriving (Eq, Show)
+
+defaultUncharacterizedOpts :: UncharacterizedOpts
+defaultUncharacterizedOpts =
+    UncharacterizedOpts
+        { uoMinAbsWeight = 0.001
+        , uoMaxSimilar = 3
+        , uoMaxFlows = 50
+        }
+
+-- | Build a 'MethodIndex' from a raw 'Method'. Run once per method, cache.
+buildMethodIndex :: Method -> MethodIndex
+buildMethodIndex method =
+    let cfs = V.fromList (methodFactors method)
+        tokens = V.map cfTokens cfs
+        indexed = zip [0 ..] (methodFactors method)
+     in MethodIndex
+            { miCFs = cfs
+            , miCFTokens = tokens
+            , miByMedium = M.fromListWith (++) [(cfMedium cf, [i]) | (i, cf) <- indexed]
+            , miByCAS = M.fromListWith (++) [(cas, [i]) | (i, cf) <- indexed, Just cas <- [mcfCAS cf]]
+            }
+  where
+    cfTokens :: MethodCF -> S.Set Text
+    cfTokens = S.fromList . T.words . normalizeName . mcfFlowName
+
+    cfMedium :: MethodCF -> Text
+    cfMedium cf = case mcfCompartment cf of
+        Nothing -> ""
+        Just (Compartment med _ _) -> normalizeMediumIdx (T.toLower med)
+
+    normalizeMediumIdx m
+        | m == "natural resource" = "resource"
+        | otherwise = m
+
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
 
 The map is applied to each CF's compartment before keying the lookup
@@ -440,38 +608,55 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
 
+Returns 'LCIAOutcome' carrying the score plus characterized-vs-total
+inventory mass (so callers can detect tail erosion when many small flows
+go uncharacterized).
+
 Uses 'mtBroadcast' (single Map lookup, conversion pre-multiplied) when filled,
 falling back to the legacy UUID→exact→fallback cascade with on-the-fly unit
 conversion when 'mtBroadcast' is empty. Tests and back-compat callers that use
 'buildMethodTables' directly hit the legacy path; the cached
 'mapMethodToTablesCached' fills the broadcast and gets the fast path.
 -}
-computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Double
-computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
-    | M.null (mtBroadcast tables) =
-        M.foldlWithKey' (\acc fid qty -> acc + legacyScore fid qty) 0 inventory
-    | otherwise =
-        M.foldlWithKey' (\acc fid qty -> acc + fastScore fid qty) 0 inventory
+computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> LCIAOutcome
+computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
+    let (!score, !charSum, !invSum) = M.foldlWithKey' step (0, 0, 0) inventory
+     in LCIAOutcome
+            { loScore = score
+            , loCharacterizedSum = charSum
+            , loInventoryAbsSum = invSum
+            , loUncharacterized = []
+            , loUnknownUuids = []
+            }
   where
-    fastScore fid qty
-        | qty == 0 = 0
-        | otherwise = case M.lookup fid (mtBroadcast tables) of
-            Just cf -> qty * cf
+    useFast = not (M.null (mtBroadcast tables))
+
+    step (!s, !cs, !is) fid qty
+        | qty == 0 = (s, cs, is)
+        | otherwise =
+            let !absQty = abs qty
+                !is' = is + absQty
+             in case scoreFlow fid qty of
+                    Nothing -> (s, cs, is')
+                    Just contribution -> (s + contribution, cs + absQty, is')
+
+    scoreFlow fid qty
+        | useFast = case M.lookup fid (mtBroadcast tables) of
+            Just cf -> Just (qty * cf)
             -- Inventory may reference flows not in the broadcast (e.g. cross-DB
             -- merged flows beyond the original flowDB at build time): fall back
             -- to the cascade so we don't silently drop them.
-            Nothing -> legacyScore fid qty
+            Nothing -> legacyScoreFlow fid qty
+        | otherwise = legacyScoreFlow fid qty
 
-    legacyScore fid qty
-        | qty == 0 = 0
-        | otherwise = case lookupCascadeCF tables flowDB fid of
-            Nothing -> 0
-            Just cfTuple -> convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty
+    legacyScoreFlow fid qty = case lookupCascadeCF tables flowDB fid of
+        Nothing -> Nothing
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty)
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
 -}
-computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
+computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
     computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
 
@@ -503,7 +688,7 @@ computeLCIAScoreAuto ::
     Either Text Double
 computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier tables
     | M.null (mtRegionalizedCF tables) =
-        Right (computeLCIAScoreFromTables unitCfg unitDB flowDB inventory tables)
+        Right (loScore (computeLCIAScoreFromTables unitCfg unitDB flowDB inventory tables))
     | otherwise =
         computeRegionalizedLCIAScore unitCfg unitDB flowDB db scalingVec hier tables
 
@@ -985,3 +1170,211 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
          in [ (mseMethodId e, Right (scores U.! i))
             | (i, e) <- zip [0 ..] entries
             ]
+
+-- ──────────────────────────────────────────────
+-- Post-scoring suggester
+-- ──────────────────────────────────────────────
+
+-- | Top-level CF lookup helper used by the suggester. Same cascade as the
+-- per-function @lookupCF@ helpers inlined elsewhere in this module, but
+-- exposed so 'findUncharacterized' can ask whether a flow has any CF at all.
+lookupCFForFlow :: MethodTables -> UUID -> Maybe Flow -> Maybe (Double, Text)
+lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
+    Just cfv -> Just cfv
+    Nothing -> case mFlow of
+        Nothing -> Nothing
+        Just flow ->
+            let name = normalizeName (flowName flow)
+                rawCategory = T.toLower (flowCategory flow)
+                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                    (m, rest)
+                        | T.null rest -> (m, T.empty)
+                        | otherwise -> (m, T.drop 1 rest)
+                rawSub =
+                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                     in if T.null s then rawSubFromCat else s
+                Compartment normMedRaw normSub _ =
+                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+                baseMed = normalizeMediumTop normMedRaw
+                subcomp = normSub
+                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
+             in case exact of
+                    Just _ -> exact
+                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
+
+-- | Top-level variant of the @normalizeMedium@ helper used by the suggester.
+normalizeMediumTop :: Text -> Text
+normalizeMediumTop m
+    | m == "natural resource" = "resource"
+    | otherwise = m
+
+{- | Find the top-N method CFs that most resemble a database flow.
+
+Three signals are stacked, the highest-scoring reason wins:
+
+1. Plain Jaccard on normalized-name tokens (cheap baseline; catches
+   word-order and punctuation variants).
+2. Jaccard after expanding tokens via the PubChem snapshot
+   ('expandedTokens'). This is what bridges \"CO2\" and
+   \"Carbon dioxide\" — pure tokenization can never see they relate.
+3. CAS bridge: when the flow's CAS matches a CF's CAS, the candidate is
+   surfaced at score 0.95 regardless of name overlap. Highest-confidence
+   reason; catches cases where one side has CAS and the other doesn't,
+   so the existing CAS-cascade match already failed.
+
+Candidate space is pre-filtered to the same compartment medium when the
+flow has one (via 'miByMedium'), plus any CAS-bridge hits. This keeps the
+scan cheap even on methods with thousands of CFs.
+
+Empty result list = no signal above zero. Caller should treat that as
+\"this flow is genuinely uncharacterized by the method\", not a bug.
+-}
+findSimilarCFs :: ChemSynonyms -> MethodIndex -> Flow -> Int -> [SimilarCF]
+findSimilarCFs syns idx flow maxN
+    | maxN <= 0 = []
+    | otherwise =
+        let flowName' = flowName flow
+            flowCAS' = flowCAS flow
+            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
+
+            flowRawTokens = S.fromList (T.words (normalizeName flowName'))
+            flowExpTokens = expandedTokens syns flowName'
+
+            -- Same-medium candidates (cheap scan); fall back to whole index
+            -- only when we have no medium info to filter by.
+            mediumIdxs = case M.lookup flowMedium (miByMedium idx) of
+                Just is -> is
+                Nothing -> [0 .. V.length (miCFs idx) - 1]
+
+            casBridgeIdxs = case flowCAS' of
+                Nothing -> []
+                Just cas -> M.findWithDefault [] cas (miByCAS idx)
+
+            -- Score one CF index. Two Jaccards: raw (plain tokens) vs
+            -- expanded (synonyms folded in). The reason follows whichever
+            -- signal won, so the audit JSON tells the reviewer what to
+            -- verify.
+            scoreCandidate i =
+                let cfRawTokens = miCFTokens idx V.! i
+                    cf = miCFs idx V.! i
+                    cfExpTokens = expandedTokens syns (mcfFlowName cf)
+                    rawJ = jaccard flowRawTokens cfRawTokens
+                    expJ = jaccard flowExpTokens cfExpTokens
+                 in if expJ > rawJ
+                        then (i, expJ, SimBySynonymExpansion)
+                        else (i, rawJ, SimByJaccard)
+
+            mediumScored = map scoreCandidate mediumIdxs
+            casScored = [(i, 0.95, SimByCASBridge) | i <- casBridgeIdxs]
+
+            -- Merge: same CF can be in both lists (medium hit AND CAS hit);
+            -- keep the higher-scoring entry so we don't show duplicates.
+            mergedMap =
+                M.fromListWith
+                    pickHigher
+                    [(i, (s, r)) | (i, s, r) <- mediumScored ++ casScored]
+
+            ranked =
+                take maxN $
+                    sortOn (\(_, (s, _)) -> Down s) $
+                        filter (\(_, (s, _)) -> s > 0) $
+                            M.toList mergedMap
+         in [ SimilarCF
+                { scfMethodFlowName = mcfFlowName cf
+                , scfCAS = mcfCAS cf
+                , scfCompartment = mcfCompartment cf
+                , scfScore = s
+                , scfReason = r
+                , scfCfValue = mcfValue cf
+                , scfCfUnit = mcfUnit cf
+                }
+            | (i, (s, r)) <- ranked
+            , let cf = miCFs idx V.! i
+            ]
+  where
+    pickHigher (s1, r1) (s2, r2) = if s1 >= s2 then (s1, r1) else (s2, r2)
+
+    jaccard :: S.Set Text -> S.Set Text -> Double
+    jaccard a b
+        | S.null a || S.null b = 0
+        | otherwise =
+            let inter = S.size (S.intersection a b)
+                uni = S.size (S.union a b)
+             in fromIntegral inter / fromIntegral uni
+
+{- | Collect uncharacterized flows from an inventory, ranked by their share of
+total inventory mass. For each, surface the top-N similar CFs from the
+method (so the caller can tell genuine method gaps from mapping bugs).
+
+This walks the inventory once for the totals and once for the unmatched
+collection — two cheap O(|inventory|) passes. The expensive part (the
+suggester) only runs on the surviving flows after weight filtering and
+'uoMaxFlows' truncation.
+
+Returns @[]@ when no flow exceeds 'uoMinAbsWeight' or when the method's
+diagnostics are disabled (@uoMaxFlows == 0@ / @uoMaxSimilar == 0@).
+-}
+findUncharacterized ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Inventory ->
+    MethodTables ->
+    ChemSynonyms ->
+    MethodIndex ->
+    UncharacterizedOpts ->
+    [UncharacterizedFlow]
+findUncharacterized _ unitDB flowDB inventory tables syns idx opts
+    | uoMaxFlows opts <= 0 = []
+    | totalAbs == 0 = []
+    | otherwise =
+        let unmatched =
+                [ (flow, qty, w)
+                | (fid, qty) <- M.toList inventory
+                , qty /= 0
+                , Just flow <- [M.lookup fid flowDB]
+                , isNothing (lookupCFForFlow tables fid (Just flow))
+                , let w = abs qty / totalAbs
+                , w >= uoMinAbsWeight opts
+                ]
+            ranked =
+                take (uoMaxFlows opts) $
+                    sortOn (\(_, _, w) -> Down w) unmatched
+         in [ UncharacterizedFlow
+                { ucfFlowId = flowId flow
+                , ucfFlowName = flowName flow
+                , ucfCategory = flowCategory flow
+                , ucfSubcomp = flowSubcompartment flow
+                , ucfFlowUnit = flowUnitText flow
+                , ucfQuantity = qty
+                , ucfAbsWeight = w
+                , ucfSimilarCFs = findSimilarCFs syns idx flow (uoMaxSimilar opts)
+                }
+            | (flow, qty, w) <- ranked
+            ]
+  where
+    !totalAbs = M.foldr (\q s -> s + abs q) 0 inventory
+    flowUnitText flow = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
+
+{- | Score an inventory and attach diagnostics in one call.
+
+Convenience wrapper that runs 'computeLCIAScoreFromTables' and then
+'findUncharacterized' on the same inputs, splicing the results into one
+'LCIAOutcome'. Use this on the diagnostics path; stick to
+'computeLCIAScoreFromTables' on the hot scoring path where the extra
+suggester work is wasted.
+-}
+computeLCIAScoreWithDiagnostics ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Inventory ->
+    MethodTables ->
+    ChemSynonyms ->
+    MethodIndex ->
+    UncharacterizedOpts ->
+    LCIAOutcome
+computeLCIAScoreWithDiagnostics unitConfig unitDB flowDB inventory tables syns idx opts =
+    let outcome = computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
+        diagnostics = findUncharacterized unitConfig unitDB flowDB inventory tables syns idx opts
+     in outcome{loUncharacterized = diagnostics}

@@ -37,7 +37,8 @@ import qualified Database.Manager as DM
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
-import Method.Mapping (MappingStats (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
+import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
@@ -47,7 +48,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import Matrix (applyBiosphereMatrix)
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
-import Types (Activity (..), Database (..), FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), Database (..), Flow, FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -348,6 +349,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "list_classifications" -> withDb dbManager rid args $ callListClassifications rid args
     "get_path_to" -> withDb dbManager rid args $ callGetPathTo rid args
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
+    "compare_impacts" -> callCompareImpacts dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -818,6 +820,127 @@ callGetInventory dbManager rid args =
                             ]
             )
 
+-- | JSON shape for one uncharacterized-flow diagnostic entry.
+encodeUncharacterized :: UncharacterizedFlow -> Value
+encodeUncharacterized u =
+    object
+        [ "flow_id" .= UUID.toText (ucfFlowId u)
+        , "name" .= ucfFlowName u
+        , "category" .= ucfCategory u
+        , "subcompartment" .= ucfSubcomp u
+        , "unit" .= ucfFlowUnit u
+        , "quantity" .= ucfQuantity u
+        , "abs_weight" .= ucfAbsWeight u
+        , "similar_cfs" .= map encodeSimilarCF (ucfSimilarCFs u)
+        ]
+
+-- | JSON shape for one suggested CF candidate.
+encodeSimilarCF :: SimilarCF -> Value
+encodeSimilarCF s =
+    object
+        [ "cf_name" .= scfMethodFlowName s
+        , "cas" .= scfCAS s
+        , "score" .= scfScore s
+        , "reason" .= encodeReason (scfReason s)
+        , "cf_value" .= scfCfValue s
+        , "cf_unit" .= scfCfUnit s
+        ]
+  where
+    encodeReason :: SimilarReason -> Text
+    encodeReason SimByJaccard = "jaccard"
+    encodeReason SimBySynonymExpansion = "synonym_expansion"
+    encodeReason SimByCASBridge = "cas_bridge"
+
+{- | Everything an LCA-impacts handler needs after running the request.
+
+Bundled so that 'callGetImpacts' and the (future) 'callCompareImpacts'
+share one path through the math — there must be no second implementation
+to drift from this one.
+-}
+data ImpactsResult = ImpactsResult
+    { irOutcome :: !LCIAOutcome
+    , irMappingStats :: !MappingStats
+    , irContribs :: ![(Flow, Double, Double)]
+    -- ^ Sorted descending by absolute contribution.
+    , irUnknownUuids :: ![UUID.UUID]
+    , irRefProductName :: !Text
+    , irRefProductAmount :: !Double
+    , irRefProductUnit :: !Text
+    }
+
+{- | Run a fully resolved LCA request: solve inventory, map flows, score.
+
+Pure-data return: the JSON envelope is the caller's job, so different
+audit tools (single-impact, cross-DB compare) can format the same
+underlying numbers differently without duplicating the math.
+-}
+runImpactsRequest ::
+    DatabaseManager ->
+    KeyMap Value ->
+    LcaRequest ->
+    ExceptT Text IO ImpactsResult
+runImpactsRequest dbManager args req = do
+    let ld = lrLoaded req
+        db = ldDatabase ld
+        method = lrMethod req
+        dbName = lrDbName req
+        ra = lrResolved req
+    ExceptT $ pure $ ensureLinked dbName "computing impacts" db
+    subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
+    unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+    inventory <-
+        ExceptT $
+            if null subs
+                then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) (raPid ra)
+                else
+                    either (Left . T.pack . show) Right
+                        <$> Service.inventoryWithSubsAndDeps
+                            unitCfg
+                            (DM.mkDepSolverLookup dbManager)
+                            db
+                            dbName
+                            (ldSharedSolver ld)
+                            (raPid ra)
+                            subs
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+    let stats = computeMappingStats mappings
+        baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+        contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
+    -- Diagnostics path: opt-in via include_diagnostics. Skips the suggester
+    -- work entirely when not requested, so the hot path stays bit-identical
+    -- to runs without the flag.
+    outcome <-
+        if fromMaybe False (boolArg "include_diagnostics" args)
+            then do
+                idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName method
+                let opts = defaultUncharacterizedOpts
+                    diagnostics =
+                        Mapping.findUncharacterized
+                            unitCfg
+                            mUnits
+                            mFlows
+                            inventory
+                            tables
+                            (DM.dmChemSynonyms dbManager)
+                            idx
+                            opts
+                pure baseOutcome{loUncharacterized = diagnostics, loUnknownUuids = unknownUuids}
+            else pure baseOutcome
+    pure
+        ImpactsResult
+            { irOutcome = outcome
+            , irMappingStats = stats
+            , irContribs = contribs
+            , irUnknownUuids = unknownUuids
+            , irRefProductName = prodName
+            , irRefProductAmount = prodAmount
+            , irRefProductUnit = prodUnit
+            }
+
 {- | Handler for the 'get_impacts' MCP tool (computes LCIA score).
 Historically named 'get_lcia' — the MCP surface now uses 'impacts'
 per the naming audit; internal Haskell types keep the 'LCIA' acronym
@@ -829,41 +952,25 @@ callGetImpacts dbManager baseUrl rid args =
         <$> runExceptT
             ( do
                 req <- loadLcaRequest dbManager args
-                let ld = lrLoaded req
-                    db = ldDatabase ld
+                ir <- runImpactsRequest dbManager args req
+                (_, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+                let topN = fromMaybe 5 (intArg "top_flows" args)
                     method = lrMethod req
                     dbName = lrDbName req
                     ra = lrResolved req
-                ExceptT $ pure $ ensureLinked dbName "computing impacts" db
-                subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
-                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                inventory <-
-                    ExceptT $
-                        if null subs
-                            then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) (raPid ra)
-                            else
-                                either (Left . T.pack . show) Right
-                                    <$> Service.inventoryWithSubsAndDeps
-                                        unitCfg
-                                        (DM.mkDepSolverLookup dbManager)
-                                        db
-                                        dbName
-                                        (ldSharedSolver ld)
-                                        (raPid ra)
-                                        subs
-                mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let topN = fromMaybe 5 (intArg "top_flows" args)
-                    stats = computeMappingStats mappings
-                    score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
-                    (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
-                    functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-                    (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-                    contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                    score = loScore (irOutcome ir)
+                    stats = irMappingStats ir
+                    functionalUnit =
+                        T.pack (showFFloat (Just 2) (irRefProductAmount ir) "")
+                            <> " "
+                            <> irRefProductUnit ir
+                            <> " of "
+                            <> irRefProductName ir
+                    contribs = irContribs ir
                     topFlows = take topN contribs
                     webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
+                    unknownUuids = irUnknownUuids ir
                 liftIO $
                     unless (null unknownUuids) $
                         reportProgress Warning $
@@ -873,9 +980,18 @@ callGetImpacts dbManager baseUrl rid args =
                                 <> show (length unknownUuids)
                                 <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
                                 <> show (take 3 unknownUuids)
+                let outcome = irOutcome ir
+                    diagnosticsFields =
+                        [ "uncharacterized_flows" .= map encodeUncharacterized (loUncharacterized outcome)
+                        , "characterized_share"
+                            .= ( if loInventoryAbsSum outcome > 0
+                                    then loCharacterizedSum outcome / loInventoryAbsSum outcome
+                                    else 1 :: Double
+                               )
+                        ]
                 pure $
                     toolSuccessJson rid $
-                        object
+                        object $
                             [ "method" .= methodName method
                             , "category" .= methodCategory method
                             , "score" .= score
@@ -898,6 +1014,7 @@ callGetImpacts dbManager baseUrl rid args =
                                    | (f, cfVal, c) <- topFlows
                                    ]
                             ]
+                                ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
             )
 
 {- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
@@ -981,6 +1098,134 @@ callComputeSensitivity dbManager baseUrl rid args =
                             ]
             )
 
+{- | Cross-database impact comparison for mapping audits.
+
+Scores the same logical activity twice — once on @(database_a, method_a)@,
+once on @(database_b, method_b)@ — and reports the per-impact-category
+delta plus a per-flow drill-down. Built for the BAFU+EF3.1 vs SimaPro+EF3.1
+audit: the SimaPro side is the trusted ground truth, the BAFU side is the
+mapping under test, and 'delta.relative_pct' is the headline metric to
+drive down.
+
+Per-flow alignment uses (normalized name, medium, subcompartment) — NOT
+UUIDs — because UUIDs differ across databases by construction (each parser
+generates them in its own namespace), and that's exactly the problem this
+audit is designed to expose.
+-}
+callCompareImpacts :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callCompareImpacts dbManager rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                argsA <- ExceptT . pure $ subArgs "_a" args
+                argsB <- ExceptT . pure $ subArgs "_b" args
+                reqA <- loadLcaRequest dbManager argsA
+                reqB <- loadLcaRequest dbManager argsB
+                irA <- runImpactsRequest dbManager argsA reqA
+                irB <- runImpactsRequest dbManager argsB reqB
+                let topN = fromMaybe 10 (intArg "top_flows" args)
+                    scoreA = loScore (irOutcome irA)
+                    scoreB = loScore (irOutcome irB)
+                    delta = scoreA - scoreB
+                    relPct =
+                        if scoreB /= 0
+                            then abs delta / abs scoreB * 100
+                            else 0
+                    aTop = take topN (irContribs irA)
+                    bTop = take topN (irContribs irB)
+                    aMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irA]
+                    bMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irB]
+                    common =
+                        [ object
+                            [ "flow_name" .= flowName f
+                            , "category" .= flowCategory f
+                            , "compartment" .= flowSubcompartment f
+                            , "a_contrib" .= cA
+                            , "b_contrib" .= cB
+                            , "delta" .= (cA - cB)
+                            ]
+                        | (f, _, cA) <- aTop
+                        , let k = flowKey f
+                        , Just cB <- [M.lookup k bMap]
+                        ]
+                    aOnly =
+                        [ encodeContrib f c
+                        | (f, _, c) <- aTop
+                        , M.notMember (flowKey f) bMap
+                        ]
+                    bOnly =
+                        [ encodeContrib f c
+                        | (f, _, c) <- bTop
+                        , M.notMember (flowKey f) aMap
+                        ]
+                pure $
+                    toolSuccessJson rid $
+                        object
+                            [ "a" .= sideJson reqA irA
+                            , "b" .= sideJson reqB irB
+                            , "delta"
+                                .= object
+                                    [ "absolute" .= delta
+                                    , "relative_pct" .= relPct
+                                    ]
+                            , "common_flows" .= common
+                            , "top_a_only_flows" .= aOnly
+                            , "top_b_only_flows" .= bOnly
+                            ]
+            )
+  where
+    sideJson req ir =
+        let outcome = irOutcome ir
+            characterizedShare =
+                if loInventoryAbsSum outcome > 0
+                    then loCharacterizedSum outcome / loInventoryAbsSum outcome
+                    else 1 :: Double
+         in object
+                [ "database" .= lrDbName req
+                , "process_id" .= raText (lrResolved req)
+                , "method" .= methodName (lrMethod req)
+                , "score" .= loScore outcome
+                , "unit" .= methodUnit (lrMethod req)
+                , "characterized_share" .= characterizedShare
+                ]
+    encodeContrib f c =
+        object
+            [ "flow_name" .= flowName f
+            , "category" .= flowCategory f
+            , "compartment" .= flowSubcompartment f
+            , "contribution" .= c
+            ]
+
+    -- Align flows across databases by (normalized name, medium, subcompartment).
+    -- UUIDs differ across DBs by construction — see Method/Mapping comments.
+    flowKey :: Flow -> (Text, Text, Text)
+    flowKey f =
+        ( T.toLower (T.strip (flowName f))
+        , T.toLower (flowCategory f)
+        , maybe "" T.toLower (flowSubcompartment f)
+        )
+
+{- | Pull side-specific args (suffixed @_a@ / @_b@) up to the standard names
+expected by 'loadLcaRequest'. Errors if any required side arg is missing.
+-}
+subArgs :: Text -> KeyMap Value -> Either Text (KeyMap Value)
+subArgs suffix args = do
+    db <- requireSide "database"
+    pid <- requireSide "process_id"
+    method <- requireSide "method_id"
+    pure $
+        KM.fromList
+            [ (fromText "database", String db)
+            , (fromText "process_id", String pid)
+            , (fromText "method_id", String method)
+            ]
+  where
+    requireSide key =
+        let suffixed = key <> suffix
+         in case textArg suffixed args of
+                Just v -> Right v
+                Nothing -> Left ("Missing required parameter: " <> suffixed)
+
 callListMethods :: DatabaseManager -> Value -> IO Value
 callListMethods dbManager rid = do
     loadedMethods <- DM.getLoadedMethods dbManager
@@ -1023,15 +1268,98 @@ callGetFlowMapping dbManager rid args =
                                             if total > 0
                                                 then fromIntegral matched / fromIntegral total * 100 :: Double
                                                 else 0
+                                        verbose = fromMaybe False (boolArg "verbose" args)
+                                        maxUnm = fromMaybe 50 (intArg "max_unmatched" args)
+                                    extra <-
+                                        if not verbose
+                                            then pure []
+                                            else do
+                                                let unmatchedCFs =
+                                                        take
+                                                            maxUnm
+                                                            [ object
+                                                                [ "name" .= mcfFlowName cf
+                                                                , "cas" .= mcfCAS cf
+                                                                , "compartment" .= mcfCompartment cf
+                                                                , "cf_value" .= mcfValue cf
+                                                                , "cf_unit" .= mcfUnit cf
+                                                                ]
+                                                            | (cf, Nothing) <- mappings
+                                                            ]
+                                                unmatchedFlows <- buildUnmatchedDbFlows dbManager dbName db method args maxUnm
+                                                pure
+                                                    [ "unmatched_cfs" .= unmatchedCFs
+                                                    , "unmatched_db_flows" .= unmatchedFlows
+                                                    ]
                                     return $
                                         toolSuccessJson rid $
-                                            object
+                                            object $
                                                 [ "method" .= methodName method
                                                 , "total" .= total
                                                 , "matched" .= matched
                                                 , "unmatched" .= msUnmatched stats
                                                 , "coverage" .= coverage
                                                 ]
+                                                    ++ extra
+
+{- | Verbose-mode helper: rank unmatched DB flows for a method.
+
+When @process_id@ is given, runs 'findUncharacterized' on that activity's
+inventory — the most actionable view (which uncharacterized flows actually
+contribute to the score that user is auditing). Without @process_id@, falls
+back to an empty list with a hint, so callers know how to ask for the
+useful version. The "scan the whole biosphere matrix" mode promised by the
+plan would belong here too — left for a follow-up commit if the
+process-scoped view turns out to be insufficient in practice.
+-}
+buildUnmatchedDbFlows ::
+    DatabaseManager ->
+    Text ->
+    Database ->
+    Method ->
+    KeyMap Value ->
+    Int ->
+    IO [Value]
+buildUnmatchedDbFlows dbManager dbName db method args maxN =
+    case textArg "process_id" args of
+        Nothing -> pure [] -- caller didn't pin a process; nothing actionable to rank by
+        Just pidText -> do
+            mLoaded <- getDatabase dbManager dbName
+            case mLoaded of
+                Nothing -> pure []
+                Just ld -> case Service.resolveActivityAndProcessId db pidText of
+                    Left _ -> pure []
+                    Right (pid, _) -> do
+                        unitCfg <- DM.getMergedUnitConfig dbManager
+                        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+                        invE <-
+                            computeInventoryMatrixWithDepsCached
+                                unitCfg
+                                (DM.mkDepSolverLookup dbManager)
+                                db
+                                (ldSharedSolver ld)
+                                pid
+                        case invE of
+                            Left _ -> pure []
+                            Right inventory -> do
+                                tables <- DM.mapMethodToTablesCached dbManager dbName db method
+                                idx <- DM.mapMethodToIndexCached dbManager dbName method
+                                let opts =
+                                        defaultUncharacterizedOpts
+                                            { Mapping.uoMaxFlows = maxN
+                                            , Mapping.uoMaxSimilar = 3
+                                            }
+                                    uncharacterized =
+                                        Mapping.findUncharacterized
+                                            unitCfg
+                                            mUnits
+                                            mFlows
+                                            inventory
+                                            tables
+                                            (DM.dmChemSynonyms dbManager)
+                                            idx
+                                            opts
+                                pure (map encodeUncharacterized uncharacterized)
 
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetCharacterization dbManager rid args =
@@ -1248,11 +1576,36 @@ callGetContributingFlows dbManager baseUrl rid args =
                             (ldSharedSolver ld)
                             (raPid ra)
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-                let score = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+                    score = loScore outcome
                     (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
                     contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                     top = take lim contribs
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
+                diagnosticsFields <-
+                    if fromMaybe False (boolArg "include_diagnostics" args)
+                        then do
+                            idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName method
+                            let opts = defaultUncharacterizedOpts
+                                uncharacterized =
+                                    Mapping.findUncharacterized
+                                        unitCfg
+                                        mUnits
+                                        mFlows
+                                        inventory
+                                        tables
+                                        (DM.dmChemSynonyms dbManager)
+                                        idx
+                                        opts
+                            pure
+                                [ "uncharacterized_flows" .= map encodeUncharacterized uncharacterized
+                                , "characterized_share"
+                                    .= ( if loInventoryAbsSum outcome > 0
+                                            then loCharacterizedSum outcome / loInventoryAbsSum outcome
+                                            else 1 :: Double
+                                       )
+                                ]
+                        else pure []
                 liftIO $
                     unless (null unknownUuids) $
                         reportProgress Warning $
@@ -1264,7 +1617,7 @@ callGetContributingFlows dbManager baseUrl rid args =
                                 <> show (take 3 unknownUuids)
                 pure $
                     toolSuccessJson rid $
-                        object
+                        object $
                             [ "method" .= methodName method
                             , "unit" .= methodUnit method
                             , "total_score" .= score
@@ -1283,6 +1636,7 @@ callGetContributingFlows dbManager baseUrl rid args =
                                    | (f, cfVal, c) <- top
                                    ]
                             ]
+                                ++ diagnosticsFields
             )
 
 callGetContributingActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value

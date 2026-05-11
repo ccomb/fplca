@@ -179,7 +179,7 @@ lciaAnalyzer =
                             toJSON $
                                 M.fromList
                                     [ ("method" :: String, toJSON (show m))
-                                    , ("score", toJSON (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acFlowDB ctx) inv mappings))
+                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acFlowDB ctx) inv mappings)))
                                     ]
                     )
                     methods
@@ -347,7 +347,7 @@ hotspotAnalyzer =
         let tables = Mapping.buildMethodTables M.empty mappings
             (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables
             sorted = take topN $ sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-            total = Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables
+            total = Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables)
         pure $
             toJSON $
                 M.fromList
