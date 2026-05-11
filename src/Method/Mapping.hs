@@ -238,14 +238,30 @@ data MethodTables = MethodTables
     , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
     , mtRegionalizedCF :: !(M.Map (UUID, Text) (Double, Text))
-    -- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → (CF, unit).
-    -- Empty for non-regionalized methods. When non-empty, callers should dispatch
-    -- to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
+    {- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → (CF, unit).
+    Empty for non-regionalized methods. When non-empty, callers should dispatch
+    to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
+    -}
+    , mtCompartmentMap :: !CompartmentMap
+    {- ^ Compartment-normalization rules (e.g. @"Emissions to air" → "air"@).
+    Applied to both CF compartments at build time and database flow
+    compartments at query time, so both sides converge to the same
+    canonical form. Empty map = identity, no normalization.
+    -}
     }
 
--- | Build 'MethodTables' from raw mappings. Run once per (db, method).
-buildMethodTables :: [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
-buildMethodTables mappings =
+{- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
+
+The map is applied to each CF's compartment before keying the lookup
+tables, so all keys land in canonical form. The same map is then stored
+in the result so 'computeLCIAScoreFromTables' can normalize inventory-side
+compartments at query time and meet at the same canonical keys.
+
+Pass 'M.empty' for the compartment map when no normalization is desired
+(behaves identically to the pre-CompartmentMap implementation).
+-}
+buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
+buildMethodTables cmap mappings =
     MethodTables
         { mtUuidCF =
             M.fromList
@@ -256,19 +272,23 @@ buildMethodTables mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normalizeMedium medium, subcomp), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((nameKey cf mflow, normMed, normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
-                    , Just (Compartment medium subcomp _) <- [mcfCompartment cf]
-                    , not (T.null subcomp)
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , not (T.null normSub)
                     ]
         , mtFallbackCF =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normalizeMedium medium), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((nameKey cf mflow, normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
-                    , Just (Compartment medium subcomp _) <- [mcfCompartment cf]
-                    , T.null subcomp
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , T.null normSub
                     ]
         , mtRegionalizedCF =
             M.fromList
@@ -276,6 +296,7 @@ buildMethodTables mappings =
                 | (cf, Just (flow, _)) <- mappings
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
+        , mtCompartmentMap = cmap
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
@@ -329,8 +350,24 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
             Nothing -> Nothing
             Just flow ->
                 let name = normalizeName (flowName flow)
-                    baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                    subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
+                    -- Build the flow's raw compartment from flowCategory ("medium/sub")
+                    -- and flowSubcompartment, then normalize via the same map applied
+                    -- when buildMethodTables keyed the CF tables. Both sides converge
+                    -- to the canonical form, so a "Emissions to air,,,air,," rule in
+                    -- compartments.csv suffices to bridge BAFU's prefix vs ILCD's bare
+                    -- medium without listing every (medium, sub) pair explicitly.
+                    rawCategory = T.toLower (flowCategory flow)
+                    (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                        (m, rest)
+                            | T.null rest -> (m, T.empty)
+                            | otherwise -> (m, T.drop 1 rest)
+                    rawSub =
+                        let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                         in if T.null s then rawSubFromCat else s
+                    Compartment normMedRaw normSub _ =
+                        normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+                    baseMed = normalizeMedium normMedRaw
+                    subcomp = normSub
                     exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
                  in case exact of
                         Just _ -> exact
@@ -345,7 +382,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> Double
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
 
 {- | LCIA score with automatic dispatch.
 
@@ -487,8 +524,9 @@ resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
                                         <> " parent regions) and no universal broadcast."
                             | otherwise -> Right Nothing
 
--- | Universal CF lookup: same cascade as 'computeLCIAScoreFromTables' uses
--- internally, factored out for reuse from 'computeRegionalizedLCIAScore'.
+{- | Universal CF lookup: same cascade as 'computeLCIAScoreFromTables' uses
+internally, factored out for reuse from 'computeRegionalizedLCIAScore'.
+-}
 lookupBroadcastCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
 lookupBroadcastCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv

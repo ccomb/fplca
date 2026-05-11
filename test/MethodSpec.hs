@@ -519,6 +519,65 @@ spec = do
                 let xml = TE.encodeUtf8 "<not-valid-xml"
                 parseMethodBytes xml `shouldSatisfy` isLeft
 
+            it "captures <location> as mcfConsumerLocation and keeps factors distinct" $ do
+                -- EF3.1 ILCD ships per-country CFs as separate <factor> entries each
+                -- carrying <location>. Without parsing this, all country variants
+                -- collapse onto the global default via preferBetter.
+                let xml =
+                        TE.encodeUtf8 $
+                            T.unlines
+                                [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                                , "<LCIAMethodDataSet>"
+                                , "  <LCIAMethodInformation>"
+                                , "    <dataSetInformation>"
+                                , "      <UUID>12345678-1234-1234-1234-123456789012</UUID>"
+                                , "      <name>Regionalized Method</name>"
+                                , "    </dataSetInformation>"
+                                , "    <quantitativeReference>"
+                                , "      <referenceQuantity>"
+                                , "        <shortDescription>mol H+ eq</shortDescription>"
+                                , "      </referenceQuantity>"
+                                , "    </quantitativeReference>"
+                                , "  </LCIAMethodInformation>"
+                                , "  <characterisationFactors>"
+                                , "    <factor>"
+                                , "      <referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\">"
+                                , "        <shortDescription>Ammonia (Mass)</shortDescription>"
+                                , "      </referenceToFlowDataSet>"
+                                , "      <exchangeDirection>Output</exchangeDirection>"
+                                , "      <location>CH</location>"
+                                , "      <meanValue>0.747</meanValue>"
+                                , "    </factor>"
+                                , "    <factor>"
+                                , "      <referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\">"
+                                , "        <shortDescription>Ammonia (Mass)</shortDescription>"
+                                , "      </referenceToFlowDataSet>"
+                                , "      <exchangeDirection>Output</exchangeDirection>"
+                                , "      <location>DE</location>"
+                                , "      <meanValue>4.0</meanValue>"
+                                , "    </factor>"
+                                , "    <factor>"
+                                , "      <referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\">"
+                                , "        <shortDescription>Ammonia (Mass)</shortDescription>"
+                                , "      </referenceToFlowDataSet>"
+                                , "      <exchangeDirection>Output</exchangeDirection>"
+                                , "      <meanValue>3.02</meanValue>"
+                                , "    </factor>"
+                                , "  </characterisationFactors>"
+                                , "</LCIAMethodDataSet>"
+                                ]
+                case parseMethodBytes xml of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right method -> do
+                        let factors = methodFactors method
+                            locValuePairs = [(mcfConsumerLocation cf, mcfValue cf) | cf <- factors]
+                        length factors `shouldBe` 3
+                        locValuePairs
+                            `shouldBe` [ (Just "CH", 0.747)
+                                       , (Just "DE", 4.0)
+                                       , (Nothing, 3.02)
+                                       ]
+
     describe "parseMethodBytesWithFlows" $ do
         let minimalXML =
                 TE.encodeUtf8 $

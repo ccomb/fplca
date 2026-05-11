@@ -463,7 +463,8 @@ mapMethodToTablesCached manager dbName db method = do
         Just tables -> pure tables
         Nothing -> do
             mappings <- mapMethodToFlowsCached manager dbName db method
-            let !tables = buildMethodTables mappings
+            cmap <- getMergedCompartmentMap manager
+            let !tables = buildMethodTables cmap mappings
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 
@@ -2332,9 +2333,11 @@ Detects UUID collisions with divergent metadata. 'M.unions' is first-wins;
 collisions should never happen (same UUID ⇒ same flow by construction),
 but if data drift produces them, surface via log rather than hide.
 -}
--- | Location hierarchy as a 'Map ChildLocation [ParentLocation]', sourced from
--- 'data/geographies.csv' (or the hardcoded fallback). Reused across the LCIA
--- regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
+
+{- | Location hierarchy as a 'Map ChildLocation [ParentLocation]', sourced from
+'data/geographies.csv' (or the hardcoded fallback). Reused across the LCIA
+regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
+-}
 getLocationHierarchy :: DatabaseManager -> IO (M.Map Text [Text])
 getLocationHierarchy manager = pure (M.map snd (dmGeographies manager))
 

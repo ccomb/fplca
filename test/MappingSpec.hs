@@ -262,6 +262,46 @@ spec = do
                 score = computeLCIAScore defaultUnitConfig M.empty M.empty inventory mapping
             score `shouldBe` 0.0
 
+    describe "buildMethodTables compartment normalization" $ do
+        -- Regression: BAFU categorizes air emissions as "emissions to air/low. pop.",
+        -- ILCD CFs are keyed on bare "air/...". Without a compartment map applied to
+        -- both sides, the lookup misses and the flow silently scores zero.
+        it "scores zero without a compartment map (regression)" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
+                cf = mkCFComp "ammonia" "air" "low. pop." 0.747
+                tables = buildMethodTables M.empty [(cf, Nothing)]
+                inventory = M.singleton fid 10.0
+                flowDB = M.singleton fid flow
+                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+            score `shouldBe` 0.0
+
+        it "bridges 'emissions to air' → 'air' via a medium-only rule" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
+                cf = mkCFComp "ammonia" "air" "low. pop." 0.747
+                cmap = M.singleton ("emissions to air", "", "") (Compartment "air" "" "")
+                tables = buildMethodTables cmap [(cf, Nothing)]
+                inventory = M.singleton fid 10.0
+                flowDB = M.singleton fid flow
+                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+            score `shouldBe` 7.47
+
+        it "bridges full (medium, sub, qual) triples for subcompartment rewrites" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
+                -- ILCD-style CF on a different subcompartment than the BAFU flow.
+                cf = mkCFComp "ammonia" "air" "non-urban air or from high stacks" 0.747
+                cmap =
+                    M.singleton
+                        ("emissions to air", "low. pop.", "")
+                        (Compartment "air" "non-urban air or from high stacks" "")
+                tables = buildMethodTables cmap [(cf, Nothing)]
+                inventory = M.singleton fid 10.0
+                flowDB = M.singleton fid flow
+                score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
+            score `shouldBe` 7.47
+
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
         it "counts ByFuzzy matches" $ do
             fid <- nextRandom
