@@ -18,6 +18,7 @@ module Method.Mapping (
     -- * LCIA scoring
     MethodTables (..),
     buildMethodTables,
+    fillBroadcastVector,
     computeLCIAScore,
     computeLCIAScoreFromTables,
     computeLCIAScoreAuto,
@@ -25,6 +26,12 @@ module Method.Mapping (
     inventoryContributions,
     processContributionsFromTables,
     convertForCharacterization,
+
+    -- * Multi-method scoring
+    MethodSetTables (..),
+    MethodSetEntry (..),
+    buildMethodSetTables,
+    computeLCIAScoreSetFromTables,
 
     -- * Matching strategies
     MatchStrategy (..),
@@ -249,6 +256,13 @@ data MethodTables = MethodTables
     compartments at query time, so both sides converge to the same
     canonical form. Empty map = identity, no normalization.
     -}
+    , mtBroadcast :: !(M.Map UUID Double)
+    {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
+    Collapses the UUID/exact/fallback cascade into a single Map and absorbs unit conversion
+    so the scoring hot path is a pure multiply-accumulate. Empty when 'buildMethodTables' is
+    called directly without DB-level dependencies; fill with 'fillBroadcastVector' to enable
+    the fast path (scoring falls back to the cascade when this Map is empty).
+    -}
     }
 
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
@@ -298,6 +312,7 @@ buildMethodTables cmap mappings =
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
         , mtCompartmentMap = cmap
+        , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
@@ -323,11 +338,6 @@ buildMethodTables cmap mappings =
         Just (flow, BySynonym) -> flowName flow
         _ -> mcfFlowName cf
 
-    -- Normalize medium names between method CFs and database flows
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
-
 {- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
 
 Bypass cases (returns @qty@ unchanged):
@@ -346,52 +356,57 @@ convertForCharacterization cfg flowUnit cfUnit qty
     | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
     | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
 
+
+{- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
+to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the
+UUID/exact/fallback cascade into a single Map and absorbs the unit conversion
+so the scoring hot path becomes pure multiply-accumulate.
+
+Walks every flow in @flowDB@ once. Flows with no CF match are not inserted
+(sparse Map). Conversions route through 'convertForCharacterization', so
+dimensionally-incompatible flow/CF unit pairs land an effective CF of @0@
+(matching the per-flow scoring path) rather than silently keeping the
+unconverted quantity and contaminating the score.
+-}
+fillBroadcastVector :: UnitConfig -> UnitDB -> FlowDB -> MethodTables -> MethodTables
+fillBroadcastVector unitConfig unitDB flowDB tables =
+    tables{mtBroadcast = M.mapMaybeWithKey buildEntry flowDB}
+  where
+    buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
+        Nothing -> Nothing
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (Just flow) cfTuple 1.0)
+
+
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
+
+Uses 'mtBroadcast' (single Map lookup, conversion pre-multiplied) when filled,
+falling back to the legacy UUID→exact→fallback cascade with on-the-fly unit
+conversion when 'mtBroadcast' is empty. Tests and back-compat callers that use
+'buildMethodTables' directly hit the legacy path; the cached
+'mapMethodToTablesCached' fills the broadcast and gets the fast path.
 -}
 computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> Double
-computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
-    sum [scoreFlow fid qty | (fid, qty) <- M.toList inventory, qty /= 0]
+computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables
+    | M.null (mtBroadcast tables) =
+        M.foldlWithKey' (\acc fid qty -> acc + legacyScore fid qty) 0 inventory
+    | otherwise =
+        M.foldlWithKey' (\acc fid qty -> acc + fastScore fid qty) 0 inventory
   where
-    scoreFlow fid qty = case lookupCF fid of
-        Nothing -> 0
-        Just (cfVal, cfUnit) ->
-            let flowUnit = maybe "" unitName (M.lookup fid flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                converted = convertForCharacterization unitConfig flowUnit cfUnit qty
-             in converted * cfVal
+    fastScore fid qty
+        | qty == 0 = 0
+        | otherwise = case M.lookup fid (mtBroadcast tables) of
+            Just cf -> qty * cf
+            -- Inventory may reference flows not in the broadcast (e.g. cross-DB
+            -- merged flows beyond the original flowDB at build time): fall back
+            -- to the cascade so we don't silently drop them.
+            Nothing -> legacyScore fid qty
 
-    lookupCF fid = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing -> case M.lookup fid flowDB of
-            Nothing -> Nothing
-            Just flow ->
-                let name = normalizeName (flowName flow)
-                    -- Build the flow's raw compartment from flowCategory ("medium/sub")
-                    -- and flowSubcompartment, then normalize via the same map applied
-                    -- when buildMethodTables keyed the CF tables. Both sides converge
-                    -- to the canonical form, so a "Emissions to air,,,air,," rule in
-                    -- compartments.csv suffices to bridge BAFU's prefix vs ILCD's bare
-                    -- medium without listing every (medium, sub) pair explicitly.
-                    rawCategory = T.toLower (flowCategory flow)
-                    (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                        (m, rest)
-                            | T.null rest -> (m, T.empty)
-                            | otherwise -> (m, T.drop 1 rest)
-                    rawSub =
-                        let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
-                         in if T.null s then rawSubFromCat else s
-                    Compartment normMedRaw normSub _ =
-                        normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-                    baseMed = normalizeMedium normMedRaw
-                    subcomp = normSub
-                    exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-                 in case exact of
-                        Just _ -> exact
-                        Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
+    legacyScore fid qty
+        | qty == 0 = 0
+        | otherwise = case lookupCascadeCF tables flowDB fid of
+            Nothing -> 0
+            Just cfTuple -> convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
@@ -491,10 +506,8 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
                             loc = activityLocation act
                          in case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
                                 Right Nothing -> Right running
-                                Right (Just (cfVal, cfUnit)) ->
-                                    let flowUnit = maybe "" unitName (M.lookup flowUUID flowDB >>= \f -> M.lookup (flowUnitId f) unitDB)
-                                        converted = convertForCharacterization unitConfig flowUnit cfUnit contribution
-                                     in Right (running + converted * cfVal)
+                                Right (Just cfTuple) ->
+                                    Right (running + convertAndMultiply unitConfig unitDB (M.lookup flowUUID flowDB) cfTuple contribution)
                                 Left err -> Left err
      in U.foldl' step (Right 0) bioTriples
 
@@ -523,7 +536,7 @@ resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
                 fromParents = firstJust [M.lookup (flowUUID, p) (mtRegionalizedCF tables) | p <- parents]
              in case fromParents of
                     Just v -> Right (Just v)
-                    Nothing -> case lookupBroadcastCF tables flowDB flowUUID of
+                    Nothing -> case lookupCascadeCF tables flowDB flowUUID of
                         Just v -> Right (Just v)
                         Nothing
                             | Set.member flowUUID regionalizedFlows ->
@@ -537,26 +550,70 @@ resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
                                         <> " parent regions) and no universal broadcast."
                             | otherwise -> Right Nothing
 
-{- | Universal CF lookup: same cascade as 'computeLCIAScoreFromTables' uses
-internally, factored out for reuse from 'computeRegionalizedLCIAScore'.
+{- | Cascade CF lookup: UUID → exact (name, medium, subcomp) → fallback (name, medium).
+The same logic is baked into 'mtBroadcast' once unit conversion is available;
+this helper is the source of truth for the legacy / cross-DB / regionalized
+fallback paths that don't go through the broadcast.
+
+Both the CF table keys (built by 'buildMethodTables') and the inventory flow
+compartments are normalized through @tables.'mtCompartmentMap'@ so each side
+converges on the same canonical form — a compartments.csv rule like
+@"Emissions to air,,,air,,"@ then bridges BAFU-style prefixed compartments
+against ILCD-style bare media without requiring an explicit (medium, sub)
+pair for every combination.
 -}
-lookupBroadcastCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
-lookupBroadcastCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
+lookupCascadeCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
+lookupCascadeCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv
     Nothing -> case M.lookup fid flowDB of
         Nothing -> Nothing
         Just flow ->
             let name = normalizeName (flowName flow)
-                baseMed = normalizeMediumNm . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
+                rawCategory = T.toLower (flowCategory flow)
+                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                    (m, rest)
+                        | T.null rest -> (m, T.empty)
+                        | otherwise -> (m, T.drop 1 rest)
+                rawSub =
+                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                     in if T.null s then rawSubFromCat else s
+                Compartment normMedRaw normSub _ =
+                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+                baseMed = normalizeMedium normMedRaw
+                subcomp = normSub
                 exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
              in case exact of
                     Just _ -> exact
                     Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-  where
-    normalizeMediumNm m
-        | m == "natural resource" = "resource"
-        | otherwise = m
+
+-- | Normalize medium names between method CFs and database flows.
+normalizeMedium :: Text -> Text
+normalizeMedium m
+    | m == "natural resource" = "resource"
+    | otherwise = m
+
+{- | Apply the flow→CF unit conversion factor and multiply by the CF value.
+
+Delegates to 'convertForCharacterization' for the conversion step, so a
+dimensional mismatch between flow and CF units lands an effective @0@
+(refuse to score wrong-dimension data) rather than silently passing the
+unconverted quantity through. Pass @qty = 1.0@ to obtain the effective-CF
+factor used at build time; pass an actual quantity for inline scoring.
+-}
+convertAndMultiply ::
+    UnitConfig ->
+    UnitDB ->
+    -- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
+    -- the identity factor (no flow record means no flow unit known).
+    Maybe Flow ->
+    -- | (CF value, CF unit)
+    (Double, Text) ->
+    Double ->
+    Double
+convertAndMultiply unitConfig unitDB mflow (cfVal, cfUnit) qty =
+    let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (flowUnitId f) unitDB)
+        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
+     in converted * cfVal
 
 firstJust :: [Maybe a] -> Maybe a
 firstJust [] = Nothing
@@ -601,28 +658,11 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
         | qty == 0 = (contribs, unknowns)
         | otherwise = case M.lookup fid flowDB of
             Nothing -> (contribs, fid : unknowns) -- metadata missing — surface it
-            Just flow -> case lookupCF fid flow of
+            Just flow -> case lookupCascadeCF tables flowDB fid of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
-                Just (cfVal, cfUnit) ->
-                    let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
-                        !contribution = converted * cfVal
+                Just cfTuple@(cfVal, _) ->
+                    let !contribution = convertAndMultiply unitConfig unitDB (Just flow) cfTuple qty
                      in ((flow, cfVal, contribution) : contribs, unknowns)
-
-    lookupCF fid flow = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing ->
-            let name = normalizeName (flowName flow)
-                baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
 'MethodTables' + a merged 'FlowDB'. Mirrors
@@ -657,14 +697,12 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
     effectiveCF :: U.Vector Double
     effectiveCF = U.generate nFlows $ \i ->
         let flowUUID = bioFlows V.! i
-         in case M.lookup flowUUID flowDB of
+            mflow = M.lookup flowUUID flowDB
+         in case mflow of
                 Nothing -> 0
-                Just flow -> case lookupCF flowUUID flow of
+                Just _ -> case lookupCascadeCF tables flowDB flowUUID of
                     Nothing -> 0
-                    Just (cfVal, cfUnit) ->
-                        let flowUnit = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
-                            factor = convertForCharacterization unitConfig flowUnit cfUnit 1.0
-                         in factor * cfVal
+                    Just cfTuple -> convertAndMultiply unitConfig unitDB mflow cfTuple 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in
@@ -689,17 +727,201 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
                                     pid' = fromIntegral pid :: ProcessId
                                  in M.insertWith (+) pid' (bioVal * scale * cf) acc
 
-    lookupCF fid flow = case M.lookup fid (mtUuidCF tables) of
-        Just cfv -> Just cfv
-        Nothing ->
-            let name = normalizeName (flowName flow)
-                baseMed = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
-                subcomp = T.toLower $ fromMaybe "" (flowSubcompartment flow)
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
+-- ────────────────────────────────────────────────────────────────────────────
+-- Multi-method scoring (set-level)
+-- ────────────────────────────────────────────────────────────────────────────
 
-    normalizeMedium m
-        | m == "natural resource" = "resource"
-        | otherwise = m
+{- | One method's worth of data inside a 'MethodSetTables'. Carries the full
+'MethodTables' plus the original 'Method' so the scoring path can fall back
+to the per-method dispatcher ('computeLCIAScoreAuto') for regionalized
+methods without having to re-look up anything.
+-}
+data MethodSetEntry = MethodSetEntry
+    { mseMethodId :: !UUID
+    , mseMethod :: !Method
+    , mseTables :: !MethodTables
+    }
+
+{- | Stacked CF tables for scoring the same inventory against many methods at
+once. Built once per (db, sortedMethodIds) and cached.
+
+When no method in the set is regionalized ('msAnyRegional == False'), scoring
+collapses to a single dense matrix–vector product: one walk over the
+inventory, m FMAs per non-zero entry, no per-method inventory traversal. For
+PEF (~27 non-regionalized methods) this is the path that wins.
+
+When at least one method is regionalized, the matrix is empty and scoring
+falls back to per-method 'computeLCIAScoreAuto' — the regionalized path
+needs the biosphere-triple stream and the location hierarchy walk, which
+don't compose with the broadcast matvec. Non-regio methods in a mixed set
+still benefit indirectly via 'mtBroadcast' (filled in 'fillBroadcastVector').
+-}
+data MethodSetTables = MethodSetTables
+    { msEntries :: !(V.Vector MethodSetEntry)
+    -- ^ Per-method full data, in canonical (sorted) order.
+    , msAnyRegional :: !Bool
+    -- ^ True if any method has a non-empty 'mtRegionalizedCF'. Disables the
+    -- batched matvec path; per-method dispatch is used instead.
+    , msUuidIndex :: !(M.Map UUID Int)
+    -- ^ Flow UUID → row in 'msBroadcastMat'. Empty when 'msAnyRegional'.
+    , msNFlows :: !Int
+    -- ^ @M.size msUuidIndex@. Cached for the matvec inner loop.
+    , msBroadcastMat :: !(U.Vector Double)
+    -- ^ Flat column-major dense broadcast: @j * m + i@ holds the effective
+    -- CF for method @i@ at flow row @j@. Length @msNFlows * m@. Empty when
+    -- 'msAnyRegional'.
+    --
+    -- The layout is chosen to match the scoring access pattern: an
+    -- inventory entry maps to one flow row @j@; reading the @m@ CFs across
+    -- methods for that row is then a contiguous slice. With a sparse
+    -- inventory (typical: hundreds of non-zero flows out of thousands)
+    -- this is far cheaper than a row-major dense matvec, which would
+    -- multiply across every flow regardless.
+    , msNMethods :: !Int
+    -- ^ @V.length msEntries@ cached for the scoring inner loop.
+    }
+
+{- | Build 'MethodSetTables' from per-method 'MethodTables'. The list order
+defines the row order of the broadcast matrix and is preserved in
+'msEntries'. Callers should sort by 'methodId' for cache-key canonicality.
+-}
+buildMethodSetTables :: [(Method, MethodTables)] -> MethodSetTables
+buildMethodSetTables pairs =
+    let entries =
+            V.fromList
+                [MethodSetEntry (methodId m) m t | (m, t) <- pairs]
+        anyRegio = any (not . M.null . mtRegionalizedCF . snd) pairs
+        nMethods = V.length entries
+     in if anyRegio
+            then
+                MethodSetTables
+                    { msEntries = entries
+                    , msAnyRegional = True
+                    , msUuidIndex = M.empty
+                    , msNFlows = 0
+                    , msBroadcastMat = U.empty
+                    , msNMethods = nMethods
+                    }
+            else
+                let -- Union of all UUIDs covered by any method's broadcast,
+                    -- assigned dense Int row indices.
+                    uuidSet =
+                        Set.unions
+                            [Set.fromList (M.keys (mtBroadcast t)) | (_, t) <- pairs]
+                    uuidList = Set.toAscList uuidSet
+                    uuidIndex = M.fromList (zip uuidList [0 ..])
+                    nFlows = length uuidList
+                    -- Column-major: cell (i, j) = mat[j * nMethods + i].
+                    -- All m CFs for a single flow j are contiguous so the
+                    -- sparse-inventory scoring loop walks contiguous memory.
+                    mat = U.create $ do
+                        mv <- MU.replicate (nFlows * nMethods) (0.0 :: Double)
+                        V.iforM_ entries $ \i e ->
+                            mapM_
+                                ( \(uuid, cf) -> case M.lookup uuid uuidIndex of
+                                    Just j -> MU.unsafeWrite mv (j * nMethods + i) cf
+                                    Nothing -> pure ()
+                                )
+                                (M.toList (mtBroadcast (mseTables e)))
+                        pure mv
+                 in MethodSetTables
+                        { msEntries = entries
+                        , msAnyRegional = False
+                        , msUuidIndex = uuidIndex
+                        , msNFlows = nFlows
+                        , msBroadcastMat = mat
+                        , msNMethods = nMethods
+                        }
+
+{- | Score an inventory against every method in a 'MethodSetTables'.
+Returns @(methodId, Right score)@ on success, @(methodId, Left err)@ for a
+regionalized method whose coverage is incomplete (mirrors the existing
+'computeLCIAScoreAuto' contract).
+
+When the set is fully non-regionalized, this collapses to a single dense
+matvec over a stacked broadcast matrix — no per-method inventory walk, no
+per-flow unit conversion (already pre-multiplied in 'mtBroadcast').
+Otherwise dispatches per-method to preserve the regionalized path's
+hierarchy walk + coverage check.
+-}
+computeLCIAScoreSetFromTables ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Database ->
+    Vector ->
+    Inventory ->
+    M.Map Text [Text] ->
+    MethodSetTables ->
+    [(UUID, Either Text Double)]
+computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier mst
+    | msAnyRegional mst = perMethod
+    | otherwise = batched
+  where
+    entries = V.toList (msEntries mst)
+
+    perMethod =
+        [ ( mseMethodId e
+          , computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier (mseTables e)
+          )
+        | e <- entries
+        ]
+
+    batched =
+        let nMethods = msNMethods mst
+            mat = msBroadcastMat mst
+            uuidIdx = msUuidIndex mst
+            entriesV = msEntries mst
+            -- Per-method cascade fallback for flows missing from the dense
+            -- broadcast index. The mono-method 'fastScore' has the same
+            -- fallback to 'lookupCascadeCF' (see 'computeLCIAScoreFromTables');
+            -- replicating it here keeps the batched path numerically
+            -- equivalent on inventories carrying flows whose UUIDs weren't
+            -- in the root flowDB at table-build time — typically cross-DB
+            -- merged inventories. Without this fallback the batched path
+            -- silently drops those flows while the per-method path catches
+            -- them via name/compartment cascade.
+            cascadeContrib !tables !uuid !qty =
+                case lookupCascadeCF tables flowDB uuid of
+                    Nothing -> 0
+                    Just cfTuple ->
+                        convertAndMultiply unitCfg unitDB (M.lookup uuid flowDB) cfTuple qty
+            -- Sparse walk: for each non-zero (uuid, qty) in the inventory,
+            -- find its dense row j (if any), then accumulate
+            --   scores[i] += qty * mat[j * nMethods + i]
+            -- across the m contiguous CFs at that row. nnz × m FMAs total,
+            -- contiguous reads — vs a dense matvec which would do
+            -- nFlows × m even when the inventory touches a small fraction.
+            scores = U.create $ do
+                mv <- MU.replicate nMethods (0.0 :: Double)
+                mapM_
+                    ( \(uuid, qty) ->
+                        if qty == 0
+                            then pure ()
+                            else case M.lookup uuid uuidIdx of
+                                Just j -> do
+                                    let rowStart = j * nMethods
+                                        loop !i
+                                            | i >= nMethods = pure ()
+                                            | otherwise = do
+                                                let !cf = U.unsafeIndex mat (rowStart + i)
+                                                MU.unsafeModify mv (+ qty * cf) i
+                                                loop (i + 1)
+                                    loop 0
+                                Nothing ->
+                                    -- Out-of-broadcast flow: ask each method's
+                                    -- cascade individually. O(m) per missing
+                                    -- flow vs O(m) row-read — same cost — but
+                                    -- without the silent zero.
+                                    V.imapM_
+                                        ( \i e -> do
+                                            let !c = cascadeContrib (mseTables e) uuid qty
+                                            MU.unsafeModify mv (+ c) i
+                                        )
+                                        entriesV
+                    )
+                    (M.toList inventory)
+                pure mv
+         in [ (mseMethodId e, Right (scores U.! i))
+            | (i, e) <- zip [0 ..] entries
+            ]
