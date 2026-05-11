@@ -126,6 +126,7 @@ import Method.Mapping (
     MethodTables,
     buildMethodSetTables,
     buildMethodTables,
+    expandSynonymMappings,
     fillBroadcastVector,
     mapMethodToFlows,
  )
@@ -482,7 +483,14 @@ mapMethodToTablesCached manager dbName db method = do
             cmap <- getMergedCompartmentMap manager
             unitConfig <- getMergedUnitConfig manager
             (mFlows, mUnits) <- getMergedFlowMetadata manager
-            let !tables = fillBroadcastVector unitConfig mUnits mFlows (buildMethodTables cmap mappings)
+            -- Use the database's frozen-at-load-time synonym DB (curated-only;
+            -- auto-extracted method synonyms enter @dmLoadedFlowSyns@ after
+            -- databases are loaded, so 'getMergedSynonymDB' would surface them
+            -- and pollute the fan-out with thousands of generic PubChem
+            -- synonyms like "water" → "4-aminophenol").
+            let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+                expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
+                !tables = fillBroadcastVector unitConfig mUnits mFlows (buildMethodTables cmap expanded)
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 

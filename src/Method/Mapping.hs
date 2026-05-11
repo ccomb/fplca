@@ -26,6 +26,7 @@ module Method.Mapping (
     inventoryContributions,
     processContributionsFromTables,
     convertForCharacterization,
+    expandSynonymMappings,
 
     -- * Multi-method scoring
     MethodSetTables (..),
@@ -58,6 +59,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
 
+import qualified Data.Set as S
 import qualified Data.Set as Set
 import Matrix (Inventory, Vector)
 import qualified Matrix
@@ -275,6 +277,64 @@ compartments at query time and meet at the same canonical keys.
 Pass 'M.empty' for the compartment map when no normalization is desired
 (behaves identically to the pre-CompartmentMap implementation).
 -}
+
+{- | Fan out one-to-many synonym matches: for each CF, look up the
+synonym group of the CF name and emit one extra @(cf, Just (peerFlow,
+BySynonym))@ row per BAFU flow whose name is in the group and whose
+compartment medium matches the CF's compartment. The original mapping
+list is preserved.
+
+This is the missing piece when a method-side CF (e.g. ILCD's bare
+@copper@) covers many inventory-side variants (BAFU's @Copper, 2.19% in
+sulfide, …@, @Copper, 1.18% in sulfide, …@, etc.). Without expansion,
+@buildMethodTables@ would key the CF under a single matched-flow name
+and the other variants would silently look up as @Nothing@. With
+expansion, the CF is keyed under every group member, so every inventory
+variant of the same substance finds the same CF.
+
+Duplicates are harmless — 'buildMethodTables' uses @fromListWith
+preferBetter@.
+-}
+expandSynonymMappings ::
+    SynonymDB ->
+    M.Map Text [Flow] ->
+    [(MethodCF, Maybe (Flow, MatchStrategy))] ->
+    [(MethodCF, Maybe (Flow, MatchStrategy))]
+expandSynonymMappings synDB flowsByName mappings =
+    mappings ++ concatMap expand mappings
+  where
+    -- One-shot inverse index: normalized name → set of direct partners
+    -- (union of all groups containing the name, without recursing). Stays
+    -- inside 'SynonymDB''s star-topology semantics — no chained
+    -- inferences across hubs — but does see every direct pair, which
+    -- 'lookupSynonymGroup' alone misses when many pairs converge on the
+    -- same hub name and @M.fromList@ keeps only the last-inserted group.
+    directPeers :: M.Map Text (S.Set Text)
+    directPeers =
+        M.fromListWith
+            S.union
+            [ (normalizeName m, S.fromList (map normalizeName members))
+            | members <- M.elems (synIdToNames synDB)
+            , m <- members
+            ]
+
+    expand (cf, _) =
+        let cfName = normalizeName (mcfFlowName cf)
+            peers = M.findWithDefault S.empty cfName directPeers
+         in [ (cf, Just (flow, BySynonym))
+            | syn <- S.toList peers
+            , flow <- M.findWithDefault [] syn flowsByName
+            ]
+
+-- No compartment filter here on purpose: 'buildMethodTables' keys
+-- entries by the CF's compartment (after 'normalizeCompartment'), and
+-- 'lookupCFForFlowAt' looks up by the inventory flow's compartment, so
+-- mismatched (cf, peer) pairs simply land at keys nothing ever queries.
+-- A pre-filter would have to mirror 'normalizeCompartment' to be
+-- correct (e.g. ILCD's @land occupation@ medium → BAFU's
+-- @resources/land@ via the compartment map), so it's simpler to let
+-- the table keys do the filtering.
+
 buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap mappings =
     MethodTables
