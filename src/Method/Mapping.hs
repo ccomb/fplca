@@ -871,6 +871,21 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
         let nMethods = msNMethods mst
             mat = msBroadcastMat mst
             uuidIdx = msUuidIndex mst
+            entriesV = msEntries mst
+            -- Per-method cascade fallback for flows missing from the dense
+            -- broadcast index. The mono-method 'fastScore' has the same
+            -- fallback to 'lookupCascadeCF' (see 'computeLCIAScoreFromTables');
+            -- replicating it here keeps the batched path numerically
+            -- equivalent on inventories carrying flows whose UUIDs weren't
+            -- in the root flowDB at table-build time — typically cross-DB
+            -- merged inventories. Without this fallback the batched path
+            -- silently drops those flows while the per-method path catches
+            -- them via name/compartment cascade.
+            cascadeContrib !tables !uuid !qty =
+                case lookupCascadeCF tables flowDB uuid of
+                    Nothing -> 0
+                    Just cfTuple ->
+                        convertAndMultiply unitCfg unitDB (M.lookup uuid flowDB) cfTuple qty
             -- Sparse walk: for each non-zero (uuid, qty) in the inventory,
             -- find its dense row j (if any), then accumulate
             --   scores[i] += qty * mat[j * nMethods + i]
@@ -884,7 +899,6 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
                         if qty == 0
                             then pure ()
                             else case M.lookup uuid uuidIdx of
-                                Nothing -> pure ()
                                 Just j -> do
                                     let rowStart = j * nMethods
                                         loop !i
@@ -894,6 +908,17 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
                                                 MU.unsafeModify mv (+ qty * cf) i
                                                 loop (i + 1)
                                     loop 0
+                                Nothing ->
+                                    -- Out-of-broadcast flow: ask each method's
+                                    -- cascade individually. O(m) per missing
+                                    -- flow vs O(m) row-read — same cost — but
+                                    -- without the silent zero.
+                                    V.imapM_
+                                        ( \i e -> do
+                                            let !c = cascadeContrib (mseTables e) uuid qty
+                                            MU.unsafeModify mv (+ c) i
+                                        )
+                                        entriesV
                     )
                     (M.toList inventory)
                 pure mv

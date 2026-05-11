@@ -200,9 +200,12 @@ spec = do
                         mst
             map snd results `shouldBe` [Right 0.0, Right 0.0]
 
-        it "inventory UUIDs outside any broadcast contribute 0 (silent skip)" $ do
+        it "inventory UUIDs absent from both broadcast and flowDB contribute 0" $ do
+            -- A UUID that exists nowhere — no broadcast row, no flowDB entry —
+            -- still scores zero because the per-method cascade fallback also
+            -- misses it (nothing for 'lookupCascadeCF' to anchor against).
             let fidIn = mkUuid 100
-                fidOut = mkUuid 999 -- in inventory only
+                fidOut = mkUuid 999 -- in inventory only, unreachable
                 uidKg = mkUuid 200
                 cf = mkCF fidIn 3.0
                 m1 = mkMethod 1 "m1" [cf]
@@ -225,6 +228,54 @@ spec = do
                         mst
             -- Only the matched flow contributes: 2 × 3 = 6.
             map snd results `shouldBe` [Right 6.0]
+
+        it "out-of-broadcast UUID resolved via mtUuidCF contributes via cascade fallback" $ do
+            -- Regression gate: a merged inventory carries UUIDs whose flows
+            -- were not in the root flowDB at 'fillBroadcastVector' time, so
+            -- they have no row in 'msBroadcastMat' and miss 'msUuidIndex'.
+            -- The CF table itself ('mtUuidCF', built from the full mapping
+            -- set) still resolves them — that's the per-method 'fastScore'
+            -- fallback ('lookupCascadeCF'). Before the cascade fallback in
+            -- the batched walker, those flows silently scored zero. This
+            -- test pins the equivalence.
+            let fidBuild = mkUuid 100 -- in build flowDB → in broadcast
+                fidCrossDB = mkUuid 999 -- in CF table + scoring flowDB, NOT in build flowDB
+                uidKg = mkUuid 200
+                cfBuild = mkCF fidBuild 3.0
+                cfCross = mkCF fidCrossDB 3.0
+                m1 = mkMethod 1 "m1" [cfBuild, cfCross]
+                -- flowDB at build time: only fidBuild. 'fillBroadcastVector'
+                -- walks this, so 'mtBroadcast' / 'msUuidIndex' = {fidBuild}.
+                buildFlowDB = M.singleton fidBuild (mkFlow fidBuild "co2" uidKg)
+                -- flowDB at scoring time (merged inventories carry more
+                -- flows than the root DB had at table-build time).
+                scoringFlowDB =
+                    M.fromList
+                        [ (fidBuild, mkFlow fidBuild "co2" uidKg)
+                        , (fidCrossDB, mkFlow fidCrossDB "co2" uidKg)
+                        ]
+                udb = M.singleton uidKg (mkUnit uidKg "kg")
+                t =
+                    fillBroadcastVector UnitConversion.defaultUnitConfig udb buildFlowDB $
+                        buildMethodTables
+                            M.empty
+                            [ (cfBuild, Just (mkFlow fidBuild "co2" uidKg, ByUUID))
+                            , (cfCross, Just (mkFlow fidCrossDB "co2" uidKg, ByUUID))
+                            ]
+                mst = buildMethodSetTables [(m1, t)]
+                inv = M.fromList [(fidBuild, 2.0), (fidCrossDB, 4.0)]
+                results =
+                    computeLCIAScoreSetFromTables
+                        UnitConversion.defaultUnitConfig
+                        udb
+                        scoringFlowDB
+                        unusedDatabase
+                        U.empty
+                        inv
+                        M.empty
+                        mst
+            -- Both contribute against CF=3: (2 + 4) × 3 = 18.
+            map snd results `shouldBe` [Right 18.0]
 
     describe "msEntries preserves caller-given order" $ do
         it "preserves the order methods were passed in" $ do
