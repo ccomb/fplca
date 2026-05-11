@@ -18,6 +18,7 @@ import qualified OlcaSchemaSpec
 import qualified EcoSpold2Spec
 import qualified FlowResolverSpec
 import qualified FuzzySpec
+import qualified GeographiesSpec
 import qualified HotspotSpec
 import qualified ILCDParserSpec
 import qualified InventorySpec
@@ -86,3 +87,4 @@ main = hspec $ do
         describe "Nested Substitutions" NestedSubstitutionSpec.spec
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
         describe "Licenses Endpoint" LicensesSpec.spec
+        describe "Geographies cascade" GeographiesSpec.spec
