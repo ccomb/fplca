@@ -75,6 +75,67 @@ spec = do
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected parse failure on @type=Process"
 
+    describe "parseImpactFactor flow.category → Compartment" $ do
+        -- Regression gate for d8a054d & 3d2f7e5: openLCA flows with identical
+        -- 'name' values but different category paths (e.g. Agribalyse has 3
+        -- "Occupation, annual crop" flows under resource, resource/land and
+        -- resource/biotic) must surface their full compartment path so the
+        -- DB-flow matcher can disambiguate. Without this, only one of the
+        -- three is reachable and ~30% of regionalized factors miss their
+        -- target flow silently.
+        it "extracts (medium, subcompartment) from a slash-separated path" $ do
+            let bytes =
+                    "{\"@type\":\"ImpactCategory\",\"name\":\"M\",\"referenceUnitName\":\"u\",\
+                    \\"impactFactors\":[{\"@type\":\"ImpactFactor\",\"value\":1.0,\
+                    \\"flow\":{\"@type\":\"Flow\",\"name\":\"Occupation, annual crop\",\
+                    \\"category\":{\"@type\":\"Category\",\"name\":\"resource/land\"}}}]}"
+            case parseOlcaImpactCategoryBytes bytes of
+                Left err -> expectationFailure ("parse failed: " ++ err)
+                Right method ->
+                    case methodFactors method of
+                        [cf] -> mcfCompartment cf `shouldBe` Just (Compartment "resource" "land" "")
+                        _ -> expectationFailure "expected exactly one factor"
+
+        it "keeps deeper subpaths intact (e.g. resource/in air / long-term)" $ do
+            let bytes =
+                    "{\"@type\":\"ImpactCategory\",\"name\":\"M\",\"referenceUnitName\":\"u\",\
+                    \\"impactFactors\":[{\"@type\":\"ImpactFactor\",\"value\":1.0,\
+                    \\"flow\":{\"@type\":\"Flow\",\"name\":\"f\",\
+                    \\"category\":{\"@type\":\"Category\",\"name\":\"resource/in air/upper stratosphere\"}}}]}"
+            case parseOlcaImpactCategoryBytes bytes of
+                Right method ->
+                    case methodFactors method of
+                        [cf] ->
+                            mcfCompartment cf
+                                `shouldBe` Just (Compartment "resource" "in air/upper stratosphere" "")
+                        _ -> expectationFailure "expected exactly one factor"
+                Left err -> expectationFailure ("parse failed: " ++ err)
+
+        it "leaves mcfCompartment Nothing when the flow has no category" $ do
+            -- The mini fixture has no category fields, so Compartment must
+            -- stay 'Nothing' — the matcher falls back to the legacy name-only
+            -- path. Regression gate against the disambiguation breaking
+            -- non-openLCA / non-Agribalyse methods that ship without category.
+            bytes <- BS.readFile "test-data/olca-schema-mini/impact-category-mini.json"
+            case parseOlcaImpactCategoryBytes bytes of
+                Left err -> expectationFailure ("parse failed: " ++ err)
+                Right method ->
+                    map mcfCompartment (methodFactors method)
+                        `shouldBe` replicate (length (methodFactors method)) Nothing
+
+        it "single-segment category resolves to medium with empty subcompartment" $ do
+            let bytes =
+                    "{\"@type\":\"ImpactCategory\",\"name\":\"M\",\"referenceUnitName\":\"u\",\
+                    \\"impactFactors\":[{\"@type\":\"ImpactFactor\",\"value\":1.0,\
+                    \\"flow\":{\"@type\":\"Flow\",\"name\":\"f\",\
+                    \\"category\":{\"@type\":\"Category\",\"name\":\"air\"}}}]}"
+            case parseOlcaImpactCategoryBytes bytes of
+                Right method ->
+                    case methodFactors method of
+                        [cf] -> mcfCompartment cf `shouldBe` Just (Compartment "air" "" "")
+                        _ -> expectationFailure "expected exactly one factor"
+                Left err -> expectationFailure ("parse failed: " ++ err)
+
     describe "buildMethodTables on parsed openLCA methods" $ do
         it "leaves mtRegionalizedCF empty when no flow matched (Nothing in mappings)" $ do
             -- Without database flows to match against, every CF stays unmapped, so

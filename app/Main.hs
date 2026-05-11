@@ -150,7 +150,7 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
         then reportProgress Info "No databases loaded - upload or load one via the web interface"
         else reportProgress Info $ "Loaded databases: " ++ intercalate ", " (map T.unpack (M.keys loadedDbs))
 
-    let port = serverPort serverOpts
+    let port = fromMaybe (scPort (cfgServer effectiveConfig)) (serverPort serverOpts)
 
     -- Initialize matrix solver (no-op for MUMPS, kept for API compatibility)
     initializeSolverForServer

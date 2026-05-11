@@ -7,6 +7,7 @@ import Test.Hspec
 -- Import test modules (will be created)
 
 import qualified BM25Spec
+import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
 import qualified CrossDBSubstitutionSpec
@@ -17,6 +18,7 @@ import qualified OlcaSchemaSpec
 import qualified EcoSpold2Spec
 import qualified FlowResolverSpec
 import qualified FuzzySpec
+import qualified GeographiesSpec
 import qualified HotspotSpec
 import qualified ILCDParserSpec
 import qualified InventorySpec
@@ -37,6 +39,7 @@ import qualified ServerSpec
 import qualified ServiceSpec
 import qualified SharedSolverSpec
 import qualified SimaProParserSpec
+import qualified SensitivitySpec
 import qualified SubstitutionSpec
 import qualified SupplyChainSpec
 import qualified TreeSpec
@@ -63,8 +66,10 @@ main = hspec $ do
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Substitutions" SubstitutionSpec.spec
+        describe "Sensitivity Analysis" SensitivitySpec.spec
         describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec
         describe "Shared Solver" SharedSolverSpec.spec
+        describe "Coalescing Solver (concurrency)" CoalescingSolverSpec.spec
         describe "ILCD Flow Resolver" FlowResolverSpec.spec
         describe "Plugin Config" PluginConfigSpec.spec
         describe "VOLCA_DATA_DIR resolution" ConfigSpec.spec
@@ -82,3 +87,4 @@ main = hspec $ do
         describe "Nested Substitutions" NestedSubstitutionSpec.spec
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
         describe "Licenses Endpoint" LicensesSpec.spec
+        describe "Geographies cascade" GeographiesSpec.spec

@@ -53,6 +53,7 @@ data Resource
     | GetSupplyChain
     | GetInventory
     | GetImpacts
+    | ComputeSensitivity
     | ListMethods
     | GetFlowMapping
     | GetCharacterization
@@ -127,6 +128,7 @@ apiPath r = case r of
     GetSupplyChain -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "supply-chain"])
     GetInventory -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "inventory"])
     GetImpacts -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "impacts", "{collection}", "{methodId}"])
+    ComputeSensitivity -> Just (POST, ["db", "{dbName}", "activity", "{processId}", "sensitivity", "{collection}", "{methodId}"])
     ListMethods -> Just (GET, ["methods"])
     GetFlowMapping -> Just (GET, ["db", "{dbName}", "method", "{methodId}", "flow-mapping"])
     GetCharacterization -> Just (GET, ["db", "{dbName}", "method", "{methodId}", "characterization"])
@@ -162,6 +164,7 @@ mcpName r = case r of
     GetSupplyChain -> "get_supply_chain"
     GetInventory -> "get_inventory"
     GetImpacts -> "get_impacts"
+    ComputeSensitivity -> "compute_sensitivity"
     ListMethods -> "list_methods"
     GetFlowMapping -> "get_flow_mapping"
     GetCharacterization -> "get_characterization"
@@ -193,6 +196,7 @@ cliName r = case r of
     GetSupplyChain -> "supply-chain"
     GetInventory -> "inventory"
     GetImpacts -> "impacts"
+    ComputeSensitivity -> "sensitivity"
     ListMethods -> "methods"
     GetFlowMapping -> "flow-mapping"
     GetCharacterization -> "characterization"
@@ -274,6 +278,16 @@ description r = case r of
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
         \over web estimates for grounded, database-backed answers."
+    ComputeSensitivity ->
+        "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
+        \technosphere coefficients A_ij and report the resulting impact for each. \
+        \Each perturbation specifies (consumer, supplier, delta) where 'delta' is \
+        \relative: A_ij is multiplied by (1+delta). delta=+0.05 → +5%; delta=-1 \
+        \removes the link. Returns the baseline impact plus one entry per \
+        \perturbation with the new score and deltaImpact. Per-perturbation errors \
+        \(no link, singular update) are returned in the entry; the sweep continues. \
+        \Internally uses Sherman-Morrison rank-1 updates against the cached \
+        \factorization (~4 ms per perturbation). V1: root DB only."
     ListMethods ->
         "LCA / ACV — list all loaded LCIA methods (impact assessment methods like \
         \climate change, acidification, eutrophication, land use, water scarcity)."
@@ -428,6 +442,22 @@ params r = case r of
         , pMethodId
         , Param "top_flows" "integer" Optional "Number of top contributing flows to return (default 5)"
         , pSubstitutions
+        ]
+    ComputeSensitivity ->
+        [ pDatabase
+        , pProcessId
+        , pMethodId
+        , Param
+            "perturbations"
+            "array"
+            Required
+            "Array of perturbations to apply in parallel. Each entry is an object \
+            \{consumer: ProcessId, supplier: ProcessId, delta: number, label?: string}. \
+            \'delta' is RELATIVE: the technosphere coefficient A_ij is multiplied by \
+            \(1+delta). Use +0.05 for +5%, -1 to remove a link. 'consumer' is the \
+            \activity that consumes the input; 'supplier' is the activity that \
+            \produces it. Both must live in the root database (V1 limitation). \
+            \'label' is optional and echoed in the response for correlation."
         ]
     ListMethods -> []
     GetFlowMapping ->

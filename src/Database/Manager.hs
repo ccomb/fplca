@@ -46,6 +46,9 @@ module Database.Manager (
     addMethodCollection,
     removeMethodCollection,
 
+    -- * Geography
+    parseGeographiesCSV,
+
     -- * Reference Data Operations
     listFlowSynonyms,
     loadFlowSynonyms,
@@ -106,7 +109,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive, removeFile)
-import System.FilePath (isAbsolute, normalise, takeDirectory, takeExtension, (</>))
+import System.FilePath (isAbsolute, normalise, takeDirectory, takeExtension, takeFileName, (</>))
 import System.Mem (performGC)
 
 import Config
@@ -2056,18 +2059,27 @@ and enriches CFs from ILCD flow XMLs when available.
 -}
 loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text (MethodCollection, M.Map UUID ILCDFlowInfo))
 loadMethodCollectionFromConfig mc = do
-    -- Resolve archives (ZIP → extracted directory)
+    -- Resolve archives (ZIP → extracted directory). Single .json files (openLCA
+    -- JSON-LD ImpactCategory documents) are accepted directly without a wrapping
+    -- directory or archive.
     resolvedPath <- resolveDataPath (mcPath mc)
     isDir <- doesDirectoryExist resolvedPath
-    if not isDir
+    isFile <- doesFileExist resolvedPath
+    let isSingleJson = isFile && map toLower (takeExtension resolvedPath) == ".json"
+    if not isDir && not isSingleJson
         then return $ Left $ "Method path not found: " <> T.pack (mcPath mc)
         else do
-            -- Find method directory (handles nested ILCD structures)
-            dir <- findMethodDirectory resolvedPath
-            files <- listDirectory dir
-            let xmlFiles = filter (\f -> map toLower (takeExtension f) == ".xml") files
-                csvFiles = filter (\f -> map toLower (takeExtension f) == ".csv") files
-                jsonFiles = filter (\f -> map toLower (takeExtension f) == ".json") files
+            (dir, xmlFiles, csvFiles, jsonFiles) <-
+                if isSingleJson
+                    then return (takeDirectory resolvedPath, [], [], [takeFileName resolvedPath])
+                    else do
+                        -- Find method directory (handles nested ILCD structures)
+                        d <- findMethodDirectory resolvedPath
+                        fs <- listDirectory d
+                        let xs = filter (\f -> map toLower (takeExtension f) == ".xml") fs
+                            cs = filter (\f -> map toLower (takeExtension f) == ".csv") fs
+                            js = filter (\f -> map toLower (takeExtension f) == ".json") fs
+                        return (d, xs, cs, js)
             if null xmlFiles && null csvFiles && null jsonFiles
                 then return $ Left $ "No method files (.xml/.csv/.json) found in: " <> T.pack dir
                 else do

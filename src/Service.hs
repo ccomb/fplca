@@ -1,13 +1,15 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
+import Control.Exception (SomeException, try)
 import Data.Aeson (Value, object, toJSON, (.=))
-import Data.Either (lefts, rights)
+import Data.Either (fromRight, lefts, rights)
 import Data.Int (Int32)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
@@ -23,7 +25,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
-import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, shermanMorrisonVariant, toList)
+import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, toList)
 import qualified Matrix.Export as MatrixExport
 import Plugin.Types (Severity (..), ValidateContext (..), ValidateHandle (..), ValidationIssue (..), ValidationPhase (..))
 import qualified Progress
@@ -1833,7 +1835,7 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
                         -- Symmetric root-only swap: +a at old supplier, -a at new.
                         let perturb = [(fromIntegral oldPid, a), (fromIntegral newPid, -a)]
                         smResult <-
-                            shermanMorrisonVariant
+                            perturbA
                                 db
                                 mFact
                                 x
@@ -1849,6 +1851,87 @@ computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
         case result of
             Left err -> return $ Left err
             Right x' -> foldSubstitutions x' ss f
+
+{- | Run sensitivity analysis on a process: compute the baseline scaling
+vector @x₀@ once, then resolve every 'Perturbation' to a (consumer column,
+sparse perturbation) spec and dispatch all valid specs to 'perturbABatch'
+in a __single__ MUMPS multi-RHS call.
+
+The 'perDelta' is __relative__: the resolved coefficient @a@ is multiplied
+by @(1 + delta)@, so the absolute Δ passed to the kernel is @a * delta@.
+A positive entry in @perturb@ adds @u·e_col^T@ to @(I-A)@, which decreases
+@A_ij@; we negate to flip the convention so @delta=+0.05@ means \"+5%\".
+
+Per-perturbation errors (missing technosphere link, singular update,
+cross-DB qualified id in V1) are returned alongside the perturbation —
+they do not abort the sweep. Only the baseline solve and the global
+process-id resolution can fail at the outer 'ServiceError' level.
+
+V1: @perConsumer@ and @perSupplier@ must live in the root DB (no
+@\"dbName::pid\"@ form). Cross-DB perturbations require generalizing
+'applySubstitutionsAt' and are out of scope here.
+-}
+computeSensitivities ::
+    Database ->
+    SharedSolver ->
+    ProcessId ->
+    [Perturbation] ->
+    IO (Either ServiceError (U.Vector Double, [(Perturbation, Either Text (U.Vector Double))]))
+computeSensitivities db sharedSolver processId perts = do
+    let activityIndex = dbActivityIndex db
+        demandVec = buildDemandVectorFromIndex activityIndex processId
+    -- The baseline solve and factorization retrieval hit MUMPS through the FFI
+    -- and can throw via exceptions (singular A, allocation failure, …). Wrap
+    -- them so the documented 'Left' branch of the signature is reachable,
+    -- instead of letting raw exceptions escape to the caller.
+    eBaseline <- try @SomeException $ do
+        baselineX <- solveWithSharedSolver sharedSolver demandVec
+        mFact <- getFactorization sharedSolver
+        pure (baselineX, mFact)
+    case eBaseline of
+        Left ex ->
+            pure $
+                Left $
+                    MatrixError $
+                        "baseline solve failed: " <> T.pack (show ex)
+        Right (baselineX, mFact) -> do
+            -- Resolve each perturbation up-front. Resolution errors graft onto
+            -- the final result; resolved specs go to the batch (a Left becomes
+            -- a no-op empty spec so the batch preserves indexing).
+            let resolved = map (resolveSpec db) perts
+            smResults <-
+                perturbABatch db mFact baselineX (map (fromRight (0, [])) resolved)
+            let combined = zipWith3 step perts resolved smResults
+                step p (Left e) _ = (p, Left e)
+                step p (Right _) sm = (p, sm)
+            pure $ Right (baselineX, combined)
+
+resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
+resolveSpec db p = do
+    consumerPid <- resolveRootOnly db (perConsumer p)
+    supplierPid <- resolveRootOnly db (perSupplier p)
+    case findTechCoefficient db consumerPid supplierPid of
+        Nothing ->
+            Left $
+                "no technosphere link from consumer "
+                    <> perConsumer p
+                    <> " to supplier "
+                    <> perSupplier p
+        Just a ->
+            let deltaAbs = -(a * perDelta p)
+             in Right (fromIntegral consumerPid, [(fromIntegral supplierPid, deltaAbs)])
+
+-- V1: root-DB only — qualified "db::pid" is rejected per perturbation
+resolveRootOnly :: Database -> Text -> Either Text ProcessId
+resolveRootOnly db t
+    | "::" `T.isInfixOf` t =
+        Left ("cross-DB perturbation not supported in V1: " <> t)
+    | otherwise =
+        case resolveActivityAndProcessId db t of
+            Right (pid, _) -> Right pid
+            Left (InvalidProcessId msg) -> Left msg
+            Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
+            Left e -> Left (T.pack (show e))
 
 -- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
 maxSubsDepth :: Int
@@ -1874,12 +1957,13 @@ inventoryWithSubsAndDeps ::
     [Substitution] ->
     IO (Either ServiceError Inventory)
 inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
-    eValid <- validateConsumerDbs depLookup db rootDbName subs
+    let rootDb = RootDb rootDbName
+    eValid <- validateConsumerDbs depLookup db rootDb subs
     case eValid of
         Left e -> pure (Left e)
         Right () -> do
             let demand = buildDemandVectorFromIndex (dbActivityIndex db) pid
-            res <- goWithSubsAndDeps unitCfg depLookup db rootDbName solver [demand] subs 0
+            res <- goWithSubsAndDeps unitCfg depLookup db (ThisDb rootDbName) rootDb solver [demand] subs 0
             pure $ case res of
                 Left err -> Left err
                 Right (inv : _) -> Right inv
@@ -1894,21 +1978,22 @@ which violates the no-silent-errors invariant.
 validateConsumerDbs ::
     SharedSolver.DepSolverLookup ->
     Database ->
-    Text ->
+    RootDb ->
     [Substitution] ->
     IO (Either ServiceError ())
-validateConsumerDbs depLookup rootDb rootDbName subs = do
-    let externalConsumerDbs =
+validateConsumerDbs depLookup rootDbObj rootDb subs = do
+    let rootDbName = unRootDb rootDb
+        externalConsumerDbs =
             S.delete rootDbName $
                 S.fromList
                     [ cDb
                     | sub <- subs
-                    , let (cDb, _) = parseSubRef rootDbName (subConsumer sub)
+                    , let (cDb, _) = parseSubRef rootDb (subConsumer sub)
                     ]
     if S.null externalConsumerDbs
         then pure (Right ())
         else do
-            reachable <- reachableDepDbs depLookup rootDbName rootDb
+            reachable <- reachableDepDbs depLookup rootDbName rootDbObj
             let unreachable = externalConsumerDbs `S.difference` reachable
             case S.toList unreachable of
                 [] -> pure (Right ())
@@ -1953,7 +2038,9 @@ goWithSubsAndDeps ::
     -- | THIS DB
     Database ->
     -- | THIS DB's name
-    Text ->
+    ThisDb ->
+    -- | ROOT DB's name (default for bare consumer/from/to refs)
+    RootDb ->
     -- | THIS DB's cached solver
     SharedSolver ->
     -- | demand vectors at this level
@@ -1963,9 +2050,9 @@ goWithSubsAndDeps ::
     -- | recursion depth
     Int ->
     IO (Either ServiceError [Inventory])
-goWithSubsAndDeps unitCfg depLookup thisDb thisDbName solver demands allSubs depth = do
+goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allSubs depth = do
     scalings <- SharedSolver.solveMultiWithSharedSolver solver demands
-    eApply <- applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs
+    eApply <- applySubstitutionsAt depLookup thisDb thisDbName rootDb solver scalings allSubs
     case eApply of
         Left e -> pure (Left e)
         Right (scalings', virtualLks) -> propagate scalings' virtualLks
@@ -1982,7 +2069,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName solver demands allSubs dep
                     else do
                         depResults <-
                             mapConcurrently
-                                (resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth (length scalings'))
+                                (resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth (length scalings'))
                                 allDepDbs
                         pure $ case sequence depResults of
                             Left err -> Left err
@@ -2001,13 +2088,15 @@ recursion. Matches 'SharedSolver.resolveDep' but delegates to
 resolveDepWithSubs ::
     UnitConfig ->
     SharedSolver.DepSolverLookup ->
+    -- | ROOT DB's name (default for bare consumer/from/to refs)
+    RootDb ->
     [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
     [Substitution] ->
     Int ->
     Int ->
     Text ->
     IO (Either ServiceError [Inventory])
-resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth k depDbName = do
+resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth k depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
@@ -2018,7 +2107,7 @@ resolveDepWithSubs unitCfg depLookup perRootDepDemands allSubs depth k depDbName
              in case depVecsE of
                     Left err -> pure (Left (MatrixError err))
                     Right depDemandVecs ->
-                        goWithSubsAndDeps unitCfg depLookup depDb depDbName depSolver depDemandVecs allSubs (depth + 1)
+                        goWithSubsAndDeps unitCfg depLookup depDb (ThisDb depDbName) rootDb depSolver depDemandVecs allSubs (depth + 1)
 
 {- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 
@@ -2039,7 +2128,8 @@ computeScalingVectorWithSubstitutionsCrossDB ::
     [Substitution] ->
     IO (Either ServiceError (U.Vector Double, [CrossDBLink]))
 computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid subs = do
-    case firstNonRootConsumer of
+    let rootDb = RootDb rootDbName
+    case firstNonRootConsumer rootDb of
         Just cDb ->
             pure $
                 Left $
@@ -2048,17 +2138,17 @@ computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid 
         Nothing -> do
             let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
             originalX <- solveWithSharedSolver solver demandVec
-            res <- applySubstitutionsAt depLookup db rootDbName solver [originalX] subs
+            res <- applySubstitutionsAt depLookup db (ThisDb rootDbName) rootDb solver [originalX] subs
             pure $ case res of
                 Left e -> Left e
                 Right ([x'], links) -> Right (x', links)
                 Right (x' : _, links) -> Right (x', links) -- unreachable: K=1
                 Right ([], _) -> Right (originalX, []) -- unreachable
   where
-    firstNonRootConsumer =
+    firstNonRootConsumer rootDb =
         case [ cDb
              | sub <- subs
-             , let (cDb, _) = parseSubRef rootDbName (subConsumer sub)
+             , let (cDb, _) = parseSubRef rootDb (subConsumer sub)
              , cDb /= rootDbName
              ] of
             (d : _) -> Just d
@@ -2090,8 +2180,10 @@ applySubstitutionsAt ::
     SharedSolver.DepSolverLookup ->
     -- | THIS DB
     Database ->
-    -- | THIS DB's name (for parseSubRef)
-    Text ->
+    -- | THIS DB's name (the level the walker currently visits)
+    ThisDb ->
+    -- | ROOT DB (default for bare consumer/from/to refs, per 'Substitution')
+    RootDb ->
     -- | THIS DB's cached solver
     SharedSolver ->
     -- | K scalings at this level
@@ -2099,7 +2191,7 @@ applySubstitutionsAt ::
     -- | full sub list (filtered to consumer==this)
     [Substitution] ->
     IO (Either ServiceError ([U.Vector Double], [CrossDBLink]))
-applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
+applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs = do
     let localSubs = filter consumerLivesHere allSubs
     case localSubs of
         [] -> pure $ Right (scalings, [])
@@ -2107,8 +2199,18 @@ applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
             mFact <- getFactorization solver
             applyAll mFact scalings [] localSubs
   where
+    thisDbName = unThisDb thisDbObj
+
+    -- Bare consumer/from/to refs all default to the root DB (per the
+    -- 'Substitution' docstring), not whichever DB the recursive walker
+    -- happens to be visiting. Using 'thisDb' instead would cause a bare
+    -- consumer to be retried in every dep DB and fail with a misleading
+    -- "Invalid UUID format" on the first dep where the activity does
+    -- not exist, and would also misroute bare suppliers in dep-level
+    -- recursion. The 'RootDb' newtype on 'parseSubRef' makes the
+    -- argument-swap unrepresentable.
     consumerLivesHere sub =
-        let (cDb, _) = parseSubRef thisDbName (subConsumer sub)
+        let (cDb, _) = parseSubRef rootDb (subConsumer sub)
          in cDb == thisDbName
 
     applyAll _ xs links [] = pure $ Right (xs, links)
@@ -2119,12 +2221,12 @@ applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
             Right (xs', extraLks) -> applyAll mFact xs' (links ++ extraLks) rest
 
     applySub mFact xs sub = do
-        let (_, cPidText) = parseSubRef thisDbName (subConsumer sub)
+        let (_, cPidText) = parseSubRef rootDb (subConsumer sub)
         case resolveActivityAndProcessId thisDb cPidText of
             Left e -> pure (Left e)
             Right (consumerPid, _) -> do
-                let (fromDb, fromPidText) = parseSubRef thisDbName (subFrom sub)
-                    (toDb, toPidText) = parseSubRef thisDbName (subTo sub)
+                let (fromDb, fromPidText) = parseSubRef rootDb (subFrom sub)
+                    (toDb, toPidText) = parseSubRef rootDb (subTo sub)
                 eFrom <- resolveRef fromDb fromPidText
                 eTo <- resolveRef toDb toPidText
                 case (eFrom, eTo) of
@@ -2191,7 +2293,7 @@ applySubstitutionsAt depLookup thisDb thisDbName solver scalings allSubs = do
         -- only on u (not x); a future optimization can compute z once.
         results <-
             mapM
-                (\x -> shermanMorrisonVariant thisDb mFact x (fromIntegral consumerPid) perturb)
+                (\x -> perturbA thisDb mFact x (fromIntegral consumerPid) perturb)
                 xs
         pure $ case sequence results of
             Left msg -> Left (MatrixError msg)

@@ -34,10 +34,10 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Substitution (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
-import Method.Mapping (MappingStats (..), computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (MappingStats (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, inventoryContributions)
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
@@ -45,6 +45,7 @@ import Plugin.Types ()
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
 import qualified Service.Aggregate as Agg
+import Matrix (applyBiosphereMatrix)
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import Types (Activity (..), Database (..), FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
@@ -337,6 +338,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "aggregate" -> withDb dbManager rid args $ callAggregate dbManager rid args
     "get_inventory" -> callGetInventory dbManager rid args
     "get_impacts" -> callGetImpacts dbManager baseUrl rid args
+    "compute_sensitivity" -> callComputeSensitivity dbManager baseUrl rid args
     "list_methods" -> callListMethods dbManager rid
     "get_flow_mapping" -> callGetFlowMapping dbManager rid args
     "get_characterization" -> callGetCharacterization dbManager rid args
@@ -403,26 +405,17 @@ textArrayArg key args = case KM.lookup (fromText key) args of
   where
     toList = foldr (:) []
 
-{- | Parse the optional 'substitutions' argument into '[Substitution]'.
-Ignores malformed entries silently at parse level — missing or wrong-shape
-subs become an empty list (the caller treats empty as \"no what-if\").
-Returns 'Nothing' if the JSON is malformed enough to suggest user intent
-that can't be satisfied (e.g. entry is a non-object), letting the caller
-surface a 422 rather than running a baseline computation silently.
+{- | Parse an array-valued argument into '[a]' via the 'FromJSON' instance.
+A 'Just' @whenMissing@ rejects missing\/null with that message; 'Nothing'
+treats both as the empty list. Aeson errors are surfaced verbatim.
 -}
-parseSubstitutionsArg :: KeyMap Value -> Either Text [Substitution]
-parseSubstitutionsArg args = case KM.lookup (fromText "substitutions") args of
-    Nothing -> Right []
-    Just Null -> Right []
-    Just (Array xs) -> traverse parseOne (foldr (:) [] xs)
-    Just _ -> Left "'substitutions' must be an array of {from, to, consumer} objects"
-  where
-    parseOne (Object o) = case (KM.lookup "from" o, KM.lookup "to" o, KM.lookup "consumer" o) of
-        (Just (String f), Just (String t), Just (String c)) ->
-            Right Substitution{subFrom = f, subTo = t, subConsumer = c}
-        _ ->
-            Left "each substitution must have string fields 'from', 'to', 'consumer'"
-    parseOne _ = Left "each substitution must be an object"
+parseArrayArg :: (FromJSON a) => Text -> Maybe Text -> KeyMap Value -> Either Text [a]
+parseArrayArg key whenMissing args = case KM.lookup (fromText key) args of
+    Nothing -> maybe (Right []) Left whenMissing
+    Just Null -> maybe (Right []) Left whenMissing
+    Just v -> case fromJSON v of
+        Success xs -> Right xs
+        Error e -> Left (T.pack e)
 
 -- ---------------------------------------------------------------------------
 -- Tool implementations
@@ -612,7 +605,7 @@ callGetSupplyChain dbManager rid args =
                                 , Service.scfMaxDepth = intArg "max_depth" args
                                 , Service.scfMinQuantity = doubleArg "min_quantity" args
                                 }
-                    case parseSubstitutionsArg args of
+                    case parseArrayArg "substitutions" Nothing args :: Either Text [Substitution] of
                         Left err -> return $ toolError rid err
                         Right [] -> do
                             unitCfg <- DM.getMergedUnitConfig dbManager
@@ -780,7 +773,7 @@ callGetInventory dbManager rid args =
                 (processId, activity) <- case Service.resolveActivityAndProcessId db pid of
                     Left err -> throwE (T.pack (show err))
                     Right v -> pure v
-                subs <- ExceptT $ pure $ parseSubstitutionsArg args
+                subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                 -- Empty subs: same as GET path (plain cross-DB inventory).
@@ -842,7 +835,7 @@ callGetImpacts dbManager baseUrl rid args =
                     dbName = lrDbName req
                     ra = lrResolved req
                 ExceptT $ pure $ ensureLinked dbName "computing impacts" db
-                subs <- ExceptT $ pure $ parseSubstitutionsArg args
+                subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                 inventory <-
@@ -904,6 +897,87 @@ callGetImpacts dbManager baseUrl rid args =
                                         ]
                                    | (f, cfVal, c) <- topFlows
                                    ]
+                            ]
+            )
+
+{- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
+@POST /sensitivity/{collection}/{methodId}@ endpoint: runs Service.computeSensitivities
+to get baseline + per-perturbation scaling vectors, then computes the LCIA score
+for each. Uses 'computeLCIAScoreAuto' so regionalized methods route through the
+location-hierarchy walk; non-regionalized methods stay on the classic
+'computeLCIAScoreFromTables' path.
+-}
+callComputeSensitivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callComputeSensitivity dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                req <- loadLcaRequest dbManager args
+                let ld = lrLoaded req
+                    db = ldDatabase ld
+                    method = lrMethod req
+                    dbName = lrDbName req
+                    ra = lrResolved req
+                ExceptT $ pure $ ensureLinked dbName "computing sensitivity" db
+                perts <-
+                    ExceptT $
+                        pure
+                            ( parseArrayArg
+                                "perturbations"
+                                (Just "'perturbations' is required (array of {consumer, supplier, delta, label?})")
+                                args ::
+                                Either Text [Perturbation]
+                            )
+                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+                tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+                hier <- liftIO $ DM.getLocationHierarchy dbManager
+                eRes <-
+                    liftIO $
+                        Service.computeSensitivities db (ldSharedSolver ld) (raPid ra) perts
+                (baselineX, perResults) <- case eRes of
+                    Left err -> throwE (T.pack (show err))
+                    Right v -> pure v
+                let scoreOf x =
+                        let inv = applyBiosphereMatrix db x
+                         in case computeLCIAScoreAuto unitCfg mUnits mFlows db x inv hier tables of
+                                Right s -> Right s
+                                Left e -> Left e
+                baselineScore <- case scoreOf baselineX of
+                    Right s -> pure s
+                    Left e -> throwE ("baseline scoring failed: " <> e)
+                let webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                    pertEntry (p, eitherX) =
+                        let base =
+                                [ "perturbation"
+                                    .= object
+                                        [ "consumer" .= perConsumer p
+                                        , "supplier" .= perSupplier p
+                                        , "delta" .= perDelta p
+                                        ]
+                                ]
+                            withLabel = case perLabel p of
+                                Just l -> ("label" .= l) : base
+                                Nothing -> base
+                         in case eitherX of
+                                Left err -> object (("error" .= err) : withLabel)
+                                Right x' -> case scoreOf x' of
+                                    Left err -> object (("error" .= err) : withLabel)
+                                    Right s ->
+                                        object
+                                            ( ("score" .= s)
+                                                : ("delta_score" .= (s - baselineScore))
+                                                : withLabel
+                                            )
+                pure $
+                    toolSuccessJson rid $
+                        object
+                            [ "method" .= methodName method
+                            , "category" .= methodCategory method
+                            , "unit" .= methodUnit method
+                            , "baseline_score" .= baselineScore
+                            , "perturbed" .= map pertEntry perResults
+                            , "web_url" .= webUrl
                             ]
             )
 
