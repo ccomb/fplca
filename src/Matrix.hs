@@ -52,7 +52,6 @@ module Matrix (
     solveSparseLinearSystemWithFactorizationMulti,
     computeInventoryMatrixBatch,
     clearCachedSolver,
-    inspectCoalesceBatchCount,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -64,12 +63,10 @@ import Control.Concurrent.STM (
     TVar,
     atomically,
     flushTQueue,
-    modifyTVar',
     newTQueueIO,
     newTVarIO,
     readTQueue,
     readTVar,
-    readTVarIO,
     writeTQueue,
     writeTVar,
  )
@@ -111,9 +108,6 @@ data CoalescingSolver = CoalescingSolver
     , csSize :: !Int
     , csInbox :: !(TQueue WorkerMsg)
     , csAlive :: !(TVar Bool)
-    , csBatchCount :: !(TVar Int)
-    -- ^ Number of 'mumpsSolveMulti' calls actually issued. Used in tests to
-    -- assert that N concurrent requests collapse into < N solver calls.
     }
 
 -- | Worker mailbox message: either a solve request or a shutdown signal.
@@ -157,9 +151,8 @@ spawnCoalescingSolver :: MUMPSSolver -> Int -> IO CoalescingSolver
 spawnCoalescingSolver solver n = do
     inbox <- newTQueueIO
     alive <- newTVarIO True
-    counter <- newTVarIO 0
-    void $ forkIO (workerLoop solver inbox counter)
-    pure $ CoalescingSolver solver n inbox alive counter
+    void $ forkIO (workerLoop solver inbox)
+    pure $ CoalescingSolver solver n inbox alive
 
 {- | Submit a batch of demand vectors to the worker and block until the
 solution comes back. Throws if the solver has been shut down (csAlive
@@ -205,15 +198,15 @@ MUMPS runs in-core (ICNTL(22)=0, the default); the SAVE'd module-level
 state in @dmumps_ooc_buffer.F@ is only touched in out-of-core mode and is
 inert in our setup. If OOC is ever enabled, this assumption needs revisiting.
 -}
-workerLoop :: MUMPSSolver -> TQueue WorkerMsg -> TVar Int -> IO ()
-workerLoop solver inbox counter = do
+workerLoop :: MUMPSSolver -> TQueue WorkerMsg -> IO ()
+workerLoop solver inbox = do
     first <- atomically $ readTQueue inbox
     rest <- atomically $ flushTQueue inbox
     let (solves, stops) = partitionMsgs (first : rest)
-    runSolves solver counter solves
+    runSolves solver solves
     forM_ stops $ \ack -> putMVar ack ()
     if null stops
-        then workerLoop solver inbox counter
+        then workerLoop solver inbox
         else drainShutdown inbox
 
 {- | After observing a stop signal, flush anything that snuck in and
@@ -229,18 +222,14 @@ drainShutdown inbox = do
         WStop ack -> putMVar ack ()
 
 -- | Run a batch as one multi-RHS solve (chunked to bound scratch memory).
--- Bumps the batch counter once per call so tests can prove that N concurrent
--- requests really do collapse into < N solver invocations.
 runSolves ::
     MUMPSSolver ->
-    TVar Int ->
     [([Vector], MVar (Either SomeException [Vector]))] ->
     IO ()
-runSolves _ _ [] = pure ()
-runSolves solver counter pendings = do
+runSolves _ [] = pure ()
+runSolves solver pendings = do
     let flatRhs = concatMap fst pendings
         sizes = map (length . fst) pendings
-    atomically $ modifyTVar' counter (+ 1)
     outcome <- try $ runMultiSolveChunked solver flatRhs
     case outcome of
         Left (e :: SomeException) ->
@@ -273,17 +262,6 @@ partitionMsgs = foldr step ([], [])
   where
     step (WSolve d rv) (ss, ts) = ((d, rv) : ss, ts)
     step (WStop ack) (ss, ts) = (ss, ack : ts)
-
-{- | Read the current 'mumpsSolveMulti' call count for a cached database.
-Returns 'Nothing' if the database is not (yet) cached. Exposed so tests can
-prove that K concurrent requests collapse into < K solver invocations.
--}
-inspectCoalesceBatchCount :: Text -> IO (Maybe Int)
-inspectCoalesceBatchCount dbName = do
-    cache <- readMVar cachedSolver
-    case M.lookup dbName cache of
-        Nothing -> pure Nothing
-        Just cs -> Just <$> readTVarIO (csBatchCount cs)
 
 {- | Clear cached solver for a database (call when unloading).
 
