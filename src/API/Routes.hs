@@ -9,7 +9,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), PerturbedEntry (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..))
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..))
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
@@ -106,7 +106,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
-                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
+                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
                 -- Database management endpoints
                 :<|> "db" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
@@ -1237,34 +1237,42 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 reportProgress Warning $
                     "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
                 evaluate (0 :: Double)
-            Nothing -> if M.null (mtRegionalizedCF tables)
-                then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                else do
-                    scalingVec <- getScaling
-                    hier <- DM.getLocationHierarchy dbManager
-                    case computeLCIAScoreAuto unitCfg mUnits mFlows db scalingVec inventory hier tables of
-                        Right s -> evaluate s
-                        Left err -> do
-                            reportProgress Warning $
-                                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-                            evaluate (0 :: Double)
+            Nothing ->
+                if M.null (mtRegionalizedCF tables)
+                    then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+                    else do
+                        scalingVec <- getScaling
+                        hier <- DM.getLocationHierarchy dbManager
+                        case computeLCIAScoreAuto unitCfg mUnits mFlows db scalingVec inventory hier tables of
+                            Right s -> evaluate s
+                            Left err -> do
+                                reportProgress Warning $
+                                    "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
+                                evaluate (0 :: Double)
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-            contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-            topContribs = take topFlows contribs
-            topContributors =
-                [ FlowContributionEntry
-                    { fcoFlowName = flowName f
-                    , fcoContribution = c
-                    , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                    , fcoFlowId = UUID.toText (flowId f)
-                    , fcoCategory = flowCategory f
-                    , fcoCompartment = flowSubcompartment f
-                    , fcoCfValue = cfVal
-                    }
-                | (f, cfVal, c) <- topContribs
-                ]
+            -- Skip the full inventoryContributions walk when no top-flows are
+            -- requested (e.g. bulk exports that only consume `score`). This
+            -- avoids an O(|inventory| × |methods|) CF-lookup per process.
+            (topContributors, unknownUuids)
+                | topFlows <= 0 = ([], [])
+                | otherwise =
+                    let (rawContribs, unknown) = inventoryContributions unitCfg mUnits mFlows inventory tables
+                        contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                        topContribs = take topFlows contribs
+                     in ( [ FlowContributionEntry
+                                { fcoFlowName = flowName f
+                                , fcoContribution = c
+                                , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                                , fcoFlowId = UUID.toText (flowId f)
+                                , fcoCategory = flowCategory f
+                                , fcoCompartment = flowSubcompartment f
+                                , fcoCfValue = cfVal
+                                }
+                          | (f, cfVal, c) <- topContribs
+                          ]
+                        , unknown
+                        )
         unless (null unknownUuids) $
             reportProgress Warning $
                 "[LCIA "
@@ -1634,8 +1642,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Batch impacts: one MUMPS multi-RHS solve for all requested processes,
     -- followed by parallel characterization. Unresolved process ids are
     -- returned in notFound/invalid rather than aborting the whole call.
-    postImpactsBatch :: Text -> Text -> BatchImpactsRequest -> Handler BatchImpactsResponse
-    postImpactsBatch dbName collectionName req = do
+    postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> Handler BatchImpactsResponse
+    postImpactsBatch dbName collectionName mTopFlows req = do
+        let topFlows = max 0 (fromMaybe 5 mTopFlows)
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
         collection <- case M.lookup collectionName loadedCollections of
@@ -1653,7 +1662,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         inventories <- inventoriesWithDeps dbManager dbName db sharedSolver validPidNums
         t1 <- liftIO getCurrentTime
         let mkEntry ((pidText, pidNum, activity), inventory) = do
-                impacts <- buildLCIABatchResult dbName db sharedSolver pidNum activity collection inventory
+                impacts <- buildLCIABatchResult dbName db sharedSolver pidNum activity collection inventory topFlows
                 pure
                     BatchImpactsEntry
                         { bieProcessId = pidText
@@ -1720,8 +1729,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Shared post-inventory pipeline: characterize, enrich with NW, compute scoring sets.
     -- Pure IO on its inputs; callers own logging and inventory computation.
-    buildLCIABatchResult :: Text -> Database -> SharedSolver -> ProcessId -> Activity -> MethodCollection -> Inventory -> IO LCIABatchResult
-    buildLCIABatchResult dbName db sharedSolver actPid activity collection inventory = do
+    buildLCIABatchResult :: Text -> Database -> SharedSolver -> ProcessId -> Activity -> MethodCollection -> Inventory -> Int -> IO LCIABatchResult
+    buildLCIABatchResult dbName db sharedSolver actPid activity collection inventory topFlows = do
         let methods = mcMethods collection
             damageCats = mcDamageCategories collection
             nwSets = mcNormWeightSets collection
@@ -1736,7 +1745,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         rawResults <-
             mapConcurrently
                 ( \m ->
-                    computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actPid) activity 5 inventory (M.lookup (methodId m) scoreMap) m
+                    computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actPid) activity topFlows inventory (M.lookup (methodId m) scoreMap) m
                 )
                 methods
         let results = map (enrichWithNW dcLookup mNW) rawResults
