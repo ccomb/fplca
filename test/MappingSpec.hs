@@ -12,7 +12,7 @@ import Method.Mapping
 import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Types (Flow (..), FlowType (..), Unit (..))
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -49,6 +49,22 @@ mkCFComp :: Text -> Text -> Text -> Double -> MethodCF
 mkCFComp name medium subcomp val =
     (mkCF name Nothing val)
         { mcfCompartment = Just (Compartment medium subcomp "")
+        }
+
+unitNamed :: Text -> Unit
+unitNamed n = Unit{unitId = nil, unitName = n, unitSymbol = n, unitComment = ""}
+
+-- | UnitConfig with both kg and g (mass) so g→kg conversion succeeds.
+gKgUnitConfig :: UnitConfig
+gKgUnitConfig =
+    UnitConfig
+        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        , ucUnits =
+            M.fromList
+                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
+                ]
+        , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
         }
 
 -- ---------------------------------------------------------------------------
@@ -301,6 +317,69 @@ spec = do
                 flowDB = M.singleton fid flow
                 score = computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB inventory tables
             score `shouldBe` 7.47
+
+        -- Regression: a failed unit conversion used to fall back to the
+        -- unconverted quantity, contaminating the score with wrong-unit data.
+        -- Now an unconvertible flow contributes 0, matching the "no-CF" branch.
+        it "returns 0 when unit conversion fails (dimension mismatch)" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "co2" "air" Nothing
+                cf = mkCF "co2" Nothing 1.0 -- mcfUnit = "kg"
+                mapping = [(cf, Just (flow, ByUUID))]
+                inventory = M.singleton fid 100.0
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton nil (unitNamed "m") -- length, not mass
+                score = computeLCIAScore defaultUnitConfig unitDB flowDB inventory mapping
+            score `shouldBe` 0.0
+
+        it "applies conversion factor when units differ but are compatible (g→kg)" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "co2" "air" Nothing
+                cf = mkCF "co2" Nothing 2.0 -- mcfUnit = "kg"
+                mapping = [(cf, Just (flow, ByUUID))]
+                inventory = M.singleton fid 1000.0 -- 1000 g
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton nil (unitNamed "g")
+                score = computeLCIAScore gKgUnitConfig unitDB flowDB inventory mapping
+            -- 1000 g → 1.0 kg, * cf 2.0 = 2.0
+            score `shouldBe` 2.0
+
+    describe "inventoryContributions" $ do
+        -- Regression: same fallback bug as computeLCIAScoreFromTables.
+        it "yields zero contribution when unit conversion fails" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "co2" "air" Nothing
+                cf = mkCF "co2" Nothing 1.0
+                tables = buildMethodTables M.empty [(cf, Just (flow, ByUUID))]
+                inventory = M.singleton fid 100.0
+                flowDB = M.singleton fid flow
+                unitDB = M.singleton nil (unitNamed "m")
+                (contribs, unknowns) =
+                    inventoryContributions defaultUnitConfig unitDB flowDB inventory tables
+            unknowns `shouldBe` []
+            map (\(_, _, c) -> c) contribs `shouldBe` [0.0]
+
+    describe "convertForCharacterization" $ do
+        it "passes qty through when units match by name" $
+            convertForCharacterization defaultUnitConfig "kg" "kg" 5.0 `shouldBe` 5.0
+
+        it "passes qty through when cfUnit is empty (method without unit)" $
+            convertForCharacterization defaultUnitConfig "kg" "" 7.0 `shouldBe` 7.0
+
+        it "passes qty through when flowUnit is empty (no metadata)" $
+            convertForCharacterization defaultUnitConfig "" "kg" 9.0 `shouldBe` 9.0
+
+        it "passes qty through when cfUnit is an LCIA result expression unknown to UnitConfig" $
+            -- "kg CO2 eq" is not a physical unit; trust the CF author.
+            convertForCharacterization defaultUnitConfig "kg" "kg CO2 eq" 3.0 `shouldBe` 3.0
+
+        it "returns 0 when both units are known but dimensionally incompatible" $
+            -- m (length) → kg (mass): refuse to inject wrong-dimension data.
+            convertForCharacterization defaultUnitConfig "m" "kg" 100.0 `shouldBe` 0.0
+
+        it "applies the conversion factor when units differ but are compatible" $
+            -- 1000 g → 1.0 kg
+            convertForCharacterization gKgUnitConfig "g" "kg" 1000.0 `shouldBe` 1.0
 
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
         it "counts ByFuzzy matches" $ do
