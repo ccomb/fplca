@@ -492,6 +492,21 @@ mapMethodToFlowsCached manager dbName db method = do
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Database -> Method -> IO MethodTables
 mapMethodToTablesCached manager dbName db method = do
+    hier <- getLocationHierarchy manager
+    mapMethodToTablesCachedWithHier manager dbName db hier method
+
+{- | Variant of 'mapMethodToTablesCached' that takes the location hierarchy as
+an argument. Lets 'mapMethodSetToTablesCached' fetch it once per request
+instead of once per method in the concurrent fan-out.
+-}
+mapMethodToTablesCachedWithHier ::
+    DatabaseManager ->
+    Text ->
+    Database ->
+    M.Map Text [Text] ->
+    Method ->
+    IO MethodTables
+mapMethodToTablesCachedWithHier manager dbName db hier method = do
     let key = (dbName, methodId method)
     cache <- readTVarIO (dmMethodTablesCache manager)
     case M.lookup key cache of
@@ -506,7 +521,6 @@ mapMethodToTablesCached manager dbName db method = do
             -- databases are loaded, so 'getMergedSynonymDB' would surface them
             -- and pollute the fan-out with thousands of generic PubChem
             -- synonyms like "water" → "4-aminophenol").
-            hier <- getLocationHierarchy manager
             let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
                 expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
                 !raw = buildMethodTables cmap expanded
@@ -560,6 +574,10 @@ mapMethodSetToTablesCached manager dbName db methods = do
     case M.lookup key cache of
         Just mst -> pure mst
         Nothing -> do
+            -- Fetch the location hierarchy once for the whole fan-out so the
+            -- concurrent workers don't each rebuild 'M.map snd dmGeographies'
+            -- under 'getLocationHierarchy'.
+            hier <- getLocationHierarchy manager
             -- mapConcurrently here parallelizes the per-method 'MethodTables'
             -- build across the whole collection. On first request for a
             -- method set, this concretely parallelizes the expensive
@@ -569,7 +587,7 @@ mapMethodSetToTablesCached manager dbName db methods = do
             -- for a ~25-30s parallel one. Concurrent cache writes on the
             -- per-method cache are idempotent under STM (last write wins,
             -- same value).
-            tables <- mapConcurrently (mapMethodToTablesCached manager dbName db) sortedMethods
+            tables <- mapConcurrently (mapMethodToTablesCachedWithHier manager dbName db hier) sortedMethods
             let !mst = buildMethodSetTables (zip sortedMethods tables)
             atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
             pure mst
