@@ -90,7 +90,7 @@ module Database.Manager (
     loadDatabaseFromConfig,
 ) where
 
-import Control.Concurrent.Async (mapConcurrently_)
+import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
@@ -127,12 +127,15 @@ import Method.Mapping (
     MethodIndex,
     MethodSetTables,
     MethodTables,
+    RegionalActivityWeights (..),
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
     expandSynonymMappings,
     fillBroadcastVector,
+    fillRegionalActivityWeights,
     mapMethodToFlows,
+    mtRegionalActivityWeights,
  )
 import Method.Types (
     CompartmentMap,
@@ -503,9 +506,41 @@ mapMethodToTablesCached manager dbName db method = do
             -- databases are loaded, so 'getMergedSynonymDB' would surface them
             -- and pollute the fan-out with thousands of generic PubChem
             -- synonyms like "water" → "4-aminophenol").
+            hier <- getLocationHierarchy manager
             let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
                 expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
-                !tables = fillBroadcastVector unitConfig mUnits mFlows (buildMethodTables cmap expanded)
+                !raw = buildMethodTables cmap expanded
+                !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
+                -- Precompute per-activity weights for regionalized methods so
+                -- subsequent scoring is a dot product instead of one full
+                -- biosphere-triple walk per pid. No-op when the method has no
+                -- regional CFs (broadcast fast path handles those).
+                !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
+            -- Surface the deduplicated regionalized CF gaps ONCE, here at
+            -- table-build time, rather than per-pid × per-method on the hot
+            -- scoring path. Matches the "no silent misbehaviour" rule: the
+            -- precomputed weights still under-count for tainted activities
+            -- (callers like 'computeRegionalizedLCIAScore' return Left when a
+            -- tainted activity carries non-zero scaling — see its doc).
+            case mtRegionalActivityWeights tables of
+                Just raw'
+                    | not (null (rawMissingPairs raw')) ->
+                        reportProgress Warning $
+                            "[LCIA "
+                                <> T.unpack (methodName method)
+                                <> "] "
+                                <> show (length (rawMissingPairs raw'))
+                                <> " regionalized (flow, location) pair(s) without CF coverage "
+                                <> "(after walking parent regions and universal broadcast). "
+                                <> "Samples: "
+                                <> show
+                                    ( take
+                                        3
+                                        [ (show fid, T.unpack loc)
+                                        | (fid, loc) <- rawMissingPairs raw'
+                                        ]
+                                    )
+                _ -> pure ()
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 
@@ -525,7 +560,16 @@ mapMethodSetToTablesCached manager dbName db methods = do
     case M.lookup key cache of
         Just mst -> pure mst
         Nothing -> do
-            tables <- traverse (mapMethodToTablesCached manager dbName db) sortedMethods
+            -- mapConcurrently here parallelizes the per-method 'MethodTables'
+            -- build across the whole collection. On first request for a
+            -- method set, this concretely parallelizes the expensive
+            -- regionalized 'fillRegionalActivityWeights' walks (one per
+            -- regio method × biosphere-triple stream). For EF 3.1 (5 regio
+            -- methods over agribalyse) this trades a ~110s sequential warm-up
+            -- for a ~25-30s parallel one. Concurrent cache writes on the
+            -- per-method cache are idempotent under STM (last write wins,
+            -- same value).
+            tables <- mapConcurrently (mapMethodToTablesCached manager dbName db) sortedMethods
             let !mst = buildMethodSetTables (zip sortedMethods tables)
             atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
             pure mst
