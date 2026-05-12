@@ -72,7 +72,7 @@ import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Ord (Down (..))
-import Data.STRef (modifySTRef', newSTRef, readSTRef, writeSTRef)
+import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -325,7 +325,6 @@ caller can emit one warning per gap rather than per pid × per method.
 data RegionalActivityWeights = RegionalActivityWeights
     { rawWeights :: !(U.Vector Double)
     , rawTainted :: !(U.Vector Word8)
-    , rawAnyTainted :: !Bool
     , rawMissingPairs :: ![(UUID, Text)]
     }
 
@@ -715,7 +714,6 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
         ws <- MU.replicate nCols (0 :: Double)
         ts <- MU.replicate nCols (0 :: Word8)
         missRef <- newSTRef (Set.empty :: Set.Set (UUID, Text))
-        anyTRef <- newSTRef False
         U.forM_ bioTriples $ \(SparseTriple flowRow colIdx bioVal) -> do
             let !col = fromIntegral colIdx :: Int
                 !flowUUID = bioFlows V.! fromIntegral flowRow
@@ -734,16 +732,13 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                 Left _ -> do
                     MU.unsafeWrite ts col 1
                     modifySTRef' missRef (Set.insert (flowUUID, loc))
-                    writeSTRef anyTRef True
         wsF <- U.unsafeFreeze ws
         tsF <- U.unsafeFreeze ts
         miss <- readSTRef missRef
-        anyT <- readSTRef anyTRef
         pure
             RegionalActivityWeights
                 { rawWeights = wsF
                 , rawTainted = tsF
-                , rawAnyTainted = anyT
                 , rawMissingPairs = Set.toAscList miss
                 }
 
@@ -890,24 +885,27 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
                             <> T.pack (show n)
                             <> "). Activity index and precomputed weights are built from the same database — this means the cache is stale or the wrong tables were paired."
                 else
-                    let go !i !acc !taint
-                            | i >= n = (acc, taint)
+                    let go !i !acc !taintHits
+                            | i >= n = (acc, taintHits)
                             | otherwise =
                                 let !sv = U.unsafeIndex s i
                                  in if sv == 0
-                                        then go (i + 1) acc taint
+                                        then go (i + 1) acc taintHits
                                         else
-                                            let !taint' = taint || U.unsafeIndex tainted i /= 0
+                                            let !taintHits' =
+                                                    if U.unsafeIndex tainted i /= 0
+                                                        then taintHits + 1
+                                                        else taintHits
                                                 !acc' = acc + sv * U.unsafeIndex weights i
-                                             in go (i + 1) acc' taint'
-                        (!score, !anyTouchedTainted) = go 0 0 False
-                     in if anyTouchedTainted
+                                             in go (i + 1) acc' taintHits'
+                        (!score, !touchedTaintedCount) = go 0 0 (0 :: Int)
+                     in if touchedTaintedCount > 0
                             then
                                 Left $
-                                    "Regionalized CF lookup failed for "
-                                        <> T.pack (show (length (rawMissingPairs raw)))
-                                        <> " (flow, location) pair(s) on activities present in this inventory"
-                                        <> " — see warnings emitted at table-build time."
+                                    "Regionalized CF lookup failed on "
+                                        <> T.pack (show touchedTaintedCount)
+                                        <> " tainted activity column(s) reached by this inventory"
+                                        <> " — see warnings emitted at table-build time for the missing (flow, location) pairs."
                             else Right score
 
     -- Slow path (unchanged) — kept as a fallback for cases where the
