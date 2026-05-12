@@ -106,7 +106,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
-                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
+                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
                 -- Database management endpoints
                 :<|> "db" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
@@ -1647,8 +1647,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Batch impacts: one MUMPS multi-RHS solve for all requested processes,
     -- followed by parallel characterization. Unresolved process ids are
     -- returned in notFound/invalid rather than aborting the whole call.
-    postImpactsBatch :: Text -> Text -> BatchImpactsRequest -> Handler BatchImpactsResponse
-    postImpactsBatch dbName collectionName req = do
+    postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> Handler BatchImpactsResponse
+    postImpactsBatch dbName collectionName topFlowsParam req = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
         collection <- case M.lookup collectionName loadedCollections of
@@ -1672,8 +1672,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- 'buildLCIABatchResult' needs to construct an LCIAResult without
         -- re-entering 'mapMethodToFlowsCached' / 'mapMethodToTablesCached'.
         ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbName db) (mcMethods collection)
+        -- Top-flows opt-in: callers default to 0 (omit contributors entirely
+        -- to keep the batch path fast); >0 walks 'inventoryContributions' per
+        -- method and returns the top-N elementary flows. Matches the
+        -- single-method 'getActivityLCIA' contract.
+        let topFlows = max 0 (fromMaybe 0 topFlowsParam)
         let mkEntry ((pidText, pidNum, activity), inventory) = do
-                impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs
+                impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs topFlows
                 pure
                     BatchImpactsEntry
                         { bieProcessId = pidText
@@ -1750,10 +1755,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Batch fast path: scores via 'batchedScoresFor', then build LCIAResult
     -- records straight from the precomputed contexts. Skips the per-pid
-    -- 'mapConcurrently' over 27 methods entirely. 'topContributors' is
-    -- always empty here (the batch endpoint's contract for top-flows=0; for
-    -- top-flows>0 callers go through 'buildLCIABatchResult' which carries
-    -- the full contribution walk).
+    -- 'mapConcurrently' over 27 methods entirely. When 'topFlows' is 0
+    -- (the default) 'lrTopContributors' is left empty and the contribution
+    -- walk is skipped; when >0, we run 'inventoryContributions' per method
+    -- using the warmed-up 'MethodTables' from 'mapMethodToTablesCached'.
     buildLCIABatchResultCached ::
         Text ->
         Database ->
@@ -1763,8 +1768,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         MethodCollection ->
         Inventory ->
         [MethodCtx] ->
+        Int ->
         IO LCIABatchResult
-    buildLCIABatchResultCached dbName db sharedSolver actPid activity collection inventory ctxs = do
+    buildLCIABatchResultCached dbName db sharedSolver actPid activity collection inventory ctxs topFlows = do
         let damageCats = mcDamageCategories collection
             nwSets = mcNormWeightSets collection
             dcLookup =
@@ -1777,6 +1783,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             methods = map mctxMethod ctxs
         scoreMap <- batchedScoresFor dbName db sharedSolver actPid inventory methods
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+        -- Only fetch UnitConfig when we'll actually walk the contributions; the
+        -- top-flows=0 default skips this entirely.
+        mUnitCfg <-
+            if topFlows > 0
+                then Just <$> getMergedUnitConfig dbManager
+                else pure Nothing
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
             -- Per-pid warning on Left mirrors the non-batch 'computeCategoryResult'
@@ -1798,6 +1810,26 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                 <> T.unpack err
                         pure 0
                     Nothing -> pure 0
+                topContributors <- case mUnitCfg of
+                    Nothing -> pure []
+                    Just unitCfg -> do
+                        tables <- DM.mapMethodToTablesCached dbManager dbName db method
+                        let (rawContribs, _unknownUuids) =
+                                inventoryContributions unitCfg mUnits mFlows inventory tables
+                            sorted = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                            top = take topFlows sorted
+                        pure
+                            [ FlowContributionEntry
+                                { fcoFlowName = flowName f
+                                , fcoContribution = c
+                                , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                                , fcoFlowId = UUID.toText (flowId f)
+                                , fcoCategory = flowCategory f
+                                , fcoCompartment = flowSubcompartment f
+                                , fcoCfValue = cfVal
+                                }
+                            | (f, cfVal, c) <- top
+                            ]
                 pure $
                     enrichWithNW dcLookup mNW $
                         LCIAResult
@@ -1811,7 +1843,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                             , lrWeightedScore = Nothing
                             , lrMappedFlows = mctxMappedFlows ctx
                             , lrFunctionalUnit = functionalUnit
-                            , lrTopContributors = []
+                            , lrTopContributors = topContributors
                             }
         results <- traverse mkResultIO ctxs
         let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
