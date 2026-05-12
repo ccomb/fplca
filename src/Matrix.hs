@@ -127,13 +127,25 @@ cachedSolver = unsafePerformIO $ newMVar M.empty
 
 {- | Global mutex for MUMPS factorization/creation/destruction operations.
 MUMPS_SEQ has global Fortran state that is NOT thread-safe for concurrent
-create/factorize/destroy calls. Only mumpsSolve on an already-factorized
-instance is safe (the per-database worker thread protects same-instance
-concurrent access).
+create/factorize/destroy calls.
 -}
 {-# NOINLINE mumpsFactorizationMutex #-}
 mumpsFactorizationMutex :: MVar ()
 mumpsFactorizationMutex = unsafePerformIO $ newMVar ()
+
+{- | Global mutex for the @mumpsSolveMulti@ FFI call. MUMPS_SEQ is built on
+Fortran modules with SAVE'd state that two concurrent @mumps_solve@ calls
+corrupt even when each call targets its own factorized handle. The FFI
+import is annotated @safe@ (see mumps-hs FFI), so the GHC runtime is free
+to schedule multiple OS threads inside MUMPS at once — exactly the race
+the SAVE'd state can't survive. Empirically this manifests as a silent
+SIGKILL mid-solve when several DBs' coalescing workers run @mumpsSolveMulti@
+concurrently. Holding this mutex around the FFI call serializes those
+solves across DBs while leaving the per-DB coalescing workers intact.
+-}
+{-# NOINLINE mumpsSolveMutex #-}
+mumpsSolveMutex :: MVar ()
+mumpsSolveMutex = unsafePerformIO $ newMVar ()
 
 -- | Initialize solver for server lifetime. No-op for MUMPS (no global state needed).
 initializeSolverForServer :: IO ()
@@ -193,12 +205,12 @@ offer cs msg = do
 result back to each requester. On exception, every request in the batch
 sees the same error. Exits cleanly when a 'WStop' is observed.
 
-Note on MUMPS_SEQ thread-safety: the worker is the only thread that ever
-touches the MUMPS handle's mutable RHS/SOL workspace, so 'mumpsSolveMulti'
-is safe here regardless of how many submitters race to enqueue. We assume
-MUMPS runs in-core (ICNTL(22)=0, the default); the SAVE'd module-level
-state in @dmumps_ooc_buffer.F@ is only touched in out-of-core mode and is
-inert in our setup. If OOC is ever enabled, this assumption needs revisiting.
+Note on MUMPS_SEQ thread-safety: the per-DB worker is the only thread that
+touches its MUMPS handle's mutable RHS/SOL workspace, so intra-DB races on
+the workspace can't happen. Inter-DB races are a separate hazard: MUMPS_SEQ
+modules carry SAVE'd Fortran state that corrupts under concurrent
+@mumps_solve@ calls even on distinct handles. 'mumpsSolveMutex' (acquired
+inside 'solveChunk') serializes that boundary.
 -}
 workerLoop :: MUMPSSolver -> TQueue WorkerMsg -> IO ()
 workerLoop solver inbox = do
@@ -248,7 +260,7 @@ runMultiSolveChunked solver demands =
 solveChunk :: MUMPSSolver -> [Vector] -> IO [Vector]
 solveChunk solver chunk = do
     let rhsList = map (VS.fromList . toList) chunk
-    solutions <- mumpsSolveMulti solver rhsList
+    solutions <- withMVar mumpsSolveMutex $ \_ -> mumpsSolveMulti solver rhsList
     pure $ map (VS.convert :: VS.Vector Double -> Vector) solutions
 
 -- | Split a flat list of solutions back into per-request slices.
@@ -614,8 +626,9 @@ perturbA db mFact x col perturb
                     u
         pure $ applyShermanMorrison x col z
 
--- | Apply the Sherman-Morrison rank-1 formula given the precomputed
--- z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+{- | Apply the Sherman-Morrison rank-1 formula given the precomputed
+z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+-}
 applyShermanMorrison :: Vector -> Int -> Vector -> Either T.Text Vector
 applyShermanMorrison x col z =
     let vtx = x U.! col
