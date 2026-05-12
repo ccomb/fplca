@@ -861,10 +861,15 @@ computeRegionalizedLCIAScore ::
     M.Map Text [Text] ->
     MethodTables ->
     Either Text Double
-computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables =
+computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier tables =
     case mtRegionalActivityWeights tables of
         Just raw -> scoreFromPrecomputed raw scalingVec
-        Nothing -> scoreFromBiosphereTriples
+        Nothing ->
+            Left
+                "Regionalized score requested but precomputed activity weights\
+                \ are absent. Call 'fillRegionalActivityWeights' on the\
+                \ MethodTables before scoring (mapMethodToTablesCached does\
+                \ this automatically)."
   where
     -- Fast path: one dot product over precomputed per-column weights.
     -- If any tainted activity carries non-zero scaling, surface the gap
@@ -907,41 +912,6 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
                                         <> " tainted activity column(s) reached by this inventory"
                                         <> " — see warnings emitted at table-build time for the missing (flow, location) pairs."
                             else Right score
-
-    -- Slow path (unchanged) — kept as a fallback for cases where the
-    -- precomputed weights are absent (direct callers of
-    -- 'buildMethodTables' that skip the fill step).
-    scoreFromBiosphereTriples =
-        let actIdx = dbActivityIndex db
-            bioTriples = dbBiosphereTriples db
-            bioFlows = dbBiosphereFlows db
-            activities = dbActivities db
-            regional = mtRegionalizedCF tables
-            regionalizedFlows = Set.fromList [f | (f, _) <- M.keys regional]
-            colToActivity :: M.Map Int Activity
-            colToActivity =
-                M.fromList
-                    [ (fromIntegral (actIdx V.! pid), activities V.! pid)
-                    | pid <- [0 .. V.length actIdx - 1]
-                    ]
-            step :: Either Text Double -> SparseTriple -> Either Text Double
-            step acc (SparseTriple flowRow colIdx bioVal) = do
-                running <- acc
-                let s = scalingVec U.! fromIntegral colIdx
-                    contribution = bioVal * s
-                if contribution == 0
-                    then Right running
-                    else case M.lookup (fromIntegral colIdx :: Int) colToActivity of
-                        Nothing -> Right running
-                        Just act ->
-                            let flowUUID = bioFlows V.! fromIntegral flowRow
-                                loc = activityLocation act
-                             in case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
-                                    Right Nothing -> Right running
-                                    Right (Just cfTuple) ->
-                                        Right (running + convertAndMultiply unitConfig unitDB (M.lookup flowUUID flowDB) cfTuple contribution)
-                                    Left err -> Left err
-         in U.foldl' step (Right 0) bioTriples
 
 {- | Resolve a CF for a (flow, location) pair through the hierarchy + broadcast
 fallback. See 'computeRegionalizedLCIAScore' for the rules.
