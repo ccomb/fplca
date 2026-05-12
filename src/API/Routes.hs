@@ -1672,11 +1672,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- 'buildLCIABatchResult' needs to construct an LCIAResult without
         -- re-entering 'mapMethodToFlowsCached' / 'mapMethodToTablesCached'.
         ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbName db) (mcMethods collection)
-        -- Default top-flows=5 matches the single-method 'getActivityLCIA'
-        -- contract and the pre-PR batch behaviour. Bulk-export callers that
-        -- only want the scores (and want to skip the per-method
-        -- inventoryContributions walk for speed) opt in with ?top-flows=0.
-        let topFlows = max 0 (fromMaybe 5 topFlowsParam)
+        -- Default top-flows=0: this endpoint exists to compute LCIA across
+        -- many activities in one call, so the cheap default skips the
+        -- per-(pid, method) 'inventoryContributions' walk (~17 K calls on a
+        -- 632-pid × 27-method batch). UI/per-activity callers want
+        -- contributors and use the single-method endpoint, whose default
+        -- stays at 5. Bulk callers that DO want contributors opt in with
+        -- ?top-flows=N.
+        let topFlows = max 0 (fromMaybe 0 topFlowsParam)
         let mkEntry ((pidText, pidNum, activity), inventory) = do
                 impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs topFlows
                 pure
