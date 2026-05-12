@@ -1672,11 +1672,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- 'buildLCIABatchResult' needs to construct an LCIAResult without
         -- re-entering 'mapMethodToFlowsCached' / 'mapMethodToTablesCached'.
         ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbName db) (mcMethods collection)
-        -- Top-flows opt-in: callers default to 0 (omit contributors entirely
-        -- to keep the batch path fast); >0 walks 'inventoryContributions' per
-        -- method and returns the top-N elementary flows. Matches the
-        -- single-method 'getActivityLCIA' contract.
-        let topFlows = max 0 (fromMaybe 0 topFlowsParam)
+        -- Default top-flows=5 matches the single-method 'getActivityLCIA'
+        -- contract and the pre-PR batch behaviour. Bulk-export callers that
+        -- only want the scores (and want to skip the per-method
+        -- inventoryContributions walk for speed) opt in with ?top-flows=0.
+        let topFlows = max 0 (fromMaybe 5 topFlowsParam)
         let mkEntry ((pidText, pidNum, activity), inventory) = do
                 impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs topFlows
                 pure
@@ -1783,6 +1783,25 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             methods = map mctxMethod ctxs
         scoreMap <- batchedScoresFor dbName db sharedSolver actPid inventory methods
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+        -- Surface inventory flows that aren't in the merged FlowDB once per pid
+        -- (independent of method, independent of topFlows) — the signal is a
+        -- coverage-gap warning on the inventory itself, not on any one method.
+        -- Matches what 'computeCategoryResult' emitted on the non-batch path,
+        -- but de-duplicated: one Warning per pid instead of per (pid, method).
+        let unknownUuids =
+                [ fid
+                | (fid, qty) <- M.toList inventory
+                , qty /= 0
+                , not (M.member fid mFlows)
+                ]
+        unless (null unknownUuids) $
+            reportProgress Warning $
+                "[LCIA batch] pid="
+                    <> show actPid
+                    <> ": "
+                    <> show (length unknownUuids)
+                    <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
+                    <> show (take 3 unknownUuids)
         -- Only fetch UnitConfig when we'll actually walk the contributions; the
         -- top-flows=0 default skips this entirely.
         mUnitCfg <-
