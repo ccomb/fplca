@@ -89,7 +89,7 @@ unusedDatabase = error "Database value not used in non-regio scoring"
 spec :: Spec
 spec = do
     describe "buildMethodSetTables" $ do
-        it "marks msAnyRegional False when no method has regional CFs" $ do
+        it "puts non-regional methods in msBatched, leaves msRegional empty" $ do
             let fid = mkUuid 100
                 uidKg = mkUuid 200
                 cf = mkCF fid 1.0
@@ -99,12 +99,13 @@ spec = do
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 filled = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb tables0
                 mst = buildMethodSetTables [(m1, filled)]
-            msAnyRegional mst `shouldBe` False
-            -- A single-method set still builds the matrix path
-            msNFlows mst `shouldBe` 1
-            U.length (msBroadcastMat mst) `shouldBe` 1
+                bt = msBatched mst
+            V.length (msRegional mst) `shouldBe` 0
+            btNMethods bt `shouldBe` 1
+            btNFlows bt `shouldBe` 1
+            U.length (btMat bt) `shouldBe` 1
 
-        it "marks msAnyRegional True when any method has regional CFs" $ do
+        it "puts regional methods in msRegional, keeps msBatched non-regional only" $ do
             let fid = mkUuid 100
                 uidKg = mkUuid 200
                 cf = mkCF fid 1.0
@@ -117,10 +118,11 @@ spec = do
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 filled = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb tables0
                 mst = buildMethodSetTables [(m1, filled)]
-            msAnyRegional mst `shouldBe` True
-            -- Matvec scaffolding skipped when any method is regio.
-            msNFlows mst `shouldBe` 0
-            U.null (msBroadcastMat mst) `shouldBe` True
+                bt = msBatched mst
+            V.length (msRegional mst) `shouldBe` 1
+            btNMethods bt `shouldBe` 0
+            btNFlows bt `shouldBe` 0
+            U.null (btMat bt) `shouldBe` True
 
     describe "computeLCIAScoreSetFromTables (non-regio batched matvec)" $ do
         it "matches per-method computeLCIAScoreFromTables on a 3-method set" $ do
@@ -136,7 +138,6 @@ spec = do
                 cfB1 = mkCF fid1 1.0 -- method B: co2=1, ch4=25
                 cfB2 = (mkCF fid2 25.0){mcfFlowName = "ch4"}
                 cfC1 = mkCF fid1 0.5 -- method C: co2=0.5, ch4 absent
-
                 mA = mkMethod 1 "A" [cfA1]
                 mB = mkMethod 2 "B" [cfB1, cfB2]
                 mC = mkMethod 3 "C" [cfC1]
@@ -232,7 +233,7 @@ spec = do
         it "out-of-broadcast UUID resolved via mtUuidCF contributes via cascade fallback" $ do
             -- Regression gate: a merged inventory carries UUIDs whose flows
             -- were not in the root flowDB at 'fillBroadcastVector' time, so
-            -- they have no row in 'msBroadcastMat' and miss 'msUuidIndex'.
+            -- they have no row in 'btMat' and miss 'btUuidIndex'.
             -- The CF table itself ('mtUuidCF', built from the full mapping
             -- set) still resolves them — that's the per-method 'fastScore'
             -- fallback ('lookupCascadeCF'). Before the cascade fallback in
@@ -245,7 +246,7 @@ spec = do
                 cfCross = mkCF fidCrossDB 3.0
                 m1 = mkMethod 1 "m1" [cfBuild, cfCross]
                 -- flowDB at build time: only fidBuild. 'fillBroadcastVector'
-                -- walks this, so 'mtBroadcast' / 'msUuidIndex' = {fidBuild}.
+                -- walks this, so 'mtBroadcast' / 'btUuidIndex' = {fidBuild}.
                 buildFlowDB = M.singleton fidBuild (mkFlow fidBuild "co2" uidKg)
                 -- flowDB at scoring time (merged inventories carry more
                 -- flows than the root DB had at table-build time).
@@ -277,7 +278,7 @@ spec = do
             -- Both contribute against CF=3: (2 + 4) × 3 = 18.
             map snd results `shouldBe` [Right 18.0]
 
-    describe "msEntries preserves caller-given order" $ do
+    describe "msAllMethods preserves caller-given order" $ do
         it "preserves the order methods were passed in" $ do
             let fid = mkUuid 100
                 uidKg = mkUuid 200
@@ -291,5 +292,75 @@ spec = do
                 mA = mkMethod 1 "A" [cf]
                 mC = mkMethod 3 "C" [cf]
                 mst = buildMethodSetTables [(mB, t), (mA, t), (mC, t)]
-                ids = V.toList $ V.map mseMethodId (msEntries mst)
+                ids = V.toList $ V.map mseMethodId (msAllMethods mst)
             ids `shouldBe` [methodId mB, methodId mA, methodId mC]
+
+    describe "mixed regional + non-regional set" $ do
+        -- This is the failure mode the partition fixes. Pre-PR, a single
+        -- regional method anywhere in the set flipped 'msAnyRegional' to
+        -- True and forced every method (regional or not) down the slow
+        -- per-method walk. The partition restores the batched matvec for
+        -- the non-regional half while keeping per-method dispatch for the
+        -- regional half — and crucially, the merged result list must come
+        -- back in caller order, not partition order.
+        it "merges batched + regional scores in caller order, bit-identical to mono-method" $ do
+            let fid1 = mkUuid 100
+                fid2 = mkUuid 101
+                uidKg = mkUuid 200
+                flow1 = mkFlow fid1 "co2" uidKg
+                flow2 = mkFlow fid2 "ch4" uidKg
+                fdb = M.fromList [(fid1, flow1), (fid2, flow2)]
+                udb = M.singleton uidKg (mkUnit uidKg "kg")
+                fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
+                -- Two non-regional CFs (m1 on fid1; m3 on fid1+fid2) and a
+                -- regional one (m2 with a per-location override on fid1).
+                cf1a = mkCF fid1 2.0
+                cf2a = mkCF fid1 5.0
+                cf3a = mkCF fid1 1.0
+                cf3b = (mkCF fid2 25.0){mcfFlowName = "ch4"}
+                tNonRegio1 =
+                    fill (buildMethodTables M.empty [(cf1a, Just (flow1, ByUUID))])
+                tRegio =
+                    fill
+                        ( (buildMethodTables M.empty [(cf2a, Just (flow1, ByUUID))])
+                            { mtRegionalizedCF = M.singleton (fid1, "FR") (7.0, "kg")
+                            }
+                        )
+                tNonRegio2 =
+                    fill
+                        ( buildMethodTables
+                            M.empty
+                            [ (cf3a, Just (flow1, ByUUID))
+                            , (cf3b, Just (flow2, ByUUID))
+                            ]
+                        )
+                m1 = mkMethod 1 "non-regio A" [cf1a]
+                m2 = mkMethod 2 "regio" [cf2a]
+                m3 = mkMethod 3 "non-regio B" [cf3a, cf3b]
+                -- Interleave: [non-regio, regio, non-regio]. If the merge
+                -- pulled batched-first or regional-first, this order would
+                -- not survive.
+                mst =
+                    buildMethodSetTables
+                        [(m1, tNonRegio1), (m2, tRegio), (m3, tNonRegio2)]
+                inv :: Inventory
+                inv = M.fromList [(fid1, 4.0), (fid2, 0.1)]
+                results =
+                    computeLCIAScoreSetFromTables
+                        UnitConversion.defaultUnitConfig
+                        udb
+                        fdb
+                        unusedDatabase
+                        U.empty
+                        inv
+                        M.empty
+                        mst
+            -- Caller order preserved on the result keys.
+            map fst results
+                `shouldBe` [methodId m1, methodId m2, methodId m3]
+            -- Non-regional scores are bit-identical to scoring the same
+            -- method alone via computeLCIAScoreFromTables.
+            let s1 = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tNonRegio1)
+                s3 = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tNonRegio2)
+            map snd results !! 0 `shouldBe` Right s1
+            map snd results !! 2 `shouldBe` Right s3
