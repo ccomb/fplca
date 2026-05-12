@@ -881,28 +881,34 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables 
             !tainted = rawTainted raw
             !n = U.length weights
             !sLen = U.length s
-            go !i !acc !taint
-                | i >= n = (acc, taint)
-                | otherwise =
-                    let !sv =
-                            if i < sLen
-                                then U.unsafeIndex s i
-                                else 0
-                     in if sv == 0
-                            then go (i + 1) acc taint
-                            else
-                                let !taint' = taint || U.unsafeIndex tainted i /= 0
-                                    !acc' = acc + sv * U.unsafeIndex weights i
-                                 in go (i + 1) acc' taint'
-            (!score, !anyTouchedTainted) = go 0 0 False
-         in if anyTouchedTainted
+         in if sLen /= n
                 then
                     Left $
-                        "Regionalized CF lookup failed for "
-                            <> T.pack (show (length (rawMissingPairs raw)))
-                            <> " (flow, location) pair(s) on activities present in this inventory"
-                            <> " — see warnings emitted at table-build time."
-                else Right score
+                        "Regionalized score: scaling/weights length mismatch ("
+                            <> T.pack (show sLen)
+                            <> " vs "
+                            <> T.pack (show n)
+                            <> "). Activity index and precomputed weights are built from the same database — this means the cache is stale or the wrong tables were paired."
+                else
+                    let go !i !acc !taint
+                            | i >= n = (acc, taint)
+                            | otherwise =
+                                let !sv = U.unsafeIndex s i
+                                 in if sv == 0
+                                        then go (i + 1) acc taint
+                                        else
+                                            let !taint' = taint || U.unsafeIndex tainted i /= 0
+                                                !acc' = acc + sv * U.unsafeIndex weights i
+                                             in go (i + 1) acc' taint'
+                        (!score, !anyTouchedTainted) = go 0 0 False
+                     in if anyTouchedTainted
+                            then
+                                Left $
+                                    "Regionalized CF lookup failed for "
+                                        <> T.pack (show (length (rawMissingPairs raw)))
+                                        <> " (flow, location) pair(s) on activities present in this inventory"
+                                        <> " — see warnings emitted at table-build time."
+                            else Right score
 
     -- Slow path (unchanged) — kept as a fallback for cases where the
     -- precomputed weights are absent (direct callers of
