@@ -30,6 +30,8 @@ module Method.Mapping (
     buildMethodTables,
     buildMethodIndex,
     fillBroadcastVector,
+    fillRegionalActivityWeights,
+    RegionalActivityWeights (..),
     computeLCIAScore,
     computeLCIAScoreFromTables,
     computeLCIAScoreAuto,
@@ -64,11 +66,13 @@ module Method.Mapping (
 ) where
 
 import Control.DeepSeq (NFData)
+import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Ord (Down (..))
+import Data.STRef (modifySTRef', newSTRef, readSTRef, writeSTRef)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -76,6 +80,7 @@ import Data.UUID (UUID)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
+import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as S
@@ -285,6 +290,43 @@ data MethodTables = MethodTables
     called directly without DB-level dependencies; fill with 'fillBroadcastVector' to enable
     the fast path (scoring falls back to the cascade when this Map is empty).
     -}
+    , mtRegionalActivityWeights :: !(Maybe RegionalActivityWeights)
+    {- ^ Optional per-activity-column precomputed weights for regionalized methods.
+    When present, regionalized LCIA score collapses to a single dot product
+    @w · s@ instead of walking the whole biosphere triples for every pid.
+    Built by 'fillRegionalActivityWeights' against a specific 'Database'; Nothing
+    when 'mtRegionalizedCF' is empty or precomputation hasn't been run.
+    -}
+    }
+
+{- | Per-matrix-column precomputed contributions for a regionalized method.
+
+For every activity column @a@ in the technosphere matrix, @rawWeights[a]@ is
+the inventory-weighted sum of regionalized CFs that activity emits in its own
+location:
+
+  @rawWeights[a] = Σ_f B[f,a] · CF(f, loc(a))@
+
+With this in hand, a regionalized LCIA score for any scaling vector @s_k@
+reduces to one dot product:
+
+  @score_k = Σ_a rawWeights[a] · s_k[a]@
+
+instead of re-walking the full biosphere triples once per pid.
+
+@rawTainted[a] == 1@ means at least one biosphere triple at column @a@ has a
+regionalized flow with no CF for @loc(a)@; the partial weight is still stored
+(matching the existing surface where missing-CF activities under-count), but
+callers can surface a 'Left' when any tainted column carries non-zero scaling.
+
+@rawMissingPairs@ accumulates the deduplicated (flow, location) gaps so the
+caller can emit one warning per gap rather than per pid × per method.
+-}
+data RegionalActivityWeights = RegionalActivityWeights
+    { rawWeights :: !(U.Vector Double)
+    , rawTainted :: !(U.Vector Word8)
+    , rawAnyTainted :: !Bool
+    , rawMissingPairs :: ![(UUID, Text)]
     }
 
 {- | Inverted indices over a 'Method' for the post-scoring suggester.
@@ -541,6 +583,7 @@ buildMethodTables cmap mappings =
                 ]
         , mtCompartmentMap = cmap
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
+        , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
@@ -584,7 +627,6 @@ convertForCharacterization cfg flowUnit cfUnit qty
     | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
     | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
 
-
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the
 UUID/exact/fallback cascade into a single Map and absorbs the unit conversion
@@ -604,6 +646,106 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
         Nothing -> Nothing
         Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (Just flow) cfTuple 1.0)
 
+{- | Precompute per-activity-column contributions for a regionalized method.
+
+This is the regionalized analogue of 'fillBroadcastVector': it walks the
+'Database' biosphere triples ONCE and stores, per matrix column @a@,
+
+  @w[a] = Σ_f B[f,a] · CF(f, loc(a)) · unit-conversion(f)@
+
+So any later regionalized score reduces to @w · s_k@ — one dot product per
+pid instead of one biosphere-triple walk per pid. For agribalyse this
+trades 632 walks of ~50K triples for 632 dot products over 21K activities.
+
+CF lookups follow the same hierarchical fallback as 'resolveRegionalCF'
+(exact → parents → universal broadcast). When a regionalized flow has no CF
+for that activity's location even after walking parents, the activity is
+marked tainted ('rawTainted[a] = 1') and the missing @(flow, location)@
+pair is accumulated in 'rawMissingPairs' for deduplicated warning emission
+by the caller — instead of one warning per pid × per method × per missing CF
+under the old per-call path.
+
+Score-time semantics: callers can choose between returning a partial score
+that under-counts tainted activities (matching the broadcast path's
+silent-omission behaviour for non-regio flows) or a 'Left' when any tainted
+activity has non-zero scaling (matching the old strict per-call surface).
+'computeRegionalizedLCIAScore' picks the strict surface, mirroring the
+existing contract documented on 'computeLCIAScoreAuto'.
+
+No-op when 'mtRegionalizedCF tables' is empty — non-regionalized methods
+keep 'mtRegionalActivityWeights = Nothing' so the broadcast fast path stays
+the right answer.
+-}
+fillRegionalActivityWeights ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    Database ->
+    M.Map Text [Text] ->
+    MethodTables ->
+    MethodTables
+fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
+    | M.null (mtRegionalizedCF tables) = tables
+    | otherwise = tables{mtRegionalActivityWeights = Just precomputed}
+  where
+    nCols = fromIntegral (dbActivityCount db) :: Int
+    actIdx = dbActivityIndex db
+    activities = dbActivities db
+    bioFlows = dbBiosphereFlows db
+    bioTriples = dbBiosphereTriples db
+    regional = mtRegionalizedCF tables
+    regionalizedFlows = Set.fromList [f | (f, _) <- M.keys regional]
+
+    -- ProcessId → matrix column index → activity's reference location.
+    -- Built once (O(nActivities)) and indexed by column inside the hot loop.
+    colLoc :: V.Vector Text
+    colLoc =
+        V.replicate nCols T.empty
+            V.// [ (fromIntegral (actIdx V.! pid), activityLocation (activities V.! pid))
+                 | pid <- [0 .. V.length actIdx - 1]
+                 , let !col = fromIntegral (actIdx V.! pid) :: Int
+                 , col >= 0
+                 , col < nCols
+                 ]
+
+    -- Walk biosphere triples once; build weights, tainted flags and the
+    -- deduplicated missing-(flow, location) set in a single ST action.
+    precomputed :: RegionalActivityWeights
+    precomputed = runST $ do
+        ws <- MU.replicate nCols (0 :: Double)
+        ts <- MU.replicate nCols (0 :: Word8)
+        missRef <- newSTRef (Set.empty :: Set.Set (UUID, Text))
+        anyTRef <- newSTRef False
+        U.forM_ bioTriples $ \(SparseTriple flowRow colIdx bioVal) -> do
+            let !col = fromIntegral colIdx :: Int
+                !flowUUID = bioFlows V.! fromIntegral flowRow
+                !loc = colLoc V.! col
+            case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
+                Right Nothing -> pure ()
+                Right (Just cfTuple) -> do
+                    let !contribution =
+                            convertAndMultiply
+                                unitCfg
+                                unitDB
+                                (M.lookup flowUUID flowDB)
+                                cfTuple
+                                bioVal
+                    MU.unsafeModify ws (+ contribution) col
+                Left _ -> do
+                    MU.unsafeWrite ts col 1
+                    modifySTRef' missRef (Set.insert (flowUUID, loc))
+                    writeSTRef anyTRef True
+        wsF <- U.unsafeFreeze ws
+        tsF <- U.unsafeFreeze ts
+        miss <- readSTRef missRef
+        anyT <- readSTRef anyTRef
+        pure
+            RegionalActivityWeights
+                { rawWeights = wsF
+                , rawTainted = tsF
+                , rawAnyTainted = anyT
+                , rawMissingPairs = Set.toAscList miss
+                }
 
 {- | Score an inventory against precomputed 'MethodTables'.
 Hot path: O(|inventory|) per call, no map construction.
@@ -725,36 +867,77 @@ computeRegionalizedLCIAScore ::
     MethodTables ->
     Either Text Double
 computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec hier tables =
-    let actIdx = dbActivityIndex db
-        bioTriples = dbBiosphereTriples db
-        bioFlows = dbBiosphereFlows db
-        activities = dbActivities db
-        regional = mtRegionalizedCF tables
-        regionalizedFlows = Set.fromList [f | (f, _) <- M.keys regional]
-        colToActivity :: M.Map Int Activity
-        colToActivity =
-            M.fromList
-                [ (fromIntegral (actIdx V.! pid), activities V.! pid)
-                | pid <- [0 .. V.length actIdx - 1]
-                ]
-        step :: Either Text Double -> SparseTriple -> Either Text Double
-        step acc (SparseTriple flowRow colIdx bioVal) = do
-            running <- acc
-            let s = scalingVec U.! fromIntegral colIdx
-                contribution = bioVal * s
-            if contribution == 0
-                then Right running
-                else case M.lookup (fromIntegral colIdx :: Int) colToActivity of
-                    Nothing -> Right running
-                    Just act ->
-                        let flowUUID = bioFlows V.! fromIntegral flowRow
-                            loc = activityLocation act
-                         in case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
-                                Right Nothing -> Right running
-                                Right (Just cfTuple) ->
-                                    Right (running + convertAndMultiply unitConfig unitDB (M.lookup flowUUID flowDB) cfTuple contribution)
-                                Left err -> Left err
-     in U.foldl' step (Right 0) bioTriples
+    case mtRegionalActivityWeights tables of
+        Just raw -> scoreFromPrecomputed raw scalingVec
+        Nothing -> scoreFromBiosphereTriples
+  where
+    -- Fast path: one dot product over precomputed per-column weights.
+    -- If any tainted activity carries non-zero scaling, surface the gap
+    -- as a 'Left' to match the strict-Either contract callers depend on;
+    -- the human-readable per-(flow, location) detail was already emitted
+    -- as a single warning when the table was built.
+    scoreFromPrecomputed raw s =
+        let !weights = rawWeights raw
+            !tainted = rawTainted raw
+            !n = U.length weights
+            !sLen = U.length s
+            go !i !acc !taint
+                | i >= n = (acc, taint)
+                | otherwise =
+                    let !sv =
+                            if i < sLen
+                                then U.unsafeIndex s i
+                                else 0
+                     in if sv == 0
+                            then go (i + 1) acc taint
+                            else
+                                let !taint' = taint || U.unsafeIndex tainted i /= 0
+                                    !acc' = acc + sv * U.unsafeIndex weights i
+                                 in go (i + 1) acc' taint'
+            (!score, !anyTouchedTainted) = go 0 0 False
+         in if anyTouchedTainted
+                then
+                    Left $
+                        "Regionalized CF lookup failed for "
+                            <> T.pack (show (length (rawMissingPairs raw)))
+                            <> " (flow, location) pair(s) on activities present in this inventory"
+                            <> " — see warnings emitted at table-build time."
+                else Right score
+
+    -- Slow path (unchanged) — kept as a fallback for cases where the
+    -- precomputed weights are absent (direct callers of
+    -- 'buildMethodTables' that skip the fill step).
+    scoreFromBiosphereTriples =
+        let actIdx = dbActivityIndex db
+            bioTriples = dbBiosphereTriples db
+            bioFlows = dbBiosphereFlows db
+            activities = dbActivities db
+            regional = mtRegionalizedCF tables
+            regionalizedFlows = Set.fromList [f | (f, _) <- M.keys regional]
+            colToActivity :: M.Map Int Activity
+            colToActivity =
+                M.fromList
+                    [ (fromIntegral (actIdx V.! pid), activities V.! pid)
+                    | pid <- [0 .. V.length actIdx - 1]
+                    ]
+            step :: Either Text Double -> SparseTriple -> Either Text Double
+            step acc (SparseTriple flowRow colIdx bioVal) = do
+                running <- acc
+                let s = scalingVec U.! fromIntegral colIdx
+                    contribution = bioVal * s
+                if contribution == 0
+                    then Right running
+                    else case M.lookup (fromIntegral colIdx :: Int) colToActivity of
+                        Nothing -> Right running
+                        Just act ->
+                            let flowUUID = bioFlows V.! fromIntegral flowRow
+                                loc = activityLocation act
+                             in case resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc of
+                                    Right Nothing -> Right running
+                                    Right (Just cfTuple) ->
+                                        Right (running + convertAndMultiply unitConfig unitDB (M.lookup flowUUID flowDB) cfTuple contribution)
+                                    Left err -> Left err
+         in U.foldl' step (Right 0) bioTriples
 
 {- | Resolve a CF for a (flow, location) pair through the hierarchy + broadcast
 fallback. See 'computeRegionalizedLCIAScore' for the rules.
@@ -848,8 +1031,9 @@ factor used at build time; pass an actual quantity for inline scoring.
 convertAndMultiply ::
     UnitConfig ->
     UnitDB ->
-    -- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
-    -- the identity factor (no flow record means no flow unit known).
+    {- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
+    the identity factor (no flow record means no flow unit known).
+    -}
     Maybe Flow ->
     -- | (CF value, CF unit)
     (Double, Text) ->
@@ -1005,23 +1189,25 @@ data MethodSetTables = MethodSetTables
     { msEntries :: !(V.Vector MethodSetEntry)
     -- ^ Per-method full data, in canonical (sorted) order.
     , msAnyRegional :: !Bool
-    -- ^ True if any method has a non-empty 'mtRegionalizedCF'. Disables the
-    -- batched matvec path; per-method dispatch is used instead.
+    {- ^ True if any method has a non-empty 'mtRegionalizedCF'. Disables the
+    batched matvec path; per-method dispatch is used instead.
+    -}
     , msUuidIndex :: !(M.Map UUID Int)
     -- ^ Flow UUID → row in 'msBroadcastMat'. Empty when 'msAnyRegional'.
     , msNFlows :: !Int
     -- ^ @M.size msUuidIndex@. Cached for the matvec inner loop.
     , msBroadcastMat :: !(U.Vector Double)
-    -- ^ Flat column-major dense broadcast: @j * m + i@ holds the effective
-    -- CF for method @i@ at flow row @j@. Length @msNFlows * m@. Empty when
-    -- 'msAnyRegional'.
-    --
-    -- The layout is chosen to match the scoring access pattern: an
-    -- inventory entry maps to one flow row @j@; reading the @m@ CFs across
-    -- methods for that row is then a contiguous slice. With a sparse
-    -- inventory (typical: hundreds of non-zero flows out of thousands)
-    -- this is far cheaper than a row-major dense matvec, which would
-    -- multiply across every flow regardless.
+    {- ^ Flat column-major dense broadcast: @j * m + i@ holds the effective
+    CF for method @i@ at flow row @j@. Length @msNFlows * m@. Empty when
+    'msAnyRegional'.
+
+    The layout is chosen to match the scoring access pattern: an
+    inventory entry maps to one flow row @j@; reading the @m@ CFs across
+    methods for that row is then a contiguous slice. With a sparse
+    inventory (typical: hundreds of non-zero flows out of thousands)
+    this is far cheaper than a row-major dense matvec, which would
+    multiply across every flow regardless.
+    -}
     , msNMethods :: !Int
     -- ^ @V.length msEntries@ cached for the scoring inner loop.
     }
@@ -1048,7 +1234,8 @@ buildMethodSetTables pairs =
                     , msNMethods = nMethods
                     }
             else
-                let -- Union of all UUIDs covered by any method's broadcast,
+                let
+                    -- Union of all UUIDs covered by any method's broadcast,
                     -- assigned dense Int row indices.
                     uuidSet =
                         Set.unions
@@ -1069,7 +1256,8 @@ buildMethodSetTables pairs =
                                 )
                                 (M.toList (mtBroadcast (mseTables e)))
                         pure mv
-                 in MethodSetTables
+                 in
+                    MethodSetTables
                         { msEntries = entries
                         , msAnyRegional = False
                         , msUuidIndex = uuidIndex
@@ -1175,9 +1363,10 @@ computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier
 -- Post-scoring suggester
 -- ──────────────────────────────────────────────
 
--- | Top-level CF lookup helper used by the suggester. Same cascade as the
--- per-function @lookupCF@ helpers inlined elsewhere in this module, but
--- exposed so 'findUncharacterized' can ask whether a flow has any CF at all.
+{- | Top-level CF lookup helper used by the suggester. Same cascade as the
+per-function @lookupCF@ helpers inlined elsewhere in this module, but
+exposed so 'findUncharacterized' can ask whether a flow has any CF at all.
+-}
 lookupCFForFlow :: MethodTables -> UUID -> Maybe Flow -> Maybe (Double, Text)
 lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv
