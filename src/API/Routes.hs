@@ -1779,13 +1779,27 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-            mkResult ctx =
+            -- Per-pid warning on Left mirrors the non-batch 'computeCategoryResult'
+            -- path. The build-time WARN lists global (flow, location) gaps but
+            -- can't tell a caller which specific pid actually hit one; without
+            -- this line a Left collapses silently to score=0, indistinguishable
+            -- from a true zero in the export.
+            mkResultIO ctx = do
                 let method = mctxMethod ctx
-                    score = case M.lookup (methodId method) scoreMap of
-                        Just (Right s) -> s
-                        Just (Left _) -> 0 -- regionalized gap; warned at table-build
-                        Nothing -> 0
-                 in enrichWithNW dcLookup mNW $
+                score <- case M.lookup (methodId method) scoreMap of
+                    Just (Right s) -> pure s
+                    Just (Left err) -> do
+                        reportProgress Warning $
+                            "[LCIA "
+                                <> T.unpack (methodName method)
+                                <> "] pid="
+                                <> show actPid
+                                <> ": "
+                                <> T.unpack err
+                        pure 0
+                    Nothing -> pure 0
+                pure $
+                    enrichWithNW dcLookup mNW $
                         LCIAResult
                             { lrMethodId = methodId method
                             , lrMethodName = methodName method
@@ -1799,8 +1813,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                             , lrFunctionalUnit = functionalUnit
                             , lrTopContributors = []
                             }
-            results = map mkResult ctxs
-            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
+        results <- traverse mkResultIO ctxs
+        let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
         (scoringResults, scoringIndicators) <-
             computeAllScoringSets (mcScoringSets collection) rawScoreMap
         pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
