@@ -9,7 +9,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), PerturbedEntry (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..))
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..))
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
@@ -229,6 +229,18 @@ inventoriesWithDeps dbManager dbName db solver pids = do
     case res of
         Right invs -> pure invs
         Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+
+{- | Per-method static context, prepared ONCE per batch request and reused
+across every pid in that request. Carries the precomputed mapping stats
+and total mapped-flow count; combined with the precomputed broadcast
+(and regionalized activity weights) on 'MethodTables', this is enough
+to build an LCIAResult per pid in O(1) per method — no TVar reads, no
+per-pid cache lookups, no inventoryContributions walk.
+-}
+data MethodCtx = MethodCtx
+    { mctxMethod :: !Method
+    , mctxMappedFlows :: !Int
+    }
 
 {- | Build an 'ActivityContribution' row from a cross-DB contribution key
 @(depDbName, pid)@. For dep-DB rows the process ID is qualified as
@@ -1237,17 +1249,18 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 reportProgress Warning $
                     "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
                 evaluate (0 :: Double)
-            Nothing -> if M.null (mtRegionalizedCF tables)
-                then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                else do
-                    scalingVec <- getScaling
-                    hier <- DM.getLocationHierarchy dbManager
-                    case computeLCIAScoreAuto unitCfg mUnits mFlows db scalingVec inventory hier tables of
-                        Right s -> evaluate s
-                        Left err -> do
-                            reportProgress Warning $
-                                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-                            evaluate (0 :: Double)
+            Nothing ->
+                if M.null (mtRegionalizedCF tables)
+                    then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+                    else do
+                        scalingVec <- getScaling
+                        hier <- DM.getLocationHierarchy dbManager
+                        case computeLCIAScoreAuto unitCfg mUnits mFlows db scalingVec inventory hier tables of
+                            Right s -> evaluate s
+                            Left err -> do
+                                reportProgress Warning $
+                                    "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
+                                evaluate (0 :: Double)
         let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
             functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1652,16 +1665,24 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         t0 <- liftIO getCurrentTime
         inventories <- inventoriesWithDeps dbManager dbName db sharedSolver validPidNums
         t1 <- liftIO getCurrentTime
+        -- Pre-fetch per-method static context ONCE for the whole batch instead
+        -- of paying it inside every per-pid 'buildLCIABatchResult' call. For
+        -- 632 agribalyse pids × 27 methods that drops 17 K cache reads down
+        -- to 27 reads on the batch hot path. The context carries everything
+        -- 'buildLCIABatchResult' needs to construct an LCIAResult without
+        -- re-entering 'mapMethodToFlowsCached' / 'mapMethodToTablesCached'.
+        ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbName db) (mcMethods collection)
         let mkEntry ((pidText, pidNum, activity), inventory) = do
-                impacts <- buildLCIABatchResult dbName db sharedSolver pidNum activity collection inventory
+                impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs
                 pure
                     BatchImpactsEntry
                         { bieProcessId = pidText
                         , bieActivityName = activityName activity
                         , bieImpacts = impacts
                         }
-        -- Sequential: inner buildLCIABatchResult already runs 27 methods concurrently.
-        -- Nesting K-wide over that would create K×27 threads and thrash the RTS.
+        -- Sequential: inner buildLCIABatchResultCached already runs the
+        -- per-method matvec batched in one pass. Nesting outer concurrency
+        -- over already-saturated CPU work just adds thread churn.
         entries <- liftIO $ mapM mkEntry (zip valid inventories)
         t2 <- liftIO getCurrentTime
         liftIO $
@@ -1718,12 +1739,33 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             , lbrScoringIndicators = scoringIndicators
             }
 
-    -- Shared post-inventory pipeline: characterize, enrich with NW, compute scoring sets.
-    -- Pure IO on its inputs; callers own logging and inventory computation.
-    buildLCIABatchResult :: Text -> Database -> SharedSolver -> ProcessId -> Activity -> MethodCollection -> Inventory -> IO LCIABatchResult
-    buildLCIABatchResult dbName db sharedSolver actPid activity collection inventory = do
-        let methods = mcMethods collection
-            damageCats = mcDamageCategories collection
+    prepMethodCtx :: Text -> Database -> Method -> IO MethodCtx
+    prepMethodCtx dbName db method = do
+        mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
+        -- Force the per-(db, method) tables once here too so subsequent
+        -- 'batchedScoresFor' calls hit a warm cache.
+        _ <- DM.mapMethodToTablesCached dbManager dbName db method
+        let stats = computeMappingStats mappings
+        pure MethodCtx{mctxMethod = method, mctxMappedFlows = msTotal stats - msUnmatched stats}
+
+    -- Batch fast path: scores via 'batchedScoresFor', then build LCIAResult
+    -- records straight from the precomputed contexts. Skips the per-pid
+    -- 'mapConcurrently' over 27 methods entirely. 'topContributors' is
+    -- always empty here (the batch endpoint's contract for top-flows=0; for
+    -- top-flows>0 callers go through 'buildLCIABatchResult' which carries
+    -- the full contribution walk).
+    buildLCIABatchResultCached ::
+        Text ->
+        Database ->
+        SharedSolver ->
+        ProcessId ->
+        Activity ->
+        MethodCollection ->
+        Inventory ->
+        [MethodCtx] ->
+        IO LCIABatchResult
+    buildLCIABatchResultCached dbName db sharedSolver actPid activity collection inventory ctxs = do
+        let damageCats = mcDamageCategories collection
             nwSets = mcNormWeightSets collection
             dcLookup =
                 M.fromList
@@ -1732,15 +1774,33 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     , (subName, _) <- dcImpacts dc
                     ]
             mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
+            methods = map mctxMethod ctxs
         scoreMap <- batchedScoresFor dbName db sharedSolver actPid inventory methods
-        rawResults <-
-            mapConcurrently
-                ( \m ->
-                    computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actPid) activity 5 inventory (M.lookup (methodId m) scoreMap) m
-                )
-                methods
-        let results = map (enrichWithNW dcLookup mNW) rawResults
-            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
+        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+        let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
+            functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+            mkResult ctx =
+                let method = mctxMethod ctx
+                    score = case M.lookup (methodId method) scoreMap of
+                        Just (Right s) -> s
+                        Just (Left _) -> 0 -- regionalized gap; warned at table-build
+                        Nothing -> 0
+                 in enrichWithNW dcLookup mNW $
+                        LCIAResult
+                            { lrMethodId = methodId method
+                            , lrMethodName = methodName method
+                            , lrCategory = methodCategory method
+                            , lrDamageCategory = methodCategory method
+                            , lrScore = score
+                            , lrUnit = methodUnit method
+                            , lrNormalizedScore = Nothing
+                            , lrWeightedScore = Nothing
+                            , lrMappedFlows = mctxMappedFlows ctx
+                            , lrFunctionalUnit = functionalUnit
+                            , lrTopContributors = []
+                            }
+            results = map mkResult ctxs
+            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
         (scoringResults, scoringIndicators) <-
             computeAllScoringSets (mcScoringSets collection) rawScoreMap
         pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
