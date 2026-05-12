@@ -537,8 +537,9 @@ mapMethodToTablesCachedWithHier manager dbName db hier method = do
             -- (callers like 'computeRegionalizedLCIAScore' return Left when a
             -- tainted activity carries non-zero scaling — see its doc).
             case mtRegionalActivityWeights tables of
-                Just raw'
-                    | not (null (rawMissingPairs raw')) ->
+                Nothing -> pure ()
+                Just raw' ->
+                    unless (null (rawMissingPairs raw')) $
                         reportProgress Warning $
                             "[LCIA "
                                 <> T.unpack (methodName method)
@@ -554,7 +555,6 @@ mapMethodToTablesCachedWithHier manager dbName db hier method = do
                                         | (fid, loc) <- rawMissingPairs raw'
                                         ]
                                     )
-                _ -> pure ()
             atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
             pure tables
 
