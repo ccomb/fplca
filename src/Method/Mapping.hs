@@ -1001,10 +1001,19 @@ Closes the gap where dep-DB biosphere emissions are present in the merged
 inventory but invisible to the regional dot product (which was previously
 keyed on the root DB's activity columns alone).
 
-Left from any per-DB call short-circuits to Left of the whole sum so a
-silent under-count never masquerades as a Right score: callers handle the
-gap explicitly (the per-pid WARN at the caller site, the build-time WARN
-that listed which (flow, location) pairs are uncovered).
+Per-DB 'Left' is tolerated: any DB whose 'computeRegionalizedLCIAScore'
+fails (tainted columns with non-zero scaling, missing weights, …) drops to
+a 0 contribution from THAT database and the function keeps summing the
+rest. The build-time WARN already lists every uncovered (flow, location)
+pair per @(db, method)@ — that is the single source of truth for what's
+missing. Score-time silently zeroing a whole method just because one dep
+DB has incomplete coverage would regress the user's view of computable
+methods; this best-effort sum preserves the partial answer while the
+build-time WARN keeps the coverage gap visible.
+
+Returns 'Left' only when 'every' triple's score is 'Left' (no recoverable
+contribution from any participating DB) — the gap is unrecoverable and the
+caller should surface it as an error rather than report 0.
 -}
 sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
@@ -1017,10 +1026,12 @@ sumRegionalizedLCIAScoreCrossDB ::
     [(Database, Vector, MethodTables)] ->
     Either Text Double
 sumRegionalizedLCIAScoreCrossDB unitCfg unitDB flowDB hier triples =
-    sum <$> traverse one triples
-  where
-    one (db, scaling, tables) =
-        computeRegionalizedLCIAScore unitCfg unitDB flowDB db scaling hier tables
+    let results = [computeRegionalizedLCIAScore unitCfg unitDB flowDB db sv hier t | (db, sv, t) <- triples]
+        rights = [s | Right s <- results]
+        lefts = [e | Left e <- results]
+     in case (rights, lefts) of
+            ([], errs) | not (null errs) -> Left (T.intercalate "; " errs)
+            _ -> Right (sum rights)
 
 {- | Resolve a CF for a (flow, location) pair through the hierarchy + broadcast
 fallback. See 'computeRegionalizedLCIAScore' for the rules.

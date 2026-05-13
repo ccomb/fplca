@@ -304,13 +304,15 @@ spec = describe "cross-DB regional LCIA" $ do
                     perDb
                     `shouldBe` Right 5.0
 
-    it "NEW path: tainted dep-DB activity with non-zero scaling surfaces Left" $ do
+    it "NEW path: tainted dep-DB drops to 0 contribution; root contribution survives" $ do
         -- Same DBs, but the method only has CF[F, FR]. The dep DB's DE
         -- activity is regionalized in the method (F appears in regional
         -- CFs) but no CF resolves at DE / parents / broadcast — that's a
-        -- tainted column, and it carries scaling 1. The contract from
-        -- computeRegionalizedLCIAScore is to Left, and the cross-DB sum
-        -- must propagate that Left rather than silently substituting 0.
+        -- tainted column, and it carries scaling 1. Per-DB scoring Lefts
+        -- on dep. The cross-DB sum tolerates it: drops the dep DB to a 0
+        -- contribution and keeps the root DB's Right. The build-time WARN
+        -- already names the gap (per-(flow, location) pair); score-time
+        -- loudness would regress users who used to see partial scores.
         let strictMappings = regionalMappings [("FR", 1)]
             depTablesStrict = buildTables depDb strictMappings
             rootTablesStrict = buildTables rootDb strictMappings
@@ -338,6 +340,51 @@ spec = describe "cross-DB regional LCIA" $ do
                         "root" -> rootTablesStrict
                         "dep" -> depTablesStrict
                         other -> error ("unexpected dbName in csScalings: " <> show other)
+                -- Root has no biosphere triples → contributes Right 0.
+                -- Dep biosphere triple at DE has no CF → Left (tainted).
+                -- Tolerant sum: Right 0 (root) + 0 dropped (dep) = Right 0.
+                sumRegionalizedLCIAScoreCrossDB
+                    kgUnitConfig
+                    (dbUnits depDb)
+                    (dbFlows depDb)
+                    M.empty
+                    perDb
+                    `shouldBe` Right 0.0
+
+    it "NEW path: all-Left case (every participating DB tainted) surfaces Left" $ do
+        -- Every DB Lefts (no Right to fall back to). The sum has nothing
+        -- to sum, so it Lefts — preserves no-silent-errors when there is
+        -- genuinely no recoverable contribution.
+        let strictMappings = regionalMappings [("FR", 1)]
+            depTablesStrict = buildTables depDb strictMappings
+            -- Root variant with a tainted biosphere triple at DE so both
+            -- root and dep tables Left on the precomputed dot product.
+            taintedRoot = mkDB 100 ["DE"] [(0, 1.0)]
+            taintedRootTables = buildTables taintedRoot strictMappings
+        rootSolver <- mkSolverFromDb taintedRoot "root"
+        depSolver <- mkSolverFromDb depDb "dep"
+        let depLookup name =
+                pure $
+                    if name == "dep" then Just (depDb, depSolver) else Nothing
+        eRes <-
+            SS.computeInventoryMatrixWithDepsCached
+                kgUnitConfig
+                depLookup
+                taintedRoot
+                "root"
+                rootSolver
+                0
+        case eRes of
+            Left err -> expectationFailure ("solve failed: " <> show err)
+            Right sol -> do
+                let perDb =
+                        [ (db, s, tablesFor n)
+                        | (n, db, s) <- SS.csScalings sol
+                        ]
+                    tablesFor n = case n of
+                        "root" -> taintedRootTables
+                        "dep" -> depTablesStrict
+                        other -> error ("unexpected dbName in csScalings: " <> show other)
                 case sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
@@ -347,6 +394,6 @@ spec = describe "cross-DB regional LCIA" $ do
                     Left _ -> pure ()
                     Right v ->
                         expectationFailure
-                            ( "expected Left for tainted cross-DB scoring, got Right "
+                            ( "expected Left when every DB Lefts, got Right "
                                 <> show v
                             )
