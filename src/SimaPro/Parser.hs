@@ -763,8 +763,12 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
         exprMap = M.fromList allExprs
 
         -- Extract location from process name if not specified
-        (_, locFromName) = extractLocation pbName
+        (cleanProcessNameRaw, locFromName) = extractLocation pbName
         location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
+        -- Trimmed Process name (without curly-brace location tag). Empty when
+        -- the SimaPro "Process name" field is empty (typical for mono-product
+        -- blocks where only the Product line carries the human-readable name).
+        processNameTrimmed = T.strip cleanProcessNameRaw
 
         -- Convert all rows in one pass, collecting exchanges/flows/units together
         avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
@@ -801,12 +805,24 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
         makeActivity prod =
             let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
                 effUnitName = unitName productUnit
-                allocFraction = resolveAmount env (prAllocRaw prod) (prAllocation prod) / 100.0
+                allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
+                allocFraction = allocPercent / 100.0
                 (cleanProductName, locFromProduct) = extractLocation (prName prod)
                 effectiveLoc = if T.null location then locFromProduct else location
+                -- Activity name = Process name when present (so coproducts of
+                -- the same Process share one activityUUID via generateActivityUUID),
+                -- otherwise fall back to product name (mono-product blocks
+                -- with empty "Process name" field).
+                effectiveActivityName =
+                    if T.null processNameTrimmed then cleanProductName else processNameTrimmed
+                allocFormulaRaw = T.strip (prAllocRaw prod)
+                allocFormula =
+                    if T.null allocFormulaRaw || isNumericFormula allocFormulaRaw
+                        then Nothing
+                        else Just allocFormulaRaw
                 activity =
                     Activity
-                        { activityName = cleanProductName
+                        { activityName = effectiveActivityName
                         , activityDescription = if T.null pbComment then [] else [pbComment]
                         , activitySynonyms = M.empty
                         , activityClassification =
@@ -821,6 +837,8 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                         , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
                         , activityParams = env
                         , activityParamExprs = exprMap
+                        , activityAllocationPercent = Just allocPercent
+                        , activityAllocationFormula = allocFormula
                         }
                 allFlows = productFlow : sharedFlows
                 allUnits =
@@ -830,6 +848,12 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
              in (activity, allFlows, allUnits)
      in
         map makeActivity pbProducts
+
+-- | True when the raw allocation cell is a plain decimal literal (no formula).
+isNumericFormula :: Text -> Bool
+isNumericFormula t = case TR.double t of
+    Right (_, rest) -> T.null (T.strip rest)
+    Left _ -> False
 
 -- | Scale an exchange amount by a factor (for allocation)
 scaleExchange :: Double -> Exchange -> Exchange

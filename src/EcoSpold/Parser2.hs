@@ -535,7 +535,7 @@ parseWithXeno xmlContent processId =
                 Just u -> u
                 Nothing -> "UNKNOWN_UNIT"
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty
+            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of

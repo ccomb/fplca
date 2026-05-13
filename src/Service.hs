@@ -255,6 +255,8 @@ convertToInventoryExport db flowDB unitDB processId rootActivity inventory =
                         prodName
                         prodAmount
                         prodUnit
+                        (activityAllocationPercent rootActivity)
+                        (activityAllocationFormula rootActivity)
                 , imTotalFlows = length flowDetails
                 , imEmissionFlows = emissionFlows
                 , imResourceFlows = resourceFlows
@@ -925,6 +927,8 @@ searchActivities db (SearchFilter core exactMatch) = do
                             prodName
                             prodAmount
                             prodUnit
+                            (activityAllocationPercent activity)
+                            (activityAllocationFormula activity)
                 )
                 pagedResults
     endTime <- getCurrentTime
@@ -1086,31 +1090,23 @@ getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
 getAllProductsForActivity db activityUUID =
     case M.lookup activityUUID (dbActivityProductsIndex db) of
         Just processIds ->
-            [ let (prodName, prodAmount, prodUnit) = getProductInfo db pid
+            [ let mAct = findActivityByProcessId db pid
+                  (prodName, prodAmount, prodUnit) = case mAct of
+                    Just a -> getReferenceProductInfo (dbFlows db) (dbUnits db) a
+                    Nothing -> ("Unknown", 1.0, "")
                in ActivitySummary
                     { prsProcessId = processIdToText db pid
-                    , prsName = getActivityNameForPid db pid
-                    , prsLocation = maybe "" activityLocation (findActivityByProcessId db pid)
+                    , prsName = maybe "Unknown" activityName mAct
+                    , prsLocation = maybe "" activityLocation mAct
                     , prsProduct = prodName
                     , prsProductAmount = prodAmount
                     , prsProductUnit = prodUnit
+                    , prsAllocationPercent = mAct >>= activityAllocationPercent
+                    , prsAllocationFormula = mAct >>= activityAllocationFormula
                     }
             | pid <- processIds
             ]
         Nothing -> []
-  where
-    -- Get activity name for a ProcessId
-    getActivityNameForPid :: Database -> ProcessId -> Text
-    getActivityNameForPid db' pid =
-        case findActivityByProcessId db' pid of
-            Just activity -> activityName activity
-            Nothing -> "Unknown"
-    -- Get product info (name, amount, unit) from reference exchange
-    getProductInfo :: Database -> ProcessId -> (Text, Double, Text)
-    getProductInfo db' pid =
-        case findActivityByProcessId db' pid of
-            Just activity -> getReferenceProductInfo (dbFlows db') (dbUnits db') activity
-            Nothing -> ("Unknown", 1.0, "")
 
 -- | Get target activity for technosphere navigation
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
@@ -1127,6 +1123,8 @@ getTargetActivity db exchange = do
             , prsProduct = prodName
             , prsProductAmount = prodAmount
             , prsProductUnit = prodUnit
+            , prsAllocationPercent = activityAllocationPercent targetActivity
+            , prsAllocationFormula = activityAllocationFormula targetActivity
             }
 
 -- | Get reference product as FlowDetail (if exists)
@@ -1155,6 +1153,8 @@ getActivitiesUsingFlow db flowUUID =
                         prodName
                         prodAmount
                         prodUnit
+                        (activityAllocationPercent proc)
+                        (activityAllocationFormula proc)
                 | procUUID <- uniqueUUIDs
                 , Just proc <- [findActivityByActivityUUID db procUUID]
                 , Just processId <- [findProcessIdForActivity db proc]
@@ -1216,6 +1216,8 @@ getActivityExchangeDetails db activity filterFn =
                             , prsProduct = cdlFlowName link
                             , prsProductAmount = 1.0
                             , prsProductUnit = cdlExchangeUnit link
+                            , prsAllocationPercent = Nothing
+                            , prsAllocationFormula = Nothing
                             }
 
 -- | Get detailed input exchanges
@@ -1550,6 +1552,8 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
                         (getReferenceProductName (dbFlows db) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
+                , prsAllocationPercent = activityAllocationPercent rootActivity
+                , prsAllocationFormula = activityAllocationFormula rootActivity
                 }
      in SupplyChainResponse
             { scrRoot = rootSummary
@@ -1609,6 +1613,8 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                         (getReferenceProductName (dbFlows rootDb) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
+                , prsAllocationPercent = activityAllocationPercent rootActivity
+                , prsAllocationFormula = activityAllocationFormula rootActivity
                 }
     eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf includeEdges 1 S.empty
     pure $ case eDep of

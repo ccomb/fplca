@@ -398,7 +398,7 @@ parseWithXeno xmlContent =
                     filter
                         (not . T.null . snd)
                         [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty
+            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of
@@ -707,7 +707,7 @@ parseAllWithXeno xmlContent =
                     filter
                         (not . T.null . snd)
                         [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty
+            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             flows = reverse (psFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of
