@@ -22,6 +22,7 @@ identically across plain, substitution, and sensitivity paths.
 -}
 module CrossDBRegionalLCIASensitivitySpec (spec) where
 
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Vector.Unboxed as U
 
@@ -75,14 +76,14 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
             Right [] -> expectationFailure "goWithDepsFromScalings returned empty list"
             Right (sol : _) -> do
                 -- Both DBs participate, in BFS order: root first, dep second.
-                let names = [n | (n, _, _) <- SS.csScalings sol]
+                let names = [n | (n, _, _) <- NE.toList (SS.csScalings sol)]
                 names `shouldBe` ["root", "dep"]
                 -- The merged inventory carries the dep DB's 1.0 kg emission.
                 M.lookup flowUUID (SS.csInventory sol) `shouldBe` Just 1.0
                 -- Regional score against both DBs' tables = 0 + 5 = 5.
                 let perDb =
                         [ (db, sv, tablesFor n)
-                        | (n, db, sv) <- SS.csScalings sol
+                        | (n, db, sv) <- NE.toList (SS.csScalings sol)
                         ]
                     tablesFor "root" = rootTables
                     tablesFor "dep" = depTables
@@ -123,7 +124,7 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
             Right (sol : _) -> do
                 let perDb =
                         [ (db, sv, tablesFor n)
-                        | (n, db, sv) <- SS.csScalings sol
+                        | (n, db, sv) <- NE.toList (SS.csScalings sol)
                         ]
                     tablesFor "root" = rootTables
                     tablesFor "dep" = depTables

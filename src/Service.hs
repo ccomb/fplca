@@ -14,8 +14,9 @@ import Data.Int (Int32)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import qualified Data.List as L
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Sequence (Seq (..), (|>))
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -1967,7 +1968,11 @@ inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs = do
             pure $ case res of
                 Left err -> Left err
                 Right (sol : _) -> Right sol
-                Right [] -> Right (SharedSolver.CrossDBSolution M.empty []) -- unreachable: K=1
+                Right [] ->
+                    -- unreachable: K=1 single-demand always yields one solution.
+                    -- Surface as Left rather than fabricate an empty solution
+                    -- with no 'csScalings' (NonEmpty forbids it).
+                    Left $ MatrixError "inventoryWithSubsAndDeps: empty result for single demand"
 
 {- | Reject substitutions whose consumer is qualified to a DB that is either
 unloaded or not reachable from @rootDbName@ via 'dbCrossDBLinks'. Such
@@ -2061,7 +2066,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allS
         let localInvs = map (applyBiosphereMatrix thisDb) scalings'
             baseSolutions =
                 zipWith
-                    (\inv s -> SharedSolver.CrossDBSolution inv [(unThisDb thisDbName, thisDb, s)])
+                    (\inv s -> SharedSolver.CrossDBSolution inv (NE.singleton (unThisDb thisDbName, thisDb, s)))
                     localInvs
                     scalings'
         if depth >= maxSubsDepth
@@ -2079,7 +2084,9 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allS
                         pure $ case sequence depResults of
                             Left err -> Left err
                             Right depSolsByDb ->
-                                let perRootDepSols = L.transpose depSolsByDb
+                                -- Absent dep DBs contribute 'Nothing'; drop
+                                -- them before the merge (see 'mergeSolutions').
+                                let perRootDepSols = map catMaybes (L.transpose depSolsByDb)
                                  in Right $
                                         zipWith
                                             SharedSolver.mergeSolutions
@@ -2100,19 +2107,22 @@ resolveDepWithSubs ::
     Int ->
     Int ->
     Text ->
-    IO (Either ServiceError [SharedSolver.CrossDBSolution])
+    IO (Either ServiceError [Maybe SharedSolver.CrossDBSolution])
 resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth k depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
-            pure (Right (replicate k (SharedSolver.CrossDBSolution M.empty [])))
+            -- Same shape as 'SharedSolver.resolveDep': absent dep DB
+            -- contributes 'Nothing' at every root; dropped before merge.
+            pure (Right (replicate k Nothing))
         Just (depDb, depSolver) ->
             let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
                 depVecsE = traverse (depDemandsToVector unitCfg depDbName depDb) demandsPerRoot
              in case depVecsE of
                     Left err -> pure (Left (MatrixError err))
-                    Right depDemandVecs ->
-                        goWithSubsAndDeps unitCfg depLookup depDb (ThisDb depDbName) rootDb depSolver depDemandVecs allSubs (depth + 1)
+                    Right depDemandVecs -> do
+                        sols <- goWithSubsAndDeps unitCfg depLookup depDb (ThisDb depDbName) rootDb depSolver depDemandVecs allSubs (depth + 1)
+                        pure $ fmap (map Just) sols
 
 {- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 

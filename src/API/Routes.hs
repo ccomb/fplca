@@ -19,6 +19,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import Data.List (find, intercalate, sortBy, sortOn)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.OpenApi (OpenApi, ToSchema)
@@ -1305,13 +1306,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- 'fillRegionalActivityWeights' walk against their own biosphere
     -- triples; subsequent requests hit the cache.
     buildPerDbSetTables ::
-        [(Text, Database, Vector)] ->
+        NE.NonEmpty (Text, Database, Vector) ->
         [Method] ->
-        IO [(Database, Vector, Method.Mapping.MethodSetTables)]
+        IO (NE.NonEmpty (Database, Vector, Method.Mapping.MethodSetTables))
     buildPerDbSetTables scalings methods =
-        forM scalings $ \(n, d, sv) -> do
-            mst <- DM.mapMethodSetToTablesCached dbManager n d methods
-            pure (d, sv, mst)
+        traverse
+            ( \(n, d, sv) -> do
+                mst <- DM.mapMethodSetToTablesCached dbManager n d methods
+                pure (d, sv, mst)
+            )
+            scalings
 
     -- Helper: compute LCIA result for a single method against a cross-DB
     -- inventory solution.
@@ -1355,7 +1359,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     else do
                         hier <- DM.getLocationHierarchy dbManager
                         perDb <-
-                            forM (SharedSolver.csScalings sol) $ \(n, d, sv) -> do
+                            forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
                                 tbls <- DM.mapMethodToTablesCached dbManager n d method
                                 pure (d, sv, tbls)
                         case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of

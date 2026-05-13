@@ -17,6 +17,7 @@ products recovers the right answer.
 -}
 module CrossDBRegionalLCIASpec (spec) where
 
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Vector.Unboxed as U
 
@@ -78,7 +79,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 -- The bug surface: the regional path scored against root
                 -- tables/scaling alone returns 0 (or, depending on how the
                 -- caller invokes it, the wrong number — never 5).
-                let rootScaling = case [s | (n, _, s) <- SS.csScalings sol, n == "root"] of
+                let rootScaling = case [s | (n, _, s) <- NE.toList (SS.csScalings sol), n == "root"] of
                         (s : _) -> s
                         [] -> U.empty
                 computeRegionalizedLCIAScore
@@ -110,7 +111,7 @@ spec = describe "cross-DB regional LCIA" $ do
             Right sol -> do
                 let perDb =
                         [ (db, s, tablesFor n)
-                        | (n, db, s) <- SS.csScalings sol
+                        | (n, db, s) <- NE.toList (SS.csScalings sol)
                         ]
                     tablesFor n = case n of
                         "root" -> rootTables
@@ -154,7 +155,7 @@ spec = describe "cross-DB regional LCIA" $ do
             Right sol -> do
                 let perDb =
                         [ (db, s, tablesFor n)
-                        | (n, db, s) <- SS.csScalings sol
+                        | (n, db, s) <- NE.toList (SS.csScalings sol)
                         ]
                     tablesFor n = case n of
                         "root" -> rootTablesStrict
@@ -199,7 +200,7 @@ spec = describe "cross-DB regional LCIA" $ do
             Right sol -> do
                 let perDb =
                         [ (db, s, tablesFor n)
-                        | (n, db, s) <- SS.csScalings sol
+                        | (n, db, s) <- NE.toList (SS.csScalings sol)
                         ]
                     tablesFor n = case n of
                         "root" -> taintedRootTables
@@ -295,7 +296,7 @@ spec = describe "cross-DB regional LCIA" $ do
                     -- csScalings has only the root entry; cross-DB sum
                     -- reduces to the single-DB dot product. Score =
                     -- 1·CF[F, FR] = 7.
-                    let perDb = [(db, sv, standaloneTables) | (_, db, sv) <- SS.csScalings sol]
+                    let perDb = [(db, sv, standaloneTables) | (_, db, sv) <- NE.toList (SS.csScalings sol)]
                     sumRegionalizedLCIAScoreCrossDB
                         kgUnitConfig
                         (dbUnits rootStandalone)
@@ -326,7 +327,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 Left err -> expectationFailure ("solve failed: " <> show err)
                 Right sol -> do
                     let perDbInvs =
-                            [applyBiosphereMatrix db sv | (_, db, sv) <- SS.csScalings sol]
+                            [applyBiosphereMatrix db sv | (_, db, sv) <- NE.toList (SS.csScalings sol)]
                         reconstructed =
                             foldr (M.unionWith (+)) M.empty perDbInvs
                     M.toList (SS.csInventory sol)

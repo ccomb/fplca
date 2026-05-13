@@ -40,7 +40,10 @@ import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, withMVar)
 import Control.Exception (SomeException, catch)
 import Data.List (transpose)
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
+import Data.Maybe (catMaybes)
 import qualified Data.Set as S
 import Data.Text (Text)
 import Matrix (
@@ -190,13 +193,15 @@ location context the regional CF lookup needs).
 
 'csScalings' lists every DB visited (root first, then dep DBs in BFS
 order — both the order and the recursion depth follow the same dep-graph
-walk that built 'csInventory'). A DB whose scaling vector is the zero
-vector for this pid is still included; downstream consumers can drop it,
-but the solver never silently omits a participating DB.
+walk that built 'csInventory'). The list is non-empty: the root entry
+('rootDbName', root 'Database', root scaling) is always added by the
+top-level solve; dep entries are appended as the recursion fans out.
+A DB whose scaling vector is the zero vector for this pid is still
+included; the solver never silently omits a participating DB.
 -}
 data CrossDBSolution = CrossDBSolution
     { csInventory :: !Inventory
-    , csScalings :: ![(Text, Database, Vector)]
+    , csScalings :: !(NonEmpty (Text, Database, Vector))
     }
 
 {- |
@@ -251,7 +256,11 @@ computeInventoryMatrixWithDepsCached unitConfig depLookup db dbName solver pid =
     pure $ case res of
         Left err -> Left err
         Right (sol : _) -> Right sol
-        Right [] -> Right (CrossDBSolution M.empty []) -- unreachable: batch is non-empty
+        Right [] ->
+            -- unreachable: a single-pid batch always returns a singleton list.
+            -- Surface as Left rather than fabricate an empty 'CrossDBSolution'
+            -- with no 'csScalings' (the type now forbids it via NonEmpty).
+            Left "computeInventoryMatrixWithDepsCached: empty batch result for one pid"
 
 -- | Safety net against cyclic cross-DB links (Ginko → Agribalyse → Ginko).
 maxDepsDepth :: Int
@@ -304,7 +313,7 @@ goWithDepsFromScalings unitConfig depLookup db dbName extraLinks scalings depth 
     let localInvs = map (applyBiosphereMatrix db) scalings
         baseSolutions =
             zipWith
-                (\inv s -> CrossDBSolution inv [(dbName, db, s)])
+                (\inv s -> CrossDBSolution inv (NE.singleton (dbName, db, s)))
                 localInvs
                 scalings
     if depth >= maxDepsDepth
@@ -322,7 +331,12 @@ goWithDepsFromScalings unitConfig depLookup db dbName extraLinks scalings depth 
                     pure $ case sequence depResults of
                         Left err -> Left err
                         Right depSolsByDb ->
-                            let perRootDepSols = transpose depSolsByDb
+                            -- Each dep returns @[Maybe CrossDBSolution]@ of
+                            -- length K. Absent-dep entries (depLookup
+                            -- returned Nothing) are 'Nothing' and drop out
+                            -- of the merge — an absent dep contributes
+                            -- nothing to inventory or csScalings.
+                            let perRootDepSols = map catMaybes (transpose depSolsByDb)
                              in Right $
                                     zipWith
                                         mergeSolutions
@@ -343,7 +357,9 @@ mergeSolutions base depSols =
         { csInventory =
             foldr (M.unionWith (+)) (csInventory base) (map csInventory depSols)
         , csScalings =
-            csScalings base ++ concatMap csScalings depSols
+            NE.appendList
+                (csScalings base)
+                (concatMap (NE.toList . csScalings) depSols)
         }
 
 resolveDep ::
@@ -352,22 +368,28 @@ resolveDep ::
     [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
     -- | current depth (for recursion)
     Int ->
-    -- | K (so we can pad with empty on a missing dep DB)
+    -- | K (so absent-dep returns the right number of 'Nothing' padding)
     Int ->
     Text ->
-    IO (Either Text [CrossDBSolution])
+    IO (Either Text [Maybe CrossDBSolution])
 resolveDep unitConfig depLookup perRootDepDemands depth k depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
-            pure (Right (replicate k (CrossDBSolution M.empty [])))
+            -- Dep DB not loaded: contribute nothing at every root. The
+            -- 'Nothing' propagates through 'mergeSolutions' and drops out
+            -- before the inventory union / csScalings concat, exactly
+            -- equivalent to an empty 'CrossDBSolution' but without
+            -- materialising one (which the NonEmpty type forbids).
+            pure (Right (replicate k Nothing))
         Just (depDb, depSolver) ->
             let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
                 depVecsE = traverse (depDemandsToVector unitConfig depDbName depDb) demandsPerRoot
              in case depVecsE of
                     Left err -> pure (Left err)
-                    Right depDemandVecs ->
-                        goWithDeps unitConfig depLookup depDb depDbName depSolver depDemandVecs (depth + 1)
+                    Right depDemandVecs -> do
+                        sols <- goWithDeps unitConfig depLookup depDb depDbName depSolver depDemandVecs (depth + 1)
+                        pure $ fmap (map Just) sols
 
 {- | Cross-DB per-activity LCIA contributions. Walks the same dep graph as
 'goWithDeps' but attributes contributions per @(dbName, localPid)@ instead

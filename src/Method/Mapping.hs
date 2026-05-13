@@ -71,6 +71,8 @@ import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.List (find, sortOn)
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Ord (Down (..))
@@ -1379,9 +1381,10 @@ methodId so the result list follows the input order ('msAllMethods'):
     database — root + each dep DB reached at request time. Closes the
     gap where dep-DB regional CFs were previously invisible.
 
-Callers pass the per-DB triples as a non-empty list with the ROOT triple
-first. The non-regional matvec is keyed off the root entry's 'msBatched';
-the regional cross-DB sum walks every entry.
+Callers pass the per-DB triples as a 'NonEmpty' with the ROOT triple at
+'NE.head'. The non-regional matvec is keyed off the root entry's
+'msBatched'; the regional cross-DB sum walks every entry. The 'NonEmpty'
+constraint makes the impossible state (no DBs participated) unrepresentable.
 -}
 computeLCIAScoreSetFromTables ::
     UnitConfig ->
@@ -1389,14 +1392,14 @@ computeLCIAScoreSetFromTables ::
     FlowDB ->
     Inventory ->
     M.Map Text [Text] ->
-    {- | Non-empty per-DB triples: head is root, tail is each participating
+    {- | Non-empty per-DB triples: 'NE.head' is root, tail is each participating
     dep DB. Building order matches 'SharedSolver.csScalings'.
     -}
-    [(Database, Vector, MethodSetTables)] ->
+    NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]
-computeLCIAScoreSetFromTables _ _ _ _ _ [] = []
-computeLCIAScoreSetFromTables unitCfg unitDB flowDB inventory hier perDb@((_, _, mstRoot) : _) =
-    let batched = scoreBatched unitCfg unitDB flowDB (msBatched mstRoot) inventory
+computeLCIAScoreSetFromTables unitCfg unitDB flowDB inventory hier perDb =
+    let (_, _, mstRoot) = NE.head perDb
+        batched = scoreBatched unitCfg unitDB flowDB (msBatched mstRoot) inventory
         regional = scoreRegionalCrossDB unitCfg unitDB flowDB hier (msRegional mstRoot) perDb
         byId = M.fromList (batched ++ regional)
      in [ (mseMethodId e, byId M.! mseMethodId e)
@@ -1418,7 +1421,7 @@ scoreRegionalCrossDB ::
     FlowDB ->
     M.Map Text [Text] ->
     V.Vector MethodSetEntry ->
-    [(Database, Vector, MethodSetTables)] ->
+    NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]
 scoreRegionalCrossDB unitCfg unitDB flowDB hier ms perDb =
     [ ( mseMethodId e
@@ -1430,7 +1433,7 @@ scoreRegionalCrossDB unitCfg unitDB flowDB hier ms perDb =
     -- Per-method per-DB triples; skip DBs that don't carry this method.
     triples mid =
         [ (db, sv, t)
-        | (db, sv, mst) <- perDb
+        | (db, sv, mst) <- NE.toList perDb
         , Just t <- [lookupMethodTables mid mst]
         ]
     lookupMethodTables mid mst =
