@@ -94,7 +94,7 @@ import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
@@ -823,7 +823,7 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
     let transforms = prTransforms (dmPlugins manager)
     result <- loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
     case result of
-        Right loaded -> do
+        Right (loaded, _fromCache) -> do
             let indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
             atomically $ do
                 modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
@@ -999,7 +999,8 @@ This is the original function, kept for backward compatibility
 -}
 loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text LoadedDatabase)
 loadDatabaseFromConfig dbConfig synonymDB noCache =
-    loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty
+    fmap (fmap fst)
+        (loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty)
 
 {- | Resolve a database path: if it's an archive, extract it first.
 Extracts to "{archivePath}.d/" and finds the actual data directory inside.
@@ -1051,7 +1052,7 @@ loadDatabaseFromConfigWithCrossDB ::
     Bool -> -- noCache
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map T.Text [T.Text] -> -- Location hierarchy (empty = use built-in)
-    IO (Either Text LoadedDatabase)
+    IO (Either Text (LoadedDatabase, Bool))
 loadDatabaseFromConfigWithCrossDB = loadDatabaseFromConfigWithCrossDBAndTransforms []
 
 -- | Load with optional transform pipeline
@@ -1063,7 +1064,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms ::
     Bool -> -- noCache
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map T.Text [T.Text] -> -- Location hierarchy (empty = use built-in)
-    IO (Either Text LoadedDatabase)
+    IO (Either Text (LoadedDatabase, Bool))
 loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
@@ -1072,7 +1073,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
 
     case dbResult of
         Left err -> return $ Left err
-        Right dbRaw -> do
+        Right (dbRaw, fromCache) -> do
             -- Apply transform plugins (sorted by priority) before runtime init
             transformed <- applyTransforms transforms (toSimpleDatabase dbRaw)
             dbRebuiltResult <-
@@ -1095,11 +1096,13 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
 
                     return $
                         Right
-                            LoadedDatabase
+                            ( LoadedDatabase
                                 { ldDatabase = database
                                 , ldSharedSolver = sharedSolver
                                 , ldConfig = dbConfig
                                 }
+                            , fromCache
+                            )
 
 -- | Apply transform plugins sequentially (sorted by priority)
 applyTransforms :: [TransformHandle] -> SimpleDatabase -> IO SimpleDatabase
@@ -1194,7 +1197,10 @@ loadDatabaseRawWithCrossDB ::
     [IndexedDatabase] ->
     -- | Location hierarchy (empty = use built-in)
     M.Map T.Text [T.Text] ->
-    IO (Either Text Database)
+    -- | (Database, fromCache): True iff the result came from the matrix cache
+    -- as-is, i.e. cross-DB linking was NOT freshly run against 'otherIndexes'.
+    -- Callers use this to decide whether a self-relink is needed.
+    IO (Either Text (Database, Bool))
 loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier = do
     mCachedDb <-
         if noCache
@@ -1210,7 +1216,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
     case (cacheUsable, mCachedDb) of
         (True, Just db) -> do
             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-            return $ Right db
+            return $ Right (db, True)
         _ -> do
             when (isJust mCachedDb && not cacheUsable) $
                 reportProgress Info "Cache has unresolved links, rebuilding with available dependencies..."
@@ -1257,7 +1263,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                         unless noCache $
                             Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
                         Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                        return $ Right db
+                        return $ Right (db, False)
 
     loadStructured path = do
         loadResult <-
@@ -1290,7 +1296,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                                     }
                         unless noCache $
                             Loader.saveCachedDatabaseWithMatrices dbName sourcePath dbWithLinks
-                        return $ Right dbWithLinks
+                        return $ Right (dbWithLinks, False)
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -1345,7 +1351,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                     case eitherResult of
                         Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
                         Right (Left err) -> return $ Left err
-                        Right (Right loaded) -> do
+                        Right (Right (loaded, fromCache)) -> do
                             let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
                             atomically $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
@@ -1361,16 +1367,16 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 dbName
                                 ("Auto-extracted from " <> dcDisplayName dbConfig)
                                 pairs
-                            -- Re-link THIS DB too. A cache hit can return a
-                            -- DB whose stored 'dbCrossDBLinks' point at deps
-                            -- that aren't loaded now (or miss deps that are):
-                            -- 'loadDatabaseRawWithCrossDB' only re-parses
-                            -- when 'unresolvedCount > 0', so a fully-resolved
-                            -- cache against version A is reused as-is even
-                            -- when version B is now loaded instead. The
-                            -- self-relink walks the current 'otherIndexes'
-                            -- and rewrites links + cache if they changed.
-                            _ <- relinkDatabase manager dbName
+                            -- Self-relink only on cache hits. On a fresh
+                            -- parse, 'loadDatabaseRawWithCrossDB' already ran
+                            -- linking against the current 'otherIndexes' via
+                            -- 'loadStructured' / 'loadCSV', so a follow-up
+                            -- relink is guaranteed no-op work. On a cache
+                            -- hit the cached DB carries links computed
+                            -- against a previous dep set — possibly stale
+                            -- versions of the same dep names — so a relink
+                            -- is required to converge.
+                            when fromCache $ void $ relinkDatabase manager dbName
                             relinkDependents manager dbName
                             return $ Right loaded
 
@@ -1381,6 +1387,11 @@ data RelinkResult = RelinkResult
     , rresUnresolvedAfter :: !Int
     , rresCrossDBLinks :: !Int
     , rresDepsLoaded :: ![Text]
+    , -- | True iff the relink actually changed 'dbCrossDBLinks' or
+      -- 'dbDependsOn' versus the in-memory state before the call. Callers
+      -- use this to skip redundant work — e.g. the explicit cache write in
+      -- 'finalizeDatabase' is suppressed when the relink already saved.
+      rresLinksChanged :: !Bool
     }
     deriving (Show, Eq)
 
@@ -1474,6 +1485,7 @@ relinkDatabase manager dbName = do
                         , rresUnresolvedAfter = afterUnresolved
                         , rresCrossDBLinks = length newLinks
                         , rresDepsLoaded = newDeps
+                        , rresLinksChanged = linksChanged
                         }
 
 {- | After a DB loads (or reloads), re-link every already-loaded DB that
@@ -2227,18 +2239,26 @@ finalizeDatabase manager dbName = do
                                         modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
                                     clearMethodMappingCacheForDb manager dbName
 
-                                    -- Only save to cache when matrices were built fresh
-                                    when (not fromCache) $
-                                        Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
+                                    -- Self-relink first against the current
+                                    -- dep set: a cached or staged build can
+                                    -- carry cross-DB links that don't match
+                                    -- the deps now in 'dmIndexedDbs'.
+                                    -- 'relinkDatabase' rewrites both the
+                                    -- in-memory state and (when 'linksChanged'
+                                    -- is True) the matrix cache.
+                                    relinkOutcome <- relinkDatabase manager dbName
 
-                                    -- Self-relink against the current dep
-                                    -- set. Same rationale as the Load path:
-                                    -- a cached DB can carry stale cross-DB
-                                    -- links that no longer match what is
-                                    -- loaded now. 'relinkDatabase' will
-                                    -- rewrite both the in-memory state and
-                                    -- the cache file when the answer changes.
-                                    _ <- relinkDatabase manager dbName
+                                    -- Explicit cache save is only needed when
+                                    -- we built matrices fresh AND the relink
+                                    -- didn't already write the cache. The
+                                    -- 'Left' fallback preserves the original
+                                    -- "save iff fresh" behavior if relink
+                                    -- failed for some unexpected reason.
+                                    let linksChangedAfter = case relinkOutcome of
+                                            Right rr -> rresLinksChanged rr
+                                            Left _ -> False
+                                    when (not fromCache && not linksChangedAfter) $
+                                        Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
 
                                     reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
                                     return $ Right loaded
