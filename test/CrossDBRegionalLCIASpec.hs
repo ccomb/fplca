@@ -23,7 +23,10 @@ import qualified Data.Vector.Unboxed as U
 import Test.Hspec
 
 import CrossDBRegionalLCIAFixture
+import Matrix (applyBiosphereMatrix)
 import Method.Mapping
+import qualified Method.Mapping as MM
+import Method.Types (FlowDirection (..), MethodCF (..))
 import qualified SharedSolver as SS
 import TestHelpers (mkSolverFromDb)
 import Types
@@ -214,3 +217,117 @@ spec = describe "cross-DB regional LCIA" $ do
                             ( "expected Left when every DB Lefts, got Right "
                                 <> show v
                             )
+
+    describe "non-regression invariants" $ do
+        -- These guard the cross-DB regional fix against drift on adjacent
+        -- code paths. The numerical proof-points (Right 5.0 / Right 10.0)
+        -- live in the gap-and-fix specs above; here we lock in the
+        -- properties the fix must preserve.
+
+        it "non-regional methods score identically on a cross-DB recipe" $ do
+            -- A method whose CFs are all universal (no consumer location)
+            -- never enters the regional cascade. Its score must be
+            -- whatever the merged-inventory matvec produces, regardless
+            -- of how many DBs participated. Guards against double-counting
+            -- in the non-regional code path of 'computeLCIAScoreFromTables'.
+            rootSolver <- mkSolverFromDb rootDb "root"
+            depSolver <- mkSolverFromDb depDb "dep"
+            let depLookup name =
+                    pure $
+                        if name == "dep" then Just (depDb, depSolver) else Nothing
+                -- Universal CF: same value applied wherever F shows up.
+                universalCF =
+                    MethodCF
+                        { mcfFlowRef = flowUUID
+                        , mcfFlowName = "Carbon dioxide"
+                        , mcfDirection = Output
+                        , mcfValue = 3.0
+                        , mcfCompartment = Nothing
+                        , mcfCAS = Nothing
+                        , mcfUnit = "kg"
+                        , mcfConsumerLocation = Nothing -- key: makes it non-regional
+                        }
+                universalTables =
+                    buildTables rootDb [(universalCF, Just (testFlow, ByUUID))]
+            eRes <-
+                SS.computeInventoryMatrixWithDepsCached
+                    kgUnitConfig
+                    depLookup
+                    rootDb
+                    "root"
+                    rootSolver
+                    0
+            case eRes of
+                Left err -> expectationFailure ("solve failed: " <> show err)
+                Right sol -> do
+                    -- Merged inventory has F = 1.0 kg (from dep DB).
+                    -- Universal CF = 3.0/kg → score = 3.0.
+                    let outcome =
+                            MM.computeLCIAScoreFromTables
+                                kgUnitConfig
+                                (dbUnits rootDb)
+                                (dbFlows rootDb)
+                                (SS.csInventory sol)
+                                universalTables
+                    MM.loScore outcome `shouldBe` 3.0
+
+        it "recipe without any cross-DB reach scores identically to root-only path" $ do
+            -- A root DB whose CrossDBLinks don't fire (or aren't there)
+            -- must produce a regional score equal to what the OLD
+            -- root-only path returned. The cross-DB sum must collapse to
+            -- the single-DB dot product, no spurious dep contribution.
+            let rootStandalone = mkDB 100 ["FR"] [(0, 1.0)] -- emits 1.0 on root, no links
+                standaloneTables =
+                    buildTables rootStandalone (regionalMappings [("FR", 7), ("DE", 0)])
+            rootSolver <- mkSolverFromDb rootStandalone "root"
+            let noDeps _ = pure Nothing
+            eRes <-
+                SS.computeInventoryMatrixWithDepsCached
+                    kgUnitConfig
+                    noDeps
+                    rootStandalone
+                    "root"
+                    rootSolver
+                    0
+            case eRes of
+                Left err -> expectationFailure ("solve failed: " <> show err)
+                Right sol -> do
+                    -- csScalings has only the root entry; cross-DB sum
+                    -- reduces to the single-DB dot product. Score =
+                    -- 1·CF[F, FR] = 7.
+                    let perDb = [(db, sv, standaloneTables) | (_, db, sv) <- SS.csScalings sol]
+                    sumRegionalizedLCIAScoreCrossDB
+                        kgUnitConfig
+                        (dbUnits rootStandalone)
+                        (dbFlows rootStandalone)
+                        M.empty
+                        perDb
+                        `shouldBe` Right 7.0
+
+        it "merged inventory equals the sum of per-DB biosphere matvecs" $ do
+            -- Property: csInventory is exactly Σ_d applyBiosphereMatrix d s_d
+            -- over csScalings. If 'mergeSolutions' ever drifts (drops
+            -- entries, double-counts a DB, mis-orders a transpose), this
+            -- catches it directly.
+            rootSolver <- mkSolverFromDb rootDb "root"
+            depSolver <- mkSolverFromDb depDb "dep"
+            let depLookup name =
+                    pure $
+                        if name == "dep" then Just (depDb, depSolver) else Nothing
+            eRes <-
+                SS.computeInventoryMatrixWithDepsCached
+                    kgUnitConfig
+                    depLookup
+                    rootDb
+                    "root"
+                    rootSolver
+                    0
+            case eRes of
+                Left err -> expectationFailure ("solve failed: " <> show err)
+                Right sol -> do
+                    let perDbInvs =
+                            [applyBiosphereMatrix db sv | (_, db, sv) <- SS.csScalings sol]
+                        reconstructed =
+                            foldr (M.unionWith (+)) M.empty perDbInvs
+                    M.toList (SS.csInventory sol)
+                        `shouldBe` M.toList reconstructed
