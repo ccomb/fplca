@@ -502,6 +502,8 @@ buildActivity flowInfoMap flowDB unitDB p =
         , exchanges = map (mkExchange (iprRefFlowIdx p)) (iprExchanges p)
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
   where
     refUnit = case findRefExchange p of

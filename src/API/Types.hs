@@ -35,6 +35,8 @@ data ActivitySummary = ActivitySummary
     , prsProduct :: Text -- Reference product name
     , prsProductAmount :: Double -- Reference product amount
     , prsProductUnit :: Text -- Reference product unit name
+    , prsAllocationPercent :: Maybe Double -- SimaPro coproduct allocation (%, 0..100); Nothing for non-allocated bases
+    , prsAllocationFormula :: Maybe Text -- Raw SimaPro allocation formula; Nothing if purely numeric
     }
     deriving (Generic)
 

@@ -26,7 +26,7 @@ import SimaPro.Parser (
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
-import Types (Activity (..), Exchange (..), Flow, UUID, Unit (..), exchangeComment)
+import Types (Activity (..), Exchange (..), Flow, UUID, Unit (..), exchangeComment, flowName)
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
 
 -- | Test CSV content with a quoted product name containing the delimiter (;)
@@ -427,10 +427,13 @@ spec = do
             unknowns `shouldNotContain` ["kg"]
 
         it "parses product names with embedded delimiters correctly" $ do
-            (activities, _, _) <- parseTestCSV
+            (activities, flowDB, _) <- parseTestCSV
+            -- activityName now reflects the SimaPro Process name (multi-product
+            -- friendly); the quoted product name lives on the reference flow.
             let names = map activityName activities
-            -- The quoted product name should be extracted intact
-            names `shouldContain` ["Food product (irradiated ; with treatment)"]
+            names `shouldContain` ["Irradiated Food"]
+            let flowNames = map flowName (M.elems flowDB)
+            flowNames `shouldContain` ["Food product (irradiated ; with treatment)"]
 
     describe "SimaPro classification parsing" $ do
         it "parses Category type from metadata" $ do
@@ -448,22 +451,22 @@ spec = do
             (activities, _, _) <- parseWasteCSV
             length activities `shouldSatisfy` (>= 2)
 
-        it "uses Waste treatment row as activity name" $ do
+        it "uses Process name as activity name (waste treatment block)" $ do
             (activities, _, _) <- parseWasteCSV
             let names = map activityName activities
-            names `shouldContain` ["Municipal waste incineration"]
+            names `shouldContain` ["Incineration process"]
 
         it "parses 6-field waste treatment rows without allocation" $ do
             (activities, _, _) <- parseWasteNoAllocCSV
             length activities `shouldBe` 1
             let a = head activities
-            activityName a `shouldBe` "Non-sulfidic overburden {GLO}| treatment of | Cut-off, S"
+            activityName a `shouldBe` "treatment of non-sulfidic overburden"
             let cls = activityClassification a
             M.lookup "Category" cls `shouldBe` Just "Others\\Copied from Ecoinvent cut-off S"
 
         it "marks Waste to treatment exchanges as inputs" $ do
             (activities, _, _) <- parseWasteCSV
-            let producer = head [a | a <- activities, activityName a == "Widget"]
+            let producer = head [a | a <- activities, activityName a == "Widget production"]
                 wasteExchanges =
                     [ e
                     | e@TechnosphereExchange{} <- exchanges producer
@@ -807,10 +810,78 @@ spec = do
 
         it "leaves an already-canonical kg reference unchanged" $ do
             (activities, _, _) <- parseTestCSV
-            let steel = head [a | a <- activities, activityName a == "Steel"]
+            let steel = head [a | a <- activities, activityName a == "Steel Production"]
                 refExs = [ex | ex <- exchanges steel, techIsReference ex, not (techIsInput ex)]
             techAmount (head refExs) `shouldBe` 1.0
             activityUnit steel `shouldBe` "kg"
+
+    describe "SimaPro multi-product processes (coproducts)" $ do
+        -- One Process block declares 5 coproducts with mass-allocation formulas.
+        -- The 5 resulting Activity records must share one activityUUID (so
+        -- dbActivityProductsIndex can group them) and each must carry its own
+        -- allocation percentage.
+        it "shares one activityUUID across all 5 coproducts" $ do
+            (activities, _, _) <- parseMultiCoproductCSV
+            length activities `shouldBe` 5
+            let uuids = S.fromList (map generateActivityUUID activities)
+            S.size uuids `shouldBe` 1
+
+        it "uses the Process name as activityName for every coproduct" $ do
+            (activities, _, _) <- parseMultiCoproductCSV
+            let names = S.fromList (map activityName activities)
+            S.size names `shouldBe` 1
+            S.member "Multi-coproduct refinery" names `shouldBe` True
+
+        it "stores allocation percentage on each coproduct Activity" $ do
+            (activities, _, _) <- parseMultiCoproductCSV
+            -- Order-agnostic: the 5 allocation percentages must match the
+            -- declared shares (50/20/15/10/5) as a multiset.
+            let percents = [p | a <- activities, Just p <- [activityAllocationPercent a]]
+                expected = [50.0, 20.0, 15.0, 10.0, 5.0]
+                matchOne e = any (\p -> abs (p - e) < 0.01) percents
+            length percents `shouldBe` 5
+            all matchOne expected `shouldBe` True
+            abs (sum percents - 100.0) `shouldSatisfy` (< 0.01)
+
+        it "preserves the raw allocation formula when non-numeric" $ do
+            -- paramTestCSV (butter) uses an expression "allocButter" for allocation
+            (activities, _, _) <- parseParamCSV
+            let butter = head activities
+            activityAllocationFormula butter `shouldBe` Just "allocButter"
+
+        it "leaves allocation formula populated for formula-based allocations" $ do
+            (activities, _, _) <- parseMultiCoproductCSV
+            -- Multi-coproduct allocations are of the form 'Sx /(...)*100',
+            -- so the formula field should be populated for each coproduct.
+            let formulas = [activityAllocationFormula a | a <- activities]
+            all (/= Nothing) formulas `shouldBe` True
+
+        it "scales shared exchanges by the per-coproduct allocation fraction" $ do
+            (activities, _, _) <- parseMultiCoproductCSV
+            -- A shared 1 kg upstream input is allocated across the 5 coproducts:
+            -- Alpha 0.5 kg, Beta 0.2 kg, Gamma 0.15 kg, Delta 0.1 kg, Epsilon
+            -- 0.05 kg. The sum across all coproduct columns restores 1 kg.
+            let perActivity =
+                    [ techAmount e
+                    | a <- activities
+                    , e@TechnosphereExchange{} <- exchanges a
+                    , techIsInput e
+                    , not (techIsReference e)
+                    ]
+            length perActivity `shouldBe` 5
+            let total = sum perActivity
+            abs (total - 1.0) `shouldSatisfy` (< 0.001)
+
+    describe "SimaPro Process name fallback" $ do
+        it "falls back to product name when Process name field is empty" $ do
+            (activities, _, _) <- parseNoProcessNameCSV
+            length activities `shouldBe` 1
+            -- With an empty 'Process name', the product name is used as
+            -- activityName (preserves legacy behaviour for mono-product CSVs
+            -- that omit the field).
+            activityName (head activities) `shouldBe` "Bare product"
+            -- A single-product Process still carries Just 100.0 allocation.
+            activityAllocationPercent (head activities) `shouldBe` Just 100.0
 
 -- ---------------------------------------------------------------------------
 -- Helpers for section tests
@@ -933,3 +1004,101 @@ parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
+
+-- | Two Maybe Double values, considered equal within 0.01.
+approxEqAlloc :: Maybe Double -> Maybe Double -> Bool
+approxEqAlloc (Just a) (Just b) = abs (a - b) < 0.01
+approxEqAlloc Nothing Nothing = True
+approxEqAlloc _ _ = False
+
+-- | Generic 5-coproduct fixture: one Process block emits 5 fictional outputs
+-- with five mass-allocation formulas. Percentages are chosen so they sum to
+-- exactly 100 and use round numbers (50/20/15/10/5), keeping the test
+-- self-contained without copying real LCA data. The five share-parameters
+-- (S1..S5) are arranged so the formula 'Sx /(S1+S2+S3+S4+S5)*100' returns
+-- the corresponding percentage. A single upstream input lets us assert
+-- allocation scaling on the resulting Activities.
+multiCoproductCSV :: BS.ByteString
+multiCoproductCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "processing"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Process name"
+        , "Multi-coproduct refinery"
+        , ""
+        , "Geography"
+        , "GLO"
+        , ""
+        , "Products"
+        , "Product Alpha;kg;1;S1 /(S1 + S2 + S3 + S4 + S5)*100;not defined;processing;"
+        , "Product Beta;kg;1;S2 /(S1 + S2 + S3 + S4 + S5)*100;not defined;processing;"
+        , "Product Gamma;kg;1;S3 /(S1 + S2 + S3 + S4 + S5)*100;not defined;processing;"
+        , "Product Delta;kg;1;S4 /(S1 + S2 + S3 + S4 + S5)*100;not defined;processing;"
+        , "Product Epsilon;kg;1;S5 /(S1 + S2 + S3 + S4 + S5)*100;not defined;processing;"
+        , ""
+        , "Input parameters"
+        , "S1;50;Undefined;0;0;No;"
+        , "S2;20;Undefined;0;0;No;"
+        , "S3;15;Undefined;0;0;No;"
+        , "S4;10;Undefined;0;0;No;"
+        , "S5;5;Undefined;0;0;No;"
+        , ""
+        , "Materials/fuels"
+        , "Upstream feedstock;kg;1;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseMultiCoproductCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
+    BS.hPut handle multiCoproductCSV
+    hClose handle
+    parseSimaProCSV defaultUnitConfig path
+
+-- | Single-product CSV with an empty Process name field. Mirrors mono-product
+-- SimaPro exports that leave the "Process name" line blank: the parser must
+-- fall back to the product row name so activityUUID stays stable.
+noProcessNameCSV :: BS.ByteString
+noProcessNameCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , ""
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Geography"
+        , "GLO"
+        , ""
+        , "Products"
+        , "Bare product;kg;1.0;100;not defined;material;"
+        , ""
+        , "End"
+        ]
+
+parseNoProcessNameCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseNoProcessNameCSV = withSystemTempFile "no-process-name.csv" $ \path handle -> do
+    BS.hPut handle noProcessNameCSV
+    hClose handle
+    parseSimaProCSV defaultUnitConfig path

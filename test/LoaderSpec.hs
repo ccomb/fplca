@@ -48,6 +48,8 @@ minimalActivity name loc exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 refExchange :: UUID.UUID -> Exchange

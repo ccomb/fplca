@@ -240,6 +240,8 @@ data Activity = Activity
     , exchanges :: ![Exchange] -- List of exchanges
     , activityParams :: !(M.Map Text Double) -- Resolved SimaPro parameter values
     , activityParamExprs :: !(M.Map Text Text) -- Raw SimaPro parameter expressions (for re-evaluation)
+    , activityAllocationPercent :: !(Maybe Double) -- SimaPro multi-product allocation fraction (%, 0..100); Nothing for non-allocated bases
+    , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
     }
     deriving (Generic, NFData, Store)
 

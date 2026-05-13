@@ -33,6 +33,8 @@ mkActivity name loc xs =
         , exchanges = xs
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 mkRefOutput :: UUID -> Exchange

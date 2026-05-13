@@ -54,6 +54,8 @@ activityWithRefExchange fid =
             ]
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 -- An activity with a single unresolved input exchange for the given flow UUID
@@ -66,6 +68,8 @@ activityWithInputExchange fid =
         , activityClassification = M.empty
         , activityLocation = "GLO"
         , activityUnit = "kg"
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         , exchanges =
             [ TechnosphereExchange
                 { techFlowId = fid

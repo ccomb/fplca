@@ -154,6 +154,11 @@ History of manual bumps:
      pattern (ecoinvent 3.9.1 export). Caches built before this bump have
      empty activityLocation for every activity in such databases, which
      breaks geography-aware supplier lookups.
+- 7: SimaPro multi-product processes now share one activityUUID across
+     coproducts (activityName derived from "Process name" field, not from
+     the product name). Activity record gained activityAllocationPercent
+     and activityAllocationFormula. Old caches have stale per-product
+     UUIDs and miss the allocation fields entirely.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -161,7 +166,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
-     in hi `xor` lo `xor` 6
+     in hi `xor` lo `xor` 7
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

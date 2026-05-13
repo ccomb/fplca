@@ -91,6 +91,8 @@ mkActivity loc =
         , exchanges = []
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 -- Triples: (bioRow=0, col=i, value=v) for each activity.

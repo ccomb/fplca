@@ -27,6 +27,8 @@ emptyActivity =
         , exchanges = []
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 -- | A production output exchange (isInput=False, isReference=False by default)
