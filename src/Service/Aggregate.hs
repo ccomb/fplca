@@ -45,6 +45,7 @@ import Service (
     resolveActivityAndProcessId,
  )
 import SharedSolver (DepSolverLookup, SharedSolver, computeInventoryMatrixWithDepsCached, solveWithSharedSolver)
+import qualified SharedSolver
 import Types (
     Activity,
     Database (..),
@@ -162,11 +163,12 @@ aggregate unitConfig flowDB unitDB db dbName solver depLookup pidText params =
                             False
                     return $ fmap (reduce params . rowsFromSupplyChain) eResp
                 ScopeBiosphere -> do
-                    invE <- computeInventoryMatrixWithDepsCached unitConfig depLookup db solver processId
-                    case invE of
+                    solE <- computeInventoryMatrixWithDepsCached unitConfig depLookup db dbName solver processId
+                    case solE of
                         Left err -> return (Left (MatrixError err))
-                        Right inventory ->
-                            let export = convertToInventoryExport db flowDB unitDB processId activity inventory
+                        Right sol ->
+                            let inventory = SharedSolver.csInventory sol
+                                export = convertToInventoryExport db flowDB unitDB processId activity inventory
                              in return $ Right $ reduce params (rowsFromBiosphere export)
   where
     emptyFilter maxD =

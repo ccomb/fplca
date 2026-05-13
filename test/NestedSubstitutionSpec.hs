@@ -30,6 +30,7 @@ import SharedSolver (
     createSharedSolver,
     solveWithSharedSolver,
  )
+import qualified SharedSolver
 import Test.Hspec
 import TestHelpers (
     linkDatabases,
@@ -141,10 +142,12 @@ spec = do
             solver <- mkSolver db "SAMPLE.min3"
             let pid = 0
                 noDeps _ = pure Nothing
-            eBase <- computeInventoryMatrixWithDepsCached defaultUnitConfig noDeps db solver pid
+            eBase <- computeInventoryMatrixWithDepsCached defaultUnitConfig noDeps db "SAMPLE.min3" solver pid
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid []
             case (eBase, eSub) of
-                (Right base, Right subInv) -> M.toList subInv `shouldBe` M.toList base
+                (Right base, Right subSol) ->
+                    M.toList (SharedSolver.csInventory subSol)
+                        `shouldBe` M.toList (SharedSolver.csInventory base)
                 (Left e, _) -> expectationFailure ("baseline failed: " <> T.unpack e)
                 (_, Left e) -> expectationFailure ("subs path failed: " <> show e)
 
@@ -192,8 +195,9 @@ spec = do
             eBase <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 []
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [mkDepSub fromPid toPid]
             case (eBase, eSub) of
-                (Right base, Right subInv) ->
-                    M.toList subInv `shouldNotBe` M.toList base
+                (Right base, Right subSol) ->
+                    M.toList (SharedSolver.csInventory subSol)
+                        `shouldNotBe` M.toList (SharedSolver.csInventory base)
                 (Left e, _) -> expectationFailure ("baseline failed: " <> show e)
                 (_, Left e) -> expectationFailure ("dep-sub path failed: " <> show e)
 
@@ -226,7 +230,8 @@ spec = do
             eChain <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [rootSub, depSub]
             case (eBase, eChain) of
                 (Right base, Right c) ->
-                    M.toList c `shouldNotBe` M.toList base
+                    M.toList (SharedSolver.csInventory c)
+                        `shouldNotBe` M.toList (SharedSolver.csInventory base)
                 _ -> expectationFailure "chain or baseline path failed"
 
         it "identity dep-sub (from == to) matches baseline (no-op invariant)" $ do
@@ -249,8 +254,9 @@ spec = do
             eBase <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 []
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [identitySub]
             case (eBase, eSub) of
-                (Right base, Right subInv) ->
-                    M.toList subInv `shouldBe` M.toList base
+                (Right base, Right subSol) ->
+                    M.toList (SharedSolver.csInventory subSol)
+                        `shouldBe` M.toList (SharedSolver.csInventory base)
                 (Left e, _) -> expectationFailure ("baseline failed: " <> show e)
                 (_, Left e) -> expectationFailure ("identity path failed: " <> show e)
 

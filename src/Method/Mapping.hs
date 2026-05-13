@@ -36,6 +36,7 @@ module Method.Mapping (
     computeLCIAScoreFromTables,
     computeLCIAScoreAuto,
     computeRegionalizedLCIAScore,
+    sumRegionalizedLCIAScoreCrossDB,
     computeLCIAScoreWithDiagnostics,
     findUncharacterized,
     findSimilarCFs,
@@ -70,6 +71,8 @@ import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.List (find, sortOn)
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Ord (Down (..))
@@ -928,12 +931,21 @@ computeRegionalizedLCIAScore ::
 computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier tables =
     case mtRegionalActivityWeights tables of
         Just raw -> scoreFromPrecomputed raw scalingVec
-        Nothing ->
-            Left
-                "Regionalized score requested but precomputed activity weights\
-                \ are absent. Call 'fillRegionalActivityWeights' on the\
-                \ MethodTables before scoring (mapMethodToTablesCached does\
-                \ this automatically)."
+        Nothing
+            -- Cross-DB scoring passes per-DB tables in; a dep DB whose flow
+            -- mappings caught none of this method's regional CFs has empty
+            -- 'mtRegionalizedCF', so 'fillRegionalActivityWeights' left
+            -- 'mtRegionalActivityWeights' unfilled. Treat as a 0
+            -- contribution rather than erroring — non-regional emissions
+            -- from that DB are handled by the broadcast pass for which the
+            -- DB built 'rawWeights' from its own broadcast cell.
+            | M.null (mtRegionalizedCF tables) -> Right 0
+            | otherwise ->
+                Left
+                    "Regionalized score requested but precomputed activity weights\
+                    \ are absent. Call 'fillRegionalActivityWeights' on the\
+                    \ MethodTables before scoring (mapMethodToTablesCached does\
+                    \ this automatically)."
   where
     -- Fast path: one dot product over precomputed per-column weights.
     -- If any tainted activity carries non-zero scaling, surface the gap
@@ -976,6 +988,52 @@ computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier ta
                                         <> " tainted activity column(s) reached by this inventory"
                                         <> " — see warnings emitted at table-build time for the missing (flow, location) pairs."
                             else Right score
+
+{- | Cross-DB regionalized LCIA score.
+
+For each participating database @d@ (root + each dep DB reached at request
+time), call 'computeRegionalizedLCIAScore' against THAT DB's scaling
+vector and MethodTables, then sum the per-DB scores. Equivalent to one
+dot product over the concatenated activity space
+@[s_root, s_dep1, …] · [w_root, w_dep1, …]@ — just computed per-DB so
+each side keeps its own activity index, hierarchy walks and tainted-column
+diagnostics local.
+
+Closes the gap where dep-DB biosphere emissions are present in the merged
+inventory but invisible to the regional dot product (which was previously
+keyed on the root DB's activity columns alone).
+
+Per-DB 'Left' is tolerated: any DB whose 'computeRegionalizedLCIAScore'
+fails (tainted columns with non-zero scaling, missing weights, …) drops to
+a 0 contribution from THAT database and the function keeps summing the
+rest. The build-time WARN already lists every uncovered (flow, location)
+pair per @(db, method)@ — that is the single source of truth for what's
+missing. Score-time silently zeroing a whole method just because one dep
+DB has incomplete coverage would regress the user's view of computable
+methods; this best-effort sum preserves the partial answer while the
+build-time WARN keeps the coverage gap visible.
+
+Returns 'Left' only when 'every' triple's score is 'Left' (no recoverable
+contribution from any participating DB) — the gap is unrecoverable and the
+caller should surface it as an error rather than report 0.
+-}
+sumRegionalizedLCIAScoreCrossDB ::
+    UnitConfig ->
+    UnitDB ->
+    FlowDB ->
+    M.Map Text [Text] ->
+    {- | Per-DB triples: one per database participating in the cross-DB solve
+    (root + dep DBs in the same order returned by 'SharedSolver.csScalings').
+    -}
+    [(Database, Vector, MethodTables)] ->
+    Either Text Double
+sumRegionalizedLCIAScoreCrossDB unitCfg unitDB flowDB hier triples =
+    let results = [computeRegionalizedLCIAScore unitCfg unitDB flowDB db sv hier t | (db, sv, t) <- triples]
+        rights = [s | Right s <- results]
+        lefts = [e | Left e <- results]
+     in case (rights, lefts) of
+            ([], errs) | not (null errs) -> Left (T.intercalate "; " errs)
+            _ -> Right (sum rights)
 
 {- | Resolve a CF for a (flow, location) pair through the hierarchy + broadcast
 fallback. See 'computeRegionalizedLCIAScore' for the rules.
@@ -1313,52 +1371,74 @@ regional method whose coverage is incomplete (mirrors 'computeLCIAScoreAuto').
 The two halves of the set are scored by separate code paths and merged by
 methodId so the result list follows the input order ('msAllMethods'):
 
-  * non-regional half ('msBatched'): one matvec over the shared dense
-    broadcast — the PR #29 fast path, restored for mixed sets like EF 3.1;
-  * regional half ('msRegional'): per-method dispatch through
-    'computeLCIAScoreAuto', which since PR #39 is itself a per-pid dot
-    product against precomputed activity weights.
+  * non-regional half ('msBatched' on root): one matvec over the shared
+    dense broadcast — the PR #29 fast path, restored for mixed sets like
+    EF 3.1. Reads the merged cross-DB inventory, so dep-DB flows are
+    characterized without any per-DB bookkeeping.
+  * regional half ('msRegional' on root): per-method cross-DB sum
+    ('sumRegionalizedLCIAScoreCrossDB'). For each regional method, the
+    score is @Σ_d rawWeights_d · scaling_d@ across every participating
+    database — root + each dep DB reached at request time. Closes the
+    gap where dep-DB regional CFs were previously invisible.
+
+Callers pass the per-DB triples as a 'NonEmpty' with the ROOT triple at
+'NE.head'. The non-regional matvec is keyed off the root entry's
+'msBatched'; the regional cross-DB sum walks every entry. The 'NonEmpty'
+constraint makes the impossible state (no DBs participated) unrepresentable.
 -}
 computeLCIAScoreSetFromTables ::
     UnitConfig ->
     UnitDB ->
     FlowDB ->
-    Database ->
-    Vector ->
     Inventory ->
     M.Map Text [Text] ->
-    MethodSetTables ->
+    {- | Non-empty per-DB triples: 'NE.head' is root, tail is each participating
+    dep DB. Building order matches 'SharedSolver.csScalings'.
+    -}
+    NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]
-computeLCIAScoreSetFromTables unitCfg unitDB flowDB db scalingVec inventory hier mst =
-    let batched = scoreBatched unitCfg unitDB flowDB (msBatched mst) inventory
-        regional =
-            scoreRegional unitCfg unitDB flowDB db scalingVec inventory hier (msRegional mst)
+computeLCIAScoreSetFromTables unitCfg unitDB flowDB inventory hier perDb =
+    let (_, _, mstRoot) = NE.head perDb
+        batched = scoreBatched unitCfg unitDB flowDB (msBatched mstRoot) inventory
+        regional = scoreRegionalCrossDB unitCfg unitDB flowDB hier (msRegional mstRoot) perDb
         byId = M.fromList (batched ++ regional)
      in [ (mseMethodId e, byId M.! mseMethodId e)
-        | e <- V.toList (msAllMethods mst)
+        | e <- V.toList (msAllMethods mstRoot)
         ]
 
-{- | Per-method dispatch for the regional half of a 'MethodSetTables'. Each
-call into 'computeLCIAScoreAuto' uses PR #39's precomputed regional
-activity weights, so individually they're tight dot products — they
-just aren't stacked across methods (yet).
+{- | Per-method cross-DB regional sum. For each regional method, scores
+@Σ_d rawWeights_d · scaling_d@ across all participating DBs by looking
+up that method's tables in each DB's 'MethodSetTables' and summing the
+per-DB dot products via 'sumRegionalizedLCIAScoreCrossDB'.
+
+A DB whose 'MethodSetTables' has no entry for a given methodId (mismatched
+sets) contributes 0 for that method — the same neutral element as a DB
+whose mappings caught none of the method's regional CFs.
 -}
-scoreRegional ::
+scoreRegionalCrossDB ::
     UnitConfig ->
     UnitDB ->
     FlowDB ->
-    Database ->
-    Vector ->
-    Inventory ->
     M.Map Text [Text] ->
     V.Vector MethodSetEntry ->
+    NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]
-scoreRegional unitCfg unitDB flowDB db scalingVec inventory hier ms =
+scoreRegionalCrossDB unitCfg unitDB flowDB hier ms perDb =
     [ ( mseMethodId e
-      , computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier (mseTables e)
+      , sumRegionalizedLCIAScoreCrossDB unitCfg unitDB flowDB hier (triples (mseMethodId e))
       )
     | e <- V.toList ms
     ]
+  where
+    -- Per-method per-DB triples; skip DBs that don't carry this method.
+    triples mid =
+        [ (db, sv, t)
+        | (db, sv, mst) <- NE.toList perDb
+        , Just t <- [lookupMethodTables mid mst]
+        ]
+    lookupMethodTables mid mst =
+        mseTables
+            <$> V.find ((== mid) . mseMethodId) (msAllMethods mst)
 
 {- | One sparse-inventory matvec over the non-regional half of a method set.
 For each non-zero @(uuid, qty)@ in the inventory, accumulates
