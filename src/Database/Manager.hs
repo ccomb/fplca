@@ -88,6 +88,9 @@ module Database.Manager (
 
     -- * Internal (for Main.hs to load database)
     loadDatabaseFromConfig,
+
+    -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
+    loadDatabaseRawWithCrossDB,
 ) where
 
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
