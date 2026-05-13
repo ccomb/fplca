@@ -1361,6 +1361,16 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 dbName
                                 ("Auto-extracted from " <> dcDisplayName dbConfig)
                                 pairs
+                            -- Re-link THIS DB too. A cache hit can return a
+                            -- DB whose stored 'dbCrossDBLinks' point at deps
+                            -- that aren't loaded now (or miss deps that are):
+                            -- 'loadDatabaseRawWithCrossDB' only re-parses
+                            -- when 'unresolvedCount > 0', so a fully-resolved
+                            -- cache against version A is reused as-is even
+                            -- when version B is now loaded instead. The
+                            -- self-relink walks the current 'otherIndexes'
+                            -- and rewrites links + cache if they changed.
+                            _ <- relinkDatabase manager dbName
                             relinkDependents manager dbName
                             return $ Right loaded
 
@@ -1379,6 +1389,13 @@ of loaded dep DBs. Updates 'dbCrossDBLinks' and 'dbLinkingStats' in place
 in the LoadedDatabase record. Does NOT rebuild the technosphere matrix or
 invalidate the MUMPS factorization — cross-DB links are consumed only at
 solve time.
+
+Side-effect: persists the updated 'Database' back to its matrix-cache file
+('Loader.saveCachedDatabaseWithMatrices') whenever the relink actually
+changed 'dbCrossDBLinks' or 'dbDependsOn'. Without this, the next startup
+would re-load the stale cache and re-run cross-DB linking from scratch
+even though we already know the answer. The save is skipped when the
+relink is a no-op (no change vs. the in-memory state).
 -}
 relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
 relinkDatabase manager dbName = do
@@ -1392,6 +1409,8 @@ relinkDatabase manager dbName = do
             unitConfig <- getMergedUnitConfig manager
             let db = ldDatabase loaded
                 beforeUnresolved = unresolvedCount (dbLinkingStats db)
+                beforeLinks = dbCrossDBLinks db
+                beforeDeps = dbDependsOn db
                 activityMap =
                     M.fromList
                         [ (dbProcessIdTable db V.! i, dbActivities db V.! i)
@@ -1423,12 +1442,20 @@ relinkDatabase manager dbName = do
                         }
                 !loaded' = loaded{ldDatabase = db'}
                 afterUnresolved = unresolvedCount newStats
+                linksChanged = newLinks /= beforeLinks || newDeps /= beforeDeps
             atomically $ do
                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                 modifyTVar'
                     (dmIndexedDbs manager)
                     (M.insert dbName (buildIndexedDatabaseFromDB dbName synonymDB db'))
             clearMethodMappingCacheForDb manager dbName
+            -- Persist the relinked Database back to its matrix cache so the
+            -- next startup doesn't have to re-discover the same links.
+            when linksChanged $
+                Loader.saveCachedDatabaseWithMatrices
+                    dbName
+                    (dcPath (ldConfig loaded'))
+                    db'
             reportProgress Info $
                 "Re-linked "
                     <> T.unpack dbName
@@ -2203,6 +2230,15 @@ finalizeDatabase manager dbName = do
                                     -- Only save to cache when matrices were built fresh
                                     when (not fromCache) $
                                         Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
+
+                                    -- Self-relink against the current dep
+                                    -- set. Same rationale as the Load path:
+                                    -- a cached DB can carry stale cross-DB
+                                    -- links that no longer match what is
+                                    -- loaded now. 'relinkDatabase' will
+                                    -- rewrite both the in-memory state and
+                                    -- the cache file when the answer changes.
+                                    _ <- relinkDatabase manager dbName
 
                                     reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
                                     return $ Right loaded
