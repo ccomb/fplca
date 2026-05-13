@@ -787,7 +787,7 @@ callGetInventory dbManager rid args =
                         if null subs
                             then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName solver processId)
                             else
-                                either (Left . T.pack . show) Right
+                                either (Left . T.pack . show) (Right . SharedSolver.csInventory)
                                     <$> Service.inventoryWithSubsAndDeps
                                         unitCfg
                                         (DM.mkDepSolverLookup dbManager)
@@ -895,7 +895,7 @@ runImpactsRequest dbManager args req = do
             if null subs
                 then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName (ldSharedSolver ld) (raPid ra))
                 else
-                    either (Left . T.pack . show) Right
+                    either (Left . T.pack . show) (Right . SharedSolver.csInventory)
                         <$> Service.inventoryWithSubsAndDeps
                             unitCfg
                             (DM.mkDepSolverLookup dbManager)

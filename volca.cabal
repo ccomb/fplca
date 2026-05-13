@@ -175,6 +175,8 @@ test-suite lca-tests
                      , CrossLinkingSpec
                      , CrossDBInventorySpec
                      , CrossDBRegionalLCIASpec
+                     , CrossDBRegionalLCIAFixture
+                     , CrossDBRegionalLCIASubsSpec
                      , RegionalLCIASpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec

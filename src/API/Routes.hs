@@ -782,7 +782,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eInv <-
+        eSol <-
             liftIO $
                 Service.inventoryWithSubsAndDeps
                     unitCfg
@@ -792,20 +792,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     sharedSolver
                     processId
                     (srSubstitutions subReq)
-        inventory <- either throwServiceError pure eInv
-        -- Substitution path keeps a root-only 'CrossDBSolution': the
-        -- regional cross-DB sum sees only root's MethodTables here, so a
-        -- regional CF that lives in a dep DB's mapping won't apply to the
-        -- substituted-and-routed dep emissions. Tracked as a follow-up;
-        -- substitution + regional cross-DB requires per-DB scalings from
-        -- 'Service.goWithSubsAndDeps', which still returns the merged
-        -- inventory only.
-        rootScaling <- liftIO $ SharedSolver.computeScalingVectorCached db sharedSolver processId
-        let sol =
-                SharedSolver.CrossDBSolution
-                    { SharedSolver.csInventory = inventory
-                    , SharedSolver.csScalings = [(dbName, db, rootScaling)]
-                    }
+        sol <- either throwServiceError pure eSol
         liftIO $ computeCategoryResult dbName db sol activity 5 Nothing method
 
     -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
@@ -940,7 +927,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
             mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eInv <-
+        eSol <-
             liftIO $
                 Service.inventoryWithSubsAndDeps
                     unitCfg
@@ -950,16 +937,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     sharedSolver
                     processId
                     (srSubstitutions subReq)
-        inventory <- either throwServiceError pure eInv
-        -- Substitution path: root-only 'CrossDBSolution' (regional cross-DB
-        -- sum sees only root MethodTables here, same gap as documented on
-        -- 'postActivityLCIA').
-        rootScaling <- liftIO $ SharedSolver.computeScalingVectorCached db sharedSolver processId
-        let sol =
-                SharedSolver.CrossDBSolution
-                    { SharedSolver.csInventory = inventory
-                    , SharedSolver.csScalings = [(dbName, db, rootScaling)]
-                    }
+        sol <- either throwServiceError pure eSol
         scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
         rawResults <-
             liftIO $
@@ -983,7 +961,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         requireFullyLinked dbName db
         (processId, activity) <- resolveOrThrow db processIdText
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eInv <-
+        eSol <-
             liftIO $
                 Service.inventoryWithSubsAndDeps
                     unitCfg
@@ -993,9 +971,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     sharedSolver
                     processId
                     (srSubstitutions subReq)
-        inventory <- either throwServiceError pure eInv
+        sol <- either throwServiceError pure eSol
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity inventory
+        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
 
     -- POST: Supply chain with substitutions
     postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse

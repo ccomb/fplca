@@ -32,6 +32,7 @@ module SharedSolver (
     computeInventoryMatrixWithDepsCached,
     computeInventoryMatrixBatchWithDepsCached,
     goWithDepsFromScalings,
+    mergeSolutions,
     crossDBProcessContributions,
 ) where
 
@@ -327,14 +328,23 @@ goWithDepsFromScalings unitConfig depLookup db dbName extraLinks scalings depth 
                                         mergeSolutions
                                         baseSolutions
                                         perRootDepSols
-  where
-    mergeSolutions base depSols =
-        CrossDBSolution
-            { csInventory =
-                foldr (M.unionWith (+)) (csInventory base) (map csInventory depSols)
-            , csScalings =
-                csScalings base ++ concatMap csScalings depSols
-            }
+
+{- | Merge a base 'CrossDBSolution' (this DB's own contribution) with the
+list of dep-DB solutions resolved at this level. Inventories are summed
+via 'M.unionWith (+)'; scaling vectors are concatenated so the final
+'csScalings' lists every visited DB in BFS order.
+
+Exported so the substitution-aware solver ('Service.goWithSubsAndDeps')
+reuses the same merge shape as the plain cross-DB solver.
+-}
+mergeSolutions :: CrossDBSolution -> [CrossDBSolution] -> CrossDBSolution
+mergeSolutions base depSols =
+    CrossDBSolution
+        { csInventory =
+            foldr (M.unionWith (+)) (csInventory base) (map csInventory depSols)
+        , csScalings =
+            csScalings base ++ concatMap csScalings depSols
+        }
 
 resolveDep ::
     UnitConfig ->
