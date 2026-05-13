@@ -694,7 +694,24 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     bioFlows = dbBiosphereFlows db
     bioTriples = dbBiosphereTriples db
     regional = mtRegionalizedCF tables
-    regionalizedFlows = Set.fromList [f | (f, _) <- M.keys regional]
+
+    -- Flow-row-indexed view of 'regional'. For each biosphere flow row index
+    -- @r@, @regionalByRow V.! r@ is @Just locMap@ when that flow has any
+    -- regionalized CF, @Nothing@ otherwise. Most biosphere flows in a
+    -- typical inventory are not regionalized, so the hot loop's outer test
+    -- becomes a single 'V.!' + Nothing match instead of two
+    -- @M.lookup (UUID, Text)@ walks (exact + parents) against the big shared
+    -- @(UUID, Text)@-keyed map. Subsumes the old
+    -- @regionalizedFlows :: Set UUID@ check — @Just _@ here is the
+    -- "this flow is regionalized" signal needed at the taint branch.
+    regionalByRow :: V.Vector (Maybe (M.Map Text (Double, Text)))
+    regionalByRow =
+        let perFlow :: M.Map UUID (M.Map Text (Double, Text))
+            perFlow =
+                M.fromListWith
+                    M.union
+                    [(f, M.singleton loc cf) | ((f, loc), cf) <- M.toList regional]
+         in V.map (`M.lookup` perFlow) bioFlows
 
     -- ProcessId → matrix column index → activity's reference location.
     -- Built once (O(nActivities)) and indexed by column inside the hot loop.
@@ -734,8 +751,8 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
         missRef <- newSTRef (Set.empty :: Set.Set (UUID, Text))
         U.forM_ bioTriples $ \(SparseTriple flowRow colIdx bioVal) -> do
             let !col = fromIntegral colIdx :: Int
-                !flowUUID = bioFlows V.! fromIntegral flowRow
-                !loc = colLoc V.! col
+                !row = fromIntegral flowRow :: Int
+                !flowUUID = bioFlows V.! row
                 applyRaw cfTuple =
                     let !contribution =
                             convertAndMultiply
@@ -745,28 +762,40 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                                 cfTuple
                                 bioVal
                      in MU.unsafeModify ws (+ contribution) col
-                -- Walk the parent locations until one yields a CF. Allocates
-                -- no list cells — replaces 'firstJust [.. | p <- parents]'.
-                lookupParents [] = Nothing
-                lookupParents (p : ps) = case M.lookup (flowUUID, p) regional of
-                    Just cf -> Just cf
-                    Nothing -> lookupParents ps
-            case M.lookup (flowUUID, loc) regional of
-                Just cfTuple -> applyRaw cfTuple
-                Nothing -> case lookupParents (M.findWithDefault [] loc hier) of
-                    Just cfTuple -> applyRaw cfTuple
-                    Nothing -> case M.lookup flowUUID broadcast of
-                        Just preMultipliedCF ->
-                            -- 'mtBroadcast' is the unit-converted CF per
-                            -- unit of flow, so the contribution is
-                            -- bioVal * preMultipliedCF — same algebra
-                            -- as 'computeLCIAScoreFromTables's fast path.
-                            MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
-                        Nothing
-                            | Set.member flowUUID regionalizedFlows -> do
-                                MU.unsafeWrite ts col 1
-                                modifySTRef' missRef (Set.insert (flowUUID, loc))
-                            | otherwise -> pure ()
+                -- 'mtBroadcast' is the unit-converted CF per unit of flow, so
+                -- the contribution is @bioVal * preMultipliedCF@ — same
+                -- algebra as 'computeLCIAScoreFromTables's fast path.
+                applyBroadcast = case M.lookup flowUUID broadcast of
+                    Just preMultipliedCF ->
+                        MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
+                    Nothing -> pure ()
+            case regionalByRow V.! row of
+                -- Common case: flow is not regionalized at all. No exact /
+                -- parent walk; just broadcast (universal CF) if present.
+                Nothing -> applyBroadcast
+                Just locMap ->
+                    let !loc = colLoc V.! col
+                        -- Walk the parent locations until one yields a CF.
+                        -- Allocates no list cells — replaces
+                        -- @firstJust [.. | p <- parents]@.
+                        lookupParents [] = Nothing
+                        lookupParents (p : ps) = case M.lookup p locMap of
+                            Just cf -> Just cf
+                            Nothing -> lookupParents ps
+                     in case M.lookup loc locMap of
+                            Just cfTuple -> applyRaw cfTuple
+                            Nothing -> case lookupParents (M.findWithDefault [] loc hier) of
+                                Just cfTuple -> applyRaw cfTuple
+                                Nothing -> case M.lookup flowUUID broadcast of
+                                    Just preMultipliedCF ->
+                                        MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
+                                    Nothing -> do
+                                        -- Flow IS regionalized (locMap is
+                                        -- @Just _@) but has no CF for this
+                                        -- location even after parents and
+                                        -- no universal broadcast — taint.
+                                        MU.unsafeWrite ts col 1
+                                        modifySTRef' missRef (Set.insert (flowUUID, loc))
         wsF <- U.unsafeFreeze ws
         tsF <- U.unsafeFreeze ts
         miss <- readSTRef missRef
