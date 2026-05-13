@@ -94,7 +94,7 @@ import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
@@ -1376,7 +1376,13 @@ loadDatabaseSingleFromConfig manager dbName = do
                             -- against a previous dep set — possibly stale
                             -- versions of the same dep names — so a relink
                             -- is required to converge.
-                            when fromCache $ void $ relinkDatabase manager dbName
+                            when fromCache $ do
+                                result <- relinkDatabase manager dbName
+                                case result of
+                                    Right _ -> return ()
+                                    Left err ->
+                                        reportProgress Warning $
+                                            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
                             relinkDependents manager dbName
                             return $ Right loaded
 
@@ -2254,9 +2260,12 @@ finalizeDatabase manager dbName = do
                                     -- 'Left' fallback preserves the original
                                     -- "save iff fresh" behavior if relink
                                     -- failed for some unexpected reason.
-                                    let linksChangedAfter = case relinkOutcome of
-                                            Right rr -> rresLinksChanged rr
-                                            Left _ -> False
+                                    linksChangedAfter <- case relinkOutcome of
+                                        Right rr -> return (rresLinksChanged rr)
+                                        Left err -> do
+                                            reportProgress Warning $
+                                                "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
+                                            return False
                                     when (not fromCache && not linksChangedAfter) $
                                         Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
 
