@@ -12,6 +12,7 @@ import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
 import qualified CrossDBRegionalLCIASpec
+import qualified CrossDBRegionalLCIASensitivitySpec
 import qualified CrossDBRegionalLCIASubsSpec
 import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
@@ -72,6 +73,7 @@ main = hspec $ do
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Cross-DB Regional LCIA" CrossDBRegionalLCIASpec.spec
         describe "Cross-DB Regional LCIA (substitution path)" CrossDBRegionalLCIASubsSpec.spec
+        describe "Cross-DB Regional LCIA (sensitivity path)" CrossDBRegionalLCIASensitivitySpec.spec
         describe "Substitutions" SubstitutionSpec.spec
         describe "Sensitivity Analysis" SensitivitySpec.spec
         describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec

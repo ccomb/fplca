@@ -177,6 +177,7 @@ test-suite lca-tests
                      , CrossDBRegionalLCIASpec
                      , CrossDBRegionalLCIAFixture
                      , CrossDBRegionalLCIASubsSpec
+                     , CrossDBRegionalLCIASensitivitySpec
                      , RegionalLCIASpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec

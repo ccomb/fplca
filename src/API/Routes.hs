@@ -35,7 +35,7 @@ import qualified Database.Manager as DM
 import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
-import Matrix (Inventory, Vector, applyBiosphereMatrix)
+import Matrix (Inventory, Vector)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
@@ -796,6 +796,19 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         liftIO $ computeCategoryResult dbName db sol activity 5 Nothing method
 
     -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
+    --
+    -- Perturbations are root-only by design (Sherman-Morrison rank-1 on
+    -- root's MUMPS factorization; 'Service.resolveRootOnly' rejects
+    -- "dbName::pid" forms). But scoring the perturbed root scaling must
+    -- still walk the cross-DB graph: dep-DB regional CFs are invisible
+    -- to a root-only 'applyBiosphereMatrix', and the propagation infra
+    -- ('SharedSolver.goWithDepsFromScalings') is already documented for
+    -- this exact use case ("caller supplies root scalings, e.g. after
+    -- a Sherman-Morrison update").
+    --
+    -- Cost: each perturbation now triggers one cross-DB back-substitution
+    -- per dep DB it actually reaches. MUMPS factorizations are cached, so
+    -- back-sub is O(n²) per dep DB, not full O(n³) factorization.
     postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> Handler SensitivityResponse
     postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
@@ -804,31 +817,47 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (processId, activity) <- resolveOrThrow db processIdText
         eRes <- liftIO $ Service.computeSensitivities db sharedSolver processId (srPerturbations senReq)
         (baselineX, perResults) <- either throwServiceError pure eRes
-        let baselineInv = applyBiosphereMatrix db baselineX
-            -- Sensitivity is single-DB by design: the perturbation hits
-            -- the root technosphere. The regional cross-DB sum sees only
-            -- root here, matching the pre-fix behaviour.
-            mkRootSol inv x =
-                SharedSolver.CrossDBSolution
-                    { SharedSolver.csInventory = inv
-                    , SharedSolver.csScalings = [(dbName, db, x)]
-                    }
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        let depLookup = DM.mkDepSolverLookup dbManager
+            scaleToSolution x = do
+                eSol <-
+                    SharedSolver.goWithDepsFromScalings
+                        unitCfg
+                        depLookup
+                        db
+                        dbName
+                        []
+                        [x]
+                        0
+                pure $ case eSol of
+                    Left err -> Left err
+                    Right (sol : _) -> Right sol
+                    Right [] -> Left "cross-DB propagation returned empty result"
+        eBaselineSol <- liftIO $ scaleToSolution baselineX
+        baselineSol <-
+            either
+                (\err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err})
+                pure
+                eBaselineSol
         baselineLcia <-
             liftIO $
-                computeCategoryResult dbName db (mkRootSol baselineInv baselineX) activity 5 Nothing method
+                computeCategoryResult dbName db baselineSol activity 5 Nothing method
         perturbed <-
             liftIO $
                 mapConcurrently
-                    (buildEntry db activity method baselineLcia mkRootSol)
+                    (buildEntry db activity method baselineLcia scaleToSolution)
                     perResults
         pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
       where
-        buildEntry db activity method baselineLcia mkRootSol (p, eitherX) = case eitherX of
+        buildEntry db activity method baselineLcia scaleToSolution (p, eitherX) = case eitherX of
             Left err -> pure (PerturbedEntry p (Left err))
             Right x' -> do
-                let inv = applyBiosphereMatrix db x'
-                lcia <- computeCategoryResult dbName db (mkRootSol inv x') activity 5 Nothing method
-                pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
+                eSol <- scaleToSolution x'
+                case eSol of
+                    Left err -> pure (PerturbedEntry p (Left err))
+                    Right sol -> do
+                        lcia <- computeCategoryResult dbName db sol activity 5 Nothing method
+                        pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
     -- Batch LCIA endpoint (all methods in a collection)
     getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
