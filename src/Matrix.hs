@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -509,17 +510,35 @@ Apply the biosphere matrix to a scaling vector: g = B * x.
 
 Converts the scaling vector (activity scaling factors) into a biosphere inventory
 (environmental flows) by multiplying with the biosphere intervention matrix.
+
+Walks 'dbBiosphereTriples' as an unboxed 'U.Vector' directly. The previous
+implementation went via @U.toList bioTriples@ → list of boxed
+@(Int,Int,Double)@ tuples → 'applySparseMatrix', allocating ~150 MB per pid
+on agribalyse's ~4.5M biosphere triples. Profiling on the 633-pid Ecobalyse
+batch attributed 56% of total allocation and 14% of CPU to that path
+(@applyBiosphereMatrix.inventoryVec@). With the list intermediate gone, the
+matvec is a tight 'U.forM_' over contiguous memory.
 -}
 applyBiosphereMatrix :: Database -> Vector -> Inventory
 applyBiosphereMatrix db supplyVec =
-    let bioFlowCount = dbBiosphereCount db
+    let bioFlowCount = fromIntegral (dbBiosphereCount db) :: Int
         bioTriples = dbBiosphereTriples db
-        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0 ..]
-        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
+        bioFlows = dbBiosphereFlows db
+        supplyLen = U.length supplyVec
+        inventoryVec = U.create $ do
+            mv <- MU.replicate bioFlowCount 0.0
+            U.forM_ bioTriples $ \(SparseTriple i j v) -> do
+                let !ci = fromIntegral i :: Int
+                    !cj = fromIntegral j :: Int
+                when (cj < supplyLen) $ do
+                    old <- MU.unsafeRead mv ci
+                    MU.unsafeWrite mv ci (old + v * U.unsafeIndex supplyVec cj)
+            pure mv
+        invLen = U.length inventoryVec
      in M.fromList
-            [ (uuid, inventoryVec U.! idx)
-            | (uuid, idx) <- M.toList bioFlowIndex
-            , idx < U.length inventoryVec
+            [ (bioFlows V.! i, U.unsafeIndex inventoryVec i)
+            | i <- [0 .. V.length bioFlows - 1]
+            , i < invLen
             ]
 
 computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
