@@ -6,6 +6,7 @@ import Test.Hspec
 
 -- Import test modules (will be created)
 
+import qualified AutoRelinkSpec
 import qualified BM25Spec
 import qualified ChemSynonymsSpec
 import qualified CoalescingSolverSpec
@@ -100,3 +101,4 @@ main = hspec $ do
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
         describe "Licenses Endpoint" LicensesSpec.spec
         describe "Geographies cascade" GeographiesSpec.spec
+        describe "Auto-relink on Load (cache hit)" AutoRelinkSpec.spec
