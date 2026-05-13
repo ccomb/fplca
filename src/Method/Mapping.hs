@@ -721,6 +721,12 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     -- agribalyse showed 'normalizeName' eating ~83% of fillRegional time
     -- across 90M biosphere triples; the broadcast map already has the
     -- answer the cascade was recomputing.
+    --
+    -- The parent-region fallback uses a manual short-circuit recursion
+    -- ('lookupParents') rather than @firstJust [M.lookup .. | p <- parents]@:
+    -- the list comprehension materialised a cons cell per parent per triple,
+    -- accounting for ~30% of warmup heap allocations on EF31-biomaps. The
+    -- manual recursion stops at the first hit and allocates nothing.
     precomputed :: RegionalActivityWeights
     precomputed = runST $ do
         ws <- MU.replicate nCols (0 :: Double)
@@ -739,26 +745,28 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                                 cfTuple
                                 bioVal
                      in MU.unsafeModify ws (+ contribution) col
+                -- Walk the parent locations until one yields a CF. Allocates
+                -- no list cells — replaces 'firstJust [.. | p <- parents]'.
+                lookupParents [] = Nothing
+                lookupParents (p : ps) = case M.lookup (flowUUID, p) regional of
+                    Just cf -> Just cf
+                    Nothing -> lookupParents ps
             case M.lookup (flowUUID, loc) regional of
                 Just cfTuple -> applyRaw cfTuple
-                Nothing ->
-                    let parents = M.findWithDefault [] loc hier
-                        fromParents =
-                            firstJust [M.lookup (flowUUID, p) regional | p <- parents]
-                     in case fromParents of
-                            Just cfTuple -> applyRaw cfTuple
-                            Nothing -> case M.lookup flowUUID broadcast of
-                                Just preMultipliedCF ->
-                                    -- 'mtBroadcast' is the unit-converted CF per
-                                    -- unit of flow, so the contribution is
-                                    -- bioVal * preMultipliedCF — same algebra
-                                    -- as 'computeLCIAScoreFromTables's fast path.
-                                    MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
-                                Nothing
-                                    | Set.member flowUUID regionalizedFlows -> do
-                                        MU.unsafeWrite ts col 1
-                                        modifySTRef' missRef (Set.insert (flowUUID, loc))
-                                    | otherwise -> pure ()
+                Nothing -> case lookupParents (M.findWithDefault [] loc hier) of
+                    Just cfTuple -> applyRaw cfTuple
+                    Nothing -> case M.lookup flowUUID broadcast of
+                        Just preMultipliedCF ->
+                            -- 'mtBroadcast' is the unit-converted CF per
+                            -- unit of flow, so the contribution is
+                            -- bioVal * preMultipliedCF — same algebra
+                            -- as 'computeLCIAScoreFromTables's fast path.
+                            MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
+                        Nothing
+                            | Set.member flowUUID regionalizedFlows -> do
+                                MU.unsafeWrite ts col 1
+                                modifySTRef' missRef (Set.insert (flowUUID, loc))
+                            | otherwise -> pure ()
         wsF <- U.unsafeFreeze ws
         tsF <- U.unsafeFreeze ts
         miss <- readSTRef missRef
