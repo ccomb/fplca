@@ -1473,16 +1473,21 @@ relinkDatabase manager dbName = do
                     dbName
                     (dcPath (ldConfig loaded'))
                     db'
-            reportProgress Info $
-                "Re-linked "
-                    <> T.unpack dbName
-                    <> ": "
-                    <> show beforeUnresolved
-                    <> " \8594 "
-                    <> show afterUnresolved
-                    <> " unresolved products ("
-                    <> show (length newLinks)
-                    <> " cross-DB links)"
+            -- Skip the log when the relink was a verification no-op: links
+            -- and deps already matched the in-memory state. This is the
+            -- common case for warm Loads after the previous commits and
+            -- carries no information worth a log line.
+            when linksChanged $
+                reportProgress Info $
+                    "Re-linked "
+                        <> T.unpack dbName
+                        <> ": "
+                        <> show beforeUnresolved
+                        <> " \8594 "
+                        <> show afterUnresolved
+                        <> " unresolved products ("
+                        <> show (length newLinks)
+                        <> " cross-DB links)"
             return $
                 Right
                     RelinkResult
