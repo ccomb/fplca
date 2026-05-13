@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -127,13 +128,25 @@ cachedSolver = unsafePerformIO $ newMVar M.empty
 
 {- | Global mutex for MUMPS factorization/creation/destruction operations.
 MUMPS_SEQ has global Fortran state that is NOT thread-safe for concurrent
-create/factorize/destroy calls. Only mumpsSolve on an already-factorized
-instance is safe (the per-database worker thread protects same-instance
-concurrent access).
+create/factorize/destroy calls.
 -}
 {-# NOINLINE mumpsFactorizationMutex #-}
 mumpsFactorizationMutex :: MVar ()
 mumpsFactorizationMutex = unsafePerformIO $ newMVar ()
+
+{- | Global mutex for the @mumpsSolveMulti@ FFI call. MUMPS_SEQ is built on
+Fortran modules with SAVE'd state that two concurrent @mumps_solve@ calls
+corrupt even when each call targets its own factorized handle. The FFI
+import is annotated @safe@ (see mumps-hs FFI), so the GHC runtime is free
+to schedule multiple OS threads inside MUMPS at once — exactly the race
+the SAVE'd state can't survive. Empirically this manifests as a silent
+SIGKILL mid-solve when several DBs' coalescing workers run @mumpsSolveMulti@
+concurrently. Holding this mutex around the FFI call serializes those
+solves across DBs while leaving the per-DB coalescing workers intact.
+-}
+{-# NOINLINE mumpsSolveMutex #-}
+mumpsSolveMutex :: MVar ()
+mumpsSolveMutex = unsafePerformIO $ newMVar ()
 
 -- | Initialize solver for server lifetime. No-op for MUMPS (no global state needed).
 initializeSolverForServer :: IO ()
@@ -193,12 +206,12 @@ offer cs msg = do
 result back to each requester. On exception, every request in the batch
 sees the same error. Exits cleanly when a 'WStop' is observed.
 
-Note on MUMPS_SEQ thread-safety: the worker is the only thread that ever
-touches the MUMPS handle's mutable RHS/SOL workspace, so 'mumpsSolveMulti'
-is safe here regardless of how many submitters race to enqueue. We assume
-MUMPS runs in-core (ICNTL(22)=0, the default); the SAVE'd module-level
-state in @dmumps_ooc_buffer.F@ is only touched in out-of-core mode and is
-inert in our setup. If OOC is ever enabled, this assumption needs revisiting.
+Note on MUMPS_SEQ thread-safety: the per-DB worker is the only thread that
+touches its MUMPS handle's mutable RHS/SOL workspace, so intra-DB races on
+the workspace can't happen. Inter-DB races are a separate hazard: MUMPS_SEQ
+modules carry SAVE'd Fortran state that corrupts under concurrent
+@mumps_solve@ calls even on distinct handles. 'mumpsSolveMutex' (acquired
+inside 'solveChunk') serializes that boundary.
 -}
 workerLoop :: MUMPSSolver -> TQueue WorkerMsg -> IO ()
 workerLoop solver inbox = do
@@ -248,7 +261,7 @@ runMultiSolveChunked solver demands =
 solveChunk :: MUMPSSolver -> [Vector] -> IO [Vector]
 solveChunk solver chunk = do
     let rhsList = map (VS.fromList . toList) chunk
-    solutions <- mumpsSolveMulti solver rhsList
+    solutions <- withMVar mumpsSolveMutex $ \_ -> mumpsSolveMulti solver rhsList
     pure $ map (VS.convert :: VS.Vector Double -> Vector) solutions
 
 -- | Split a flat list of solutions back into per-request slices.
@@ -497,17 +510,35 @@ Apply the biosphere matrix to a scaling vector: g = B * x.
 
 Converts the scaling vector (activity scaling factors) into a biosphere inventory
 (environmental flows) by multiplying with the biosphere intervention matrix.
+
+Walks 'dbBiosphereTriples' as an unboxed 'U.Vector' directly. The previous
+implementation went via @U.toList bioTriples@ → list of boxed
+@(Int,Int,Double)@ tuples → 'applySparseMatrix', allocating ~150 MB per pid
+on agribalyse's ~4.5M biosphere triples. Profiling on the 633-pid Ecobalyse
+batch attributed 56% of total allocation and 14% of CPU to that path
+(@applyBiosphereMatrix.inventoryVec@). With the list intermediate gone, the
+matvec is a tight 'U.forM_' over contiguous memory.
 -}
 applyBiosphereMatrix :: Database -> Vector -> Inventory
 applyBiosphereMatrix db supplyVec =
-    let bioFlowCount = dbBiosphereCount db
+    let bioFlowCount = fromIntegral (dbBiosphereCount db) :: Int
         bioTriples = dbBiosphereTriples db
-        bioFlowIndex = M.fromList $ zip (V.toList $ dbBiosphereFlows db) [0 ..]
-        inventoryVec = applySparseMatrix [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples] (fromIntegral bioFlowCount) supplyVec
+        bioFlows = dbBiosphereFlows db
+        supplyLen = U.length supplyVec
+        inventoryVec = U.create $ do
+            mv <- MU.replicate bioFlowCount 0.0
+            U.forM_ bioTriples $ \(SparseTriple i j v) -> do
+                let !ci = fromIntegral i :: Int
+                    !cj = fromIntegral j :: Int
+                when (cj < supplyLen) $ do
+                    old <- MU.unsafeRead mv ci
+                    MU.unsafeWrite mv ci (old + v * U.unsafeIndex supplyVec cj)
+            pure mv
+        invLen = U.length inventoryVec
      in M.fromList
-            [ (uuid, inventoryVec U.! idx)
-            | (uuid, idx) <- M.toList bioFlowIndex
-            , idx < U.length inventoryVec
+            [ (bioFlows V.! i, U.unsafeIndex inventoryVec i)
+            | i <- [0 .. V.length bioFlows - 1]
+            , i < invLen
             ]
 
 computeInventoryMatrix :: Database -> ProcessId -> IO Inventory
@@ -614,8 +645,9 @@ perturbA db mFact x col perturb
                     u
         pure $ applyShermanMorrison x col z
 
--- | Apply the Sherman-Morrison rank-1 formula given the precomputed
--- z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+{- | Apply the Sherman-Morrison rank-1 formula given the precomputed
+z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+-}
 applyShermanMorrison :: Vector -> Int -> Vector -> Either T.Text Vector
 applyShermanMorrison x col z =
     let vtx = x U.! col

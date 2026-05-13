@@ -179,6 +179,7 @@ spec = do
                     , mtRegionalizedCF = M.empty
                     , mtCompartmentMap = M.empty
                     , mtBroadcast = M.empty
+                    , mtRegionalActivityWeights = Nothing
                     }
 
             inventory = M.fromList [(uuidRoot, 1.0), (uuidDep, 2.0), (uuidGone, 5.0)]

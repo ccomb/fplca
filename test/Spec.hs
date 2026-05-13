@@ -15,7 +15,6 @@ import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
 import qualified DatabaseStatusSpec
 import qualified EcoSpold1Spec
-import qualified OlcaSchemaSpec
 import qualified EcoSpold2Spec
 import qualified FlowResolverSpec
 import qualified FuzzySpec
@@ -33,15 +32,17 @@ import qualified MethodSetTablesSpec
 import qualified MethodSpec
 import qualified NestedSubstitutionSpec
 import qualified NormalizeSpec
+import qualified OlcaSchemaSpec
 import qualified ParserSpec
 import qualified PluginConfigSpec
 import qualified PluginSpec
 import qualified ProgressSpec
+import qualified RegionalLCIASpec
+import qualified SensitivitySpec
 import qualified ServerSpec
 import qualified ServiceSpec
 import qualified SharedSolverSpec
 import qualified SimaProParserSpec
-import qualified SensitivitySpec
 import qualified SubstitutionSpec
 import qualified SupplyChainSpec
 import qualified TreeSpec
@@ -77,6 +78,7 @@ main = hspec $ do
         describe "VOLCA_DATA_DIR resolution" ConfigSpec.spec
         describe "Loader" LoaderSpec.spec
         describe "Method Mapping" MappingSpec.spec
+        describe "Regionalized LCIA fast path" RegionalLCIASpec.spec
         describe "Method Set Tables (multi-method scoring)" MethodSetTablesSpec.spec
         describe "Chem Synonyms" ChemSynonymsSpec.spec
         describe "Uploaded Database" UploadedDatabaseSpec.spec

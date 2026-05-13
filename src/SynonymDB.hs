@@ -167,13 +167,19 @@ normalizeName name =
         t3 = stripSuffix ", in ground" $ stripSuffix " in ground" t2
         -- Strip "/kg" suffix
         t4 = stripSuffix "/kg" t3
-        -- Remove punctuation
-        t5 = T.filter (`notElem` (",()'\"" :: String)) t4
+        -- Remove punctuation. Inlined char predicate: the old version used
+        -- @T.filter (`notElem` (",()'\"" :: String))@ which forces 'T.filter'
+        -- to traverse a 5-cons-cell @[Char]@ list per input character. With
+        -- 'normalizeName' fired ~837K times during a single LCIA warmup, this
+        -- alone took 27% of the warmup CPU.
+        t5 = T.filter notPunctChar t4
         -- Collapse whitespace again (from removed punctuation)
         t6 = T.unwords $ T.words t5
      in
         t6
   where
+    notPunctChar :: Char -> Bool
+    notPunctChar c = c /= ',' && c /= '(' && c /= ')' && c /= '\'' && c /= '"'
     stripSuffix :: Text -> Text -> Text
     stripSuffix suffix txt =
         if suffix `T.isSuffixOf` txt
