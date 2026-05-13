@@ -37,6 +37,7 @@ import qualified Database.Manager as DM
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
 import Control.Monad (unless)
 import qualified Data.List as L
+import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
@@ -46,8 +47,8 @@ import Plugin.Types ()
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
 import qualified Service.Aggregate as Agg
-import Matrix (applyBiosphereMatrix)
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
+import qualified SharedSolver
 import Types (Activity (..), Database (..), Flow, FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
@@ -784,7 +785,7 @@ callGetInventory dbManager rid args =
                 inventory <-
                     ExceptT $
                         if null subs
-                            then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db solver processId
+                            then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName solver processId)
                             else
                                 either (Left . T.pack . show) Right
                                     <$> Service.inventoryWithSubsAndDeps
@@ -892,7 +893,7 @@ runImpactsRequest dbManager args req = do
     inventory <-
         ExceptT $
             if null subs
-                then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db (ldSharedSolver ld) (raPid ra)
+                then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName (ldSharedSolver ld) (raPid ra))
                 else
                     either (Left . T.pack . show) Right
                         <$> Service.inventoryWithSubsAndDeps
@@ -1337,11 +1338,13 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                                 unitCfg
                                 (DM.mkDepSolverLookup dbManager)
                                 db
+                                dbName
                                 (ldSharedSolver ld)
                                 pid
                         case invE of
                             Left _ -> pure []
-                            Right inventory -> do
+                            Right sol -> do
+                                let inventory = SharedSolver.csInventory sol
                                 tables <- DM.mapMethodToTablesCached dbManager dbName db method
                                 idx <- DM.mapMethodToIndexCached dbManager dbName method
                                 let opts =
@@ -1567,14 +1570,16 @@ callGetContributingFlows dbManager baseUrl rid args =
                 ExceptT $ pure $ ensureLinked dbName "computing contributions" db
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                inventory <-
+                sol <-
                     ExceptT $
                         computeInventoryMatrixWithDepsCached
                             unitCfg
                             (DM.mkDepSolverLookup dbManager)
                             db
+                            dbName
                             (ldSharedSolver ld)
                             (raPid ra)
+                let inventory = SharedSolver.csInventory sol
                 tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
                 let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
                     score = loScore outcome

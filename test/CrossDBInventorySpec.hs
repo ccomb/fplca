@@ -31,6 +31,7 @@ import SharedSolver (
     computeInventoryMatrixBatchWithDepsCached,
     createSharedSolver,
  )
+import qualified SharedSolver
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
 import Types
@@ -108,14 +109,14 @@ spec = do
                 noDeps _ = pure Nothing
 
             localInvs <- computeInventoryMatrixBatchCached db solver pids
-            withDepsE <- computeInventoryMatrixBatchWithDepsCached defaultUnitConfig noDeps db solver pids
+            withDepsE <- computeInventoryMatrixBatchWithDepsCached defaultUnitConfig noDeps db "SAMPLE.min3" solver pids
 
             case withDepsE of
                 Left err -> expectationFailure (T.unpack err)
-                Right withDepsInvs -> do
-                    length withDepsInvs `shouldBe` length localInvs
-                    case (localInvs, withDepsInvs) of
-                        ([a], [b]) -> M.toList a `shouldBe` M.toList b
+                Right withDepsSols -> do
+                    length withDepsSols `shouldBe` length localInvs
+                    case (localInvs, withDepsSols) of
+                        ([a], [b]) -> M.toList a `shouldBe` M.toList (SharedSolver.csInventory b)
                         _ -> expectationFailure "expected one inventory per pid"
 
         it "empty pid list returns empty result without solving" $ do
@@ -127,8 +128,10 @@ spec = do
                 actCount = fromIntegral (dbActivityCount db)
             solver <- createSharedSolver "SAMPLE.min3-empty" techTriples actCount
             let noDeps _ = pure Nothing
-            res <- computeInventoryMatrixBatchWithDepsCached defaultUnitConfig noDeps db solver []
-            res `shouldBe` Right []
+            res <- computeInventoryMatrixBatchWithDepsCached defaultUnitConfig noDeps db "SAMPLE.min3-empty" solver []
+            case res of
+                Right sols -> length sols `shouldBe` 0
+                Left err -> expectationFailure (T.unpack err)
 
     describe "inventoryContributions (cross-DB characterization surface)" $ do
         -- Synthetic data: simulate the shape of a cross-DB-merged Inventory

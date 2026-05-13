@@ -36,7 +36,8 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector, applyBiosphereMatrix)
-import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, sumRegionalizedLCIAScoreCrossDB)
+import qualified Method.Mapping
 import Method.Types (DamageCategory (..), FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import Numeric (showFFloat)
 import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
@@ -198,7 +199,16 @@ requireFullyLinked dbName db =
 
 -- | Inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
 inventoryWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Handler Inventory
-inventoryWithDeps dbManager dbName db solver pid = do
+inventoryWithDeps dbManager dbName db solver pid =
+    SharedSolver.csInventory <$> solutionWithDeps dbManager dbName db solver pid
+
+{- | Cross-DB inventory + per-DB scaling vectors. The scalings are needed by
+the regionalized LCIA path (per-DB dot products summed across all DBs
+reached at request time); the inventory alone is enough for non-regional
+methods.
+-}
+solutionWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Handler SharedSolver.CrossDBSolution
+solutionWithDeps dbManager dbName db solver pid = do
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -207,15 +217,21 @@ inventoryWithDeps dbManager dbName db solver pid = do
                 unitCfg
                 (DM.mkDepSolverLookup dbManager)
                 db
+                dbName
                 solver
                 pid
     case res of
-        Right inv -> pure inv
+        Right sol -> pure sol
         Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
 
 -- | Batch inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
 inventoriesWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> [ProcessId] -> Handler [Inventory]
-inventoriesWithDeps dbManager dbName db solver pids = do
+inventoriesWithDeps dbManager dbName db solver pids =
+    map SharedSolver.csInventory <$> solutionsWithDeps dbManager dbName db solver pids
+
+-- | Batch variant of 'solutionWithDeps'.
+solutionsWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> [ProcessId] -> Handler [SharedSolver.CrossDBSolution]
+solutionsWithDeps dbManager dbName db solver pids = do
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -224,10 +240,11 @@ inventoriesWithDeps dbManager dbName db solver pids = do
                 unitCfg
                 (DM.mkDepSolverLookup dbManager)
                 db
+                dbName
                 solver
                 pids
     case res of
-        Right invs -> pure invs
+        Right sols -> pure sols
         Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
 
 {- | Per-method static context, prepared ONCE per batch request and reused
@@ -743,8 +760,17 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> Handler LCIAResult
     getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
         withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId activity method -> do
-            inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
-            result <- liftIO $ computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actProcessId) activity (fromMaybe 5 topFlowsParam) inventory Nothing method
+            sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
+            result <-
+                liftIO $
+                    computeCategoryResult
+                        dbName
+                        db
+                        sol
+                        activity
+                        (fromMaybe 5 topFlowsParam)
+                        Nothing
+                        method
             liftIO $ logLCIAResult result method
             return result
 
@@ -767,7 +793,20 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     processId
                     (srSubstitutions subReq)
         inventory <- either throwServiceError pure eInv
-        liftIO $ computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver processId) activity 5 inventory Nothing method
+        -- Substitution path keeps a root-only 'CrossDBSolution': the
+        -- regional cross-DB sum sees only root's MethodTables here, so a
+        -- regional CF that lives in a dep DB's mapping won't apply to the
+        -- substituted-and-routed dep emissions. Tracked as a follow-up;
+        -- substitution + regional cross-DB requires per-DB scalings from
+        -- 'Service.goWithSubsAndDeps', which still returns the merged
+        -- inventory only.
+        rootScaling <- liftIO $ SharedSolver.computeScalingVectorCached db sharedSolver processId
+        let sol =
+                SharedSolver.CrossDBSolution
+                    { SharedSolver.csInventory = inventory
+                    , SharedSolver.csScalings = [(dbName, db, rootScaling)]
+                    }
+        liftIO $ computeCategoryResult dbName db sol activity 5 Nothing method
 
     -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
     postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> Handler SensitivityResponse
@@ -779,15 +818,29 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         eRes <- liftIO $ Service.computeSensitivities db sharedSolver processId (srPerturbations senReq)
         (baselineX, perResults) <- either throwServiceError pure eRes
         let baselineInv = applyBiosphereMatrix db baselineX
-        baselineLcia <- liftIO $ computeCategoryResult dbName db (pure baselineX) activity 5 baselineInv Nothing method
-        perturbed <- liftIO $ mapConcurrently (buildEntry db activity method baselineLcia) perResults
+            -- Sensitivity is single-DB by design: the perturbation hits
+            -- the root technosphere. The regional cross-DB sum sees only
+            -- root here, matching the pre-fix behaviour.
+            mkRootSol inv x =
+                SharedSolver.CrossDBSolution
+                    { SharedSolver.csInventory = inv
+                    , SharedSolver.csScalings = [(dbName, db, x)]
+                    }
+        baselineLcia <-
+            liftIO $
+                computeCategoryResult dbName db (mkRootSol baselineInv baselineX) activity 5 Nothing method
+        perturbed <-
+            liftIO $
+                mapConcurrently
+                    (buildEntry db activity method baselineLcia mkRootSol)
+                    perResults
         pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
       where
-        buildEntry db activity method baselineLcia (p, eitherX) = case eitherX of
+        buildEntry db activity method baselineLcia mkRootSol (p, eitherX) = case eitherX of
             Left err -> pure (PerturbedEntry p (Left err))
             Right x' -> do
                 let inv = applyBiosphereMatrix db x'
-                lcia <- computeCategoryResult dbName db (pure x') activity 5 inv Nothing method
+                lcia <- computeCategoryResult dbName db (mkRootSol inv x') activity 5 Nothing method
                 pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
     -- Batch LCIA endpoint (all methods in a collection)
@@ -817,7 +870,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right (actProcessId, activity) -> do
                 t0 <- liftIO getCurrentTime
-                inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+                sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
+                let inventory = SharedSolver.csInventory sol
                 t1 <- liftIO getCurrentTime
                 let !invSize = M.size inventory
                 liftIO $
@@ -841,12 +895,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         reportProgress Info $
                             "  Inventory UUIDs: "
                                 <> intercalate ", " (map UUID.toString $ M.keys inventory)
-                scoreMap <- liftIO $ batchedScoresFor dbName db sharedSolver actProcessId inventory methods
+                scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
                 rawResults <-
                     liftIO $
                         mapConcurrently
                             ( \m ->
-                                computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver actProcessId) activity 5 inventory (M.lookup (methodId m) scoreMap) m
+                                computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
                             )
                             methods
                 -- Enrich with NW data
@@ -897,12 +951,21 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     processId
                     (srSubstitutions subReq)
         inventory <- either throwServiceError pure eInv
-        scoreMap <- liftIO $ batchedScoresFor dbName db sharedSolver processId inventory methods
+        -- Substitution path: root-only 'CrossDBSolution' (regional cross-DB
+        -- sum sees only root MethodTables here, same gap as documented on
+        -- 'postActivityLCIA').
+        rootScaling <- liftIO $ SharedSolver.computeScalingVectorCached db sharedSolver processId
+        let sol =
+                SharedSolver.CrossDBSolution
+                    { SharedSolver.csInventory = inventory
+                    , SharedSolver.csScalings = [(dbName, db, rootScaling)]
+                    }
+        scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
         rawResults <-
             liftIO $
                 mapConcurrently
                     ( \m ->
-                        computeCategoryResult dbName db (SharedSolver.computeScalingVectorCached db sharedSolver processId) activity 5 inventory (M.lookup (methodId m) scoreMap) m
+                        computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
                     )
                     methods
         let results = map (enrichWithNW dcLookup mNW) rawResults
@@ -1202,44 +1265,74 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- pass. For fully non-regionalized sets (PEF) this is a stacked-broadcast
     -- matvec — one walk over the inventory, m FMAs per non-zero entry —
     -- instead of m separate inventory walks. Mixed/regio sets fall through
-    -- to per-method 'computeLCIAScoreAuto' inside the set-scoring function.
+    -- to the per-DB cross-DB regional sum inside the set-scoring function.
+    --
+    -- The 'CrossDBSolution' carries the merged inventory and per-DB scaling
+    -- vectors collected during the inventory solve. Regional methods score
+    -- as a sum across all participating DBs (root + each dep DB reached at
+    -- request time); non-regional methods read the merged inventory only.
     batchedScoresFor ::
         Text ->
         Database ->
-        SharedSolver ->
-        ProcessId ->
-        Inventory ->
+        SharedSolver.CrossDBSolution ->
         [Method] ->
         IO (M.Map UUID (Either Text Double))
-    batchedScoresFor dbName db sharedSolver actPid inventory methods = do
-        mst <- DM.mapMethodSetToTablesCached dbManager dbName db methods
+    batchedScoresFor _dbName _db sol methods = do
+        perDb <- buildPerDbSetTables (SharedSolver.csScalings sol) methods
         unitCfg <- getMergedUnitConfig dbManager
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-        -- scalingVec / hier only consulted when 'mst' has any regionalized
-        -- method; for PEF they're never read. Both are cached, so resolving
-        -- them eagerly is cheap.
-        scalingVec <- SharedSolver.computeScalingVectorCached db sharedSolver actPid
         hier <- DM.getLocationHierarchy dbManager
         pure $
             M.fromList $
-                computeLCIAScoreSetFromTables unitCfg mUnits mFlows db scalingVec inventory hier mst
+                computeLCIAScoreSetFromTables
+                    unitCfg
+                    mUnits
+                    mFlows
+                    (SharedSolver.csInventory sol)
+                    hier
+                    perDb
 
-    -- Helper: compute LCIA result for a single method against an inventory.
+    -- Look up MethodSetTables for every (DB, scaling) pair in the cross-DB
+    -- solution. 'mapMethodSetToTablesCached' is keyed by (dbName, methods),
+    -- so dep DBs on a first-time request pay a one-shot
+    -- 'fillRegionalActivityWeights' walk against their own biosphere
+    -- triples; subsequent requests hit the cache.
+    buildPerDbSetTables ::
+        [(Text, Database, Vector)] ->
+        [Method] ->
+        IO [(Database, Vector, Method.Mapping.MethodSetTables)]
+    buildPerDbSetTables scalings methods =
+        forM scalings $ \(n, d, sv) -> do
+            mst <- DM.mapMethodSetToTablesCached dbManager n d methods
+            pure (d, sv, mst)
+
+    -- Helper: compute LCIA result for a single method against a cross-DB
+    -- inventory solution.
     --
-    -- 'getScaling' is a lazy IO action; the scaling vector is required only
-    -- for regionalized methods (non-regionalized fast path skips it entirely).
-    -- For perturbed inventories (sensitivity), pass @pure x'@.
+    -- The 'CrossDBSolution' carries the merged inventory and per-DB scaling
+    -- vectors. Regional methods score as a sum over each participating DB
+    -- ('sumRegionalizedLCIAScoreCrossDB'); non-regional methods read the
+    -- merged inventory only.
     --
     -- 'precomputedScore' short-circuits the per-method scoring loop when a
     -- batched matvec result is already available (see
     -- 'mapMethodSetToTablesCached' + 'computeLCIAScoreSetFromTables'). Pass
     -- 'Nothing' on the single-method paths.
-    computeCategoryResult :: Text -> Database -> IO Vector -> Activity -> Int -> Inventory -> Maybe (Either Text Double) -> Method -> IO LCIAResult
-    computeCategoryResult dbName db getScaling activity topFlows inventory precomputedScore method = do
+    computeCategoryResult ::
+        Text ->
+        Database ->
+        SharedSolver.CrossDBSolution ->
+        Activity ->
+        Int ->
+        Maybe (Either Text Double) ->
+        Method ->
+        IO LCIAResult
+    computeCategoryResult dbName db sol activity topFlows precomputedScore method = do
         unitCfg <- getMergedUnitConfig dbManager
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
         mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
         tables <- DM.mapMethodToTablesCached dbManager dbName db method
+        let inventory = SharedSolver.csInventory sol
         -- Force score evaluation here so mapConcurrently actually parallelizes the work
         -- (without this, lazy thunks are created and forced later in the main thread)
         let stats = computeMappingStats mappings
@@ -1253,9 +1346,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 if M.null (mtRegionalizedCF tables)
                     then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                     else do
-                        scalingVec <- getScaling
                         hier <- DM.getLocationHierarchy dbManager
-                        case computeLCIAScoreAuto unitCfg mUnits mFlows db scalingVec inventory hier tables of
+                        perDb <-
+                            forM (SharedSolver.csScalings sol) $ \(n, d, sv) -> do
+                                tbls <- DM.mapMethodToTablesCached dbManager n d method
+                                pure (d, sv, tbls)
+                        case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of
                             Right s -> evaluate s
                             Left err -> do
                                 reportProgress Warning $
@@ -1663,7 +1759,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
             validPidNums = [pidNum | (_, pidNum, _) <- valid]
         t0 <- liftIO getCurrentTime
-        inventories <- inventoriesWithDeps dbManager dbName db sharedSolver validPidNums
+        sols <- solutionsWithDeps dbManager dbName db sharedSolver validPidNums
         t1 <- liftIO getCurrentTime
         -- Pre-fetch per-method static context ONCE for the whole batch instead
         -- of paying it inside every per-pid 'buildLCIABatchResult' call. For
@@ -1680,8 +1776,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- stays at 5. Bulk callers that DO want contributors opt in with
         -- ?top-flows=N.
         let topFlows = max 0 (fromMaybe 0 topFlowsParam)
-        let mkEntry ((pidText, pidNum, activity), inventory) = do
-                impacts <- buildLCIABatchResultCached dbName db sharedSolver pidNum activity collection inventory ctxs topFlows
+        let mkEntry ((pidText, pidNum, activity), sol) = do
+                impacts <- buildLCIABatchResultCached dbName db pidNum activity collection sol ctxs topFlows
                 pure
                     BatchImpactsEntry
                         { bieProcessId = pidText
@@ -1691,7 +1787,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         -- Sequential: inner buildLCIABatchResultCached already runs the
         -- per-method matvec batched in one pass. Nesting outer concurrency
         -- over already-saturated CPU work just adds thread churn.
-        entries <- liftIO $ mapM mkEntry (zip valid inventories)
+        entries <- liftIO $ mapM mkEntry (zip valid sols)
         t2 <- liftIO getCurrentTime
         liftIO $
             reportProgress Info $
@@ -1765,15 +1861,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     buildLCIABatchResultCached ::
         Text ->
         Database ->
-        SharedSolver ->
         ProcessId ->
         Activity ->
         MethodCollection ->
-        Inventory ->
+        SharedSolver.CrossDBSolution ->
         [MethodCtx] ->
         Int ->
         IO LCIABatchResult
-    buildLCIABatchResultCached dbName db sharedSolver actPid activity collection inventory ctxs topFlows = do
+    buildLCIABatchResultCached dbName db actPid activity collection sol ctxs topFlows = do
         let damageCats = mcDamageCategories collection
             nwSets = mcNormWeightSets collection
             dcLookup =
@@ -1784,7 +1879,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     ]
             mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
             methods = map mctxMethod ctxs
-        scoreMap <- batchedScoresFor dbName db sharedSolver actPid inventory methods
+            inventory = SharedSolver.csInventory sol
+        scoreMap <- batchedScoresFor dbName db sol methods
         (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
         -- Surface inventory flows that aren't in the merged FlowDB once per pid
         -- (independent of method, independent of topFlows) — the signal is a

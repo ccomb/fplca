@@ -163,11 +163,9 @@ spec = do
                         UnitConversion.defaultUnitConfig
                         udb
                         fdb
-                        unusedDatabase
-                        U.empty -- scalingVec unused for non-regio
                         inv
                         M.empty -- hier unused for non-regio
-                        mst
+                        [(unusedDatabase, U.empty, mst)] -- scalingVec unused for non-regio
                 resultMap = M.fromList results
             -- Sanity: explicit numbers
             sA `shouldBe` 8.0 -- 4*2 + 0.1*0 (no ch4 cf)
@@ -194,11 +192,9 @@ spec = do
                         UnitConversion.defaultUnitConfig
                         udb
                         fdb
-                        unusedDatabase
-                        U.empty
                         M.empty
                         M.empty
-                        mst
+                        [(unusedDatabase, U.empty, mst)]
             map snd results `shouldBe` [Right 0.0, Right 0.0]
 
         it "inventory UUIDs absent from both broadcast and flowDB contribute 0" $ do
@@ -222,11 +218,9 @@ spec = do
                         UnitConversion.defaultUnitConfig
                         udb
                         fdb
-                        unusedDatabase
-                        U.empty
                         inv
                         M.empty
-                        mst
+                        [(unusedDatabase, U.empty, mst)]
             -- Only the matched flow contributes: 2 × 3 = 6.
             map snd results `shouldBe` [Right 6.0]
 
@@ -270,11 +264,9 @@ spec = do
                         UnitConversion.defaultUnitConfig
                         udb
                         scoringFlowDB
-                        unusedDatabase
-                        U.empty
                         inv
                         M.empty
-                        mst
+                        [(unusedDatabase, U.empty, mst)]
             -- Both contribute against CF=3: (2 + 4) × 3 = 18.
             map snd results `shouldBe` [Right 18.0]
 
@@ -350,11 +342,9 @@ spec = do
                         UnitConversion.defaultUnitConfig
                         udb
                         fdb
-                        unusedDatabase
-                        U.empty
                         inv
                         M.empty
-                        mst
+                        [(unusedDatabase, U.empty, mst)]
             -- Caller order preserved on the result keys.
             map fst results
                 `shouldBe` [methodId m1, methodId m2, methodId m3]

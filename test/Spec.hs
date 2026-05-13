@@ -11,6 +11,7 @@ import qualified ChemSynonymsSpec
 import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
+import qualified CrossDBRegionalLCIASpec
 import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
 import qualified DatabaseStatusSpec
@@ -68,6 +69,7 @@ main = hspec $ do
         describe "Service Layer" ServiceSpec.spec
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
+        describe "Cross-DB Regional LCIA" CrossDBRegionalLCIASpec.spec
         describe "Substitutions" SubstitutionSpec.spec
         describe "Sensitivity Analysis" SensitivitySpec.spec
         describe "Cross-DB Substitutions" CrossDBSubstitutionSpec.spec

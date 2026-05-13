@@ -26,6 +26,7 @@ import SharedSolver (
     computeInventoryMatrixWithDepsCached,
     createSharedSolver,
  )
+import qualified SharedSolver
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
 import Types
@@ -40,11 +41,11 @@ spec = do
             let pid = 0
                 noDeps _ = pure Nothing
 
-            eBase <- computeInventoryMatrixWithDepsCached defaultUnitConfig noDeps db solver pid
+            eBase <- computeInventoryMatrixWithDepsCached defaultUnitConfig noDeps db "SAMPLE.min3" solver pid
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid []
 
             case (eBase, eSub) of
-                (Right base, Right sub) -> M.toList sub `shouldBe` M.toList base
+                (Right base, Right sub) -> M.toList sub `shouldBe` M.toList (SharedSolver.csInventory base)
                 (Left e, _) -> expectationFailure ("baseline failed: " <> T.unpack e)
                 (_, Left e) -> expectationFailure ("subs path failed: " <> show e)
 
