@@ -2,3 +2,8 @@ packages: .
           ./mumps-hs
 
 allow-newer: true
+
+jobs: $ncpus
+
+program-options
+  ghc-options: -j +RTS -A128m -RTS
