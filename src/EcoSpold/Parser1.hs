@@ -360,6 +360,7 @@ parseWithXeno xmlContent =
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
                             , bioComment = nonEmptyText (exComment edata)
+                            , bioPedigree = Nothing
                             }
                     else
                         TechnosphereExchange
@@ -372,6 +373,7 @@ parseWithXeno xmlContent =
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
                             , techComment = nonEmptyText (exComment edata)
+                            , techPedigree = Nothing
                             }
 
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
@@ -671,6 +673,7 @@ parseAllWithXeno xmlContent =
                             , bioIsInput = inputGroup == "4"
                             , bioLocation = exchangeLocation
                             , bioComment = nonEmptyText (exComment edata)
+                            , bioPedigree = Nothing
                             }
                     else
                         TechnosphereExchange
@@ -683,6 +686,7 @@ parseAllWithXeno xmlContent =
                             , techProcessLinkId = Nothing
                             , techLocation = exchangeLocation
                             , techComment = nonEmptyText (exComment edata)
+                            , techPedigree = Nothing
                             }
             cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
             flow = Flow flowId (exName edata) category Nothing unitId flowType M.empty cas Nothing

@@ -50,6 +50,7 @@ activityWithRefExchange fid =
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = Nothing
+                , techPedigree = Nothing
                 }
             ]
         , activityParams = M.empty
@@ -81,6 +82,7 @@ activityWithInputExchange fid =
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = Nothing
+                , techPedigree = Nothing
                 }
             ]
         , activityParams = M.empty
