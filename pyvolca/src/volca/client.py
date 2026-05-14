@@ -1,4 +1,4 @@
-"""HTTP client for the VoLCA REST API, dispatched by OpenAPI operationId.
+"""HTTP client for the VoLCA HTTP API, dispatched by OpenAPI operationId.
 
 Design
 ------
@@ -208,7 +208,7 @@ def _parse_spec(spec: dict) -> dict[str, _Operation]:
 
 
 class Client:
-    """HTTP client for the VoLCA REST API.
+    """HTTP client for the VoLCA HTTP API.
 
     Usage::
 

@@ -306,7 +306,7 @@ _This reference is generated from the installed package. Run `python scripts/gen
 
 ### `Client`
 
-HTTP client for the VoLCA REST API.
+HTTP client for the VoLCA HTTP API.
 
 Usage::
 
