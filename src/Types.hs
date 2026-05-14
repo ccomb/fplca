@@ -93,6 +93,30 @@ data Flow = Flow
     }
     deriving (Generic, NFData, Store)
 
+{- | Pedigree matrix (Weidema & Wesnæs 1996) — five LCA data-quality scores
+each in 1..5 (1 = best, 5 = worst). SimaPro CSV encodes it as a prefix in the
+trailing comment column; ecoinvent/EcoSpold2 stores it as structured XML.
+-}
+data Pedigree = Pedigree
+    { pedReliability :: !Int -- 1..5
+    , pedCompleteness :: !Int -- 1..5
+    , pedTemporal :: !Int -- 1..5
+    , pedGeographical :: !Int -- 1..5
+    , pedTechnological :: !Int -- 1..5
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+
+{- | Smart constructor: rejects out-of-range values (anything not in 1..5)
+by returning Nothing. Callers should treat Nothing as "no pedigree
+recorded" — never silently clamp.
+-}
+mkPedigree :: Int -> Int -> Int -> Int -> Int -> Maybe Pedigree
+mkPedigree r c t g f
+    | all inRange [r, c, t, g, f] = Just (Pedigree r c t g f)
+    | otherwise = Nothing
+  where
+    inRange n = n >= 1 && n <= 5
+
 -- | Exchange in an activity - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
 data Exchange
     = TechnosphereExchange
@@ -105,6 +129,7 @@ data Exchange
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
+        , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
@@ -113,6 +138,7 @@ data Exchange
         , bioIsInput :: !Bool -- True for resource extraction, False for emissions
         , bioLocation :: !Text -- Exchange location (EcoSpold1) or "" (EcoSpold2)
         , bioComment :: !(Maybe Text) -- Free-text per-exchange comment from source
+        , bioPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
     deriving (Generic, NFData, Store)
 
@@ -157,6 +183,11 @@ exchangeLocation BiosphereExchange{bioLocation = loc} = loc
 exchangeComment :: Exchange -> Maybe Text
 exchangeComment TechnosphereExchange{techComment = c} = c
 exchangeComment BiosphereExchange{bioComment = c} = c
+
+-- | Get pedigree matrix attached to the exchange (when the source provides it)
+exchangePedigree :: Exchange -> Maybe Pedigree
+exchangePedigree TechnosphereExchange{techPedigree = p} = p
+exchangePedigree BiosphereExchange{bioPedigree = p} = p
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
@@ -830,6 +861,11 @@ data CF = CF
 
 -- JSON instances for API compatibility
 -- Note: ProcessId is Int32, which already has ToJSON/FromJSON instances
+instance ToJSON Pedigree where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
+instance FromJSON Pedigree where
+    parseJSON = genericParseJSON stripLowerPrefix
 instance ToJSON Exchange where
     toJSON = genericToJSON stripLowerPrefix
     toEncoding = genericToEncoding stripLowerPrefix

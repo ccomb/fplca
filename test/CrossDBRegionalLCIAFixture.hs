@@ -109,6 +109,8 @@ mkActivity _ loc =
         , exchanges = []
         , activityParams = M.empty
         , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
         }
 
 emptyIndexes :: Indexes

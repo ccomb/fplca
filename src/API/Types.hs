@@ -14,7 +14,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (Exchange, Flow, UUID, Unit)
+import Types (Exchange, Flow, Pedigree, UUID, Unit)
 
 -- | Search response combining results and count
 data SearchResults a = SearchResults
@@ -673,6 +673,7 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuTargetLocation :: Maybe Text -- For technosphere: location of target activity
     , ewuTargetProcessId :: Maybe Text -- For technosphere: ProcessId for navigation (activityUUID_productUUID)
     , ewuExComment :: Maybe Text -- Free-text per-exchange comment (mirrors exchangeComment)
+    , ewuPedigree :: Maybe Pedigree -- LCA data-quality scores when available (mirrors exchangePedigree)
     }
     deriving (Generic)
 
@@ -875,9 +876,10 @@ instance ToJSON SensitivityResponse where toJSON = strippedToJSON; toEncoding = 
 -- have impact+deltaImpact and error entries have error.
 instance ToJSON PerturbedEntry where
     toJSON (PerturbedEntry p result) =
-        object $ ("perturbation" .= p) : case result of
-            Left err -> ["error" .= err]
-            Right (lcia, d) -> ["impact" .= lcia, "deltaImpact" .= d]
+        object $
+            ("perturbation" .= p) : case result of
+                Left err -> ["error" .= err]
+                Right (lcia, d) -> ["impact" .= lcia, "deltaImpact" .= d]
 
 -- FromJSON instances needed for API conversion
 instance (FromJSON a) => FromJSON (SearchResults a) where parseJSON = strippedParseJSON

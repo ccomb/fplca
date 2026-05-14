@@ -26,6 +26,7 @@ module SimaPro.Parser (
     parseProductRow,
     parseTechRow,
     parseBioRow,
+    parsePedigreePrefix,
     decodeBS,
 ) where
 
@@ -895,6 +896,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = Nothing
+                , techPedigree = Nothing
                 }
         flow =
             Flow
@@ -919,6 +921,43 @@ nonEmptyText t =
     let s = T.strip t
      in if T.null s then Nothing else Just s
 
+{- | Split SimaPro's trailing comment column into the pedigree matrix (when
+present at the start) and the cleaned free-text comment.
+
+SimaPro encodes pedigree as a `(r,c,t,g,f)` quintuple with each value in
+1..5. It is conventionally followed by a separator (`,` or `;`) and then
+the user-authored comment. Examples:
+
+* `"(3,3,2,1,2),"`                          → pedigree only, no comment
+* `"(3,3,2,1,2),. Water must be added"`     → pedigree + comment
+* `"Free comment with no pedigree"`         → no pedigree, comment as-is
+
+Out-of-range or malformed digits return `(Nothing, Just raw)` so we never
+silently drop data we cannot interpret.
+-}
+parsePedigreePrefix :: Text -> (Maybe Pedigree, Maybe Text)
+parsePedigreePrefix raw =
+    let trimmed = T.stripStart raw
+     in case T.stripPrefix "(" trimmed of
+            Nothing -> (Nothing, nonEmptyText trimmed)
+            Just rest -> case T.breakOn ")" rest of
+                (_, "") -> (Nothing, nonEmptyText trimmed)
+                (inside, afterClose) ->
+                    let digits = map T.strip (T.splitOn "," inside)
+                        leftover = T.drop 1 afterClose -- drop ')'
+                     in case traverse readDigit digits of
+                            Just [r, c, t, g, f]
+                                | Just ped <- mkPedigree r c t g f ->
+                                    (Just ped, nonEmptyText (stripCommentSeparators leftover))
+                            _ -> (Nothing, nonEmptyText trimmed)
+  where
+    readDigit txt = case T.unpack (T.strip txt) of
+        s | all (`elem` ("0123456789" :: String)) s && not (null s) -> Just (read s)
+        _ -> Nothing
+    -- After the closing paren SimaPro emits e.g. ",", ", ", ",. ", ";" before
+    -- the comment proper. Strip leading separators and whitespace.
+    stripCommentSeparators = T.dropWhile (`elem` (",;. \t" :: String))
+
 {- | Convert technosphere row to exchange (if non-zero), flow, and unit.
 Always returns the flow/unit; exchange is Nothing for zero-amount rows.
 -}
@@ -928,6 +967,7 @@ techRowToExchange env isInput TechExchangeRow{..} =
         flowUUID = generateFlowUUID cleanName "" terUnit
         unitUUID = generateUnitUUID terUnit
         resolvedAmount = resolveAmount env terAmountRaw terAmount
+        (pedigree, cleanedComment) = parsePedigreePrefix terComment
         exchange =
             if resolvedAmount == 0
                 then Nothing
@@ -942,7 +982,8 @@ techRowToExchange env isInput TechExchangeRow{..} =
                             , techActivityLinkId = UUID.nil
                             , techProcessLinkId = Nothing
                             , techLocation = location
-                            , techComment = nonEmptyText terComment
+                            , techComment = cleanedComment
+                            , techPedigree = pedigree
                             }
         flow =
             Flow
@@ -979,6 +1020,7 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
         unitUUID = generateUnitUUID berUnit
         amount = resolveAmount env berAmountRaw berAmount
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
+        (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =
             BiosphereExchange
                 { bioFlowId = flowUUID
@@ -986,7 +1028,8 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 , bioUnitId = unitUUID
                 , bioIsInput = isInput
                 , bioLocation = ""
-                , bioComment = nonEmptyText berComment
+                , bioComment = cleanedComment
+                , bioPedigree = pedigree
                 }
         flow =
             Flow
@@ -1025,7 +1068,8 @@ stripLocationSuffix name =
         | otherwise =
             let firstC = T.head t
                 rest = T.unpack (T.tail t)
-             in firstC >= 'A' && firstC <= 'Z'
+             in firstC >= 'A'
+                    && firstC <= 'Z'
                     && all (\c -> (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') rest
 
 -- ============================================================================

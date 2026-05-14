@@ -44,6 +44,7 @@ mkOutput fid amt =
         , techProcessLinkId = Nothing
         , techLocation = ""
         , techComment = Nothing
+        , techPedigree = Nothing
         }
 
 -- | A reference output exchange
@@ -64,6 +65,7 @@ mkBio fid amt =
         , bioIsInput = False
         , bioLocation = ""
         , bioComment = Nothing
+        , bioPedigree = Nothing
         }
 
 fid1, fid2, fid3 :: UUID

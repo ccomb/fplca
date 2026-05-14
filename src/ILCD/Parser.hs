@@ -533,6 +533,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , bioIsInput = isInput
                         , bioLocation = ierLocation raw
                         , bioComment = ierComment raw
+                        , bioPedigree = Nothing
                         }
                 else
                     TechnosphereExchange
@@ -545,6 +546,7 @@ buildActivity flowInfoMap flowDB unitDB p =
                         , techProcessLinkId = Nothing
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
+                        , techPedigree = Nothing
                         }
 
 --------------------------------------------------------------------------------

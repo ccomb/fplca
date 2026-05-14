@@ -308,6 +308,7 @@ parseWithXeno xmlContent processId =
                                 , techProcessLinkId = Nothing
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
                                 , techComment = snd <$> idComment idata
+                                , techPedigree = Nothing
                                 }
                         flow =
                             Flow
@@ -388,6 +389,7 @@ parseWithXeno xmlContent processId =
                                 , bioIsInput = isInput
                                 , bioLocation = "" -- EcoSpold2: no per-exchange location
                                 , bioComment = snd <$> edComment edata
+                                , bioPedigree = Nothing
                                 }
                         -- Get subcompartment from the list (first entry if any)
                         subcompartment = case edSubcompartments edata of

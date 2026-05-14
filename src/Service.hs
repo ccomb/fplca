@@ -1066,6 +1066,7 @@ convertActivityForAPI unitCfg db processId activity =
                 , ewuTargetLocation = targetActivityLocation
                 , ewuTargetProcessId = targetProcessId
                 , ewuExComment = exchangeComment exchange
+                , ewuPedigree = exchangePedigree exchange
                 }
 
 -- | Get reference product name from activity exchanges

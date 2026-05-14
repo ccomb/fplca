@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (Exchange, Flow, FlowType, Unit)
+import Types (Exchange, Flow, FlowType, Pedigree, Unit)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -44,6 +44,7 @@ instance ToSchema Value where
 instance ToSchema FlowType
 instance ToSchema Unit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Flow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+instance ToSchema Pedigree where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Exchange where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 
 -- Database.Manager types
@@ -116,6 +117,7 @@ instance ToSchema SubstitutionRequest where declareNamedSchema = genericDeclareN
 instance ToSchema Substitution where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+
 -- Manual schema: the Either inside PerturbedEntry is flattened by ToJSON
 -- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
 -- on failure. The Generic-derived schema would expose the Haskell shape

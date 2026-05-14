@@ -18,6 +18,7 @@ import SimaPro.Parser (
     generateUnitUUID,
     parseAmount,
     parseBioRow,
+    parsePedigreePrefix,
     parseProductRow,
     parseSimaProCSV,
     parseTechRow,
@@ -26,7 +27,17 @@ import SimaPro.Parser (
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
-import Types (Activity (..), Exchange (..), Flow, UUID, Unit (..), exchangeComment, flowName)
+import Types (
+    Activity (..),
+    Exchange (..),
+    Flow,
+    Pedigree (..),
+    UUID,
+    Unit (..),
+    exchangeComment,
+    exchangePedigree,
+    flowName,
+ )
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
 
 -- | Test CSV content with a quoted product name containing the delimiter (;)
@@ -701,6 +712,75 @@ spec = do
             map exchangeComment bios `shouldBe` [Just "tail-pipe combustion"]
 
     -- -----------------------------------------------------------------------
+    -- Pedigree matrix
+    -- -----------------------------------------------------------------------
+
+    describe "parsePedigreePrefix" $ do
+        it "extracts pedigree and clean comment when both are present" $
+            parsePedigreePrefix "(3,3,2,1,2),. The ecoinvent process only takes pure product"
+                `shouldBe` ( Just (Pedigree 3 3 2 1 2)
+                           , Just "The ecoinvent process only takes pure product"
+                           )
+
+        it "extracts pedigree alone when no comment follows" $
+            parsePedigreePrefix "(3,3,2,1,2),"
+                `shouldBe` (Just (Pedigree 3 3 2 1 2), Nothing)
+
+        it "keeps the raw text when there is no pedigree prefix" $
+            parsePedigreePrefix "Free comment with no pedigree"
+                `shouldBe` (Nothing, Just "Free comment with no pedigree")
+
+        it "returns Nothing/Nothing for empty input" $
+            parsePedigreePrefix "" `shouldBe` (Nothing, Nothing)
+
+        it "rejects out-of-range digits and preserves the raw text" $
+            parsePedigreePrefix "(6,3,2,1,2), extra"
+                `shouldBe` (Nothing, Just "(6,3,2,1,2), extra")
+
+        it "rejects malformed parentheses and preserves the raw text" $
+            parsePedigreePrefix "(3,3,2,1 extra"
+                `shouldBe` (Nothing, Just "(3,3,2,1 extra")
+
+        it "tolerates leading whitespace before the pedigree" $
+            parsePedigreePrefix "  (3,3,2,1,2),. note"
+                `shouldBe` (Just (Pedigree 3 3 2 1 2), Just "note")
+
+    describe "pedigree wired through to Exchange" $ do
+        it "populates techPedigree and strips the prefix from the comment" $ do
+            (activities, _, _) <-
+                parseSectionCSV
+                    [ "Materials/fuels"
+                    , "Soybean meal BR;kg;6506.5;Lognormal;1.533;0;0;(3,3,2,1,2),. Brazilian port average"
+                    ]
+            let inputs =
+                    [ ex
+                    | act <- activities
+                    , ex <- exchanges act
+                    , case ex of
+                        TechnosphereExchange{techIsInput = True} -> True
+                        _ -> False
+                    ]
+            map exchangeComment inputs `shouldBe` [Just "Brazilian port average"]
+            map exchangePedigree inputs `shouldBe` [Just (Pedigree 3 3 2 1 2)]
+
+        it "populates bioPedigree for emission rows that carry only pedigree" $ do
+            (activities, _, _) <-
+                parseSectionCSV
+                    [ "Emissions to air"
+                    , "Carbon dioxide, fossil;high. pop.;kg;0.5;Undefined;;;;;;(2,2,1,1,1),"
+                    ]
+            let bios =
+                    [ ex
+                    | act <- activities
+                    , ex <- exchanges act
+                    , case ex of
+                        BiosphereExchange{} -> True
+                        _ -> False
+                    ]
+            map exchangeComment bios `shouldBe` [Nothing]
+            map exchangePedigree bios `shouldBe` [Just (Pedigree 2 2 1 1 1)]
+
+    -- -----------------------------------------------------------------------
     -- UUID generation
     -- -----------------------------------------------------------------------
 
@@ -1011,13 +1091,14 @@ approxEqAlloc (Just a) (Just b) = abs (a - b) < 0.01
 approxEqAlloc Nothing Nothing = True
 approxEqAlloc _ _ = False
 
--- | Generic 5-coproduct fixture: one Process block emits 5 fictional outputs
--- with five mass-allocation formulas. Percentages are chosen so they sum to
--- exactly 100 and use round numbers (50/20/15/10/5), keeping the test
--- self-contained without copying real LCA data. The five share-parameters
--- (S1..S5) are arranged so the formula 'Sx /(S1+S2+S3+S4+S5)*100' returns
--- the corresponding percentage. A single upstream input lets us assert
--- allocation scaling on the resulting Activities.
+{- | Generic 5-coproduct fixture: one Process block emits 5 fictional outputs
+with five mass-allocation formulas. Percentages are chosen so they sum to
+exactly 100 and use round numbers (50/20/15/10/5), keeping the test
+self-contained without copying real LCA data. The five share-parameters
+(S1..S5) are arranged so the formula 'Sx /(S1+S2+S3+S4+S5)*100' returns
+the corresponding percentage. A single upstream input lets us assert
+allocation scaling on the resulting Activities.
+-}
 multiCoproductCSV :: BS.ByteString
 multiCoproductCSV =
     BS.intercalate
@@ -1066,9 +1147,10 @@ parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
--- | Single-product CSV with an empty Process name field. Mirrors mono-product
--- SimaPro exports that leave the "Process name" line blank: the parser must
--- fall back to the product row name so activityUUID stays stable.
+{- | Single-product CSV with an empty Process name field. Mirrors mono-product
+SimaPro exports that leave the "Process name" line blank: the parser must
+fall back to the product row name so activityUUID stays stable.
+-}
 noProcessNameCSV :: BS.ByteString
 noProcessNameCSV =
     BS.intercalate
