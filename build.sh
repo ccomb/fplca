@@ -448,6 +448,13 @@ elif [[ "$OS" == "macos" ]] && [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # libs from extra-lib-dirs (ld64's natural fallback) and pulls Fortran
     # runtime + openblas via -L/-l flags.
     LINK_MODE="darwin"
+elif [[ -f /etc/alpine-release ]] && { [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; }; then
+    # Alpine host (musl libc): produce a fully-static binary linked against
+    # musl + OpenBLAS-from-source. The glibc-static `static` mode below
+    # doesn't apply — its link line references libquadmath/libgfortran/.a
+    # that the system doesn't expose, and its glibc shim is moot under musl.
+    LINK_MODE="musl"
+    : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR required for musl builds (path to libopenblas.a — build via prebuild-openblas or apk add openblas-static + headers)}"
 elif [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # Static linking required when using locally-built MUMPS (only .a libs available)
     LINK_MODE="static"
