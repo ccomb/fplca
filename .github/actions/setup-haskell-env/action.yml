@@ -4,7 +4,7 @@ description: MSYS2/apt/brew toolchain + GHCup install (with optional cache resto
 inputs:
   matrix-os:      { required: true,  description: linux | windows | macos }
   matrix-name:    { required: true,  description: matrix entry name (e.g. linux-amd64), used in the GHCup cache key }
-  ghc-version:    { required: false, default: '',     description: GHC version to install. Empty skips every Cabal/GHC/libquadmath step (used by the MUMPS-only prebuild). }
+  ghc-version:    { required: false, default: '',     description: GHC version to install. Empty skips every Cabal/GHC/OpenBLAS step (used by the MUMPS-only prebuild). }
   install-upx:    { required: false, default: 'false', description: Install UPX for binary compression. }
   cache-ghcup:    { required: false, default: 'false', description: Restore GHCup install from actions/cache on Linux/macOS. }
 

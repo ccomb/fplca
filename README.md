@@ -502,7 +502,7 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 brew install ghcup gcc openblas python3 curl node rust elm upx
 
 # Haskell toolchain
-ghcup install ghc 9.6.7 --set
+ghcup install ghc 9.12.4 --set
 ghcup install cabal latest
 source ~/.ghcup/env
 

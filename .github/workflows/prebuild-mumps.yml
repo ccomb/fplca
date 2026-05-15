@@ -64,7 +64,7 @@ jobs:
         with:
           matrix-os: ${{ matrix.os }}
           matrix-name: ${{ matrix.name }}
-          # ghc-version='' skips every Cabal/GHC/libquadmath step — we
+          # ghc-version='' skips every Cabal/GHC/OpenBLAS step — we
           # only build the MUMPS solver here, never invoke cabal.
 
       - name: Read pinned MUMPS version
