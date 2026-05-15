@@ -1,11 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
 
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
+import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -296,7 +296,7 @@ parseWithXeno xmlContent processId =
                             if T.null (idActivityLinkId idata)
                                 then (UUID.nil, Nothing)
                                 else parseUUID (idActivityLinkId idata)
-                        uuidWarnings = [w | Just w <- [flowWarn, unitWarn, linkWarn]]
+                        uuidWarnings = catMaybes [flowWarn, unitWarn, linkWarn]
                         exchange =
                             TechnosphereExchange
                                 { techFlowId = flowUUID
@@ -322,13 +322,11 @@ parseWithXeno xmlContent processId =
                                 Nothing -- CAS
                                 Nothing -- substanceId
                         unitNameWarning =
-                            if T.null (idUnitName idata)
-                                then
-                                    [ "[WARNING] Missing unit name for intermediate exchange with flow ID: "
-                                        ++ T.unpack (idFlowId idata)
-                                        ++ " - using 'UNKNOWN_UNIT' placeholder"
-                                    ]
-                                else []
+                            [ "[WARNING] Missing unit name for intermediate exchange with flow ID: "
+                                ++ T.unpack (idFlowId idata)
+                                ++ " - using 'UNKNOWN_UNIT' placeholder"
+                            | T.null (idUnitName idata)
+                            ]
                         unit =
                             Unit
                                 unitUUID
@@ -367,20 +365,19 @@ parseWithXeno xmlContent processId =
                         -- Determine if exchange is input (resource extraction)
                         -- Primary: use inputGroup/outputGroup if present
                         -- Fallback: use compartment heuristic (natural resource = input, others = output)
-                        isInput =
-                            if not (T.null finalInputGroup)
-                                then True -- Has explicit inputGroup
-                                else
-                                    if not (T.null finalOutputGroup)
-                                        then False -- Has explicit outputGroup
-                                        else -- Fallback to compartment-based heuristic
-                                            case edCompartments edata of
-                                                (comp : _) | T.toLower comp == "natural resource" -> True
-                                                _ -> False -- Default to output (emissions)
-                                                -- Parse UUIDs and collect warnings
+                        -- Determine input/output:
+                        -- explicit inputGroup wins, then explicit outputGroup, else
+                        -- compartment-based heuristic (natural resource = input).
+                        isInput
+                            | not (T.null finalInputGroup) = True
+                            | not (T.null finalOutputGroup) = False
+                            | otherwise = case edCompartments edata of
+                                (comp : _) | T.toLower comp == "natural resource" -> True
+                                _ -> False
+                        -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
-                        uuidWarnings = [w | Just w <- [flowWarn, unitWarn]]
+                        uuidWarnings = catMaybes [flowWarn, unitWarn]
                         exchange =
                             BiosphereExchange
                                 { bioFlowId = flowUUID
@@ -407,13 +404,11 @@ parseWithXeno xmlContent processId =
                                 (edCAS edata)
                                 Nothing -- substanceId - to be filled later
                         unitNameWarning =
-                            if T.null (edUnitName edata)
-                                then
-                                    [ "[WARNING] Missing unit name for elementary exchange with flow ID: "
-                                        ++ T.unpack (edFlowId edata)
-                                        ++ " - using 'UNKNOWN_UNIT' placeholder"
-                                    ]
-                                else []
+                            [ "[WARNING] Missing unit name for elementary exchange with flow ID: "
+                                ++ T.unpack (edFlowId edata)
+                                ++ " - using 'UNKNOWN_UNIT' placeholder"
+                            | T.null (edUnitName edata)
+                            ]
                         unit =
                             Unit
                                 unitUUID
@@ -521,21 +516,15 @@ parseWithXeno xmlContent processId =
             state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler - treat as text
-    cdata state content = text state content
+    cdata = text
 
     -- Build final result from parse state
     buildResult :: ParseState -> ProcessId -> Either String (Activity, [Flow], [Unit])
     buildResult st _pid =
-        let name = case psActivityName st of
-                Just n -> n
-                Nothing -> "Unknown Activity"
-            location = case psLocation st of
-                Just loc -> loc
-                Nothing -> "GLO"
+        let name = fromMaybe "Unknown Activity" (psActivityName st)
+            location = fromMaybe "GLO" (psLocation st)
             description = reverse (psDescription st) -- Reverse to get correct order
-            refUnit = case psRefUnit st of
-                Just u -> u
-                Nothing -> "UNKNOWN_UNIT"
+            refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             -- Apply cutoff strategy to exchanges
             activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             flows = reverse (psFlows st)
@@ -581,7 +570,7 @@ hasReferenceProduct activity = any exchangeIsReference (exchanges activity)
 
 -- | Remove production exchanges with zero amounts
 removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
-removeZeroAmountCoproducts exs = filter keepExchange exs
+removeZeroAmountCoproducts = filter keepExchange
   where
     keepExchange TechnosphereExchange{techIsInput = False, techIsReference = True} = True
     keepExchange TechnosphereExchange{techIsInput = False, techIsReference = False, techAmount = amount} = amount /= 0.0

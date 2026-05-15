@@ -477,9 +477,7 @@ findSupplierAcrossDatabases ::
     -- | Unit of the exchange
     Text ->
     CrossDBLinkResult
-findSupplierAcrossDatabases ctx productName location unit =
-    -- Just delegate to the indexed version
-    findSupplierInIndexedDBs ctx productName location unit
+findSupplierAcrossDatabases = findSupplierInIndexedDBs
 
 {- | Match product names (simplified - just for scoring display)
 Actual matching is done via index lookup

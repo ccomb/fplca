@@ -1,7 +1,5 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 
 {- | Dimensional unit conversion system.
 
@@ -52,6 +50,7 @@ import Data.Csv (HasHeader (..), decode)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (elemIndex)
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -177,7 +176,7 @@ parseDimension dimOrder expr
                         <> ")"
 
     modifyAt :: Int -> (Int -> Int) -> [Int] -> [Int]
-    modifyAt idx f xs = zipWith (\i x -> if i == idx then f x else x) [0 ..] xs
+    modifyAt idx f = zipWith (\i x -> if i == idx then f x else x) [0 ..]
 
     foldlM :: (b -> a -> Either e b) -> b -> [a] -> Either e b
     foldlM _ acc [] = Right acc
@@ -201,7 +200,7 @@ buildFromCSV csvData =
             UnitConfig
                 { ucDimensionOrder = dimOrder
                 , ucUnits = units
-                , ucOriginalKeys = M.mapWithKey (\k _ -> k) units
+                , ucOriginalKeys = M.mapWithKey const units
                 }
 
     parseRow dimOrder (name, dimExpr, factor) = do
@@ -273,6 +272,4 @@ Returns the original amount if conversion fails.
 -}
 convertExchangeAmount :: UnitConfig -> Text -> Text -> Double -> Double
 convertExchangeAmount cfg fromUnit toUnit amount =
-    case convertUnit cfg fromUnit toUnit amount of
-        Just converted -> converted
-        Nothing -> amount
+    fromMaybe amount (convertUnit cfg fromUnit toUnit amount)
