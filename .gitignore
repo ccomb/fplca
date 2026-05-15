@@ -1,5 +1,5 @@
 dist-newstyle
-dist-musl
+dist/
 weeder.toml
 .hie
 *.o
