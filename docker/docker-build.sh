@@ -26,9 +26,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            # Backward-compat: first positional arg is the tag (legacy behaviour).
-            TAG="$1"
-            shift
+            echo "ERROR: unknown argument: $1" >&2
+            echo "Usage: $0 [-t TAG] [--extract]" >&2
+            exit 1
             ;;
     esac
 done
