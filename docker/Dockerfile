@@ -187,10 +187,18 @@ COPY --from=haskell-builder /build/output/volca /usr/local/bin/volca
 
 WORKDIR /app
 
+# Bundle reference data at /data/ BEFORE declaring it a volume so the files
+# become the volume's default content for fresh named volumes (Docker
+# auto-populates empty named volumes with whatever the image holds at the
+# volume path). Standalone `docker run volca` reads these directly; bind
+# mounts hide them and the caller is expected to provide their own data.
+#
+# Config paths like `path = "data/flows.csv"` resolve to /data/flows.csv via
+# Config.redirectIntoDataDir (strip leading `data/`, prepend VOLCA_DATA_DIR).
+COPY data/ /data/
+
 ENV VOLCA_DATA_DIR=/data
 VOLUME /data
-
-COPY data/ /app/data/
 
 RUN cat > /app/volca.toml <<'EOF'
 [server]
