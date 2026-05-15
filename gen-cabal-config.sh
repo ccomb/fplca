@@ -17,10 +17,23 @@ MUMPS_INCLUDE_DIR="${MUMPS_INCLUDE_DIR:-/usr/include}"
 LINK_MODE="${LINK_MODE:-dynamic}"
 OUTPUT="${OUTPUT_DIR:-.}/cabal.project.local"
 
+# Parallelism preamble shared by every LINK_MODE.
+# Lives in cabal.project.local (not cabal.project) so that Docker builds —
+# which copy only volca.cabal + mumps-hs/ into the build context and write a
+# minimal cabal.project without `packages: .` machinery — still get jobs +
+# RTS allocation area + per-module GHC parallelism.
+cat > "$OUTPUT" << 'EOF'
+jobs: $ncpus
+
+program-options
+  ghc-options: -j +RTS -A128m -RTS
+
+EOF
+
 case "$LINK_MODE" in
     dynamic)
         # Shared linking (Linux, macOS, Docker, dev builds)
-        cat > "$OUTPUT" << EOF
+        cat >> "$OUTPUT" << EOF
 optimization: 2
 
 extra-lib-dirs: $MUMPS_LIB_DIR
@@ -55,7 +68,7 @@ EOF
             *)            QUADMATH_FLAG="" ;;
         esac
         STATIC_LINK_FLAGS="-optl-no-pie -optc-no-pie -optl-L$MUMPS_LIB_DIR -optl$SHIM_OBJ -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-llapack -optl-lblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm -optl-ldl"
-        cat > "$OUTPUT" << EOF
+        cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 shared: False
@@ -91,7 +104,7 @@ EOF
         # -ffunction-sections / -fdata-sections (OpenBLAS in our pipeline);
         # harmless on the others.
         MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--gc-sections -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
-        cat > "$OUTPUT" << EOF
+        cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 shared: False
@@ -120,7 +133,7 @@ EOF
         # sections and unused dylib load commands. Pairs with `split-sections: True`
         # below for a meaningful (5–15 %) size win before strip even runs.
         DARWIN_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-L${OPENBLAS_PREFIX}/lib -optl-lopenblas -optl-L${GFORTRAN_LIB_DIR} -optl-lgfortran -optl-lquadmath -optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip -optl-Wl,-dead_strip_dylibs"
-        cat > "$OUTPUT" << EOF
+        cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 
@@ -140,7 +153,7 @@ EOF
         # Windows/MSYS2: MinGW + OpenBLAS
         : "${MSYS2_LIB_DIR:?MSYS2_LIB_DIR is required for windows mode}"
         : "${GCC_LIB_DIR:?GCC_LIB_DIR is required for windows mode}"
-        cat > "$OUTPUT" << EOF
+        cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 
