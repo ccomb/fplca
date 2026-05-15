@@ -70,7 +70,8 @@ jobs:
         id: versions
         shell: sh
         run: |
-          . versions.env
+          # See _build-matrix.yml: `./` keeps dash from PATH-searching.
+          . ./versions.env
           echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Haskell build environment

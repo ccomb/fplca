@@ -89,7 +89,10 @@ jobs:
         id: versions
         shell: sh
         run: |
-          . versions.env
+          # `./` so dash (Ubuntu /bin/sh) doesn't PATH-search for the file —
+          # POSIX `.` builtin only skips PATH when the operand contains a slash.
+          # Alpine's BusyBox ash is more lenient but the slash form works for both.
+          . ./versions.env
           echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
           echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
 
