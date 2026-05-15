@@ -67,6 +67,14 @@ jobs:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
+      # GitHub's JavaScript actions (checkout, cache, …) ship a glibc-linked
+      # Node binary which refuses to run in an Alpine container on ARM64
+      # ("JavaScript Actions in Alpine containers are only supported on x64
+      # Linux runners"). This composite action drops a patched gcompat shim
+      # into /lib and masks /etc/os-release so the runner stops detecting
+      # Alpine. No-op on amd64 (internal `runner.arch == 'ARM64'` guard).
+      - if: matrix.os == 'linux'
+        uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
       # POSIX `sh` here — bash isn't preinstalled in the Alpine container
