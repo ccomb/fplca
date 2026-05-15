@@ -153,10 +153,11 @@ EOF
         # Windows/MSYS2: MinGW + OpenBLAS
         # Auto-discover MSYS2/GCC paths and convert POSIX-style MUMPS paths
         # to Windows form. Callers running under MSYS2 bash (build.sh,
-        # prebuild-cabal-store.yml, prebuild-mumps.yml) used to duplicate this
-        # block; factoring it here keeps the per-caller code to LINK_MODE=windows.
+        # prebuild-cabal-store.yml) used to duplicate this block; factoring
+        # it here keeps the per-caller code to LINK_MODE=windows.
         if [[ -z "${MSYS2_LIB_DIR:-}" ]]; then
             MSYS2_LIB_DIR=$(cygpath -m /ucrt64/lib)
+            : "${MSYS2_LIB_DIR:?cygpath -m /ucrt64/lib returned empty — is MSYS2 ucrt64 installed?}"
         fi
         if [[ -z "${GCC_LIB_DIR:-}" ]]; then
             GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
