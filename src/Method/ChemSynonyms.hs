@@ -33,7 +33,6 @@ module Method.ChemSynonyms (
 ) where
 
 import qualified Data.ByteString as BS
-import Data.List (foldl')
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Set (Set)
