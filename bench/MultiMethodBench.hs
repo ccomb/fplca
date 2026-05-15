@@ -20,6 +20,7 @@ Speedup ratios:
 module Main (main) where
 
 import Criterion.Main
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -172,7 +173,7 @@ buildFixture mkCfFn unitCfg =
             ]
 
         methods = [mkMethod m [] | m <- [1 .. nMethods]] -- factors don't matter, mappings drive build
-        rawTables = [buildMethodTables (mappingsFor s) | s <- [1 .. nMethods]]
+        rawTables = [buildMethodTables M.empty (mappingsFor s) | s <- [1 .. nMethods]]
         filledTables = map (fillBroadcastVector unitCfg unitDB flowDB) rawTables
         setTables = buildMethodSetTables (zip methods filledTables)
 
@@ -200,48 +201,51 @@ buildFixture mkCfFn unitCfg =
 -- | Score one inventory against ONE method (the 1st in the list), legacy cascade.
 benchMonoCascade :: Fixture -> Double
 benchMonoCascade fx =
-    computeLCIAScoreFromTables
-        (fxUnitCfg fx)
-        (fxUnitDB fx)
-        (fxFlowDB fx)
-        (fxInventory fx)
-        (head (fxRawTables fx))
+    loScore $
+        computeLCIAScoreFromTables
+            (fxUnitCfg fx)
+            (fxUnitDB fx)
+            (fxFlowDB fx)
+            (fxInventory fx)
+            (head (fxRawTables fx))
 
 -- | Score one inventory against ONE method, broadcast filled (Phase 1).
 benchMonoBroadcast :: Fixture -> Double
 benchMonoBroadcast fx =
-    computeLCIAScoreFromTables
-        (fxUnitCfg fx)
-        (fxUnitDB fx)
-        (fxFlowDB fx)
-        (fxInventory fx)
-        (head (fxFilledTables fx))
+    loScore $
+        computeLCIAScoreFromTables
+            (fxUnitCfg fx)
+            (fxUnitDB fx)
+            (fxFlowDB fx)
+            (fxInventory fx)
+            (head (fxFilledTables fx))
 
 -- | Score the same inventory once per method, sequential — what the HTTP route
 -- does with mapConcurrently sans the parallelism overhead.
 benchMonoFanout :: Fixture -> [Double]
 benchMonoFanout fx =
-    [ computeLCIAScoreFromTables
-        (fxUnitCfg fx)
-        (fxUnitDB fx)
-        (fxFlowDB fx)
-        (fxInventory fx)
-        t
+    [ loScore $
+        computeLCIAScoreFromTables
+            (fxUnitCfg fx)
+            (fxUnitDB fx)
+            (fxFlowDB fx)
+            (fxInventory fx)
+            t
     | t <- fxFilledTables fx
     ]
 
 -- | Score all methods at once via stacked-broadcast matvec (Phase 2).
+-- No regional methods → 'scoreRegionalCrossDB' never inspects the triple,
+-- so the unused Database / empty scaling vector are never forced.
 benchSetBatched :: Fixture -> [(UUID, Either Text Double)]
 benchSetBatched fx =
     computeLCIAScoreSetFromTables
         (fxUnitCfg fx)
         (fxUnitDB fx)
         (fxFlowDB fx)
-        unusedDatabase
-        U.empty
         (fxInventory fx)
         M.empty
-        (fxSetTables fx)
+        ((unusedDatabase, U.empty, fxSetTables fx) :| [])
 
 main :: IO ()
 main = do
