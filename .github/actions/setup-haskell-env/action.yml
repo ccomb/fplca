@@ -121,7 +121,7 @@ runs:
       shell: sh
       run: |
         apk add --no-cache \
-          bash binutils curl file git tar xz perl python3 make cmake pkgconfig \
+          bash coreutils binutils curl file git tar xz perl python3 make cmake pkgconfig \
           linux-headers musl-dev libc-dev \
           gcc g++ gfortran \
           gmp-dev libffi-dev \

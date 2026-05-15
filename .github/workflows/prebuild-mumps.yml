@@ -23,13 +23,19 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # Linux jobs build MUMPS in Alpine so the archive is musl-compatible
+    # (no glibc symbols leaking into libdmumps_seq.a). See _build-matrix.yml
+    # for the wider context. Windows/macOS keep running on the bare runner.
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
+            container: alpine:3.19
             os: linux
+          # arm64 stays Ubuntu/glibc — see _build-matrix.yml for context.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
             os: linux
@@ -47,6 +53,10 @@ jobs:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
+      # See _build-matrix.yml for context: GH's JS actions need a glibc Node
+      # and won't run in Alpine arm64 without this gcompat + os-release mask.
+      - if: matrix.container == 'alpine:3.19'
+        uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
       - name: Setup build environment (no GHC)

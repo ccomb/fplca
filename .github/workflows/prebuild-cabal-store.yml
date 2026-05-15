@@ -28,13 +28,19 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # Linux jobs prebuild the cabal store in Alpine so the cached
+    # ~/.cabal/store is linked against musl libc — matches what
+    # _build-matrix.yml consumes. See _build-matrix.yml for context.
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
+            container: alpine:3.19
             os: linux
+          # arm64 stays Ubuntu/glibc — see _build-matrix.yml for context.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
             os: linux
@@ -52,13 +58,20 @@ jobs:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
+      # See _build-matrix.yml for context: GH's JS actions need a glibc Node
+      # and won't run in Alpine arm64 without this gcompat + os-release mask.
+      - if: matrix.container == 'alpine:3.19'
+        uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
+      # POSIX `sh` here — bash isn't preinstalled in the Alpine container
+      # we now use for Linux jobs (setup-haskell-env apk-installs it below).
       - name: Read pinned versions
         id: versions
-        shell: bash
+        shell: sh
         run: |
-          source versions.env
+          # See _build-matrix.yml: `./` keeps dash from PATH-searching.
+          . ./versions.env
           echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Haskell build environment
@@ -111,7 +124,11 @@ jobs:
           case "$RUNNER_OS" in
             Windows) export LINK_MODE=windows ;;
             macOS)   export LINK_MODE=darwin  ;;
-            *)       export LINK_MODE=static  ;;
+            *)       if [[ -f /etc/alpine-release ]]; then
+                       export LINK_MODE=musl
+                     else
+                       export LINK_MODE=static
+                     fi ;;
           esac
           ./gen-cabal-config.sh
           echo "--- cabal.project.local ---"

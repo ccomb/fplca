@@ -25,6 +25,14 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # Linux jobs run in an Alpine container so the released binary links
+    # against musl libc — truly portable across distros (vs. glibc-static,
+    # which leaks dlopen/getaddrinfo dependencies and needs the
+    # cbits/static-shims.c workaround for glibc 2.32+). Windows/macOS keep
+    # running on the bare runner — GH macOS hosts cannot run containers,
+    # and Windows uses MSYS2 instead of a Linux container. setup-haskell-env
+    # auto-detects /etc/alpine-release and branches apt vs apk accordingly.
+    container: ${{ matrix.container }}
     # Catches genuine hangs without false-failing legitimate cold builds.
     # Windows cold path (MSYS2 + GHCup install + cold cabal compile + 25-min
     # test step) tops out around 50 min; 60 min gives ~10 min headroom while
@@ -36,7 +44,12 @@ jobs:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
+            container: alpine:3.19
             os: linux
+          # linux-arm64 stays on Ubuntu/glibc-static: ghcup has no Alpine
+          # aarch64 bindist for GHC 9.6.7 (Alpine arm64 first appeared in
+          # 9.8.2), and the source-build fallback fails. amd64 keeps the
+          # musl path for fully-portable release binaries.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
             os: linux
@@ -57,19 +70,35 @@ jobs:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
+      # GitHub's JavaScript actions (checkout, cache, …) ship a glibc-linked
+      # Node binary which refuses to run in an Alpine container on ARM64
+      # ("JavaScript Actions in Alpine containers are only supported on x64
+      # Linux runners"). This composite action drops a patched gcompat shim
+      # into /lib and masks /etc/os-release so the runner stops detecting
+      # Alpine. Gated on `matrix.container` so it does not run (and try to
+      # `apk add`) on the Ubuntu/glibc arm64 path. The action's own
+      # `runner.arch == 'ARM64'` guard makes it a no-op on amd64.
+      - if: matrix.container == 'alpine:3.19'
+        uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
+      # POSIX `sh` here — bash isn't preinstalled in the Alpine container
+      # we now use for Linux jobs (setup-haskell-env apk-installs it below).
+      # All the work these two steps do is POSIX-compatible already.
       - name: Read pinned versions
         id: versions
-        shell: bash
+        shell: sh
         run: |
-          source versions.env
+          # `./` so dash (Ubuntu /bin/sh) doesn't PATH-search for the file —
+          # POSIX `.` builtin only skips PATH when the operand contains a slash.
+          # Alpine's BusyBox ash is more lenient but the slash form works for both.
+          . ./versions.env
           echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
           echo "mumps=$MUMPS_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Read engine version from cabal
         id: cabal-version
-        shell: bash
+        shell: sh
         run: |
           ver=$(awk '/^version:/ {print $2; exit}' volca.cabal)
           echo "version=$ver" >> "$GITHUB_OUTPUT"
