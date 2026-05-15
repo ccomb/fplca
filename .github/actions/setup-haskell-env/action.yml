@@ -4,7 +4,7 @@ description: MSYS2/apt/brew toolchain + GHCup install (with optional cache resto
 inputs:
   matrix-os:      { required: true,  description: linux | windows | macos }
   matrix-name:    { required: true,  description: matrix entry name (e.g. linux-amd64), used in the GHCup cache key }
-  ghc-version:    { required: false, default: '',     description: GHC version to install. Empty skips every Cabal/GHC/libquadmath step (used by the MUMPS-only prebuild). }
+  ghc-version:    { required: false, default: '',     description: GHC version to install. Empty skips every Cabal/GHC/OpenBLAS step (used by the MUMPS-only prebuild). }
   install-upx:    { required: false, default: 'false', description: Install UPX for binary compression. }
   cache-ghcup:    { required: false, default: 'false', description: Restore GHCup install from actions/cache on Linux/macOS. }
 
@@ -62,50 +62,6 @@ runs:
         source /d/ghcup/env
         ghc --version && cabal --version && cabal update
 
-    # Auto-detect runtime libc on Linux. Workflows that opt into
-    # `container: alpine:3.19` get musl; the default ubuntu-latest runner
-    # gets glibc. This drives apt-vs-apk + OpenBLAS source-build branching
-    # below, with no caller-side change required.
-    - name: Detect Linux libc
-      if: inputs.matrix-os == 'linux'
-      id: libc
-      shell: sh
-      run: |
-        if [ -f /etc/alpine-release ]; then
-          echo "libc=musl" >> "$GITHUB_OUTPUT"
-        else
-          echo "libc=glibc" >> "$GITHUB_OUTPUT"
-        fi
-
-    - name: Install build dependencies (Linux glibc)
-      if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'glibc'
-      shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          build-essential gfortran cmake python3 curl \
-          zlib1g-dev liblapack-dev libblas-dev \
-          ${{ inputs.install-upx == 'true' && 'upx-ucl' || '' }}
-        # libquadmath workaround: gcc's gfortran spec auto-adds -lquadmath
-        # when linking gfortran archives (libdmumps_seq.a). amd64 ships
-        # /usr/lib/x86_64-linux-gnu/libquadmath.so; arm64 noble ships
-        # nothing — link fails. Symlink to runtime if present, else stub
-        # (MUMPS double-precision never calls __quadmath_* at runtime).
-        # Skipped when ghc-version is empty (MUMPS-only prebuild never
-        # runs the link step that needs quadmath).
-        if [[ -n "${{ inputs.ghc-version }}" ]]; then
-          LIBDIR=/usr/lib/$(gcc -print-multiarch)
-          [[ -d "$LIBDIR" ]] || LIBDIR=/usr/lib
-          if [[ ! -e "$LIBDIR/libquadmath.so" ]]; then
-            if [[ -e "$LIBDIR/libquadmath.so.0" ]]; then
-              sudo ln -s libquadmath.so.0 "$LIBDIR/libquadmath.so"
-            else
-              echo 'void __libquadmath_stub(void) {}' \
-                | sudo gcc -shared -x c -o "$LIBDIR/libquadmath.so" -
-            fi
-          fi
-        fi
-
     # Alpine containers run as root and have no apt/sudo — install everything
     # via apk. Mirrors the package list from docker/Dockerfile.musl, the only
     # other place we build volca against musl. `*-static` packages ship the
@@ -113,18 +69,17 @@ runs:
     # the workflow's `gh release download` steps.
     #
     # IMPORTANT ordering invariant: this step installs bash on the Alpine
-    # image. Every later step on the musl path uses `shell: bash`; every
-    # step before it (e.g. "Detect Linux libc") must use `shell: sh`. Do
-    # not reorder.
+    # image. Every later step on the musl path uses `shell: bash`; this
+    # step itself must use `shell: sh` (bash isn't there yet). Do not reorder.
     - name: Install build dependencies (Linux musl)
-      if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'musl'
+      if: inputs.matrix-os == 'linux'
       shell: sh
       run: |
         apk add --no-cache \
           bash coreutils binutils curl file git tar xz perl python3 make cmake pkgconfig \
           linux-headers musl-dev libc-dev \
           gcc g++ gfortran \
-          gmp-dev libffi-dev \
+          gmp-dev gmp-static libffi-dev \
           ncurses-dev ncurses-static \
           zlib-dev zlib-static \
           zstd-dev zstd-static \
@@ -142,7 +97,7 @@ runs:
     # reuses the previous build in ~5 s instead of compiling for ~8 min.
     # Cache invalidates automatically on every versions.env edit.
     - name: Restore OpenBLAS build (Linux musl)
-      if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'musl' && inputs.ghc-version != ''
+      if: inputs.matrix-os == 'linux' && inputs.ghc-version != ''
       id: cache-openblas
       uses: actions/cache@v4
       with:
@@ -150,7 +105,7 @@ runs:
         key: openblas-${{ inputs.matrix-name }}-${{ hashFiles('versions.env') }}-v1
 
     - name: Build OpenBLAS (Linux musl)
-      if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'musl' && inputs.ghc-version != '' && steps.cache-openblas.outputs.cache-hit != 'true'
+      if: inputs.matrix-os == 'linux' && inputs.ghc-version != '' && steps.cache-openblas.outputs.cache-hit != 'true'
       shell: bash
       run: |
         source versions.env
@@ -167,7 +122,7 @@ runs:
         rm -rf "$SRC"
 
     - name: Export OpenBLAS paths (Linux musl)
-      if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'musl' && inputs.ghc-version != ''
+      if: inputs.matrix-os == 'linux' && inputs.ghc-version != ''
       shell: sh
       run: |
         echo "OPENBLAS_LIB_DIR=$GITHUB_WORKSPACE/deps/openblas/lib" >> "$GITHUB_ENV"

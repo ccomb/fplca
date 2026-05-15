@@ -449,15 +449,14 @@ elif [[ "$OS" == "macos" ]] && [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # runtime + openblas via -L/-l flags.
     LINK_MODE="darwin"
 elif [[ -f /etc/alpine-release ]] && { [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; }; then
-    # Alpine host (musl libc): produce a fully-static binary linked against
-    # musl + OpenBLAS-from-source. The glibc-static `static` mode below
-    # doesn't apply — its link line references libquadmath/libgfortran/.a
-    # that the system doesn't expose, and its glibc shim is moot under musl.
+    # Alpine host (musl libc): fully-static binary linked against musl +
+    # OpenBLAS-from-source. The only fully-portable Linux static path we
+    # still support.
     LINK_MODE="musl"
     : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR required for musl builds (path to libopenblas.a — build via prebuild-openblas or apk add openblas-static + headers)}"
-elif [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
-    # Static linking required when using locally-built MUMPS (only .a libs available)
-    LINK_MODE="static"
+elif [[ "$STATIC_BUILD" == "true" ]]; then
+    log_error "--static is only supported on Alpine/musl. Use the Docker build or run inside an Alpine container."
+    exit 1
 else
     LINK_MODE="dynamic"
 fi

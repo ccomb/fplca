@@ -27,11 +27,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Linux jobs run in an Alpine container so the released binary links
     # against musl libc — truly portable across distros (vs. glibc-static,
-    # which leaks dlopen/getaddrinfo dependencies and needs the
-    # cbits/static-shims.c workaround for glibc 2.32+). Windows/macOS keep
-    # running on the bare runner — GH macOS hosts cannot run containers,
-    # and Windows uses MSYS2 instead of a Linux container. setup-haskell-env
-    # auto-detects /etc/alpine-release and branches apt vs apk accordingly.
+    # which leaks dlopen/getaddrinfo and forces ABI-specific shims). Windows/macOS
+    # keep running on the bare runner — GH macOS hosts cannot run containers,
+    # and Windows uses MSYS2 instead of a Linux container.
     container: ${{ matrix.container }}
     # Catches genuine hangs without false-failing legitimate cold builds.
     # Windows cold path (MSYS2 + GHCup install + cold cabal compile + 25-min
@@ -44,14 +42,11 @@ jobs:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
-            container: alpine:3.19
+            container: alpine:3.23
             os: linux
-          # linux-arm64 stays on Ubuntu/glibc-static: ghcup has no Alpine
-          # aarch64 bindist for GHC 9.6.7 (Alpine arm64 first appeared in
-          # 9.8.2), and the source-build fallback fails. amd64 keeps the
-          # musl path for fully-portable release binaries.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
+            container: alpine:3.23
             os: linux
           - name: windows-amd64
             runner: windows-latest
@@ -75,10 +70,10 @@ jobs:
       # ("JavaScript Actions in Alpine containers are only supported on x64
       # Linux runners"). This composite action drops a patched gcompat shim
       # into /lib and masks /etc/os-release so the runner stops detecting
-      # Alpine. Gated on `matrix.container` so it does not run (and try to
-      # `apk add`) on the Ubuntu/glibc arm64 path. The action's own
-      # `runner.arch == 'ARM64'` guard makes it a no-op on amd64.
-      - if: matrix.container == 'alpine:3.19'
+      # Alpine. The action's own `runner.arch == 'ARM64'` guard makes it a
+      # no-op on amd64. Gated on the Alpine container in case a future matrix
+      # row reintroduces a non-Alpine Linux entry.
+      - if: matrix.container == 'alpine:3.23'
         uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 

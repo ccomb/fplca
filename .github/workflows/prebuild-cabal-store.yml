@@ -38,11 +38,11 @@ jobs:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
-            container: alpine:3.19
+            container: alpine:3.23
             os: linux
-          # arm64 stays Ubuntu/glibc — see _build-matrix.yml for context.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
+            container: alpine:3.23
             os: linux
           - name: windows-amd64
             runner: windows-latest
@@ -60,7 +60,7 @@ jobs:
     steps:
       # See _build-matrix.yml for context: GH's JS actions need a glibc Node
       # and won't run in Alpine arm64 without this gcompat + os-release mask.
-      - if: matrix.container == 'alpine:3.19'
+      - if: matrix.container == 'alpine:3.23'
         uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
@@ -124,11 +124,7 @@ jobs:
           case "$RUNNER_OS" in
             Windows) export LINK_MODE=windows ;;
             macOS)   export LINK_MODE=darwin  ;;
-            *)       if [[ -f /etc/alpine-release ]]; then
-                       export LINK_MODE=musl
-                     else
-                       export LINK_MODE=static
-                     fi ;;
+            *)       export LINK_MODE=musl    ;;
           esac
           ./gen-cabal-config.sh
           echo "--- cabal.project.local ---"

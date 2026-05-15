@@ -91,7 +91,7 @@ The reader doesn't need to know LCA to interpret a row.
   "schema_version": 1,
   "metadata": {
     "git_sha": "…",
-    "ghc": "9.6.7",
+    "ghc": "9.12.4",
     "timestamp_iso": "2026-05-15T14:32:00Z",
     "hardware": { "cpu": "…", "cores": 24, "ram_gb": 90.0, "os": "Linux" }
   },
