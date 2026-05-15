@@ -103,23 +103,16 @@ jobs:
           # mumps-hs's c-sources still need to compile against MUMPS headers
           # and the link plan still has to be valid (cabal solver bakes the
           # link line into the install plan).
+          # MSYS2/GCC discovery and POSIX→Windows MUMPS path conversion are
+          # handled inside gen-cabal-config.sh's windows branch.
           [[ -f /d/ghcup/env ]] && source /d/ghcup/env
           export MUMPS_LIB_DIR="$(pwd)/deps/mumps/lib"
           export MUMPS_INCLUDE_DIR="$(pwd)/deps/mumps/include"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            export LINK_MODE=windows
-            MSYS2_LIB_DIR=$(cygpath -m /ucrt64/lib)
-            GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
-            GCC_LIB_DIR=$(cygpath -m "$GCC_LIB_DIR")
-            win_path() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
-            export MUMPS_LIB_DIR=$(win_path "$MUMPS_LIB_DIR")
-            export MUMPS_INCLUDE_DIR=$(win_path "$MUMPS_INCLUDE_DIR")
-            export MSYS2_LIB_DIR GCC_LIB_DIR
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            export LINK_MODE=darwin
-          else
-            export LINK_MODE=static
-          fi
+          case "$RUNNER_OS" in
+            Windows) export LINK_MODE=windows ;;
+            macOS)   export LINK_MODE=darwin  ;;
+            *)       export LINK_MODE=static  ;;
+          esac
           ./gen-cabal-config.sh
           echo "--- cabal.project.local ---"
           cat cabal.project.local
