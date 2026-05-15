@@ -5,7 +5,7 @@
 # Optional env vars:
 #   MUMPS_LIB_DIR           Path to MUMPS libraries (default: system)
 #   MUMPS_INCLUDE_DIR       Path to MUMPS headers (default: /usr/include)
-#   LINK_MODE               "dynamic" (default), "static", "musl", "darwin", "windows"
+#   LINK_MODE               "dynamic" (default), "musl", "darwin", "windows"
 #   OUTPUT_DIR              Where to write cabal.project.local (default: current dir)
 #
 # Output: writes cabal.project.local in OUTPUT_DIR
@@ -41,55 +41,11 @@ extra-include-dirs: $MUMPS_INCLUDE_DIR
 EOF
         ;;
 
-    static)
-        # Fully static link for Linux glibc: MUMPS + BLAS/LAPACK + Fortran
-        # runtime all baked in. `executable-static` + `shared: False` make
-        # cabal build every dep as `.a` and link the exe with `-static` —
-        # no intermediate libHS*.so means non-PIC libgfortran.a never gets
-        # pulled into a shared object (the original PR #20 TPOFF32 trigger).
-        # `-no-pie` keeps Debian's non-PIC Fortran/BLAS archives linkable
-        # into the final non-PIE exe. `--start-group`/`--end-group`
-        # resolves the cyclic refs between MUMPS / LAPACK / BLAS / Fortran.
-        #
-        # cbits/static-shims.c provides __xmknod / __xmknodat, removed
-        # from glibc 2.32+ public ABI but still referenced by the unix
-        # package shipped with ghcup's GHC 9.6 (compiled against older
-        # glibc headers that inlined to those symbols).
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        SHIM_SRC="$SCRIPT_DIR/cbits/static-shims.c"
-        SHIM_OBJ="$SCRIPT_DIR/cbits/static-shims.o"
-        if [[ ! -f "$SHIM_OBJ" || "$SHIM_SRC" -nt "$SHIM_OBJ" ]]; then
-            cc -fno-pie -O2 -c "$SHIM_SRC" -o "$SHIM_OBJ"
-        fi
-        # libquadmath is x86-only (__float128). aarch64's gcc has no
-        # libquadmath.{a,so} and libgfortran.a doesn't pull it in there.
-        case "$(uname -m)" in
-            x86_64|amd64) QUADMATH_FLAG="-optl-lquadmath" ;;
-            *)            QUADMATH_FLAG="" ;;
-        esac
-        STATIC_LINK_FLAGS="-optl-no-pie -optc-no-pie -optl-L$MUMPS_LIB_DIR -optl$SHIM_OBJ -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-llapack -optl-lblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm -optl-ldl"
-        cat >> "$OUTPUT" << EOF
-optimization: 2
-split-sections: True
-shared: False
-executable-static: True
-
-extra-lib-dirs: $MUMPS_LIB_DIR
-extra-include-dirs: $MUMPS_INCLUDE_DIR
-
-package volca
-  ghc-options: $STATIC_LINK_FLAGS
-EOF
-        ;;
-
     musl)
-        # Fully static link for Linux against musl libc (Alpine). Unlike the
-        # `static` mode above, musl's `dlopen` / `getaddrinfo` / NSS lookups
-        # work in a static binary without dragging in the running glibc, so
-        # the resulting executable is genuinely portable across Linux distros.
-        # The `static-shims.c` glibc workaround is not needed: musl never had
-        # the __xmknod / __xmknodat internal aliases, and the unix package
-        # gets recompiled against musl headers.
+        # Fully static link for Linux against musl libc (Alpine). musl's
+        # `dlopen` / `getaddrinfo` / NSS lookups all resolve inside a static
+        # binary without dragging in the host's libc, so the resulting
+        # executable is genuinely portable across Linux distros.
         #
         # Alpine packages ship LAPACK/BLAS as shared libs only (no .a), so
         # OpenBLAS — which bundles both BLAS and LAPACK in a single static
