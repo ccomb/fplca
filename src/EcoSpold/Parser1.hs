@@ -244,19 +244,19 @@ parseWithXeno xmlContent =
              in case psContext state of
                     InInputGroup edata ->
                         -- Restore parent exchange context with updated inputGroup
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "outputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InOutputGroup edata ->
                         -- Restore parent exchange context with updated outputGroup
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
@@ -272,14 +272,14 @@ parseWithXeno xmlContent =
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "geography" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         -- Handle dataset close tag: accumulate completed activity for multi-dataset files
         | isElement tagName "dataset" =
             let !result = buildResult state
@@ -302,9 +302,9 @@ parseWithXeno xmlContent =
                         , psTextAccum = []
                         , psSupplierLinks = M.empty
                         }
-             in resetState{psPath = tail (psPath state)}
+             in resetState{psPath = drop 1 (psPath state)}
         | otherwise =
-            state{psPath = if null (psPath state) then [] else tail (psPath state)}
+            state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler
     cdata state content = text state content
@@ -577,18 +577,18 @@ parseAllWithXeno xmlContent =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InInputGroup edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "outputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InOutputGroup edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
@@ -604,14 +604,14 @@ parseAllWithXeno xmlContent =
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "geography" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         -- Handle dataset close tag: accumulate completed activity
         | isElement tagName "dataset" =
             let !result = buildResultForAll state
@@ -632,9 +632,9 @@ parseAllWithXeno xmlContent =
                         , psTextAccum = []
                         , psSupplierLinks = M.empty
                         }
-             in resetState{psPath = tail (psPath state)}
+             in resetState{psPath = drop 1 (psPath state)}
         | otherwise =
-            state{psPath = if null (psPath state) then [] else tail (psPath state)}
+            state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler
     cdata state content = text state content

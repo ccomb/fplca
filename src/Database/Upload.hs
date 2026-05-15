@@ -429,8 +429,9 @@ findDataDirectory dir = do
   where
     pickByFileCount dirs = do
         counts <- mapM (\d -> (,) d <$> countDataFilesIn d) dirs
-        let sorted = sortOn (Down . snd) counts
-        return $ fst (head sorted)
+        case sortOn (Down . snd) counts of
+            (best : _) -> return (fst best)
+            [] -> return dir
 
     -- Recursively find the first directory containing a processes/ subdirectory
     findILCDRoot d = do
@@ -511,7 +512,9 @@ findMethodDirectory dir = do
         [one] -> return one
         many -> do
             counts <- mapM (\d -> (,) d <$> countMethodFilesIn d) many
-            return $ fst $ head $ sortOn (Down . snd) counts
+            case sortOn (Down . snd) counts of
+                (best : _) -> return (fst best)
+                [] -> return dir
 
 -- | Find all directories containing ILCD method XML files under a root.
 findAllMethodDirectories :: FilePath -> IO [FilePath]

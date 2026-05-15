@@ -253,7 +253,7 @@ parseWithXeno xmlContent processId =
     closeTag state tagName
         | isElement tagName "activityName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psActivityName = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+             in state{psActivityName = Just txt, psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "comment" =
             -- Capture <comment> text only when the immediate parent is the
             -- exchange itself, not a nested <property>. Property comments
@@ -263,7 +263,7 @@ parseWithXeno xmlContent processId =
                     [] -> ""
                 txt = T.concat $ reverse $ map bsToText (psTextAccum state)
                 lang = psPendingCommentLang state
-                popPath = state{psPath = tail (psPath state), psTextAccum = [], psPendingCommentLang = ""}
+                popPath = state{psPath = drop 1 (psPath state), psTextAccum = [], psPendingCommentLang = ""}
              in case psContext state of
                     InIntermediateExchange idata
                         | isElement parent "intermediateExchange" ->
@@ -274,7 +274,7 @@ parseWithXeno xmlContent processId =
                     _ -> popPath
         | isElement tagName "shortname" && psContext state == InGeographyShortname =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psLocation = Just txt, psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+             in state{psLocation = Just txt, psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "intermediateExchange" =
             case psContext state of
                 InIntermediateExchange idata ->
@@ -345,14 +345,14 @@ parseWithXeno xmlContent processId =
                             , psFlows = flow : psFlows state
                             , psUnits = unit : psUnits state
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             , psPendingInputGroup = ""
                             , psPendingOutputGroup = ""
                             , psRefUnit = newRefUnit
                             , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "elementaryExchange" =
             case psContext state of
                 InElementaryExchange edata ->
@@ -425,13 +425,13 @@ parseWithXeno xmlContent processId =
                             , psFlows = flow : psFlows state
                             , psUnits = unit : psUnits state
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             , psPendingInputGroup = ""
                             , psPendingOutputGroup = ""
                             , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "text" =
             case psContext state of
                 InGeneralCommentText _idx ->
@@ -440,7 +440,7 @@ parseWithXeno xmlContent processId =
                         if T.null txt
                             then state{psContext = Other, psTextAccum = []}
                             else state{psDescription = txt : psDescription state, psContext = Other, psTextAccum = []}
-                _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "name" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
                 isInsideProperty = case psPath state of
@@ -449,11 +449,11 @@ parseWithXeno xmlContent processId =
              in case psContext state of
                     InIntermediateExchange idata
                         | not isInsideProperty ->
-                            state{psContext = InIntermediateExchange idata{idFlowName = txt}, psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InIntermediateExchange idata{idFlowName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InElementaryExchange edata
                         | not isInsideProperty ->
-                            state{psContext = InElementaryExchange edata{edFlowName = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InElementaryExchange edata{edFlowName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "unitName" =
             let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
                 isInsideProperty = case psPath state of
@@ -462,50 +462,50 @@ parseWithXeno xmlContent processId =
              in case psContext state of
                     InIntermediateExchange idata
                         | not isInsideProperty ->
-                            state{psContext = InIntermediateExchange idata{idUnitName = txt}, psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InIntermediateExchange idata{idUnitName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InElementaryExchange edata
                         | not isInsideProperty ->
-                            state{psContext = InElementaryExchange edata{edUnitName = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InElementaryExchange edata{edUnitName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "synonym" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InIntermediateExchange idata
                         | not (T.null txt) ->
                             let syns = M.insertWith S.union "en" (S.singleton txt) (idSynonyms idata)
-                             in state{psContext = InIntermediateExchange idata{idSynonyms = syns}, psPath = tail (psPath state), psTextAccum = []}
+                             in state{psContext = InIntermediateExchange idata{idSynonyms = syns}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InElementaryExchange edata
                         | not (T.null txt) ->
                             let syns = M.insertWith S.union "en" (S.singleton txt) (edSynonyms edata)
-                             in state{psContext = InElementaryExchange edata{edSynonyms = syns}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                             in state{psContext = InElementaryExchange edata{edSynonyms = syns}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "inputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in -- DON'T change psContext - preserve the parent exchange context
-                state{psPendingInputGroup = txt, psPath = tail (psPath state), psTextAccum = []}
+                state{psPendingInputGroup = txt, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "outputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in -- DON'T change psContext - preserve the parent exchange context
-                state{psPendingOutputGroup = txt, psPath = tail (psPath state), psTextAccum = []}
+                state{psPendingOutputGroup = txt, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "compartment" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InElementaryExchange edata
                         | not (T.null txt) ->
-                            state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = drop 1 (psPath state), psTextAccum = []}
                     _ ->
-                        state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "subcompartment" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InElementaryExchange edata
                         | not (T.null txt) ->
-                            state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = tail (psPath state), psTextAccum = []}
+                            state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = drop 1 (psPath state), psTextAccum = []}
                     _ ->
-                        state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "classificationSystem" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psPendingClassSystem = txt, psPath = tail (psPath state), psTextAccum = []}
+             in state{psPendingClassSystem = txt, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "classificationValue" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
                 sys = psPendingClassSystem state
@@ -514,11 +514,11 @@ parseWithXeno xmlContent processId =
                         if T.null sys || T.null txt
                             then psClassifications state
                             else M.insert sys txt (psClassifications state)
-                    , psPath = tail (psPath state)
+                    , psPath = drop 1 (psPath state)
                     , psTextAccum = []
                     }
         | otherwise =
-            state{psPath = if null (psPath state) then [] else tail (psPath state)}
+            state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler - treat as text
     cdata state content = text state content

@@ -213,9 +213,9 @@ buildFromCSV csvData =
 -}
 mergeUnitConfigs :: [UnitConfig] -> UnitConfig
 mergeUnitConfigs [] = defaultUnitConfig
-mergeUnitConfigs cfgs =
+mergeUnitConfigs cfgs@(first : _) =
     UnitConfig
-        { ucDimensionOrder = ucDimensionOrder (head cfgs)
+        { ucDimensionOrder = ucDimensionOrder first
         , ucUnits = M.unions (reverse $ map ucUnits cfgs)
         , ucOriginalKeys = M.unions (reverse $ map ucOriginalKeys cfgs)
         }
