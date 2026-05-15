@@ -1,37 +1,108 @@
-# Stage 1: Build Haskell application
-# Build from volca directory: docker build -f docker/Dockerfile -t volca .
-FROM debian:bookworm@sha256:1d6cd964917a13b547d1ea392dff9a000c3f36070686ebc5c8755d53fb374435 AS haskell-builder
+# Volca Docker image: fully-static musl binary on Alpine.
+#
+# The binary is statically linked against musl libc, so it runs on any Linux
+# distro without a runtime libc dependency. Used both as a server image and
+# as a source of a portable standalone binary (extract via
+# `./docker/docker-build.sh --extract`).
+#
+# Build:
+#   ./docker/docker-build.sh                 # build image (tag volca)
+#   ./docker/docker-build.sh --extract       # build + copy binary to ./dist/volca
+#
+# Verify a built/extracted binary:
+#   file dist/volca       # → "statically linked", "ELF 64-bit"
+#   ldd dist/volca        # → "not a dynamic executable"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+FROM alpine:3.19 AS haskell-builder
+
+# musl toolchain + everything MUMPS / GHC need to build statically.
+# `*-static` packages ship the .a variants required by `executable-static`.
+RUN apk add --no-cache \
+    bash \
+    binutils \
     curl \
-    libgmp-dev \
-    zlib1g-dev \
-    libzstd-dev \
-    pkg-config \
+    file \
     git \
-    build-essential \
+    tar \
+    xz \
+    perl \
+    python3 \
+    make \
+    cmake \
+    pkgconfig \
+    linux-headers \
+    musl-dev \
+    libc-dev \
+    gcc \
+    g++ \
     gfortran \
-    libnuma-dev \
-    libncurses-dev \
-    unzip \
-    libblas-dev \
-    liblapack-dev \
-    && rm -rf /var/lib/apt/lists/*
+    gmp-dev \
+    libffi-dev \
+    ncurses-dev \
+    ncurses-static \
+    zlib-dev \
+    zlib-static \
+    zstd-dev \
+    zstd-static \
+    xz-dev \
+    xz-static \
+    upx
 
 # Copy build scripts and version pins
 COPY versions.env /tmp/
 COPY build-mumps.sh /tmp/
 
-# Build MUMPS from source (cached until MUMPS_VERSION or build-mumps.sh changes)
+# Build OpenBLAS from source. Alpine's `lapack-dev` / `blas-dev` ship .so
+# only, so a static link can't resolve `-llapack` / `-lblas`. OpenBLAS
+# bundles both BLAS and LAPACK into a single libopenblas.a — one source
+# build replaces both.
+#
+# Knobs:
+#   NO_SHARED=1            archive-only, no .so
+#   USE_THREAD=1,
+#   USE_OPENMP=0           pthread parallelism (matches link flags)
+#   DYNAMIC_ARCH=1         ship kernel sets for ~12 microarchitectures
+#                          (Nehalem, Sandybridge, Haswell, Skylake-X,
+#                          Zen, Zen3, …); pick at runtime. For LCA
+#                          workloads MUMPS factorization is heavy on
+#                          dense BLAS3 (dgemm, dtrsm) on frontal
+#                          matrices — hardware-tuned kernels matter:
+#                          AVX-512 / Zen-tuned routines run 30–80 %
+#                          faster than the AVX2 baseline. The ~13 MB
+#                          binary cost compresses well under UPX.
+#   TARGET=GENERIC         build-host fallback kernel; runtime still
+#                          dispatches via DYNAMIC_ARCH.
+#
+# We deliberately do NOT pass NO_LAPACKE=1 / NO_CBLAS=1: they only shrink
+# the intermediate libopenblas.a, not the final exe (the Haskell →
+# MUMPS → Fortran path never resolves cblas_/LAPACKE_ symbols, so
+# archive resolution already drops those objects at link time). Adding
+# them also breaks OpenBLAS's bundled tests (which reference cblas_*),
+# making the default `make` target fail.
+ARG OPENBLAS_VERSION=0.3.27
+RUN curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
+        | tar -xz -C /tmp \
+    && cd "/tmp/OpenBLAS-${OPENBLAS_VERSION}" \
+    && make -j"$(nproc)" \
+        NO_SHARED=1 \
+        USE_THREAD=1 USE_OPENMP=0 \
+        DYNAMIC_ARCH=1 \
+        TARGET=GENERIC \
+    && make PREFIX=/build/openblas NO_SHARED=1 install \
+    && cd / && rm -rf "/tmp/OpenBLAS-${OPENBLAS_VERSION}"
+
+# Build MUMPS from source against musl, linking BLAS/LAPACK from our
+# locally-built OpenBLAS. `-fPIC` is OK in static archives; what we need
+# to avoid is OS-installed glibc archives, which we don't have here at all.
 RUN . /tmp/versions.env && \
     MUMPS_VERSION="$MUMPS_VERSION" \
     OUTPUT_DIR="/build/mumps" \
     BUILD_DIR="/tmp/mumps-build" \
+    BLAS_LIBS="-L/build/openblas/lib -lopenblas" \
     /tmp/build-mumps.sh && \
     rm -rf /tmp/mumps-build
 
-# Install ghcup and GHC (version from versions.env)
+# Install ghcup; on Alpine it auto-selects the musl-targeted GHC bindist.
 ENV GHCUP_INSTALL_BASE_PREFIX=/opt
 ENV PATH="/opt/.ghcup/bin:$PATH"
 RUN . /tmp/versions.env && \
@@ -48,16 +119,14 @@ WORKDIR /build
 COPY volca.cabal /build/volca/
 COPY mumps-hs/ /build/mumps-hs/
 COPY gen-cabal-config.sh /build/volca/
-# gen-cabal-config.sh compiles cbits/static-shims.c in static mode
-COPY cbits/ /build/volca/cbits/
 
-# Set up cabal.project with mumps-hs as local package
-# Static MUMPS: link .a libs into the binary so the runtime image needs no MUMPS package
+# Set up cabal.project with mumps-hs as local package, LINK_MODE=musl.
 RUN echo "packages: ./volca ./mumps-hs" > /build/cabal.project \
     && echo "allow-newer: true" >> /build/cabal.project \
     && MUMPS_LIB_DIR="/build/mumps/lib" \
     MUMPS_INCLUDE_DIR="/build/mumps/include" \
-    LINK_MODE="static" \
+    OPENBLAS_LIB_DIR="/build/openblas/lib" \
+    LINK_MODE="musl" \
     OUTPUT_DIR="/build" \
     /build/volca/gen-cabal-config.sh
 
@@ -76,48 +145,53 @@ RUN cd /build/volca && GIT_HASH="$GIT_HASH" GIT_TAG="$GIT_TAG" ./gen-version.sh
 # Build volca (only recompiles app code, deps already cached)
 RUN cd /build && cabal build volca
 
-# Find and copy the executable
+# Strip, UPX-compress, and verify the binary is fully static. Use `file`:
+# glibc and musl ldd disagree on the wording for static binaries (glibc says
+# "not a dynamic executable", musl says "Not a valid dynamic program" with
+# non-zero exit), but ELF "statically linked" from `file` is unambiguous.
+# UPX (default level, NRV2B codec) gives ~3–4× compression with negligible
+# startup cost; --best/--lzma would shrink further but pay hundreds of ms
+# decompression on every invocation, which the volca CLI cannot absorb.
 RUN mkdir -p /build/output \
     && cp $(cd /build && cabal list-bin exe:volca) /build/output/volca \
-    && strip /build/output/volca
+    && strip /build/output/volca \
+    && file /build/output/volca | grep -q "statically linked" \
+        || { echo "ERROR: binary is not statically linked"; exit 1; } \
+    && echo "Size before UPX: $(du -h /build/output/volca | cut -f1)" \
+    && upx /build/output/volca \
+    && echo "Size after UPX:  $(du -h /build/output/volca | cut -f1)" \
+    && file /build/output/volca
 
-# Stage 2: Runtime image
-FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
+# Stage 2: small runtime image. The volca binary is fully static (no libc
+# needed) so `scratch` would work, but Alpine gives us /etc/passwd, a shell
+# for debugging, and the few utilities volca shells out to (7z for SimaPro
+# CSV archives) at negligible size cost.
+FROM alpine:3.19
 ARG GIT_HASH=unknown
 LABEL org.opencontainers.image.revision="${GIT_HASH}"
 
-# MUMPS is statically linked into the binary; only its runtime BLAS/Fortran deps are needed
-RUN apt-get update && apt-get install -y \
-    libgfortran5 \
-    libgomp1 \
-    libgmp10 \
-    zlib1g \
-    libzstd1 \
-    libblas3 \
-    liblapack3 \
+# musl-locales / musl-locales-lang give us a working en_US.UTF-8 (musl's
+# native locale support is minimal; this package fills in LC_MESSAGES /
+# LC_TIME translations enough for downstream tools that probe LANG).
+RUN apk add --no-cache \
     ca-certificates \
-    locales \
+    tzdata \
     7zip \
-    && rm -rf /var/lib/apt/lists/* \
-    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
-    && locale-gen
+    musl-locales \
+    musl-locales-lang
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# Copy application
 COPY --from=haskell-builder /build/output/volca /usr/local/bin/volca
 
 WORKDIR /app
 
-# User data directory (uploads, cache) - mount as volume for persistence
 ENV VOLCA_DATA_DIR=/data
 VOLUME /data
 
-# Reference data (static, shipped with the repo)
 COPY data/ /app/data/
 
-# Default config: bind on all interfaces, no pre-loaded databases (BYOL)
 RUN cat > /app/volca.toml <<'EOF'
 [server]
 port = 8080
