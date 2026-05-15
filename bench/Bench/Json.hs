@@ -65,10 +65,14 @@ data BenchResult = BenchResult
     -- ^ 1–3 sentences explaining the operation and why it matters.
     , brUnitOfWork :: !UnitOfWork
     , brMetric :: !Text
-    -- ^ Unit of @brMean@ / @brStddev@: @"seconds"@ or @"milliseconds"@.
+    -- ^ Display hint for the consumer — @"seconds"@ or @"milliseconds"@.
+    -- @brMean@ and @brStddev@ are ALWAYS expressed in seconds regardless of
+    -- this hint; the consumer is expected to format accordingly.
     , brFixture :: !Fixture
     , brMean :: !Double
+    -- ^ Mean wall-clock time for one full iteration, in __seconds__.
     , brStddev :: !Double
+    -- ^ Sample standard deviation across iterations, in __seconds__.
     , brSamples :: !Int
     , brDerived :: !Derived
     }

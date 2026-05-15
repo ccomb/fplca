@@ -146,14 +146,15 @@ registerCrossDbLinking = do
                             pure
                                 [ BenchSpec
                                     { bsCapability = "loader.multi_db_cross_link"
-                                    , bsLabel = T.pack ("Cross-DB linking of " <> show n <> " supplier inputs between two databases")
+                                    , bsLabel = T.pack ("Reload a foreground DB and cross-link " <> show n <> " supplier inputs against a background DB")
                                     , bsDescription =
-                                        "Loads a foreground database (Agribalyse-shaped) while resolving its \
-                                        \unlinked technosphere inputs against a separately loaded background \
-                                        \database (Ecoinvent-shaped). Walks every technosphere input that did \
-                                        \not resolve locally and looks it up by product name, unit and \
-                                        \location across the background DB's pre-built index. This is the \
-                                        \canonical setup that lets sector-specific bases borrow generic \
+                                        "Each iteration re-parses the foreground database (Agribalyse-shaped) end-to-end \
+                                        \AND resolves every unlinked technosphere input against a separately loaded, \
+                                        \pre-indexed background database (Ecoinvent-shaped). The background DB is loaded \
+                                        \once before measurement; the foreground load + linking pass is re-run each \
+                                        \iteration. Wall-time is therefore dominated by the foreground parse — readers \
+                                        \should treat it as a combined « reload + cross-link » cost, not a pure linking \
+                                        \cost. This is the canonical setup that lets sector-specific bases borrow generic \
                                         \background data from a shared core."
                                     , bsUnitOfWork = UnitOfWork{uowKind = "supplier_inputs", uowN = n}
                                     , bsMetric = "seconds"

@@ -31,6 +31,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import System.Random (mkStdGen, randoms)
 
@@ -41,7 +42,15 @@ import qualified Method.Parser as MP
 import Method.Types (Method (..), MethodCF (..))
 import qualified Method.Types as MT
 import qualified Plugin.Builtin as Builtin
-import Types (Database (..), Flow (..), FlowType (..), Unit (..))
+import Types (
+    Database (..),
+    Flow (..),
+    FlowType (..),
+    Indexes (..),
+    ProductIndex (..),
+    Unit (..),
+    emptyCrossDBLinkingStats,
+ )
 import qualified UnitConversion as UC
 
 import qualified Bench.Helpers as H
@@ -120,10 +129,40 @@ mkMethod n factors =
         , methodFactors = factors
         }
 
--- 'scoreRegionalCrossDB' threads a 'Database' through but does not inspect it
--- when the method has no regionalised CFs.
-unusedDatabase :: Database
-unusedDatabase = error "Database not used in non-regio synthetic bench"
+{- | Empty 'Database' for the non-regional synthetic bench.
+
+'scoreRegionalCrossDB' threads a 'Database' through 'computeLCIAScoreSetFromTables'
+but never inspects it when the method has no regionalised CFs. We still pass a
+real value (rather than 'error' / 'undefined') so that an accidental forcing
+during a future refactor degrades to a 0-result instead of a runtime crash.
+-}
+emptyDatabase :: Database
+emptyDatabase =
+    Database
+        { dbProcessIdTable = V.empty
+        , dbProcessIdLookup = M.empty
+        , dbActivityUUIDIndex = M.empty
+        , dbActivityProductsIndex = M.empty
+        , dbProductIndex = ProductIndex M.empty M.empty M.empty
+        , dbActivities = V.empty
+        , dbFlows = M.empty
+        , dbUnits = M.empty
+        , dbIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty
+        , dbTechnosphereTriples = U.empty
+        , dbBiosphereTriples = U.empty
+        , dbActivityIndex = V.empty
+        , dbBiosphereFlows = V.empty
+        , dbActivityCount = 0
+        , dbBiosphereCount = 0
+        , dbCrossDBLinks = []
+        , dbDependsOn = []
+        , dbLinkingStats = emptyCrossDBLinkingStats
+        , dbSynonymDB = Nothing
+        , dbFlowsByName = M.empty
+        , dbFlowsByCAS = M.empty
+        , dbProductSearchIndex = M.empty
+        , dbBM25Index = Nothing
+        }
 
 data SynFixture = SynFixture
     { fxFlowDB :: !(M.Map UUID Flow)
@@ -200,7 +239,7 @@ benchSetBatched fx =
         (fxFlowDB fx)
         (fxInventory fx)
         M.empty
-        ((unusedDatabase, U.empty, fxSetTables fx) :| [])
+        ((emptyDatabase, U.empty, fxSetTables fx) :| [])
 
 -- ---------------------------------------------------------------------------
 -- Public registration

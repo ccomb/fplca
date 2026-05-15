@@ -15,7 +15,7 @@ module Main (main) where
 
 import Control.Exception (SomeException, try)
 import Data.Maybe (fromMaybe)
-import GHC.IO.Exception (ExitCode)
+import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
@@ -207,12 +207,16 @@ readRamGb = do
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- | Run a sub-process and return its stdout only on @ExitSuccess@. Spawn
+-- failures and non-zero exits both collapse to 'Nothing' so the
+-- 'Metadata' field stays absent rather than carrying garbage (e.g. an
+-- empty string when @git rev-parse HEAD@ fails outside a checkout).
 safeRead :: FilePath -> [String] -> IO (Maybe Text)
 safeRead cmd args = do
     r <- try (readProcessWithExitCode cmd args "") :: IO (Either SomeException (ExitCode, String, String))
     pure $ case r of
-        Right (_, out, _) -> Just (T.pack out)
-        Left _ -> Nothing
+        Right (ExitSuccess, out, _) -> Just (T.pack out)
+        _ -> Nothing
 
 safeReadFile :: FilePath -> IO (Maybe String)
 safeReadFile path = do
@@ -221,5 +225,9 @@ safeReadFile path = do
         Right s -> Just s
         Left _ -> Nothing
 
+-- | Strip whitespace and demote @Just ""@ to 'Nothing' — handy when the
+-- underlying command exits cleanly but prints nothing useful.
 trimResult :: Maybe Text -> Maybe Text
-trimResult = fmap T.strip
+trimResult m = case T.strip <$> m of
+    Just t | not (T.null t) -> Just t
+    _ -> Nothing
