@@ -151,8 +151,27 @@ EOF
 
     windows)
         # Windows/MSYS2: MinGW + OpenBLAS
-        : "${MSYS2_LIB_DIR:?MSYS2_LIB_DIR is required for windows mode}"
-        : "${GCC_LIB_DIR:?GCC_LIB_DIR is required for windows mode}"
+        # Auto-discover MSYS2/GCC paths and convert POSIX-style MUMPS paths
+        # to Windows form. Callers running under MSYS2 bash (build.sh,
+        # prebuild-cabal-store.yml, prebuild-mumps.yml) used to duplicate this
+        # block; factoring it here keeps the per-caller code to LINK_MODE=windows.
+        if [[ -z "${MSYS2_LIB_DIR:-}" ]]; then
+            MSYS2_LIB_DIR=$(cygpath -m /ucrt64/lib)
+        fi
+        if [[ -z "${GCC_LIB_DIR:-}" ]]; then
+            GCC_LIB_DIR=$(find /ucrt64/lib/gcc/x86_64-w64-mingw32 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
+            : "${GCC_LIB_DIR:?Could not locate GCC lib dir under /ucrt64/lib/gcc/x86_64-w64-mingw32 — install mingw-w64-ucrt-x86_64-gcc}"
+            GCC_LIB_DIR=$(cygpath -m "$GCC_LIB_DIR")
+        fi
+        # Cabal + clang on Windows want forward-slash drive-letter paths
+        # (`C:/foo/bar`), not the MSYS2 `/c/foo/bar` form. Convert if needed.
+        win_path() { echo "$1" | sed 's|^/\([a-zA-Z]\)/|\1:/|'; }
+        case "$MUMPS_LIB_DIR" in
+            /[a-zA-Z]/*) MUMPS_LIB_DIR=$(win_path "$MUMPS_LIB_DIR") ;;
+        esac
+        case "$MUMPS_INCLUDE_DIR" in
+            /[a-zA-Z]/*) MUMPS_INCLUDE_DIR=$(win_path "$MUMPS_INCLUDE_DIR") ;;
+        esac
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
