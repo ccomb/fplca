@@ -1644,7 +1644,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- returned in notFound/invalid rather than aborting the whole call.
     postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> Handler BatchImpactsResponse
     postImpactsBatch dbName collectionName mTopFlows req = do
-        let topFlows = max 0 (fromMaybe 5 mTopFlows)
+        let topFlows = max 0 (fromMaybe 0 mTopFlows)
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
         collection <- case M.lookup collectionName loadedCollections of
