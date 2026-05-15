@@ -35,9 +35,9 @@ jobs:
             runner: ubuntu-latest
             container: alpine:3.19
             os: linux
+          # arm64 stays Ubuntu/glibc — see _build-matrix.yml for context.
           - name: linux-arm64
             runner: ubuntu-24.04-arm
-            container: alpine:3.19
             os: linux
           - name: windows-amd64
             runner: windows-latest
@@ -55,7 +55,7 @@ jobs:
     steps:
       # See _build-matrix.yml for context: GH's JS actions need a glibc Node
       # and won't run in Alpine arm64 without this gcompat + os-release mask.
-      - if: matrix.os == 'linux'
+      - if: matrix.container == 'alpine:3.19'
         uses: laverdet/alpine-arm64@v1
       - uses: actions/checkout@v4
 
