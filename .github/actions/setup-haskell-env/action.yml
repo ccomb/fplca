@@ -111,6 +111,11 @@ runs:
     # other place we build volca against musl. `*-static` packages ship the
     # .a variants required by `executable-static`. github-cli is needed for
     # the workflow's `gh release download` steps.
+    #
+    # IMPORTANT ordering invariant: this step installs bash on the Alpine
+    # image. Every later step on the musl path uses `shell: bash`; every
+    # step before it (e.g. "Detect Linux libc") must use `shell: sh`. Do
+    # not reorder.
     - name: Install build dependencies (Linux musl)
       if: inputs.matrix-os == 'linux' && steps.libc.outputs.libc == 'musl'
       shell: sh
