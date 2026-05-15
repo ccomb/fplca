@@ -6,3 +6,5 @@ cradle:
       component: "volca:lib:volca"
     - path: "test/"
       component: "volca:test:lca-tests"
+    - path: "bench/"
+      component: "volca:bench:volca-bench"
