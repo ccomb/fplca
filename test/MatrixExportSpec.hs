@@ -5,7 +5,6 @@ module MatrixExportSpec (spec) where
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.UUID as UUID
-import GoldenData
 import Matrix.Export (
     MatrixDebugInfo (..),
     escapeCsvField,
@@ -45,11 +44,7 @@ spec = do
                 let diagonalLines = filter (T.isInfixOf "0;0;1.0") lines
                 length diagonalLines `shouldSatisfy` (>= 1)
 
-                -- Check off-diagonal entries (should be NEGATIVE for (I-A) format)
-                let offDiagonalLines = tail lines -- Skip header
-                let offDiagonalEntries = filter (\l -> not (T.isInfixOf ";1.0;" l)) offDiagonalLines
-
-                -- For SAMPLE.min3: Expected -0.6 and -0.4
+                -- For SAMPLE.min3: Expected -0.6 and -0.4 off-diagonal entries.
                 let hasNegative = any (T.isInfixOf "-0.") lines
                 hasNegative `shouldBe` True
 

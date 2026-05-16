@@ -4,7 +4,7 @@ module SharedSolverSpec (spec) where
 
 import qualified Data.Vector.Unboxed as U
 import GoldenData
-import Matrix (buildDemandVectorFromIndex, computeScalingVector)
+import Matrix (buildDemandVectorFromIndex)
 import SharedSolver (SharedSolver, createSharedSolver, getFactorization, solveWithSharedSolver)
 import Test.Hspec
 import TestHelpers (assertVectorNear, loadSampleDatabase)

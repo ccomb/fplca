@@ -2,7 +2,6 @@
 
 module CrossLinkingSpec (spec) where
 
-import qualified Data.Map.Strict as M
 import Database.CrossLinking
 import Database.Loader (loadDatabase)
 import SynonymDB (buildFromPairs, emptySynonymDB)

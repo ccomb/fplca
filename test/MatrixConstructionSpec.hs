@@ -2,10 +2,8 @@
 
 module MatrixConstructionSpec (spec) where
 
-import qualified Data.Map as M
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import GoldenData
 import Test.Hspec
 import TestHelpers
 import Types

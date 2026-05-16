@@ -31,7 +31,7 @@ import qualified Data.Vector.Generic.Mutable as VGM
 import qualified Data.Vector.Unboxed as VU
 import GHC.Generics (Generic)
 
-import Data.List (foldl', nub)
+import Data.List (nub)
 import Search.BM25.Types (BM25Index)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)

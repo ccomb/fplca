@@ -68,10 +68,9 @@ mkBio fid amt =
         , bioPedigree = Nothing
         }
 
-fid1, fid2, fid3 :: UUID
+fid1, fid2 :: UUID
 fid1 = read "11111111-1111-1111-1111-111111111111"
 fid2 = read "22222222-2222-2222-2222-222222222222"
-fid3 = read "33333333-3333-3333-3333-333333333333"
 
 -- | Minimal valid EcoSpold1 XML with one reference product and one air emission
 minimalXml :: BC.ByteString

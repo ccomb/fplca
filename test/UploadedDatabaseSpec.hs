@@ -2,12 +2,10 @@
 
 module UploadedDatabaseSpec (spec) where
 
-import Data.Text (Text)
 import qualified Data.Text as T
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import Database.Upload (DatabaseFormat (..))
 import Database.UploadedDatabase
 
 -- | Minimal UploadMeta without description

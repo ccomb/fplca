@@ -17,7 +17,6 @@ module Method.ParserSimaPro (
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.Char (toLower)
-import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T

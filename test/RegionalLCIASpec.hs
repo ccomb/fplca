@@ -12,7 +12,7 @@ module RegionalLCIASpec (spec) where
 import Data.Int (Int32)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
-import Data.UUID (UUID, nil)
+import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U

@@ -48,7 +48,7 @@ withinTolerance tolerance expected actual = abs (expected - actual) < tolerance
 
 -- | Assert that a vector is near expected values
 assertVectorNear :: String -> Double -> U.Vector Double -> [Double] -> Expectation
-assertVectorNear label tolerance actualVec expectedList = do
+assertVectorNear _label tolerance actualVec expectedList = do
     let actual = U.toList actualVec
     length actual `shouldBe` length expectedList
     zipWithM_ (\a e -> withinTolerance tolerance e a `shouldBe` True) actual expectedList

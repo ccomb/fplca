@@ -70,6 +70,7 @@ module Method.Mapping (
 import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
+import Data.Either (lefts, rights)
 import Data.List (find, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
@@ -87,10 +88,8 @@ import qualified Data.Vector.Unboxed.Mutable as MU
 import Data.Word (Word8)
 import GHC.Generics (Generic)
 
-import qualified Data.Set as S
 import qualified Data.Set as Set
 import Matrix (Inventory, Vector)
-import qualified Matrix
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
@@ -1029,50 +1028,11 @@ sumRegionalizedLCIAScoreCrossDB ::
     Either Text Double
 sumRegionalizedLCIAScoreCrossDB unitCfg unitDB flowDB hier triples =
     let results = [computeRegionalizedLCIAScore unitCfg unitDB flowDB db sv hier t | (db, sv, t) <- triples]
-        rights = [s | Right s <- results]
-        lefts = [e | Left e <- results]
-     in case (rights, lefts) of
-            ([], errs) | not (null errs) -> Left (T.intercalate "; " errs)
-            _ -> Right (sum rights)
-
-{- | Resolve a CF for a (flow, location) pair through the hierarchy + broadcast
-fallback. See 'computeRegionalizedLCIAScore' for the rules.
-
-* @Right Nothing@: the flow is not covered by this method (silent OK).
-* @Right (Just v)@: a CF was found.
-* @Left err@: the flow IS regionalized in this method but no CF could be
-  resolved for the given location even after walking parents — surfacing the
-  gap prevents silent under-counting.
--}
-resolveRegionalCF ::
-    MethodTables ->
-    FlowDB ->
-    Set.Set UUID ->
-    M.Map Text [Text] ->
-    UUID ->
-    Text ->
-    Either Text (Maybe (Double, Text))
-resolveRegionalCF tables flowDB regionalizedFlows hier flowUUID loc =
-    case M.lookup (flowUUID, loc) (mtRegionalizedCF tables) of
-        Just v -> Right (Just v)
-        Nothing ->
-            let parents = M.findWithDefault [] loc hier
-                fromParents = firstJust [M.lookup (flowUUID, p) (mtRegionalizedCF tables) | p <- parents]
-             in case fromParents of
-                    Just v -> Right (Just v)
-                    Nothing -> case lookupCascadeCF tables flowDB flowUUID of
-                        Just v -> Right (Just v)
-                        Nothing
-                            | Set.member flowUUID regionalizedFlows ->
-                                Left $
-                                    "Regionalized CF lookup failed: flow "
-                                        <> T.pack (show flowUUID)
-                                        <> " has regional CFs in this method but none for location '"
-                                        <> loc
-                                        <> "' (after walking "
-                                        <> T.pack (show (length parents))
-                                        <> " parent regions) and no universal broadcast."
-                            | otherwise -> Right Nothing
+        oks = rights results
+        errs = lefts results
+     in case (oks, errs) of
+            ([], es) | not (null es) -> Left (T.intercalate "; " es)
+            _ -> Right (sum oks)
 
 {- | Cascade CF lookup: UUID → exact (name, medium, subcomp) → fallback (name, medium).
 The same logic is baked into 'mtBroadcast' once unit conversion is available;
@@ -1140,11 +1100,6 @@ convertAndMultiply unitConfig unitDB mflow (cfVal, cfUnit) qty =
         converted = convertForCharacterization unitConfig flowUnit cfUnit qty
      in converted * cfVal
 
-firstJust :: [Maybe a] -> Maybe a
-firstJust [] = Nothing
-firstJust (Just x : _) = Just x
-firstJust (Nothing : xs) = firstJust xs
-
 {- | Per-flow contributions over an 'Inventory', keyed by flow UUID (possibly
 cross-DB-merged). Walks the inventory directly (not the mappings) so any
 flow with a matchable CF contributes — including flows from dep DBs that
@@ -1205,7 +1160,7 @@ processContributionsFromTables ::
     UnitDB ->
     FlowDB ->
     Database ->
-    Matrix.Vector ->
+    Vector ->
     MethodTables ->
     M.Map ProcessId Double
 processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =

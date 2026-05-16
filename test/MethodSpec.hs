@@ -4,7 +4,6 @@
 module MethodSpec (spec) where
 
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
@@ -20,7 +19,6 @@ import Method.ParserCSV (parseMethodCSVBytes)
 import Method.ParserNW (parseNormWeightCSVBytes)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import Method.Types
-import Method.Types (Compartment (..))
 import SynonymDB
 import Types (Flow (..), FlowType (..))
 import UnitConversion (defaultUnitConfig)

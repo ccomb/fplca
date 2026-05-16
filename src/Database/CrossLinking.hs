@@ -398,16 +398,15 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
             if T.null location
                 then extractBracketedLocation productName
                 else location
-     in if null allCandidates
-            then CrossDBNotLinked NoNameMatch
-            else
+     in case allCandidates of
+            [] -> CrossDBNotLinked NoNameMatch
+            ((_, firstSe) : _) ->
                 -- Check unit compatibility first
                 let unitCompatible = filter (\(_, se) -> unitsAreCompatible lcUnitConfig unit (seUnit se)) allCandidates
                  in if null unitCompatible
                         then
                             -- All candidates failed unit check — report the first supplier's unit
-                            let (_, firstSe) = head allCandidates
-                             in CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
+                            CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
                         else
                             -- Score by effective location
                             let scoredCandidates = map (scoreEntry effectiveLocation) unitCompatible
@@ -478,9 +477,7 @@ findSupplierAcrossDatabases ::
     -- | Unit of the exchange
     Text ->
     CrossDBLinkResult
-findSupplierAcrossDatabases ctx productName location unit =
-    -- Just delegate to the indexed version
-    findSupplierInIndexedDBs ctx productName location unit
+findSupplierAcrossDatabases = findSupplierInIndexedDBs
 
 {- | Match product names (simplified - just for scoring display)
 Actual matching is done via index lookup

@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
@@ -27,7 +26,9 @@ module EcoSpold.Parser1 (
 
 import Control.Monad (forM_)
 import qualified Data.ByteString as BS
+import Data.Either (lefts, rights)
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -244,19 +245,19 @@ parseWithXeno xmlContent =
              in case psContext state of
                     InInputGroup edata ->
                         -- Restore parent exchange context with updated inputGroup
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "outputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InOutputGroup edata ->
                         -- Restore parent exchange context with updated outputGroup
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
@@ -272,14 +273,14 @@ parseWithXeno xmlContent =
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "geography" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         -- Handle dataset close tag: accumulate completed activity for multi-dataset files
         | isElement tagName "dataset" =
             let !result = buildResult state
@@ -302,12 +303,12 @@ parseWithXeno xmlContent =
                         , psTextAccum = []
                         , psSupplierLinks = M.empty
                         }
-             in resetState{psPath = tail (psPath state)}
+             in resetState{psPath = drop 1 (psPath state)}
         | otherwise =
-            state{psPath = if null (psPath state) then [] else tail (psPath state)}
+            state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler
-    cdata state content = text state content
+    cdata = text
 
     -- Build exchange, flow, and unit from exchange data
     -- activityLoc is the activity's location for fallback
@@ -342,9 +343,7 @@ parseWithXeno xmlContent =
                 if T.null (exLocation edata)
                     then
                         if isBiosphere
-                            then case activityLoc of
-                                Just loc -> loc
-                                Nothing -> ""
+                            then fromMaybe "" activityLoc
                             else "" -- Technosphere: leave empty for name-only lookup in Loader
                     else exLocation edata
 
@@ -385,15 +384,9 @@ parseWithXeno xmlContent =
     -- Build final result
     buildResult :: ParseState -> Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)
     buildResult st =
-        let name = case psActivityName st of
-                Just n -> n
-                Nothing -> "Unknown Activity"
-            location = case psLocation st of
-                Just loc -> loc
-                Nothing -> "GLO"
-            refUnit = case psRefUnit st of
-                Just u -> u
-                Nothing -> "UNKNOWN_UNIT"
+        let name = fromMaybe "Unknown Activity" (psActivityName st)
+            location = fromMaybe "GLO" (psLocation st)
+            refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             description = reverse (psDescription st)
             classifications =
                 M.fromList $
@@ -432,7 +425,7 @@ hasReferenceProduct act = any exchangeIsReference (exchanges act)
 
 -- | Remove production exchanges with zero amounts
 removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
-removeZeroAmountCoproducts exs = filter keepExchange exs
+removeZeroAmountCoproducts = filter keepExchange
   where
     keepExchange TechnosphereExchange{techIsInput = False, techIsReference = True} = True
     keepExchange TechnosphereExchange{techIsInput = False, techIsReference = False, techAmount = amount} = amount /= 0.0
@@ -577,18 +570,18 @@ parseAllWithXeno xmlContent =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InInputGroup edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "outputGroup" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
              in case psContext state of
                     InOutputGroup edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
                     InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = tail (psPath state), psTextAccum = []}
-                    _ -> state{psPath = tail (psPath state), psTextAccum = []}
+                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
+                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
@@ -604,14 +597,14 @@ parseAllWithXeno xmlContent =
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
-                            , psPath = tail (psPath state)
+                            , psPath = drop 1 (psPath state)
                             , psTextAccum = []
                             }
-                _ -> state{psPath = tail (psPath state)}
+                _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         | isElement tagName "geography" =
-            state{psContext = Other, psPath = tail (psPath state), psTextAccum = []}
+            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
         -- Handle dataset close tag: accumulate completed activity
         | isElement tagName "dataset" =
             let !result = buildResultForAll state
@@ -632,12 +625,12 @@ parseAllWithXeno xmlContent =
                         , psTextAccum = []
                         , psSupplierLinks = M.empty
                         }
-             in resetState{psPath = tail (psPath state)}
+             in resetState{psPath = drop 1 (psPath state)}
         | otherwise =
-            state{psPath = if null (psPath state) then [] else tail (psPath state)}
+            state{psPath = drop 1 (psPath state)}
 
     -- CDATA handler
-    cdata state content = text state content
+    cdata = text
 
     -- Build exchange, flow, and unit from exchange data (same logic as parseWithXeno)
     buildExchangeForAll :: Int -> Maybe Text -> ExchangeData -> (Exchange, Flow, Unit)
@@ -658,9 +651,7 @@ parseAllWithXeno xmlContent =
                 if T.null (exLocation edata)
                     then
                         if isBiosphere
-                            then case activityLoc of
-                                Just loc -> loc
-                                Nothing -> ""
+                            then fromMaybe "" activityLoc
                             else ""
                     else exLocation edata
             exchange =
@@ -696,15 +687,9 @@ parseAllWithXeno xmlContent =
     -- Build final result for a single dataset
     buildResultForAll :: ParseState -> Either String (Activity, [Flow], [Unit], Int, M.Map UUID Int)
     buildResultForAll st =
-        let name = case psActivityName st of
-                Just n -> n
-                Nothing -> "Unknown Activity"
-            location = case psLocation st of
-                Just loc -> loc
-                Nothing -> "GLO"
-            refUnit = case psRefUnit st of
-                Just u -> u
-                Nothing -> "UNKNOWN_UNIT"
+        let name = fromMaybe "Unknown Activity" (psActivityName st)
+            location = fromMaybe "GLO" (psLocation st)
+            refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             description = reverse (psDescription st)
             classifications =
                 M.fromList $
@@ -727,9 +712,9 @@ streamParseAllDatasetsFromFile1 path = do
     !xmlContent <- BS.readFile path
     case parseAllWithXeno xmlContent of
         Right results -> do
-            forM_ [e | Left e <- results] $ \e ->
+            forM_ (lefts results) $ \e ->
                 reportProgress Warning $ "Skipping dataset in " ++ path ++ ": " ++ e
-            return [r | Right r <- results]
+            return (rights results)
         Left err -> do
             reportProgress Warning $ "Failed to parse " ++ path ++ ": " ++ err
             return []

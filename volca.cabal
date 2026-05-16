@@ -1,6 +1,6 @@
 cabal-version:       2.4
 name:                volca
-version:             0.6.1-dev
+version:             0.6.1.0
 build-type:          Simple
 
 license:             Apache-2.0
@@ -159,6 +159,13 @@ executable volca
 
 test-suite lca-tests
   import:              warnings, rtsdefaults
+  -- Test code idiomatically destructures well-formed fixtures with partial
+  -- patterns; a fixture mismatch should crash the test with the relevant
+  -- 'head'/'let Just x' source location rather than be silenced.
+  ghc-options:         -Wno-x-partial
+                       -Wno-incomplete-uni-patterns
+                       -Wno-incomplete-record-updates
+                       -Wno-name-shadowing
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs

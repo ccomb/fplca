@@ -15,7 +15,6 @@ module Search.BM25 (
 
 import Control.Monad (forM_)
 import Control.Monad.ST (runST)
-import Data.Foldable (foldl')
 import Data.Int (Int32)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M

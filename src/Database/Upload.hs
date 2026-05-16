@@ -429,8 +429,9 @@ findDataDirectory dir = do
   where
     pickByFileCount dirs = do
         counts <- mapM (\d -> (,) d <$> countDataFilesIn d) dirs
-        let sorted = sortOn (Down . snd) counts
-        return $ fst (head sorted)
+        case sortOn (Down . snd) counts of
+            (best : _) -> return (fst best)
+            [] -> return dir
 
     -- Recursively find the first directory containing a processes/ subdirectory
     findILCDRoot d = do
@@ -451,7 +452,7 @@ findDataDirectory dir = do
 
 -- | Find all directories containing recognized data files under a root.
 findAllDataDirectories :: FilePath -> IO [FilePath]
-findAllDataDirectories root = go root
+findAllDataDirectories = go
   where
     go dir = do
         result <- try @SomeException $ do
@@ -489,7 +490,7 @@ anyDataFilesIn d = do
         else do
             let fullPaths = map (d </>) fs
                 extensions = map (map toLower . takeExtension) fs
-            if any (== ".spold") extensions
+            if ".spold" `elem` extensions
                 then return True
                 else do
                     let xmlFiles = [p | p <- fullPaths, map toLower (takeExtension p) == ".xml"]
@@ -511,11 +512,13 @@ findMethodDirectory dir = do
         [one] -> return one
         many -> do
             counts <- mapM (\d -> (,) d <$> countMethodFilesIn d) many
-            return $ fst $ head $ sortOn (Down . snd) counts
+            case sortOn (Down . snd) counts of
+                (best : _) -> return (fst best)
+                [] -> return dir
 
 -- | Find all directories containing ILCD method XML files under a root.
 findAllMethodDirectories :: FilePath -> IO [FilePath]
-findAllMethodDirectories root = go root
+findAllMethodDirectories = go
   where
     go dir = do
         hasMethod <- anyMethodFilesIn dir
@@ -612,9 +615,9 @@ detectDatabaseFormat path = do
                         else do
                             fs <- listDirectoryRecursive path
                             let extensions = map (map toLower . takeExtension) fs
-                            let hasSpold = any (== ".spold") extensions
-                                hasXml = any (== ".xml") extensions
-                                hasCsv = any (== ".csv") extensions
+                            let hasSpold = ".spold" `elem` extensions
+                                hasXml = ".xml" `elem` extensions
+                                hasCsv = ".csv" `elem` extensions
                             if hasSpold
                                 then return EcoSpold2
                                 else
