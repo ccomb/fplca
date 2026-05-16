@@ -13,7 +13,11 @@
 #   file dist/volca       # → "statically linked", "ELF 64-bit"
 #   ldd dist/volca        # → "not a dynamic executable"
 
-FROM alpine:3.23 AS haskell-builder
+# ALPINE_VERSION is the single source of truth — set in versions.env and
+# passed by docker/docker-build.sh. No default here on purpose: a stale
+# fallback is exactly how OPENBLAS_VERSION drifted out of sync before.
+ARG ALPINE_VERSION
+FROM alpine:${ALPINE_VERSION} AS haskell-builder
 
 # musl toolchain + everything MUMPS / GHC need to build statically.
 # `*-static` packages ship the .a variants required by `executable-static`.
@@ -80,8 +84,8 @@ COPY build-mumps.sh /tmp/
 # archive resolution already drops those objects at link time). Adding
 # them also breaks OpenBLAS's bundled tests (which reference cblas_*),
 # making the default `make` target fail.
-ARG OPENBLAS_VERSION=0.3.27
-RUN curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
+RUN . /tmp/versions.env \
+    && curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
         | tar -xz -C /tmp \
     && cd "/tmp/OpenBLAS-${OPENBLAS_VERSION}" \
     && make -j"$(nproc)" \
@@ -167,7 +171,8 @@ RUN mkdir -p /build/output \
 # needed) so `scratch` would work, but Alpine gives us /etc/passwd, a shell
 # for debugging, and the few utilities volca shells out to (7z for SimaPro
 # CSV archives) at negligible size cost.
-FROM alpine:3.23
+ARG ALPINE_VERSION
+FROM alpine:${ALPINE_VERSION}
 ARG GIT_HASH=unknown
 LABEL org.opencontainers.image.revision="${GIT_HASH}"
 

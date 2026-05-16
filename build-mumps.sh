@@ -41,8 +41,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if [[ -n "$HOMEBREW_GCC" ]]; then
         CC_DEFAULT="$HOMEBREW_GCC"
     fi
-    EXTRA_FFLAGS="-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-13.0}"
-    EXTRA_CFLAGS="-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+    EXTRA_FFLAGS="-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set (source versions.env)}"
+    EXTRA_CFLAGS="-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set (source versions.env)}"
 fi
 CC="${CC:-$CC_DEFAULT}"
 FC="${FC:-$FC_DEFAULT}"

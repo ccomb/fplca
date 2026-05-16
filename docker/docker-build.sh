@@ -39,10 +39,14 @@ if ! git diff --quiet HEAD 2>/dev/null; then
 fi
 GIT_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
 
-echo "Building Docker image: tag=$TAG hash=$GIT_HASH git-tag=${GIT_TAG:-none}"
+# shellcheck source=../versions.env
+source versions.env
+
+echo "Building Docker image: tag=$TAG hash=$GIT_HASH git-tag=${GIT_TAG:-none} alpine=$ALPINE_VERSION"
 
 docker build \
     -f docker/Dockerfile \
+    --build-arg ALPINE_VERSION="$ALPINE_VERSION" \
     --build-arg GIT_HASH="$GIT_HASH" \
     --build-arg GIT_TAG="$GIT_TAG" \
     -t "$TAG" .

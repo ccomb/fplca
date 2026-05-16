@@ -18,8 +18,21 @@ permissions:
   actions: read
 
 jobs:
+  versions:
+    name: Read pinned versions
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.r.outputs.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: r
+        run: |
+          source versions.env
+          echo "python=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+
   test:
     name: Test pyvolca
+    needs: versions
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,7 +42,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ needs.versions.outputs.python }}
           cache: pip
           cache-dependency-path: pyvolca/pyproject.toml
 
