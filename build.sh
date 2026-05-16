@@ -68,10 +68,13 @@ set +a
 OS=$(detect_os)
 
 # On macOS, pin the deployment target floor for every link step so binaries
-# produced on a recent Mac still run on Ventura (13.0). GHC, rustc, clang,
-# and Homebrew gcc all honor this env var natively.
+# produced on a recent Mac still run on the version pinned in versions.env
+# (currently Ventura 13.0). GHC, rustc, clang, and Homebrew gcc all honor
+# this env var natively. `set -a` above auto-exported the versions.env value;
+# the explicit export here is just for readability.
 if [[ "$OS" == "macos" ]]; then
-    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+    : "${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set in versions.env}"
+    export MACOSX_DEPLOYMENT_TARGET
 fi
 
 # Strip + UPX + (re-)sign $1 in place. Idempotent: a binary already UPX'd

@@ -84,7 +84,7 @@ EOF
         # Homebrew gcc lays out libgfortran/libquadmath under lib/gcc/<major>/
         GFORTRAN_LIB_DIR=$(ls -d "${BREW_PREFIX}/Cellar/gcc/"*/lib/gcc/*/ 2>/dev/null | sort -V | tail -1)
         : "${GFORTRAN_LIB_DIR:?Could not locate Homebrew gcc libgfortran — install with: brew install gcc}"
-        DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+        DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set (source versions.env)}"
         # -Wl,-dead_strip and -Wl,-dead_strip_dylibs let ld64 prune unreferenced
         # sections and unused dylib load commands. Pairs with `split-sections: True`
         # below for a meaningful (5–15 %) size win before strip even runs.
