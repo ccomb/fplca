@@ -15,8 +15,6 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import Data.UUID (nil)
-import qualified Data.UUID as UUID
-import GoldenData
 import Service (
     ServiceError (..),
     buildUnitGroups,

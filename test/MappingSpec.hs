@@ -15,7 +15,6 @@ import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Types (Flow (..), FlowType (..), Unit (..))
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
-import qualified UnitConversion
 
 -- ---------------------------------------------------------------------------
 -- Helpers

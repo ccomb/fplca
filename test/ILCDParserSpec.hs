@@ -8,14 +8,8 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import ILCD.Parser (ILCDExchangeRaw (..), ILCDProcessRaw (..), buildSupplierIndex, fixActivityExchanges, parseILCDDirectory, parseProcessXML)
-import System.IO (hClose)
-import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types
-
-isRight :: Either a b -> Bool
-isRight (Right _) = True
-isRight _ = False
 
 classOf :: BS.ByteString -> M.Map Text Text
 classOf = maybe M.empty iprClassifications . parseProcessXML

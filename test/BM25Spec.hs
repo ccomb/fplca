@@ -6,7 +6,7 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Ord (Down (Down))
 import Data.Text (Text)
-import Data.UUID (UUID, nil)
+import Data.UUID (nil)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Test.Hspec
@@ -66,10 +66,8 @@ mkFlow fid name =
         , flowSubstanceId = Nothing
         }
 
-f1, f2, f3 :: UUID
+f1 :: UUID
 f1 = read "11111111-1111-1111-1111-111111111111"
-f2 = read "22222222-2222-2222-2222-222222222222"
-f3 = read "33333333-3333-3333-3333-333333333333"
 
 -- | Return docIds sorted by descending score, filtering out zeros.
 ranking :: VU.Vector Double -> [Int]

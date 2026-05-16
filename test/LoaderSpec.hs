@@ -16,11 +16,10 @@ import Types
 -- Minimal fixtures
 -- ---------------------------------------------------------------------------
 
-flowUUID1, flowUUID2, actUUID1, actUUID2 :: UUID.UUID
+flowUUID1, flowUUID2, actUUID1 :: UUID.UUID
 flowUUID1 = read "aaaaaaaa-0000-0000-0000-000000000001"
 flowUUID2 = read "bbbbbbbb-0000-0000-0000-000000000002"
 actUUID1 = read "cccccccc-0000-0000-0000-000000000001"
-actUUID2 = read "cccccccc-0000-0000-0000-000000000002"
 
 minimalFlow :: UUID.UUID -> Text -> Flow
 minimalFlow fid name =

@@ -167,7 +167,7 @@ serverSpecs = do
 
         it "POST /api/v1/idle-timeout/0 cancels timeout" $ do
             withMinimalConfig $ \cfgPath ->
-                withServer cfgPath $ \ph mgr -> do
+                withServer cfgPath $ \_ph mgr -> do
                     -- Activate 2s timeout then immediately cancel
                     _ <- postEndpoint mgr "/api/v1/idle-timeout/2"
                     _ <- postEndpoint mgr "/api/v1/idle-timeout/0"

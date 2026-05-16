@@ -53,7 +53,7 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
         -- must equal the plain-path baseline (5.0), proving the
         -- perturbed-scaling path picks up dep-DB emissions instead of
         -- silently zeroing them.
-        rootSolver <- mkSolverFromDb rootDb "root"
+        _rootSolver <- mkSolverFromDb rootDb "root"
         depSolver <- mkSolverFromDb depDb "dep"
         let depLookup name =
                 pure $
@@ -103,7 +103,7 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
         -- depends on: if Sherman-Morrison produces a perturbed scaling
         -- that differs from baseline by Δ, the downstream regional
         -- score must reflect that Δ, not silently flatten it.
-        rootSolver <- mkSolverFromDb rootDb "root"
+        _rootSolver <- mkSolverFromDb rootDb "root"
         depSolver <- mkSolverFromDb depDb "dep"
         let depLookup name =
                 pure $

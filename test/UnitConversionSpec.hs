@@ -3,7 +3,6 @@
 module UnitConversionSpec (spec) where
 
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Test.Hspec
 import UnitConversion
@@ -12,11 +11,6 @@ import UnitConversion
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
-
--- Helper for testing Right results
-isRight :: Either a b -> Bool
-isRight (Right _) = True
-isRight _ = False
 
 -- | Load the full unit config from data/units.csv
 loadFullUnitConfig :: IO UnitConfig

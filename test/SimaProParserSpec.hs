@@ -6,7 +6,6 @@ module SimaProParserSpec (spec) where
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import qualified Data.Text as T
 import Expr (evaluate, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
@@ -323,19 +322,6 @@ parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     BS.hPut handle yieldChainTestCSV
     hClose handle
     parseSimaProCSV defaultUnitConfig path
-
--- Helper: find technosphere input by name
-findInput :: Activity -> T.Text -> Maybe Exchange
-findInput act query = case [ e
-                           | e@TechnosphereExchange{} <- exchanges act
-                           , techIsInput e
-                           , not (techIsReference e)
-                           ] of
-    exs -> case filter (matchesName query) exs of
-        (e : _) -> Just e
-        _ -> Nothing
-  where
-    matchesName _ _ = True -- We check by position since we can't easily get flow names here
 
 -- Helper: get all tech input amounts
 techInputAmounts :: Activity -> [Double]
@@ -1084,12 +1070,6 @@ parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
-
--- | Two Maybe Double values, considered equal within 0.01.
-approxEqAlloc :: Maybe Double -> Maybe Double -> Bool
-approxEqAlloc (Just a) (Just b) = abs (a - b) < 0.01
-approxEqAlloc Nothing Nothing = True
-approxEqAlloc _ _ = False
 
 {- | Generic 5-coproduct fixture: one Process block emits 5 fictional outputs
 with five mass-allocation formulas. Percentages are chosen so they sum to
