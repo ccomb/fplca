@@ -13,7 +13,7 @@
 #   file dist/volca       # → "statically linked", "ELF 64-bit"
 #   ldd dist/volca        # → "not a dynamic executable"
 
-FROM alpine:3.19 AS haskell-builder
+FROM alpine:3.23 AS haskell-builder
 
 # musl toolchain + everything MUMPS / GHC need to build statically.
 # `*-static` packages ship the .a variants required by `executable-static`.
@@ -37,6 +37,7 @@ RUN apk add --no-cache \
     g++ \
     gfortran \
     gmp-dev \
+    gmp-static \
     libffi-dev \
     ncurses-dev \
     ncurses-static \
@@ -166,7 +167,7 @@ RUN mkdir -p /build/output \
 # needed) so `scratch` would work, but Alpine gives us /etc/passwd, a shell
 # for debugging, and the few utilities volca shells out to (7z for SimaPro
 # CSV archives) at negligible size cost.
-FROM alpine:3.19
+FROM alpine:3.23
 ARG GIT_HASH=unknown
 LABEL org.opencontainers.image.revision="${GIT_HASH}"
 
