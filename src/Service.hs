@@ -1323,7 +1323,11 @@ getPathTo db solver pidText target = do
                                         Left $
                                             ActivityNotFound $
                                                 "No upstream node matching '" <> target <> "' reachable from " <> pidText
-                                    Just pids ->
+                                    Just [] ->
+                                        Left $
+                                            ActivityNotFound $
+                                                "BFS returned empty path from " <> pidText
+                                    Just pids@(firstPid : restPids) ->
                                         let scalingOf i = supplyVec U.! i
                                             mkStep i mRatio =
                                                 let act = dbActivities db V.! i
@@ -1340,9 +1344,9 @@ getPathTo db solver pidText target = do
                                                         Nothing -> base
                                                         Just r -> base ++ ["local_step_ratio" .= r]
                                             steps =
-                                                mkStep (head pids) (Nothing :: Maybe Double)
+                                                mkStep firstPid (Nothing :: Maybe Double)
                                                     : [ mkStep c (Just ratio)
-                                                      | (p, c) <- zip pids (tail pids)
+                                                      | (p, c) <- zip pids restPids
                                                       , let ratio =
                                                                 if scalingOf p == 0
                                                                     then 0
@@ -1351,7 +1355,7 @@ getPathTo db solver pidText target = do
                                             totalRatio =
                                                 product
                                                     [ scalingOf c / scalingOf p
-                                                    | (p, c) <- zip pids (tail pids)
+                                                    | (p, c) <- zip pids restPids
                                                     , scalingOf p /= 0
                                                     ]
                                          in Right $

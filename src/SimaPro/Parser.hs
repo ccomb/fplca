@@ -38,7 +38,7 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
-import Data.List (dropWhileEnd, foldl')
+import Data.List (dropWhileEnd)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)

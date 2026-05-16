@@ -102,7 +102,8 @@ import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
-import Data.List (isPrefixOf, nub, sortOn)
+import Data.Either (lefts, rights)
+import Data.List (isPrefixOf, nub, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust)
@@ -1144,13 +1145,13 @@ detectDirectoryFormat path = do
                             files <- listDirectory path
                             let extensions = map (map toLower . takeExtension) files
                             -- Check for different formats (in order of preference)
-                            if elem ".spold" extensions
+                            if ".spold" `elem` extensions
                                 then return FormatSpold
                                 else
-                                    if elem ".csv" extensions
+                                    if ".csv" `elem` extensions
                                         then return FormatCSV
                                         else
-                                            if elem ".xml" extensions
+                                            if ".xml" `elem` extensions
                                                 then return FormatXML
                                                 else return FormatUnknown
                 else return FormatUnknown
@@ -2345,10 +2346,10 @@ loadMethodCollectionFromConfig mc = do
                             else return Nothing
                     let (xmlErrs, xmlMethods) = partitionEithers xmlResults
                         (csvErrs, csvOks) = partitionEithers csvParsed
-                        (jsonErrs, jsonMethods) = partitionEithers [r | Just r <- jsonResults]
+                        (jsonErrs, jsonMethods) = partitionEithers (catMaybes jsonResults)
                         -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method]
-                        spCollections = [sp | Left sp <- csvOks]
-                        tabularMethods = concat [ms | Right ms <- csvOks]
+                        spCollections = lefts csvOks
+                        tabularMethods = concat (rights csvOks)
                         allMethods =
                             xmlMethods
                                 ++ tabularMethods
@@ -2359,21 +2360,22 @@ loadMethodCollectionFromConfig mc = do
                         allNWSets = concatMap mcNormWeightSets spCollections
                         collection = MethodCollection allMethods allDamageCats allNWSets []
                         errs = xmlErrs ++ csvErrs ++ jsonErrs
-                    if null allMethods && not (null errs)
-                        then return $ Left $ "All method files failed to parse: " <> T.pack (head errs)
-                        else do
+                    case (null allMethods, errs) of
+                        (True, firstErr : _) ->
+                            return $ Left $ "All method files failed to parse: " <> T.pack firstErr
+                        _ -> do
                             let xmlOk = length xmlMethods
                                 csvOk = length csvOks
                                 jsonOk = length jsonMethods
                             reportProgress Info $ "  Parsed " <> show xmlOk <> " XML, " <> show csvOk <> " CSV, " <> show jsonOk <> " JSON file(s)"
-                            when (not (null allDamageCats)) $
+                            unless (null allDamageCats) $
                                 reportProgress Info $
                                     "  "
                                         <> show (length allDamageCats)
                                         <> " damage categories, "
                                         <> show (length allNWSets)
                                         <> " normalization-weighting set(s)"
-                            when (not (null errs)) $
+                            unless (null errs) $
                                 reportProgress Warning $
                                     "  " <> show (length errs) <> " method file(s) failed to parse"
                             return $ Right (collection, flowInfo)
@@ -2897,13 +2899,15 @@ parseGeographiesCSV path = do
         | otherwise = case T.splitOn "," line of
             [] -> []
             [_] -> []
-            parts ->
-                let code = T.strip (head parts)
-                    parentsStr = T.strip (last parts)
-                    displayRaw = T.intercalate "," (init (tail parts))
-                    displayName = let d = T.strip displayRaw in if T.null d then code else d
-                    parents = if T.null parentsStr then [] else T.splitOn "|" parentsStr
-                 in [(code, (displayName, parents))]
+            parts@(codeRaw : _) -> case unsnoc parts of
+                Nothing -> [] -- unreachable: parts is non-empty by pattern
+                Just (initPart, parentsRaw) ->
+                    let code = T.strip codeRaw
+                        parentsStr = T.strip parentsRaw
+                        displayRaw = T.intercalate "," (drop 1 initPart)
+                        displayName = let d = T.strip displayRaw in if T.null d then code else d
+                        parents = if T.null parentsStr then [] else T.splitOn "|" parentsStr
+                     in [(code, (displayName, parents))]
 
 -- | Load CSV file content from path.
 loadRefDataCSV :: FilePath -> IO (Either Text BL.ByteString)

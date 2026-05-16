@@ -81,7 +81,8 @@ import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
 import Data.Either (partitionEithers)
-import Data.List (group, sort, sortBy, sortOn, unzip7)
+import Data.List (sort, sortBy, sortOn, unzip7)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Data.Ord (Down (..))
@@ -277,7 +278,7 @@ reportUnlinkedSummary summary
                 printf "  ... and %d more activities" remainingCount
   where
     sortOn' f = sortBy (\a b -> compare (f a) (f b))
-    nub = map head . group . sort
+    nub = map NE.head . NE.group . sort
 
 -- | Normalize text for matching: lowercase, strip whitespace, normalize Unicode
 normalizeText :: T.Text -> T.Text
