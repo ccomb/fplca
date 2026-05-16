@@ -88,15 +88,6 @@ RUN . /tmp/versions.env \
     && curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
         | tar -xz -C /tmp \
     && cd "/tmp/OpenBLAS-${OPENBLAS_VERSION}" \
-    # musl's pthread default stack is 128 KB (vs glibc's 8 MB read from
-    # RLIMIT_STACK). OpenBLAS worker threads inherit it and overflow on
-    # DYNAMIC_ARCH Fortran kernels with large auto-arrays → SIGSEGV at the
-    # first BLAS3 call from MUMPS. Force an 8 MB stack on each worker.
-    # Guard: fail the build if the upstream anchor disappears so a silent
-    # OpenBLAS refactor can't reintroduce the crash.
-    && grep -q 'pthread_attr_init(&attr);' driver/others/blas_server.c \
-    && sed -i 's|pthread_attr_init(&attr);|pthread_attr_init(\&attr); pthread_attr_setstacksize(\&attr, 8 << 20);|' driver/others/blas_server.c \
-    && grep -q 'pthread_attr_setstacksize(&attr, 8 << 20);' driver/others/blas_server.c \
     && make -j"$(nproc)" \
         NO_SHARED=1 \
         USE_THREAD=1 USE_OPENMP=0 \
