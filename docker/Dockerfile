@@ -88,15 +88,6 @@ RUN . /tmp/versions.env \
     && curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
         | tar -xz -C /tmp \
     && cd "/tmp/OpenBLAS-${OPENBLAS_VERSION}" \
-    # musl's pthread default stack is 128 KB (vs glibc's 8 MB read from
-    # RLIMIT_STACK). OpenBLAS worker threads inherit it and overflow on
-    # DYNAMIC_ARCH Fortran kernels with large auto-arrays → SIGSEGV at the
-    # first BLAS3 call from MUMPS. Force an 8 MB stack on each worker.
-    # Guard: fail the build if the upstream anchor disappears so a silent
-    # OpenBLAS refactor can't reintroduce the crash.
-    && grep -q 'pthread_attr_init(&attr);' driver/others/blas_server.c \
-    && sed -i 's|pthread_attr_init(&attr);|pthread_attr_init(\&attr); pthread_attr_setstacksize(\&attr, 8 << 20);|' driver/others/blas_server.c \
-    && grep -q 'pthread_attr_setstacksize(&attr, 8 << 20);' driver/others/blas_server.c \
     && make -j"$(nproc)" \
         NO_SHARED=1 \
         USE_THREAD=1 USE_OPENMP=0 \
@@ -174,6 +165,18 @@ RUN mkdir -p /build/output \
     && echo "Size before UPX: $(du -h /build/output/volca | cut -f1)" \
     && upx /build/output/volca \
     && echo "Size after UPX:  $(du -h /build/output/volca | cut -f1)" \
+    # Guard the musl pthread-stack fix from PR #60/#61. The link-time
+    # -Wl,-z,stack-size=8388608 (see gen-cabal-config.sh, LINK_MODE=musl)
+    # bakes an 8 MiB PT_GNU_STACK header into the ELF; musl reads it at
+    # startup as __default_stacksize. If a future linker-flag refactor
+    # drops it — or UPX strips it — every pthread falls back to musl's
+    # hardcoded 128 KB and OpenBLAS DYNAMIC_ARCH Fortran workers SIGSEGV
+    # on the first BLAS3 call inside MUMPS factorization (exit 139).
+    # Fail the build loudly here rather than rediscover it from a
+    # production crash log a third time.
+    && { STACK_MEMSZ=$(readelf -l /build/output/volca | grep -A1 GNU_STACK | tail -n1 | awk '{print $2}'); \
+         echo "$STACK_MEMSZ" | grep -qE '^0x0*800000$' \
+         || { echo "ERROR: PT_GNU_STACK MemSiz=$STACK_MEMSZ on shipped binary, expected 8 MiB (0x800000) — musl default pthread stack would fall back to 128 KB; OpenBLAS workers will SIGSEGV in MUMPS factorization. See PR #60/#61."; exit 1; }; } \
     && file /build/output/volca
 
 # Stage 2: small runtime image. The volca binary is fully static (no libc

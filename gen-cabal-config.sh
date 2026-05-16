@@ -59,7 +59,20 @@ EOF
         # Effective on the C/Fortran archives that were compiled with
         # -ffunction-sections / -fdata-sections (OpenBLAS in our pipeline);
         # harmless on the others.
-        MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--gc-sections -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
+        #
+        # -z stack-size=8388608: bake an 8 MB PT_GNU_STACK into the ELF.
+        # musl reads this header at startup and uses it as the default
+        # pthread stack size (its hardcoded fallback is 128 KB, vs glibc's
+        # 8 MB picked up from RLIMIT_STACK). OpenBLAS DYNAMIC_ARCH Fortran
+        # kernels have large auto-arrays that overflow 128 KB on the first
+        # BLAS3 call inside MUMPS factorization (SIGSEGV / exit 139).
+        # Setting it at link time covers every pthread the binary creates
+        # — RTS capabilities and OpenBLAS workers alike — without patching
+        # OpenBLAS source. (An earlier attempt to sed the stack size into
+        # OpenBLAS's blas_server.c was a no-op: the relevant block sits
+        # under #ifdef NEED_STACKATTR, which blas_server.c #undef's
+        # unconditionally on Linux.)
+        MUSL_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-L$OPENBLAS_LIB_DIR -optl-Wl,--gc-sections -optl-Wl,-z,stack-size=8388608 -optl-Wl,--start-group -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran $QUADMATH_FLAG -optl-Wl,--end-group -optl-lpthread -optl-lm"
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
