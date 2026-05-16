@@ -36,11 +36,22 @@ NURSERY_MB=$((CORES * 16))
 CHUNK_MB=$((NURSERY_MB / 32))
 [ $CHUNK_MB -lt 8 ] && CHUNK_MB=8
 
-# Max heap: 75% of RAM, minimum 2G
-MAX_MB=$((RAM_MB * 3 / 4))
+# Max heap: 50% of RAM, minimum 2G.
+# The remaining half is left to: kernel + page cache, MUMPS Fortran solver
+# (which allocates outside the GHC heap), parser intermediates that
+# transiently inflate RSS above heap size, and the OOM headroom needed to
+# let `-M` trigger a clean Haskell heap-exhaustion exit before the kernel
+# OOM-killer fires.
+MAX_MB=$((RAM_MB / 2))
 [ $MAX_MB -lt 2048 ] && MAX_MB=2048
 
-RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -I30 -RTS"
+# -Fd1.0 (GHC 9.10+): return free heap blocks to the OS over ~1 idle period
+# instead of holding them indefinitely after a parsing spike. Default decay
+# (4.0) keeps RSS pinned near the peak for minutes.
+# -I0.3 (GHC default): trigger idle-time major GC promptly. The previous
+# -I30 deferred GC for 30 s, hiding live-data drops and starving -Fd of
+# free blocks to release.
+RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -Fd1.0 -I0.3 -RTS"
 
 echo "RTS_FLAGS=\"$RTS_FLAGS\""
 
