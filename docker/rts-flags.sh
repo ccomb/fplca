@@ -40,7 +40,13 @@ CHUNK_MB=$((NURSERY_MB / 32))
 MAX_MB=$((RAM_MB * 3 / 4))
 [ $MAX_MB -lt 2048 ] && MAX_MB=2048
 
-RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -I30 -RTS"
+# -Fd1.0 (GHC 9.10+): return free heap blocks to the OS over ~1 idle period
+# instead of holding them indefinitely after a parsing spike. Default decay
+# (4.0) keeps RSS pinned near the peak for minutes.
+# -I0.3 (GHC default): trigger idle-time major GC promptly. The previous
+# -I30 deferred GC for 30 s, hiding live-data drops and starving -Fd of
+# free blocks to release.
+RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -Fd1.0 -I0.3 -RTS"
 
 echo "RTS_FLAGS=\"$RTS_FLAGS\""
 
