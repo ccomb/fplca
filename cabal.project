@@ -7,3 +7,15 @@ jobs: $ncpus
 
 program-options
   ghc-options: -j +RTS -A128m -RTS
+
+-- Binary-size reduction: emit one ELF section per top-level symbol in every
+-- package, then have the linker drop sections nothing references. Both halves
+-- are required — split-sections without --gc-sections is dead weight. Shrinks
+-- the dynamic Linux exe ~78 MB → ~25 MB (~50 MB → ~18 MB stripped); the static
+-- musl binary in docker/ shrinks proportionally before UPX. Forces a one-time
+-- rebuild of the cabal store (the prebuilt-store hash includes this file).
+package *
+  split-sections: True
+
+package volca
+  ghc-options: -optl-Wl,--gc-sections
