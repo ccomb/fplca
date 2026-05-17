@@ -138,6 +138,13 @@ executable volca
   import:              warnings, rtsdefaults
   main-is:             Main.hs
   hs-source-dirs:      app
+  -- Drop ELF/Mach-O sections nothing references; pairs with cabal.project's
+  -- split-sections to actually shrink the linked exe. Apple ld doesn't accept
+  -- --gc-sections, uses -dead_strip instead.
+  if os(darwin)
+    ghc-options:       -optl-Wl,-dead_strip
+  else
+    ghc-options:       -optl-Wl,--gc-sections
   build-depends:       base >=4.14 && <5
                      , volca
                      , text
