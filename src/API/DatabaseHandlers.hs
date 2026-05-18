@@ -428,7 +428,7 @@ uploadMethodHandler dbManager req = do
                             True
                             "Method uploaded successfully"
                             (Just $ urSlug uploadResult)
-                            (Just "ILCD")
+                            (Just $ formatToText $ urFormat uploadResult)
 
 -- | Delete an uploaded method collection
 deleteMethodHandler :: DatabaseManager -> Text -> Handler ActivateResponse
