@@ -41,6 +41,7 @@ module Database.Manager (
     -- * Method Operations
     listMethodCollections,
     loadMethodCollection,
+    loadMethodCollectionFromConfig,
     unloadMethodCollection,
     getLoadedMethods,
     addMethodCollection,
@@ -1003,7 +1004,8 @@ This is the original function, kept for backward compatibility
 -}
 loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text LoadedDatabase)
 loadDatabaseFromConfig dbConfig synonymDB noCache =
-    fmap (fmap fst)
+    fmap
+        (fmap fst)
         (loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty)
 
 {- | Resolve a database path: if it's an archive, extract it first.
@@ -1201,9 +1203,10 @@ loadDatabaseRawWithCrossDB ::
     [IndexedDatabase] ->
     -- | Location hierarchy (empty = use built-in)
     M.Map T.Text [T.Text] ->
-    -- | (Database, fromCache): True iff the result came from the matrix cache
-    -- as-is, i.e. cross-DB linking was NOT freshly run against 'otherIndexes'.
-    -- Callers use this to decide whether a self-relink is needed.
+    {- | (Database, fromCache): True iff the result came from the matrix cache
+    as-is, i.e. cross-DB linking was NOT freshly run against 'otherIndexes'.
+    Callers use this to decide whether a self-relink is needed.
+    -}
     IO (Either Text (Database, Bool))
 loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier = do
     mCachedDb <-
@@ -1397,11 +1400,12 @@ data RelinkResult = RelinkResult
     , rresUnresolvedAfter :: !Int
     , rresCrossDBLinks :: !Int
     , rresDepsLoaded :: ![Text]
-    , -- | True iff the relink actually changed 'dbCrossDBLinks' or
-      -- 'dbDependsOn' versus the in-memory state before the call. Callers
-      -- use this to skip redundant work — e.g. the explicit cache write in
-      -- 'finalizeDatabase' is suppressed when the relink already saved.
-      rresLinksChanged :: !Bool
+    , rresLinksChanged :: !Bool
+    {- ^ True iff the relink actually changed 'dbCrossDBLinks' or
+    'dbDependsOn' versus the in-memory state before the call. Callers
+    use this to skip redundant work — e.g. the explicit cache write in
+    'finalizeDatabase' is suppressed when the relink already saved.
+    -}
     }
     deriving (Show, Eq)
 
@@ -1972,6 +1976,7 @@ discoverCandidatePaths dbConfig = do
                 Upload.EcoSpold1 -> "EcoSpold 1"
                 Upload.SimaProCSV -> "SimaPro CSV"
                 Upload.ILCDProcess -> "ILCD"
+                Upload.OpenLcaJsonLd -> "openLCA JSON-LD"
                 Upload.UnknownFormat -> "Unknown"
         return (T.pack rel, label, count)
   where

@@ -10,11 +10,13 @@ module Database.Upload (
     UploadData (..),
     UploadResult (..),
     DatabaseFormat (..),
+    ArchiveFormat (..),
     ProgressEvent (..),
 
     -- * Upload handling
     handleUpload,
     extractArchiveFile,
+    detectArchiveFormat,
     detectDatabaseFormat,
     findDataDirectory,
     findAllDataDirectories,
@@ -49,12 +51,15 @@ import System.FilePath (takeExtension, (</>))
 import System.Info (os)
 import System.Process (readProcessWithExitCode)
 
+import qualified Method.Parser.OlcaSchema as OlcaSchema
+
 -- | Detected database format
 data DatabaseFormat
     = SimaProCSV -- SimaPro CSV export
     | EcoSpold1 -- EcoSpold v1 XML format
     | EcoSpold2 -- EcoSpold v2 XML format
     | ILCDProcess -- ILCD process dataset format
+    | OpenLcaJsonLd -- openLCA JSON-LD (single ImpactCategory document)
     | UnknownFormat -- Could not detect format
     deriving (Show, Eq, Generic)
 
@@ -63,6 +68,7 @@ instance ToJSON DatabaseFormat where
     toJSON EcoSpold1 = A.String "EcoSpold 1"
     toJSON SimaProCSV = A.String "SimaPro CSV"
     toJSON ILCDProcess = A.String "ILCD"
+    toJSON OpenLcaJsonLd = A.String "openLCA JSON-LD"
     toJSON UnknownFormat = A.String ""
 
 instance FromJSON DatabaseFormat where
@@ -71,6 +77,7 @@ instance FromJSON DatabaseFormat where
         "EcoSpold 1" -> pure EcoSpold1
         "SimaPro CSV" -> pure SimaProCSV
         "ILCD" -> pure ILCDProcess
+        "openLCA JSON-LD" -> pure OpenLcaJsonLd
         _ -> pure UnknownFormat
 
 -- | Progress event for upload/loading operations
@@ -160,6 +167,7 @@ data ArchiveFormat
     | ArchiveGzip -- gzip (tar.gz): 1F 8B
     | ArchiveXz -- XZ (tar.xz): FD 37 7A 58 5A 00
     | ArchivePlainXML -- Plain XML file (EcoSpold1)
+    | ArchivePlainJSON -- openLCA JSON-LD ImpactCategory document
     | ArchivePlainCSV
     | ArchiveUnknown
     deriving (Show, Eq)
@@ -173,6 +181,7 @@ detectArchiveFormat content
     | matchesMagic [0x1F, 0x8B] = ArchiveGzip
     | matchesMagic [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] = ArchiveXz
     | isXmlFile = ArchivePlainXML -- Check XML before plain text
+    | isOlcaImpactCategory = ArchivePlainJSON -- Route openLCA JSON-LD to its own branch before CSV
     | isPlainText = ArchivePlainCSV
     | otherwise = ArchiveUnknown
   where
@@ -185,6 +194,17 @@ detectArchiveFormat content
         matchesMagic [0x3C, 0x3F, 0x78, 0x6D, 0x6C]
             || matchesMagic [0x3C, 0x65, 0x63, 0x6F]
             || matchesMagic [0xEF, 0xBB, 0xBF, 0x3C, 0x3F]
+    -- openLCA JSON-LD ImpactCategory sniff: a JSON object whose first ~2KB
+    -- mentions both "@type" and "ImpactCategory". Strict validation happens
+    -- later in OlcaSchema.parseOlcaImpactCategoryBytes; this only routes
+    -- the bytes to the right on-disk extension.
+    header2k = BL.toStrict (BL.take 2048 content)
+    firstNonSpace = BS.uncons (BS.dropWhile (\b -> b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) header2k)
+    isOlcaImpactCategory = case firstNonSpace of
+        Just (0x7B, _) ->
+            BS.isInfixOf "\"@type\"" header2k
+                && BS.isInfixOf "ImpactCategory" header2k
+        _ -> False
     -- Check if first byte is printable ASCII (plain text / CSV)
     isPlainText = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
 
@@ -207,12 +227,17 @@ extractUpload content targetDir = do
             -- Plain XML: write directly (e.g., EcoSpold1 multi-dataset file)
             BL.writeFile (targetDir </> "data.xml") content
             return $ Right ()
+        ArchivePlainJSON -> do
+            -- openLCA JSON-LD: keep the .json extension so the loader dispatches
+            -- through OlcaSchema instead of treating the blob as CSV.
+            BL.writeFile (targetDir </> "data.json") content
+            return $ Right ()
         ArchivePlainCSV -> do
             -- Plain CSV: write directly
             BL.writeFile (targetDir </> "data.csv") content
             return $ Right ()
         ArchiveUnknown ->
-            return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive, XML, or CSV file."
+            return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive, XML, CSV, or openLCA JSON-LD file."
         Archive7z -> extract7z content targetDir
         ArchiveZip -> extractZip content targetDir
         ArchiveGzip -> extractArchive ArchiveGzip content targetDir
@@ -381,6 +406,7 @@ extractArchive format archiveData targetDir = do
             ArchiveZip -> ".tar"
             Archive7z -> ".tar"
             ArchivePlainXML -> ".tar"
+            ArchivePlainJSON -> ".tar"
             ArchivePlainCSV -> ".tar"
             ArchiveUnknown -> ".tar"
     let tempArchive = targetDir </> ".temp" <> ext
@@ -407,6 +433,7 @@ extractArchive format archiveData targetDir = do
         ArchiveZip -> "archive"
         Archive7z -> "archive"
         ArchivePlainXML -> "archive"
+        ArchivePlainJSON -> "archive"
         ArchivePlainCSV -> "archive"
         ArchiveUnknown -> "archive"
 
@@ -527,29 +554,41 @@ findAllMethodDirectories = go
         childResults <- concat <$> mapM go subdirs
         if hasMethod then return (dir : childResults) else return childResults
 
--- | Count method files (ILCD XML or CSV) in a single directory (non-recursive).
+-- | Count method files (ILCD XML, CSV, or openLCA JSON-LD) in a single directory (non-recursive).
 countMethodFilesIn :: FilePath -> IO Int
 countMethodFilesIn dir = do
     fs <- listDirectory dir
     let xmlFiles = [dir </> f | f <- fs, map toLower (takeExtension f) == ".xml"]
+        jsonFiles = [dir </> f | f <- fs, map toLower (takeExtension f) == ".json"]
         csvCount = length [f | f <- fs, map toLower (takeExtension f) == ".csv"]
     xmlCount <- sum <$> mapM (\f -> do b <- isMethodXml f; return $ if b then 1 else 0) xmlFiles
-    return $ xmlCount + csvCount
+    jsonCount <- sum <$> mapM (\f -> do b <- isOlcaJsonFile f; return $ if b then 1 else 0) jsonFiles
+    return $ xmlCount + csvCount + jsonCount
 
-{- | Check if a directory contains method files (ILCD XML or CSV) directly.
-Content-aware for XML: reads the first few bytes to check for
-LCIAMethodDataSet marker, avoiding false positives on contacts/, flows/, etc.
+{- | Check if a directory contains method files (ILCD XML, CSV, or openLCA JSON-LD) directly.
+Content-aware for XML and JSON: reads the first bytes to confirm the file is
+actually a method, avoiding false positives on contacts/, flows/, etc.
 -}
 anyMethodFilesIn :: FilePath -> IO Bool
 anyMethodFilesIn d = do
     fs <- listDirectory d
     let csvFiles = [f | f <- fs, map toLower (takeExtension f) == ".csv"]
         xmlFiles = [d </> f | f <- fs, map toLower (takeExtension f) == ".xml"]
+        jsonFiles = [d </> f | f <- fs, map toLower (takeExtension f) == ".json"]
     if not (null csvFiles)
         then return True
-        else case xmlFiles of
-            [] -> return False
-            (f : _) -> isMethodXml f
+        else do
+            hasMethodXml <- case xmlFiles of
+                [] -> return False
+                (f : _) -> isMethodXml f
+            if hasMethodXml
+                then return True
+                else anyM isOlcaJsonFile jsonFiles
+  where
+    anyM _ [] = return False
+    anyM p (x : xs) = do
+        b <- p x
+        if b then return True else anyM p xs
 
 -- | Check if an XML file is an ILCD LCIA method dataset
 isMethodXml :: FilePath -> IO Bool
@@ -563,6 +602,14 @@ isMethodXml f = do
                     BS.isInfixOf "LCIAMethodDataSet" header
                         || BS.isInfixOf "lciamethods" header
 
+-- | Check if a .json file is an openLCA ImpactCategory document.
+isOlcaJsonFile :: FilePath -> IO Bool
+isOlcaJsonFile f = do
+    result <- try $ BS.readFile f
+    case result of
+        Left (_ :: SomeException) -> return False
+        Right content -> return $ OlcaSchema.isOlcaImpactCategoryJson content
+
 -- | Count data files based on format
 countDataFiles :: FilePath -> DatabaseFormat -> IO Int
 countDataFiles d format = do
@@ -573,6 +620,7 @@ countDataFiles d format = do
     isDataFile EcoSpold1 f = ".xml" `isSuffixOf` map toLower f
     isDataFile EcoSpold2 f = ".spold" `isSuffixOf` map toLower f
     isDataFile ILCDProcess f = ".xml" `isSuffixOf` map toLower f
+    isDataFile OpenLcaJsonLd f = ".json" `isSuffixOf` map toLower f
     isDataFile UnknownFormat _ = True
 
 -- | Recursively list all files in a directory
@@ -604,6 +652,9 @@ detectDatabaseFormat path = do
                 ".csv" -> do
                     isSimaPro <- checkForSimaProCSV [path]
                     return $ if isSimaPro then SimaProCSV else UnknownFormat
+                ".json" -> do
+                    isOlca <- isOlcaJsonFile path
+                    return $ if isOlca then OpenLcaJsonLd else UnknownFormat
                 _ -> return UnknownFormat
         else
             if isDir
@@ -618,6 +669,7 @@ detectDatabaseFormat path = do
                             let hasSpold = ".spold" `elem` extensions
                                 hasXml = ".xml" `elem` extensions
                                 hasCsv = ".csv" `elem` extensions
+                                jsonFiles = [f | f <- fs, map toLower (takeExtension f) == ".json"]
                             if hasSpold
                                 then return EcoSpold2
                                 else
@@ -630,7 +682,11 @@ detectDatabaseFormat path = do
                                                 then do
                                                     isSimaPro <- checkForSimaProCSV fs
                                                     return $ if isSimaPro then SimaProCSV else UnknownFormat
-                                                else return UnknownFormat
+                                                else case jsonFiles of
+                                                    [] -> return UnknownFormat
+                                                    (j : _) -> do
+                                                        isOlca <- isOlcaJsonFile j
+                                                        return $ if isOlca then OpenLcaJsonLd else UnknownFormat
                 else return UnknownFormat
 
 -- | Check if XML files are EcoSpold1 format

@@ -145,6 +145,7 @@ parseFormat "ecospold2" = Just EcoSpold2
 parseFormat "ecospold1" = Just EcoSpold1
 parseFormat "simapro" = Just SimaProCSV
 parseFormat "ilcd" = Just ILCDProcess
+parseFormat "openlca-jsonld" = Just OpenLcaJsonLd
 parseFormat _ = Just UnknownFormat
 
 -- | Format meta.toml content
@@ -172,6 +173,7 @@ formatMetaToml UploadMeta{..} =
     formatToText EcoSpold1 = "ecospold1"
     formatToText SimaProCSV = "simapro"
     formatToText ILCDProcess = "ilcd"
+    formatToText OpenLcaJsonLd = "openlca-jsonld"
     formatToText UnknownFormat = "unknown"
 
 -- | Scan a directory for subdirectories with meta.toml

@@ -302,6 +302,7 @@ formatToText SimaProCSV = "simapro-csv"
 formatToText EcoSpold1 = "ecospold1"
 formatToText EcoSpold2 = "ecospold2"
 formatToText ILCDProcess = "ilcd"
+formatToText OpenLcaJsonLd = "openlca-jsonld"
 formatToText UnknownFormat = "unknown"
 
 --------------------------------------------------------------------------------
