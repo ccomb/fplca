@@ -41,6 +41,7 @@ module API.DatabaseHandlers (
     -- * Helpers
     convertDbStatus,
     simpleAction,
+    formatToText,
 ) where
 
 import Control.Exception (SomeException, try)

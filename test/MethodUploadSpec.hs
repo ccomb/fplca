@@ -10,11 +10,12 @@ module MethodUploadSpec (spec) where
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.Maybe (fromMaybe)
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
+import API.DatabaseHandlers (formatToText)
 import Config (MethodConfig (..))
 import Database.Manager (loadMethodCollectionFromConfig)
 import Database.Upload
@@ -79,10 +80,21 @@ spec = do
                     Left err -> expectationFailure ("upload failed: " ++ show err)
                     Right res -> do
                         urFormat res `shouldBe` OpenLcaJsonLd
+                        -- Lock the side fix: the API response advertises the
+                        -- detected format slug, not a hardcoded "ILCD".
+                        formatToText (urFormat res) `shouldBe` "openlca-jsonld"
                         let slugDir = tmp </> "test-json-ld-method"
                         files <- listDirectory slugDir
                         files `shouldContain` ["data.json"]
                         doesFileExist (slugDir </> "data.csv") `shouldReturn` False
+
+    describe "detectDatabaseFormat on a directory with a JSON-LD ImpactCategory" $
+        it "returns OpenLcaJsonLd (covers the directory branch missed by the single-file test)" $
+            withSystemTempDirectory "volca-method-detect" $ \tmp -> do
+                let dir = tmp </> "method-dir"
+                createDirectoryIfMissing True dir
+                BL.writeFile (dir </> "impact-category.json") miniImpactCategoryJson
+                detectDatabaseFormat dir `shouldReturn` OpenLcaJsonLd
 
     describe "loadMethodCollectionFromConfig on the uploaded JSON" $
         it "produces one Method with one CF carrying the fixture's value" $
