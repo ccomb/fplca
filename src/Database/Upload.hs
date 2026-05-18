@@ -195,15 +195,17 @@ detectArchiveFormat content
             || matchesMagic [0x3C, 0x65, 0x63, 0x6F]
             || matchesMagic [0xEF, 0xBB, 0xBF, 0x3C, 0x3F]
     -- openLCA JSON-LD ImpactCategory sniff: a JSON object whose first ~2KB
-    -- mentions both "@type" and "ImpactCategory". Strict validation happens
-    -- later in OlcaSchema.parseOlcaImpactCategoryBytes; this only routes
-    -- the bytes to the right on-disk extension.
+    -- mentions both "@type" and the quoted "ImpactCategory" token. Quoting
+    -- avoids false positives on prose mentions inside other openLCA entities
+    -- (e.g. a Process whose description references ImpactCategory). Strict
+    -- validation happens later in OlcaSchema.parseOlcaImpactCategoryBytes;
+    -- this only routes the bytes to the right on-disk extension.
     header2k = BL.toStrict (BL.take 2048 content)
     firstNonSpace = BS.uncons (BS.dropWhile (\b -> b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) header2k)
     isOlcaImpactCategory = case firstNonSpace of
         Just (0x7B, _) ->
             BS.isInfixOf "\"@type\"" header2k
-                && BS.isInfixOf "ImpactCategory" header2k
+                && BS.isInfixOf "\"ImpactCategory\"" header2k
         _ -> False
     -- Check if first byte is printable ASCII (plain text / CSV)
     isPlainText = let b = BL.head content in b == 0x7B || (b >= 0x20 && b < 0x7F)
