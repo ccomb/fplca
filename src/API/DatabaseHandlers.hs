@@ -41,6 +41,7 @@ module API.DatabaseHandlers (
     -- * Helpers
     convertDbStatus,
     simpleAction,
+    formatToText,
 ) where
 
 import Control.Exception (SomeException, try)
@@ -302,6 +303,7 @@ formatToText SimaProCSV = "simapro-csv"
 formatToText EcoSpold1 = "ecospold1"
 formatToText EcoSpold2 = "ecospold2"
 formatToText ILCDProcess = "ilcd"
+formatToText OpenLcaJsonLd = "openlca-jsonld"
 formatToText UnknownFormat = "unknown"
 
 --------------------------------------------------------------------------------
@@ -427,7 +429,7 @@ uploadMethodHandler dbManager req = do
                             True
                             "Method uploaded successfully"
                             (Just $ urSlug uploadResult)
-                            (Just "ILCD")
+                            (Just $ formatToText $ urFormat uploadResult)
 
 -- | Delete an uploaded method collection
 deleteMethodHandler :: DatabaseManager -> Text -> Handler ActivateResponse
