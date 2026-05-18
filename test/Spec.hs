@@ -12,8 +12,8 @@ import qualified ChemSynonymsSpec
 import qualified CoalescingSolverSpec
 import qualified ConfigSpec
 import qualified CrossDBInventorySpec
-import qualified CrossDBRegionalLCIASpec
 import qualified CrossDBRegionalLCIASensitivitySpec
+import qualified CrossDBRegionalLCIASpec
 import qualified CrossDBRegionalLCIASubsSpec
 import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
@@ -34,6 +34,7 @@ import qualified MatrixConstructionSpec
 import qualified MatrixExportSpec
 import qualified MethodSetTablesSpec
 import qualified MethodSpec
+import qualified MethodUploadSpec
 import qualified NestedSubstitutionSpec
 import qualified NormalizeSpec
 import qualified OlcaSchemaSpec
@@ -93,6 +94,7 @@ main = hspec $ do
         describe "EcoSpold1 Parser" EcoSpold1Spec.spec
         describe "EcoSpold2 Parser" EcoSpold2Spec.spec
         describe "openLCA JSON-LD ImpactCategory parser" OlcaSchemaSpec.spec
+        describe "Method upload pipeline (JSON-LD)" MethodUploadSpec.spec
         describe "MCP Tool Schemas" MCPSchemaSpec.spec
         describe "Search.Normalize" NormalizeSpec.spec
         describe "Search.BM25" BM25Spec.spec
