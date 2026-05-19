@@ -578,10 +578,18 @@ buildMethodTables cmap mappings =
                     , T.null normSub
                     ]
         , mtRegionalizedCF =
+            -- Filter: a CF whose own compartment carries a specific subcomp
+            -- (e.g. "groundwater, long-term" or "ocean") must only apply to
+            -- flows in that exact subcomp — otherwise a CF=0 set explicitly for
+            -- a niche subcomp leaks onto flows in other subcomps via
+            -- ByName/synonym fan-out and clobbers the correct (unspecified)
+            -- fallback CF. CFs with subcomp "(unspecified)" / empty are
+            -- wildcards and match any flow subcomp.
             M.fromList
                 [ ((flowId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
                 , Just loc <- [mcfConsumerLocation cf]
+                , cfSubcompMatchesFlow cf flow
                 ]
         , mtCompartmentMap = cmap
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -589,6 +597,37 @@ buildMethodTables cmap mappings =
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
+
+    -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
+    -- with a specific subcomp must match the flow's subcomp exactly — otherwise
+    -- an explicit-zero niche-subcomp CF would clobber the correct
+    -- (unspecified) CF for flows in other subcomps via ByName/synonym fan-out.
+    --
+    -- Both sides go through 'normalizeCompartment' so a compartments.csv rule
+    -- that rewrites a subcomp can't desynchronise the filter from the sibling
+    -- 'mtExactCF' / 'mtFallbackCF' tables or the 'lookupCascadeCF' read path.
+    -- Flow subcomp resolution mirrors 'lookupCascadeCF': prefer the explicit
+    -- 'flowSubcompartment' field, fall back to the tail of "<medium>/<sub>"
+    -- parsed from 'flowCategory'.
+    cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
+        Nothing -> True
+        Just comp ->
+            let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
+                !cfSubN = T.toLower (T.strip cfSubRaw)
+                rawCategory = T.toLower (flowCategory flow)
+                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                    (m, rest)
+                        | T.null rest -> (m, T.empty)
+                        | otherwise -> (m, T.drop 1 rest)
+                rawSub =
+                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                     in if T.null s then rawSubFromCat else s
+                Compartment _ flowSubRaw _ =
+                    normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
+                !flowSubN = T.toLower (T.strip flowSubRaw)
+             in T.null cfSubN
+                    || cfSubN == "(unspecified)"
+                    || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
         | stratPriority s1 < stratPriority s2 = (v1, u1, s1)

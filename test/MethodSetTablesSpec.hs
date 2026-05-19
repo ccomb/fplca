@@ -22,7 +22,7 @@ import Test.Hspec
 
 import Matrix (Inventory)
 import Method.Mapping
-import Method.Types (Method (..), MethodCF (..))
+import Method.Types (Compartment (..), Method (..), MethodCF (..))
 import qualified Method.Types as MT
 import Types (Database, Flow (..), FlowType (..), Unit (..))
 import qualified UnitConversion
@@ -355,3 +355,100 @@ spec = do
                 s3 = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tNonRegio2)
             map snd results !! 0 `shouldBe` Right s1
             map snd results !! 2 `shouldBe` Right s3
+
+    describe "buildMethodTables mtRegionalizedCF subcomp filter" $ do
+        -- Regression for the niche-subcomp clobber: ByName / synonym fan-out
+        -- pairs every CF sharing a name with every flow sharing that name,
+        -- so a CF with a specific subcomp (e.g. "ocean") ends up paired with
+        -- flows in *other* subcomps (e.g. "(unspecified)"). With M.fromList
+        -- last-write-wins, an explicit-zero niche CF would silently clobber
+        -- the correct wildcard CF at the (flow, location) key. The build-time
+        -- filter must drop those mismatched (cf, flow) pairs.
+        it "drops fan-out pairs where CF subcomp doesn't match flow subcomp" $ do
+            let fidUns = mkUuid 100
+                fidOcean = mkUuid 101
+                uidKg = mkUuid 200
+                flowUns =
+                    (mkFlow fidUns "water" uidKg)
+                        { flowCategory = "water"
+                        , flowSubcompartment = Just "(unspecified)"
+                        }
+                flowOcean =
+                    (mkFlow fidOcean "water" uidKg)
+                        { flowCategory = "water"
+                        , flowSubcompartment = Just "ocean"
+                        }
+                cfUns =
+                    (mkCF fidUns 3.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
+                        , mcfConsumerLocation = Just "FR"
+                        }
+                cfOcean =
+                    (mkCF fidOcean 0.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" "ocean" "")
+                        , mcfConsumerLocation = Just "FR"
+                        }
+                -- Simulate ByName fan-out: each CF paired with every flow
+                -- sharing the name. Ordering matters for last-write-wins:
+                -- the niche-subcomp zero CF comes *after* the wildcard CF
+                -- for fidUns, so without the filter it would overwrite the
+                -- correct 3.0.
+                mappings =
+                    [ (cfUns, Just (flowUns, ByName))
+                    , (cfUns, Just (flowOcean, ByName))
+                    , (cfOcean, Just (flowUns, ByName))
+                    , (cfOcean, Just (flowOcean, ByName))
+                    ]
+                tables = buildMethodTables M.empty mappings
+                regio = mtRegionalizedCF tables
+            -- Pre-fix: this was (0.0, "kg") — clobbered by cfOcean. The
+            -- filter drops (cfOcean, flowUns) so the wildcard cfUns survives.
+            M.lookup (fidUns, "FR") regio `shouldBe` Just (3.0, "kg")
+            -- The ocean flow legitimately receives the ocean CF (and the
+            -- wildcard cfUns also matches, but cfOcean writes last so its
+            -- explicit zero stays — that's the intended modeller behaviour).
+            M.lookup (fidOcean, "FR") regio `shouldBe` Just (0.0, "kg")
+
+        it "treats CFs with empty / (unspecified) subcomp as wildcards" $ do
+            let fid = mkUuid 110
+                uidKg = mkUuid 200
+                flowOcean =
+                    (mkFlow fid "water" uidKg)
+                        { flowCategory = "water"
+                        , flowSubcompartment = Just "ocean"
+                        }
+                cfEmpty =
+                    (mkCF fid 2.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" "" "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
+                cfUnspecified =
+                    (mkCF fid 7.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
+                tEmpty = buildMethodTables M.empty [(cfEmpty, Just (flowOcean, ByName))]
+                tUnspec = buildMethodTables M.empty [(cfUnspecified, Just (flowOcean, ByName))]
+            -- Both wildcard forms apply to a specific-subcomp flow.
+            M.lookup (fid, "DE") (mtRegionalizedCF tEmpty) `shouldBe` Just (2.0, "kg")
+            M.lookup (fid, "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (7.0, "kg")
+
+        it "keeps CF when mcfCompartment is Nothing (no subcomp info)" $ do
+            let fid = mkUuid 120
+                uidKg = mkUuid 200
+                flowAny =
+                    (mkFlow fid "water" uidKg)
+                        { flowSubcompartment = Just "groundwater, long-term"
+                        }
+                cf =
+                    (mkCF fid 4.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Nothing
+                        , mcfConsumerLocation = Just "IT"
+                        }
+                tables = buildMethodTables M.empty [(cf, Just (flowAny, ByName))]
+            M.lookup (fid, "IT") (mtRegionalizedCF tables) `shouldBe` Just (4.0, "kg")
