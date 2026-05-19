@@ -21,7 +21,6 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.UUID (UUID)
 import qualified Data.UUID.V5 as UUID5
 
 import Method.Types
@@ -30,6 +29,8 @@ import SimaPro.Parser (
     decodeBS,
     defaultConfig,
     ensureUtf8,
+    generateFlowUUID,
+    normalizeSimaProCompartment,
     parseAmount,
     simaproNamespace,
     splitCSV,
@@ -173,17 +174,26 @@ step cfg methodologyName st line = case psPhase st of
                             -- activity location (openLCA JSON-LD); SimaPro
                             -- CSV CFs are already region-tagged in the name,
                             -- so dual storage is correct.
-                            (_, !mLoc) = extractLocationSuffix rawName
-                            !cfUnitBS = BS8.strip cfUnit
+                            !mLoc = snd (extractLocationSuffix rawName)
+                            !cfUnitT = decodeBS (BS8.strip cfUnit)
+                            -- UUID hashed via the shared 'generateFlowUUID' +
+                            -- 'normalizeSimaProCompartment' so the CF side
+                            -- and 'SimaPro.Parser.bioRowToExchange' produce
+                            -- the same UUID for the same flow.
+                            !flowRef =
+                                generateFlowUUID
+                                    rawName
+                                    (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
+                                    cfUnitT
                             !cf =
                                 MethodCF
-                                    { mcfFlowRef = makeFlowUUID (TE.encodeUtf8 rawName) comp sub cfUnitBS
+                                    { mcfFlowRef = flowRef
                                     , mcfFlowName = rawName
                                     , mcfDirection = direction comp
                                     , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                                     , mcfCompartment = mkCompartment comp sub
                                     , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
-                                    , mcfUnit = decodeBS (BS8.strip cfUnit)
+                                    , mcfUnit = cfUnitT
                                     , mcfConsumerLocation = mLoc
                                     }
                          in st{psFactors = cf : psFactors st}
@@ -357,41 +367,6 @@ isBlank = BS.null . BS8.strip
 head' :: [a] -> a
 head' (x : _) = x
 head' [] = error "Method.ParserSimaPro: unexpected empty field list"
-
-makeFlowUUID :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString -> UUID
-makeFlowUUID name comp sub unit =
-    -- Mirror 'SimaPro.Parser.generateFlowUUID' exactly so a CF and its
-    -- matching inventory flow hash to the same UUID:
-    --   * lower-case compartment (the biosphere parser stores categories
-    --     in lower-case via 'mkCompartment'),
-    --   * treat the SimaPro CF placeholder sub "(unspecified)" as the
-    --     same as an empty subcompartment — the biosphere parser emits
-    --     bare 'water' / 'air' / 'soil' / 'resource' categories when
-    --     the activity row's subcompartment column is blank, so the CF
-    --     side must collapse "(unspecified)" too or UUIDs diverge for
-    --     every release/emission keyed to the unspecified sub,
-    --   * use the CF's actual unit (m3, kg, MJ, mol H+ eq, …), not the
-    --     historical hard-coded "kg" which broke matching for every CF
-    --     whose unit isn't kg (water flows, energy resources, …).
-    let rawComp = T.toLower (decodeBS (BS8.strip comp))
-        -- Map SimaPro CF compartment 'raw' to the biosphere parser's
-        -- canonical 'resource' (see SimaPro.Parser bioRowToExchange call sites
-        -- which pass "resource" / "air" / "water" / "soil" for the SecResources
-        -- / SecEmissionsAir / … sections).
-        lcComp = case rawComp of
-            "raw" -> "resource"
-            "resources" -> "resource"
-            c -> c
-        rawSub = T.toLower (decodeBS (BS8.strip sub))
-        normSub
-            | T.null rawSub || rawSub == "(unspecified)" = T.empty
-            | otherwise = rawSub
-        compartment
-            | T.null normSub = lcComp
-            | otherwise = lcComp <> "/" <> normSub
-     in UUID5.generateNamed
-            simaproNamespace
-            (BS.unpack $ TE.encodeUtf8 $ "flow:" <> decodeBS (BS8.strip name) <> ":" <> compartment <> ":" <> decodeBS (BS8.strip unit))
 
 direction :: BS.ByteString -> FlowDirection
 direction comp

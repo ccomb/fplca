@@ -16,6 +16,7 @@ module SimaPro.Parser (
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    normalizeSimaProCompartment,
 
     -- * Shared utilities (used by Method.ParserSimaPro)
     defaultConfig,
@@ -654,6 +655,38 @@ generateFlowUUID :: Text -> Text -> Text -> UUID
 generateFlowUUID name compartment unit =
     UUID5.generateNamed simaproNamespace (BS.unpack $ TE.encodeUtf8 $ "flow:" <> name <> ":" <> compartment <> ":" <> unit)
 
+{- | Canonical (compartment, subcompartment) string for SimaPro flow UUIDs.
+
+The inventory parser ('bioRowToExchange') and the method CF parser
+('Method.ParserSimaPro') both feed flow UUIDs through 'generateFlowUUID'.
+They MUST agree on the compartment string or a CF will never match its
+inventory flow by UUID — the lookup falls through to the slower name-based
+cascade, and any CF whose canonical entry is keyed on a different medium is
+silently dropped.
+
+Normalization rules:
+
+* lower-case + trim both inputs
+* map @raw@ / @resources@ → @resource@ (SimaPro method CSVs use \"Raw\" as
+  the section header for elementary resource inputs, while the inventory
+  parser already passes the canonical @resource@)
+* collapse the SimaPro placeholder sub @(unspecified)@ to empty so a CF
+  carrying an explicit @(unspecified)@ subcompartment lands on the same
+  UUID as an inventory row whose sub column is blank
+* join non-empty parts with @\/@; emit just the medium when sub is empty
+-}
+normalizeSimaProCompartment :: Text -> Text -> Text
+normalizeSimaProCompartment comp sub =
+    let lcComp = case T.toLower (T.strip comp) of
+            "raw" -> "resource"
+            "resources" -> "resource"
+            c -> c
+        lcSub = T.toLower (T.strip sub)
+        normSub
+            | T.null lcSub || lcSub == "(unspecified)" = T.empty
+            | otherwise = lcSub
+     in if T.null normSub then lcComp else lcComp <> "/" <> normSub
+
 -- | Generate deterministic unit UUID from name
 generateUnitUUID :: Text -> UUID
 generateUnitUUID unitName =
@@ -1018,7 +1051,11 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
         -- AWaRe CFs). Universal-CF matching still works through the
         -- (name, medium) fallback cascade by virtue of synonym fan-out.
         cleanName = berName
-        flowUUID = generateFlowUUID cleanName category berUnit
+        -- UUID input goes through the shared normalizer so this side and
+        -- 'Method.ParserSimaPro' agree on the hash, regardless of sub-
+        -- compartment case or the SimaPro CF placeholder '(unspecified)'
+        -- (which inventory rows leave blank in the same medium).
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment) berUnit
         unitUUID = generateUnitUUID berUnit
         amount = resolveAmount env berAmountRaw berAmount
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
