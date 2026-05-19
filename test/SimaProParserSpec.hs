@@ -998,6 +998,31 @@ spec = do
             -- A single-product Process still carries Just 100.0 allocation.
             activityAllocationPercent (head activities) `shouldBe` Just 100.0
 
+    -- A negative amount on a Materials/fuels row encodes a SimaPro substitution
+    -- (avoided burden): the activity co-produces a fraction of that input
+    -- instead of consuming it. The sign must reach the matrix so the solver
+    -- subtracts the upstream footprint. Historically the parser took `abs`
+    -- here, silently turning every substitution into extra consumption.
+    describe "SimaPro substitutions (negative Materials/fuels)" $ do
+        it "preserves the negative sign on Materials/fuels exchanges" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Materials/fuels"
+                , "Avoided diesel;kg;-1.5;Undefined;;;;;;"
+                ]
+            length activities `shouldBe` 1
+            techInputAmounts (head activities) `shouldBe` [-1.5]
+
+        it "keeps positive and negative rows side by side with their own signs" $ do
+            (activities, _, _) <- parseSectionCSV
+                [ "Materials/fuels"
+                , "Fertilizer input;kg;231.84;Undefined;;;;;;"
+                , "Avoided diesel;kg;-1568.16;Undefined;;;;;;"
+                ]
+            length activities `shouldBe` 1
+            -- Order-agnostic compare: the two amounts must appear unchanged.
+            S.fromList (techInputAmounts (head activities))
+                `shouldBe` S.fromList [231.84, -1568.16]
+
 -- ---------------------------------------------------------------------------
 -- Helpers for section tests
 -- ---------------------------------------------------------------------------

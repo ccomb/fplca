@@ -22,15 +22,20 @@ mkUUID s = case UUID.fromString s of
 spec :: Spec
 spec = do
     describe "Matrix Construction Sign Convention" $ do
-        it "stores technosphere triplets as POSITIVE input coefficients" $ do
-            -- CRITICAL REGRESSION TEST: Prevent reintroduction of negative sign bug
-            -- The fix in Query.hs line 93 stores: value = rawValue / denom (POSITIVE)
-            -- Matrix.hs line 232 negates when building (I-A)
+        it "stores technosphere input triplets as positive on samples without substitutions" $ do
+            -- Regression: an earlier bug stored input coefficients with the
+            -- wrong sign, producing positive (I-A) off-diagonals instead of
+            -- negative ones. Database.hs sets value = sign * amount / denom
+            -- with sign=+1 for inputs; Matrix.hs negates when building (I-A).
+            --
+            -- SAMPLE.min3 has no substitution (avoided-burden) rows, so every
+            -- input is a real consumption and every tech triplet is positive.
+            -- Sources with negative Materials/fuels rows legitimately produce
+            -- negative triplets — see SimaProParserSpec "SimaPro substitutions".
             db <- loadSampleDatabase "SAMPLE.min3"
 
             let techTriples = VU.toList (dbTechnosphereTriples db)
 
-            -- Verify all technosphere triplets are POSITIVE
             -- Expected: Y needs 0.6 from X, Z needs 0.4 from Y
             let positiveTriplets = filter (\(SparseTriple _ _ v) -> v > 0) techTriples
             length positiveTriplets `shouldBe` length techTriples
