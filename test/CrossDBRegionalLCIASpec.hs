@@ -172,14 +172,14 @@ spec = describe "cross-DB regional LCIA" $ do
                     perDb
                     `shouldBe` Right 0.0
 
-    it "NEW path: all-Left case (every participating DB tainted) surfaces Left" $ do
-        -- Every DB Lefts (no Right to fall back to). The sum has nothing
-        -- to sum, so it Lefts — preserves no-silent-errors when there is
-        -- genuinely no recoverable contribution.
+    it "NEW path: all-tainted case returns partial sum (tainted columns contribute 0)" $ do
+        -- Every DB has tainted columns (no Right to fall back to). Each DB
+        -- returns Right with tainted-column contribution = 0; the cross-DB
+        -- sum is therefore Right 0. Build-time warnings surface the gaps.
         let strictMappings = regionalMappings [("FR", 1)]
             depTablesStrict = buildTables depDb strictMappings
             -- Root variant with a tainted biosphere triple at DE so both
-            -- root and dep tables Left on the precomputed dot product.
+            -- root and dep tables have tainted columns under strict mappings.
             taintedRoot = mkDB 100 ["DE"] [(0, 1.0)]
             taintedRootTables = buildTables taintedRoot strictMappings
         rootSolver <- mkSolverFromDb taintedRoot "root"
@@ -206,18 +206,13 @@ spec = describe "cross-DB regional LCIA" $ do
                         "root" -> taintedRootTables
                         "dep" -> depTablesStrict
                         other -> error ("unexpected dbName in csScalings: " <> show other)
-                case sumRegionalizedLCIAScoreCrossDB
+                sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
                     (dbFlows depDb)
                     M.empty
-                    perDb of
-                    Left _ -> pure ()
-                    Right v ->
-                        expectationFailure
-                            ( "expected Left when every DB Lefts, got Right "
-                                <> show v
-                            )
+                    perDb
+                    `shouldBe` Right 0.0
 
     describe "non-regression invariants" $ do
         -- These guard the cross-DB regional fix against drift on adjacent

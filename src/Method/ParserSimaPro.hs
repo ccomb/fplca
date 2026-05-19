@@ -21,7 +21,6 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.UUID (UUID)
 import qualified Data.UUID.V5 as UUID5
 
 import Method.Types
@@ -30,6 +29,8 @@ import SimaPro.Parser (
     decodeBS,
     defaultConfig,
     ensureUtf8,
+    generateFlowUUID,
+    normalizeSimaProCompartment,
     parseAmount,
     simaproNamespace,
     splitCSV,
@@ -164,16 +165,35 @@ step cfg methodologyName st line = case psPhase st of
              in case fields of
                     (comp : sub : name : cas : cfVal : cfUnit : _) ->
                         let !rawName = decodeBS (BS8.strip name)
-                            (!cleanName, !mLoc) = extractLocationSuffix rawName
+                            -- Keep the full suffixed name so the CF's
+                            -- 'mcfFlowRef' UUID matches the suffixed
+                            -- biosphere flow UUID parsed by
+                            -- 'SimaPro.Parser.bioRowToExchange'. The location
+                            -- is also exposed via 'mcfConsumerLocation' for
+                            -- regional dispatch on engines that key CFs by
+                            -- activity location (openLCA JSON-LD); SimaPro
+                            -- CSV CFs are already region-tagged in the name,
+                            -- so dual storage is correct.
+                            !mLoc = snd (extractLocationSuffix rawName)
+                            !cfUnitT = decodeBS (BS8.strip cfUnit)
+                            -- UUID hashed via the shared 'generateFlowUUID' +
+                            -- 'normalizeSimaProCompartment' so the CF side
+                            -- and 'SimaPro.Parser.bioRowToExchange' produce
+                            -- the same UUID for the same flow.
+                            !flowRef =
+                                generateFlowUUID
+                                    rawName
+                                    (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
+                                    cfUnitT
                             !cf =
                                 MethodCF
-                                    { mcfFlowRef = makeFlowUUID (TE.encodeUtf8 cleanName) comp sub
-                                    , mcfFlowName = cleanName
+                                    { mcfFlowRef = flowRef
+                                    , mcfFlowName = rawName
                                     , mcfDirection = direction comp
                                     , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                                     , mcfCompartment = mkCompartment comp sub
                                     , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
-                                    , mcfUnit = decodeBS (BS8.strip cfUnit)
+                                    , mcfUnit = cfUnitT
                                     , mcfConsumerLocation = mLoc
                                     }
                          in st{psFactors = cf : psFactors st}
@@ -347,13 +367,6 @@ isBlank = BS.null . BS8.strip
 head' :: [a] -> a
 head' (x : _) = x
 head' [] = error "Method.ParserSimaPro: unexpected empty field list"
-
-makeFlowUUID :: BS.ByteString -> BS.ByteString -> BS.ByteString -> UUID
-makeFlowUUID name comp sub =
-    let compartment = decodeBS (BS8.strip comp) <> "/" <> decodeBS (BS8.strip sub)
-     in UUID5.generateNamed
-            simaproNamespace
-            (BS.unpack $ TE.encodeUtf8 $ "flow:" <> decodeBS (BS8.strip name) <> ":" <> compartment <> ":" <> "kg")
 
 direction :: BS.ByteString -> FlowDirection
 direction comp

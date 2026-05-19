@@ -15,6 +15,7 @@ import SimaPro.Parser (
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    normalizeSimaProCompartment,
     parseAmount,
     parseBioRow,
     parsePedigreePrefix,
@@ -782,6 +783,54 @@ spec = do
 
         it "generateFlowUUID differs when compartment differs" $
             generateFlowUUID "CO2" "air" "kg" `shouldNotBe` generateFlowUUID "CO2" "water" "kg"
+
+    -- -----------------------------------------------------------------------
+    -- CF ↔ biosphere UUID alignment (regression: see PR #65)
+    --
+    -- The inventory parser ('bioRowToExchange') and the method CF parser
+    -- ('Method.ParserSimaPro') both hash flow UUIDs via 'generateFlowUUID'
+    -- composed with 'normalizeSimaProCompartment'. These tests pin the
+    -- invariant that the two call sites land on the same UUID for the same
+    -- elementary flow — the bug they prevent silently routed every regional,
+    -- non-kg or '(unspecified)'-sub CF through the slower name cascade.
+    -- -----------------------------------------------------------------------
+    describe "CF / biosphere flow UUID alignment" $ do
+        let cfSide name comp sub unit =
+                generateFlowUUID name (normalizeSimaProCompartment comp sub) unit
+            bioSide name comp sub unit =
+                generateFlowUUID name (normalizeSimaProCompartment comp sub) unit
+
+        it "regional water in m³: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
+            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
+                `shouldBe` bioSide "Water, FR" "resource" "" "m3"
+
+        it "non-kg energy resource: CF unit must come from the CF row, not 'kg'" $
+            cfSide "Energy, gross calorific value, in biomass" "Raw" "(unspecified)" "MJ"
+                `shouldBe` bioSide "Energy, gross calorific value, in biomass" "resource" "" "MJ"
+
+        it "regional air emission: CF 'Air'/'(unspecified)' matches bio 'air'/blank" $
+            cfSide "Nitrogen dioxide, FR" "Air" "(unspecified)" "kg"
+                `shouldBe` bioSide "Nitrogen dioxide, FR" "air" "" "kg"
+
+        it "subcompartment case is normalized on both sides" $
+            cfSide "NOx" "Air" "Low. Pop." "kg"
+                `shouldBe` bioSide "NOx" "air" "low. pop." "kg"
+
+        it "CF 'resources' header matches bio 'resource' literal" $
+            cfSide "Iron" "Resources" "in ground" "kg"
+                `shouldBe` bioSide "Iron" "resource" "in ground" "kg"
+
+        it "differs when units differ (kg vs m³ are distinct flows)" $
+            cfSide "Water" "Raw" "(unspecified)" "kg"
+                `shouldNotBe` cfSide "Water" "Raw" "(unspecified)" "m3"
+
+        it "differs when the regional suffix differs" $
+            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
+                `shouldNotBe` cfSide "Water, DE" "Raw" "(unspecified)" "m3"
+
+        it "preserves the unit signal in the hash (CF unit is not stripped)" $
+            generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "m3"
+                `shouldNotBe` generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "kg"
 
     -- -----------------------------------------------------------------------
     -- Uncovered CSV sections
