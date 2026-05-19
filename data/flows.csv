@@ -247,8 +247,6 @@ Cadmium,"Cadmium, ion"
 Calcite,"Calcite, in ground"
 Calcium,"Calcium, in ground"
 Calcium,"Calcium, ion"
-Calcium carbonate,"Calcium, in ground"
-Calcium chloride,"Calcium, in ground"
 Calcium sulfate dihydrate,"Gypsum, in ground"
 Caparol,Prometryn
 Captan,"N-(trichloromethylthio)cyclohex-4-ene-1,2-dicarboximide"
@@ -559,15 +557,8 @@ Oxydemeton methyl,Oxydemeton-methyl
 Oxydemeton-methyl,"S-2-ethylsulfinylethyl O,O-dimethyl phosphorothioate"
 PCB,Polychlorinated biphenyls
 PCP,"Phenol, pentachloro-"
-PSM,Starane
-PSM,Tebuconazole
-PSM,Thifensulfuron-methyl
-PSM,Triasulfuron
-PSM,Triflusulfuron-methyl
 Palladium,"Palladium, in ground"
 "Palladium, Pd 1.6E-6%, in mixed ore","Palladium, Pd 1.6E-6%, in mixed ore, in ground"
-"Pd, Pd 2.0E-4%, Pt 4.8E-4%, Rh 2.4E-5%, Ni 3.7E-2%, Cu 5.2E-2% in ore, in ground",Platin ab Erz
-"Pd, Pd 7.3E-4%, Pt 2.5E-4%, Rh 2.0E-5%, Ni 2.3E+0%, Cu 3.2E+0% in ore, in ground",Platin ab Erz
 Peat,"Peat, in ground"
 Pentachlorphenol,"Phenol, pentachloro-"
 Perchlorate,"Perchlorate, ion"
@@ -579,8 +570,6 @@ Phosphine,phosphorated hydrogen
 Phosphorus,"Phosphorus, in ground"
 "Phosphorus, 18% in apatite, 4% in crude ore","Phosphorus, 18% in apatite, 4% in crude ore, in ground"
 Piperonyl butoxide,pyrenone 606
-Platin ab Erz,"Pt, Pt 2.5E-4%, Pd 7.3E-4%, Rh 2.0E-5%, Ni 2.3E+0%, Cu 3.2E+0% in ore, in ground"
-Platin ab Erz,"Pt, Pt 4.8E-4%, Pd 2.0E-4%, Rh 2.4E-5%, Ni 3.7E-2%, Cu 5.2E-2% in ore, in ground"
 Platinum,"Platinum, in ground"
 "Platinum, Pt 4.7E-7%, in mixed ore","Platinum, Pt 4.7E-7%, in mixed ore, in ground"
 Polonium,"Polonium, in ground"
@@ -712,9 +701,6 @@ methyl 3-(3-methylcarbaniloyloxy)carbanilate,Phenmedipham
 "methyl DL-lactate, 2-mydroxy-propanoic acid methyl ester",Methyl lactate
 methyl N-{2-[1-(4-chlorophenyl)pyrazol-3-yloxymethyl]phenyl}(N-methoxy)carbamate,Pyraclostrobin
 methyl N-{2-[1-(4-chlorophenyl)pyrazol-3-yloxymethyl]phenyl}(N-methoxy)carbamate,Pyraclostrobin (prop)
-nicht für Gesamtvolumen des Stollens,"Volume occupied, final repository for low-active radioactive waste"
-nicht für Gesamtvolumen des Stollens,"Volume occupied, final repository for radioactive waste"
-nicht für Gesamtvolumen des Stollens,"Volume occupied, underground deposit"
 "o-Mononitrotoluene, o-methylnitrobenzene, 2-nitrotoluene, ONT",o-Nitrotoluene
 p-Xylene,Xylene
 polfoschlor,Trichlorfon
@@ -724,20 +710,6 @@ sethodydim,Sethoxydim
 "sulfan, sulphuric anhydride",Sulfur trioxide
 tetramethylthiuram disulfide,Thiram
 tribenuron,Tribenuron-methyl
-"Copper, 0.52% in sulfide, Cu 0.27% and Mo 8.2E-3% in crude ore",copper
-"Copper, 0.59% in sulfide, Cu 0.22% and Mo 8.2E-3% in crude ore",copper
-"Copper, 0.97% in sulfide, Cu 0.36% and Mo 4.1E-2% in crude ore",copper
-"Copper, 0.99% in sulfide, Cu 0.36% and Mo 8.2E-3% in crude ore",copper
-"Copper, 1.13% in sulfide, Cu 0.76% and Ni 0.76% in crude ore",copper
-"Copper, 1.18% in sulfide, Cu 0.39% and Mo 8.2E-3% in crude ore",copper
-"Copper, 1.42% in sulfide, Cu 0.81% and Mo 8.2E-3% in crude ore",copper
-"Copper, 2.19% in sulfide, Cu 1.83% and Mo 8.2E-3% in crude ore",copper
-"Copper, Cu 0.38%, Au 9.7E-4%, Ag 9.7E-4%, Zn 0.63%, Pb 0.014%, in ore",copper
-"Copper, Cu 3.2E+0%, Pt 2.5E-4%, Pd 7.3E-4%, Rh 2.0E-5%, Ni 2.3E+0% in ore",copper
-"Copper, Cu 5.2E-2%, Pt 4.8E-4%, Pd 2.0E-4%, Rh 2.4E-5%, Ni 3.7E-2% in ore",copper
-"Gold, Au 1.1E-4%, Ag 4.2E-3%, in ore",gold
-"Gold, Au 1.3E-4%, Ag 4.6E-5%, in ore",gold
-"Gold, Au 7.1E-4%, in ore",gold
 "Occupation, annual crop, non-irrigated","arable, non-irrigated"
 "Transformation, from annual crop, non-irrigated","from arable, non-irrigated"
 "Transformation, to annual crop, non-irrigated","to arable, non-irrigated"
