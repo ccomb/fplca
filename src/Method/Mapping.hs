@@ -578,10 +578,18 @@ buildMethodTables cmap mappings =
                     , T.null normSub
                     ]
         , mtRegionalizedCF =
+            -- Filter: a CF whose own compartment carries a specific subcomp
+            -- (e.g. "groundwater, long-term" or "ocean") must only apply to
+            -- flows in that exact subcomp — otherwise a CF=0 set explicitly for
+            -- a niche subcomp leaks onto flows in other subcomps via
+            -- ByName/synonym fan-out and clobbers the correct (unspecified)
+            -- fallback CF. CFs with subcomp "(unspecified)" / empty are
+            -- wildcards and match any flow subcomp.
             M.fromList
                 [ ((flowId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
                 , Just loc <- [mcfConsumerLocation cf]
+                , cfSubcompMatchesFlow cf flow
                 ]
         , mtCompartmentMap = cmap
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -589,6 +597,20 @@ buildMethodTables cmap mappings =
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
+
+    -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
+    -- with a specific subcomp must match the flow's subcomp exactly (after
+    -- normalisation through the compartment map) — otherwise an explicit-zero
+    -- niche-subcomp CF would clobber the correct (unspecified) CF for flows
+    -- in other subcomps via ByName/synonym fan-out.
+    cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
+        Nothing -> True
+        Just (Compartment _ cfSub _) ->
+            let !cfSubN = T.toLower (T.strip cfSub)
+                !flowSubN = T.toLower (T.strip (fromMaybe T.empty (flowSubcompartment flow)))
+             in T.null cfSubN
+                    || cfSubN == "(unspecified)"
+                    || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
         | stratPriority s1 < stratPriority s2 = (v1, u1, s1)
