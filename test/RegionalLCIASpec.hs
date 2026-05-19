@@ -265,24 +265,25 @@ spec = do
                 tables
                 `shouldBe` Right 220
 
-        it "returns Left when a tainted activity column carries non-zero scaling" $ do
+        it "returns partial Right when a tainted activity column carries non-zero scaling" $ do
             -- F has a regional CF only at FR. A2@DE has B[F,A2]=20 and no
             -- regional/parent/broadcast CF. With scaling[A2]=1, the column
-            -- is touched-tainted and scoring must Left out.
+            -- is touched-tainted and contributes 0 to the score (matches
+            -- SimaPro behaviour). A1@FR still contributes 1·20=20.
+            -- Build-time warnings + 'rawMissingPairs' surface the gap.
             let db = mkDB [("FR", 10), ("DE", 20)]
                 mappings = regionalMappings [("FR", 2)]
                 tables = buildTables db M.empty mappings
                 scaling = U.fromList [1, 1]
-            case computeRegionalizedLCIAScore
+            computeRegionalizedLCIAScore
                 kgUnitConfig
                 (dbUnits db)
                 (dbFlows db)
                 db
                 scaling
                 M.empty
-                tables of
-                Left _ -> pure ()
-                Right v -> expectationFailure ("expected Left, got Right " <> show v)
+                tables
+                `shouldBe` Right 20
 
         it "ignores tainted columns whose scaling is zero" $ do
             -- Same fixture as the tainted case, but with scaling[A2]=0.

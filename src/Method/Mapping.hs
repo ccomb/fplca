@@ -978,15 +978,14 @@ computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier ta
                                                         else taintHits
                                                 !acc' = acc + sv * U.unsafeIndex weights i
                                              in go (i + 1) acc' taintHits'
-                        (!score, !touchedTaintedCount) = go 0 0 (0 :: Int)
-                     in if touchedTaintedCount > 0
-                            then
-                                Left $
-                                    "Regionalized CF lookup failed on "
-                                        <> T.pack (show touchedTaintedCount)
-                                        <> " tainted activity column(s) reached by this inventory"
-                                        <> " — see warnings emitted at table-build time for the missing (flow, location) pairs."
-                            else Right score
+                        (!score, _touchedTaintedCount) = go 0 0 (0 :: Int)
+                     in -- Tainted columns contributed 0 (weights[i] == 0 by construction
+                        -- in 'fillRegionalActivityWeights' when no CF matched).
+                        -- Surface the gap via the build-time warning + 'rawMissingPairs',
+                        -- not by collapsing the whole method to a 'Left' (which forced
+                        -- every category with even one uncovered (flow, location) pair
+                        -- to 0 µPt, masking the partial score). Matches SimaPro behaviour.
+                        Right score
 
 {- | Cross-DB regionalized LCIA score.
 
