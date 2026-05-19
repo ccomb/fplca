@@ -975,7 +975,7 @@ techRowToExchange env isInput TechExchangeRow{..} =
                     Just
                         TechnosphereExchange
                             { techFlowId = flowUUID
-                            , techAmount = abs resolvedAmount
+                            , techAmount = resolvedAmount
                             , techUnitId = unitUUID
                             , techIsInput = isInput
                             , techIsReference = False
