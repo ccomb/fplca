@@ -164,11 +164,21 @@ step cfg methodologyName st line = case psPhase st of
              in case fields of
                     (comp : sub : name : cas : cfVal : cfUnit : _) ->
                         let !rawName = decodeBS (BS8.strip name)
-                            (!cleanName, !mLoc) = extractLocationSuffix rawName
+                            -- Keep the full suffixed name so the CF's
+                            -- 'mcfFlowRef' UUID matches the suffixed
+                            -- biosphere flow UUID parsed by
+                            -- 'SimaPro.Parser.bioRowToExchange'. The location
+                            -- is also exposed via 'mcfConsumerLocation' for
+                            -- regional dispatch on engines that key CFs by
+                            -- activity location (openLCA JSON-LD); SimaPro
+                            -- CSV CFs are already region-tagged in the name,
+                            -- so dual storage is correct.
+                            (_, !mLoc) = extractLocationSuffix rawName
+                            !cfUnitBS = BS8.strip cfUnit
                             !cf =
                                 MethodCF
-                                    { mcfFlowRef = makeFlowUUID (TE.encodeUtf8 cleanName) comp sub
-                                    , mcfFlowName = cleanName
+                                    { mcfFlowRef = makeFlowUUID (TE.encodeUtf8 rawName) comp sub cfUnitBS
+                                    , mcfFlowName = rawName
                                     , mcfDirection = direction comp
                                     , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                                     , mcfCompartment = mkCompartment comp sub
@@ -348,12 +358,40 @@ head' :: [a] -> a
 head' (x : _) = x
 head' [] = error "Method.ParserSimaPro: unexpected empty field list"
 
-makeFlowUUID :: BS.ByteString -> BS.ByteString -> BS.ByteString -> UUID
-makeFlowUUID name comp sub =
-    let compartment = decodeBS (BS8.strip comp) <> "/" <> decodeBS (BS8.strip sub)
+makeFlowUUID :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString -> UUID
+makeFlowUUID name comp sub unit =
+    -- Mirror 'SimaPro.Parser.generateFlowUUID' exactly so a CF and its
+    -- matching inventory flow hash to the same UUID:
+    --   * lower-case compartment (the biosphere parser stores categories
+    --     in lower-case via 'mkCompartment'),
+    --   * treat the SimaPro CF placeholder sub "(unspecified)" as the
+    --     same as an empty subcompartment — the biosphere parser emits
+    --     bare 'water' / 'air' / 'soil' / 'resource' categories when
+    --     the activity row's subcompartment column is blank, so the CF
+    --     side must collapse "(unspecified)" too or UUIDs diverge for
+    --     every release/emission keyed to the unspecified sub,
+    --   * use the CF's actual unit (m3, kg, MJ, mol H+ eq, …), not the
+    --     historical hard-coded "kg" which broke matching for every CF
+    --     whose unit isn't kg (water flows, energy resources, …).
+    let rawComp = T.toLower (decodeBS (BS8.strip comp))
+        -- Map SimaPro CF compartment 'raw' to the biosphere parser's
+        -- canonical 'resource' (see SimaPro.Parser bioRowToExchange call sites
+        -- which pass "resource" / "air" / "water" / "soil" for the SecResources
+        -- / SecEmissionsAir / … sections).
+        lcComp = case rawComp of
+            "raw" -> "resource"
+            "resources" -> "resource"
+            c -> c
+        rawSub = T.toLower (decodeBS (BS8.strip sub))
+        normSub
+            | T.null rawSub || rawSub == "(unspecified)" = T.empty
+            | otherwise = rawSub
+        compartment
+            | T.null normSub = lcComp
+            | otherwise = lcComp <> "/" <> normSub
      in UUID5.generateNamed
             simaproNamespace
-            (BS.unpack $ TE.encodeUtf8 $ "flow:" <> decodeBS (BS8.strip name) <> ":" <> compartment <> ":" <> "kg")
+            (BS.unpack $ TE.encodeUtf8 $ "flow:" <> decodeBS (BS8.strip name) <> ":" <> compartment <> ":" <> decodeBS (BS8.strip unit))
 
 direction :: BS.ByteString -> FlowDirection
 direction comp
