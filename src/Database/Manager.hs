@@ -537,10 +537,10 @@ mapMethodToTablesCachedWithHier manager dbName db hier method = do
                 !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
             -- Surface the deduplicated regionalized CF gaps ONCE, here at
             -- table-build time, rather than per-pid × per-method on the hot
-            -- scoring path. Matches the "no silent misbehaviour" rule: the
-            -- precomputed weights still under-count for tainted activities
-            -- (callers like 'computeRegionalizedLCIAScore' return Left when a
-            -- tainted activity carries non-zero scaling — see its doc).
+            -- scoring path. This WARN is the single source of truth for
+            -- coverage gaps: 'computeRegionalizedLCIAScore' returns a
+            -- partial 'Right' with tainted activities contributing 0, so
+            -- score time no longer signals the gap.
             case mtRegionalActivityWeights tables of
                 Nothing -> pure ()
                 Just raw' ->

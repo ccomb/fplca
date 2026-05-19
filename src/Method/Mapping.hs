@@ -706,12 +706,13 @@ pair is accumulated in 'rawMissingPairs' for deduplicated warning emission
 by the caller — instead of one warning per pid × per method × per missing CF
 under the old per-call path.
 
-Score-time semantics: callers can choose between returning a partial score
-that under-counts tainted activities (matching the broadcast path's
-silent-omission behaviour for non-regio flows) or a 'Left' when any tainted
-activity has non-zero scaling (matching the old strict per-call surface).
-'computeRegionalizedLCIAScore' picks the strict surface, mirroring the
-existing contract documented on 'computeLCIAScoreAuto'.
+Score-time semantics: 'computeRegionalizedLCIAScore' returns a partial
+score that under-counts tainted activities (matching the broadcast path's
+silent-omission behaviour for non-regio flows, and SimaPro). The coverage
+gap is surfaced once via 'rawMissingPairs' + the build-time WARN, not by
+'Left'-ing the whole method — that contract used to be strict but masked
+every other column's valid contribution as soon as one (flow, location)
+pair was uncovered.
 
 No-op when 'mtRegionalizedCF tables' is empty — non-regionalized methods
 keep 'mtRegionalActivityWeights = Nothing' so the broadcast fast path stays
@@ -912,8 +913,11 @@ The caller is expected to provide both an 'Inventory' (cheap if already
 computed for other purposes) and a scaling 'Vector' (cheap if the MUMPS
 factorization is cached). Pass them both and let this function pick.
 
-Returns 'Either' so regionalized methods can surface coverage gaps as
-explicit errors instead of silently under-counting.
+Returns 'Either' so the regionalized path can surface integrity errors
+(scaling/weights length mismatch, weights absent) explicitly. Coverage
+gaps are NOT surfaced here — they appear once at table-build time as a
+WARN listing the uncovered (flow, location) pairs; score-time returns
+the partial 'Right'.
 -}
 computeLCIAScoreAuto ::
     UnitConfig ->
@@ -986,13 +990,19 @@ computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier ta
                     \ this automatically)."
   where
     -- Fast path: one dot product over precomputed per-column weights.
-    -- If any tainted activity carries non-zero scaling, surface the gap
-    -- as a 'Left' to match the strict-Either contract callers depend on;
-    -- the human-readable per-(flow, location) detail was already emitted
-    -- as a single warning when the table was built.
+    -- Tainted columns contribute 0 by construction in
+    -- 'fillRegionalActivityWeights' (weights[i] == 0 when no CF matched),
+    -- so summing them yields the correct partial score. The coverage gap is
+    -- surfaced once at table-build time via 'rawMissingPairs' + the WARN
+    -- in 'Database.Manager' — not by collapsing the whole method to a
+    -- 'Left', which forced every category with even one uncovered
+    -- (flow, location) pair to 0 µPt and masked the partial score.
+    -- Matches SimaPro behaviour.
+    --
+    -- 'Left' is reserved here for genuine integrity errors (length mismatch
+    -- below; "weights absent" in the outer 'case'), not coverage gaps.
     scoreFromPrecomputed raw s =
         let !weights = rawWeights raw
-            !tainted = rawTainted raw
             !n = U.length weights
             !sLen = U.length s
          in if sLen /= n
@@ -1004,28 +1014,15 @@ computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier ta
                             <> T.pack (show n)
                             <> "). Activity index and precomputed weights are built from the same database — this means the cache is stale or the wrong tables were paired."
                 else
-                    let go !i !acc !taintHits
-                            | i >= n = (acc, taintHits)
+                    let go !i !acc
+                            | i >= n = acc
                             | otherwise =
                                 let !sv = U.unsafeIndex s i
                                  in if sv == 0
-                                        then go (i + 1) acc taintHits
-                                        else
-                                            let !taintHits' =
-                                                    if U.unsafeIndex tainted i /= 0
-                                                        then taintHits + 1
-                                                        else taintHits
-                                                !acc' = acc + sv * U.unsafeIndex weights i
-                                             in go (i + 1) acc' taintHits'
-                        (!score, !touchedTaintedCount) = go 0 0 (0 :: Int)
-                     in if touchedTaintedCount > 0
-                            then
-                                Left $
-                                    "Regionalized CF lookup failed on "
-                                        <> T.pack (show touchedTaintedCount)
-                                        <> " tainted activity column(s) reached by this inventory"
-                                        <> " — see warnings emitted at table-build time for the missing (flow, location) pairs."
-                            else Right score
+                                        then go (i + 1) acc
+                                        else go (i + 1) (acc + sv * U.unsafeIndex weights i)
+                        !score = go 0 0
+                     in Right score
 
 {- | Cross-DB regionalized LCIA score.
 
@@ -1041,19 +1038,21 @@ Closes the gap where dep-DB biosphere emissions are present in the merged
 inventory but invisible to the regional dot product (which was previously
 keyed on the root DB's activity columns alone).
 
-Per-DB 'Left' is tolerated: any DB whose 'computeRegionalizedLCIAScore'
-fails (tainted columns with non-zero scaling, missing weights, …) drops to
-a 0 contribution from THAT database and the function keeps summing the
-rest. The build-time WARN already lists every uncovered (flow, location)
-pair per @(db, method)@ — that is the single source of truth for what's
-missing. Score-time silently zeroing a whole method just because one dep
-DB has incomplete coverage would regress the user's view of computable
-methods; this best-effort sum preserves the partial answer while the
-build-time WARN keeps the coverage gap visible.
+Coverage gaps no longer show up here: 'computeRegionalizedLCIAScore'
+returns 'Right' with tainted columns contributing 0, so an incomplete-
+coverage DB just contributes its partial score to the sum. The build-time
+WARN + 'rawMissingPairs' per @(db, method)@ is the single source of truth
+for what's missing — score time stays quiet.
 
-Returns 'Left' only when 'every' triple's score is 'Left' (no recoverable
-contribution from any participating DB) — the gap is unrecoverable and the
-caller should surface it as an error rather than report 0.
+Per-DB 'Left' is tolerated for genuine integrity errors (scaling/weights
+length mismatch, weights absent on a regionalized method): that DB drops
+to a 0 contribution and the function keeps summing the rest, preserving
+the partial answer over the other DBs.
+
+Returns 'Left' only when 'every' triple's score is 'Left' — i.e. every
+participating DB hit an integrity error and there is no salvageable
+contribution. The concatenated error messages are surfaced so the caller
+can act on them.
 -}
 sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
