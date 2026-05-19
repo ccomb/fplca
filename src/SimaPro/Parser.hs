@@ -1010,12 +1010,14 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
             if T.null berCompartment
                 then compartment
                 else compartment <> "/" <> berCompartment
-        -- SimaPro encodes regional flow variants as a `, <ISO>` suffix on the
-        -- flow name (e.g. "Nitrogen dioxide, FR"). Strip it so the inventory
-        -- DB's flows have canonical names that match universal CFs from any
-        -- method format. The regional info is implicit via the activity's
-        -- location, which carries the same signal in EcoSpold / Agribalyse.
-        (cleanName, _) = stripLocationSuffix berName
+        -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
+        -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
+        -- SimaPro-style method) characterises them via suffix-keyed CFs of
+        -- matching name, so collapsing them to a canonical name breaks
+        -- per-region characterisation (Water use net cancellation, regional
+        -- AWaRe CFs). Universal-CF matching still works through the
+        -- (name, medium) fallback cascade by virtue of synonym fan-out.
+        cleanName = berName
         flowUUID = generateFlowUUID cleanName category berUnit
         unitUUID = generateUnitUUID berUnit
         amount = resolveAmount env berAmountRaw berAmount
@@ -1045,32 +1047,6 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 }
         unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
      in (exchange, flow, unit)
-
-{- | Strip a SimaPro-style ", <ISO>" location suffix from a flow name.
-Mirrors 'Method.ParserSimaPro.extractLocationSuffix'. Same heuristic so the
-inventory side of a regionalized SimaPro export matches the method side.
-False positives are harmless: they only normalize a name that wasn't actually
-suffixed.
--}
-stripLocationSuffix :: Text -> (Text, Maybe Text)
-stripLocationSuffix name =
-    case T.breakOnEnd ", " name of
-        ("", _) -> (name, Nothing)
-        (prefixWithSep, candidate)
-            | isLocationCode candidate
-            , let cleaned = T.dropEnd 2 prefixWithSep
-            , not (T.null cleaned) ->
-                (cleaned, Just candidate)
-            | otherwise -> (name, Nothing)
-  where
-    isLocationCode t
-        | T.length t < 2 || T.length t > 6 = False
-        | otherwise =
-            let firstC = T.head t
-                rest = T.unpack (T.tail t)
-             in firstC >= 'A'
-                    && firstC <= 'Z'
-                    && all (\c -> (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') rest
 
 -- ============================================================================
 -- Encoding Conversion
