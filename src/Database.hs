@@ -162,7 +162,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                                                     else 1.0
                                             sign = if exchangeIsInput ex then 1 else -1
                                             value = sign * convertedValue / denom
-                                         in Right ([SparseTriple idx j value | abs value > 1e-15, idx /= j], warnings)
+                                         in Right ([SparseTriple idx j value | convertedValue /= 0, idx /= j], warnings)
                         Nothing -> Right ([], warnings)
 
         buildActivityTriplets (j, consumerPid) =
@@ -211,7 +211,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                                         let rawValue = exchangeAmount ex
                                             denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
                                             value = rawValue / denom
-                                         in [SparseTriple i j value | abs value > 1e-15]
+                                         in [SparseTriple i j value | rawValue /= 0]
                                     Nothing -> []
 
                         buildActivityBioTriplets (j, pid) =
