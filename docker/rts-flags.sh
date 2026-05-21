@@ -43,10 +43,14 @@ MAX_MB=$((RAM_MB * 3 / 4))
 # -Fd1.0 (GHC 9.10+): return free heap blocks to the OS over ~1 idle period
 # instead of holding them indefinitely after a parsing spike. Default decay
 # (4.0) keeps RSS pinned near the peak for minutes.
-# -I0.3 (GHC default): trigger idle-time major GC promptly. The previous
-# -I30 deferred GC for 30 s, hiding live-data drops and starving -Fd of
-# free blocks to release.
-RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -Fd1.0 -I0.3 -RTS"
+# -I30: idle-time major GC only after 30 s of genuine inactivity. A major GC
+# over a multi-GB compacting heap (-c) is a multi-second stop-the-world pause
+# on a few-core VM. -I0.3 fired it after every sub-second gap between requests,
+# so each interactive page load (/activities, /classifications) stalled ~4 s
+# behind a GC. 30 s is longer than any inter-request gap, so the pause never
+# lands during active use, yet memory is still released once the VM is idle.
+# OOM protection is -M / -F1.5 / -c, all independent of -I.
+RTS_FLAGS="+RTS -N -M${MAX_MB}M -H${HEAP_MB}M -A${NURSERY_MB}M -n${CHUNK_MB}m -qg0 -c -F1.5 -Fd1.0 -I30 -RTS"
 
 echo "RTS_FLAGS=\"$RTS_FLAGS\""
 
