@@ -26,10 +26,12 @@ PLATFORM=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -t)
+            [[ -n "$2" ]] || { echo "ERROR: -t requires a tag argument" >&2; exit 1; }
             TAG="$2"
             shift 2
             ;;
         --platform)
+            [[ -n "$2" ]] || { echo "ERROR: --platform requires a platform argument (e.g. linux/arm64)" >&2; exit 1; }
             PLATFORM="$2"
             shift 2
             ;;
