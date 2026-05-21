@@ -598,17 +598,41 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
                     return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
+    -- Cross-DB inventory solution for an activity. 'Nothing' takes the cached
+    -- no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
+    -- 'Just' applies the substitutions through the uncached path.
+    crossDBSolutionFor :: Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> Handler SharedSolver.CrossDBSolution
+    crossDBSolutionFor dbName db solver pid mSub = case mSub of
+        Nothing -> solutionWithDeps dbManager dbName db solver pid
+        Just subReq -> do
+            requireFullyLinked dbName db
+            unitCfg <- liftIO $ getMergedUnitConfig dbManager
+            eSol <-
+                liftIO $
+                    Service.inventoryWithSubsAndDeps
+                        unitCfg
+                        (DM.mkDepSolverLookup dbManager)
+                        db
+                        dbName
+                        solver
+                        pid
+                        (srSubstitutions subReq)
+            either throwServiceError pure eSol
+
     -- Activity inventory calculation (full supply chain LCI).
     -- Goes through the cross-DB back-substitution path so inventories from
     -- dep DBs are merged into the returned flow map; metadata (flow names,
     -- units) comes from the merged FlowDB/UnitDB snapshot.
-    getActivityInventory :: Text -> Text -> Handler InventoryExport
-    getActivityInventory dbName processIdText = do
+    activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> Handler InventoryExport
+    activityInventoryCore dbName processIdText mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         (processId, activity) <- resolveOrThrow db processIdText
-        inventory <- inventoryWithDeps dbManager dbName db sharedSolver processId
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        return $ Service.convertToInventoryExport db mFlows mUnits processId activity inventory
+        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
+
+    getActivityInventory :: Text -> Text -> Handler InventoryExport
+    getActivityInventory dbName processIdText = activityInventoryCore dbName processIdText Nothing
 
     -- Activity graph endpoint for network visualization
     getActivityGraph :: Text -> Text -> Maybe Double -> Handler GraphExport
@@ -986,24 +1010,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- POST: Inventory with substitutions
     postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
-    postActivityInventory dbName processIdText subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        (processId, activity) <- resolveOrThrow db processIdText
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
-        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
+    postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
 
     -- POST: Supply chain with substitutions
     postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
