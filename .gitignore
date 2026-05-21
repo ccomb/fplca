@@ -63,4 +63,9 @@ debug/
 coverage-report/
 *.tix
 
+# Profiling and benchmark output
+*.prof
+dist-prof/
+bench-results.json
+
 .docker-bundle/
