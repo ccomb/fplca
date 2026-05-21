@@ -76,7 +76,13 @@ if [[ -n "$PLATFORM" ]]; then
         aarch64|arm64) HOST_ARCH="arm64" ;;
         *)             HOST_ARCH="$(uname -m)" ;;
     esac
-    TARGET_ARCH="${PLATFORM##*/}"
+    # Match known arch names anywhere in the platform string so variant forms
+    # (linux/arm64/v8) and bare forms (arm64) are recognised, not just linux/<arch>.
+    case "$PLATFORM" in
+        *amd64*|*x86_64*)  TARGET_ARCH="amd64" ;;
+        *arm64*|*aarch64*) TARGET_ARCH="arm64" ;;
+        *)                 TARGET_ARCH="${PLATFORM##*/}" ;;
+    esac
     if [[ "$TARGET_ARCH" != "$HOST_ARCH" ]]; then
         echo "WARNING: building '$PLATFORM' on a '$HOST_ARCH' host runs the whole" >&2
         echo "         from-source build under QEMU emulation and takes hours." >&2
