@@ -21,7 +21,7 @@ import qualified Data.ByteString.Lazy as BSL
 import Data.List (find, intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.OpenApi (OpenApi, ToSchema)
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -781,44 +781,27 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                 isExact = T.drop 1 mode == "exact"
                              in Just (T.strip sys, T.strip val, isExact)
 
-    -- Activity LCIA endpoint (single method within a collection)
+    -- Activity LCIA endpoint (single method within a collection). The GET
+    -- variant honours a top-flows query param and logs the result; the POST
+    -- route carries neither (no top-flows param, no logging).
+    activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> Handler LCIAResult
+    activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        method <- loadMethodByUUID methodIdText
+        (processId, activity) <- resolveOrThrow db processIdText
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
+        result <- liftIO $ computeCategoryResult dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+        when (isNothing mSub) $ liftIO $ logLCIAResult result method
+        pure result
+
     getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> Handler LCIAResult
     getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
-        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId activity method -> do
-            sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
-            result <-
-                liftIO $
-                    computeCategoryResult
-                        dbName
-                        db
-                        sol
-                        activity
-                        (fromMaybe 5 topFlowsParam)
-                        Nothing
-                        method
-            liftIO $ logLCIAResult result method
-            return result
+        activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
 
     -- POST: LCIA with substitutions
     postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
-    postActivityLCIA dbName processIdText _collectionName methodIdText subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        method <- loadMethodByUUID methodIdText
-        (processId, activity) <- resolveOrThrow db processIdText
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
-        liftIO $ computeCategoryResult dbName db sol activity 5 Nothing method
+    postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
+        activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
 
     -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
     --
