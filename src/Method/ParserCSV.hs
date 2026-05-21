@@ -32,11 +32,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
-import qualified Data.Text.Read as TR
 import Data.UUID (UUID)
 import qualified Data.UUID.V5 as UUID5
 import Data.Word (Word8)
 
+import Method.CSV (detectDelimiter, parseDouble, splitRow)
 import Method.Types
 
 -- | Pure parser, exported for testing.
@@ -58,7 +58,7 @@ parseMethodCSVBytes bytes =
 rows from data rows.  Returns (categories, names, units, dataRows, delimiter).
 2-row layout → categories = names.  3-row layout → distinct.
 -}
-splitHeaderFromData :: [BS.ByteString] -> Maybe ([Text], [Text], [Text], [BS.ByteString], Word8)
+splitHeaderFromData :: [BS.ByteString] -> Maybe ([Text], [Text], [Text], [BS.ByteString], Char)
 splitHeaderFromData dataLines =
     case break isLabelRow dataLines of
         (headerRows, _labelRow : rows) ->
@@ -81,14 +81,12 @@ splitHeaderFromData dataLines =
 -- | Detect the label row: first cell is a variation of "substance".
 isLabelRow :: BS.ByteString -> Bool
 isLabelRow line =
-    let first = T.toCaseFold . T.strip . head' . splitRow (detectDelimiter line) $ line
-     in first == "substance"
-  where
-    head' (x : _) = x
-    head' [] = ""
+    case splitRow (detectDelimiter line) line of
+        (first : _) -> T.toCaseFold (T.strip first) == "substance"
+        [] -> False
 
 -- | Build a single Method from one column of the CSV.
-mkMethod :: Maybe Text -> Text -> Text -> Text -> Int -> [BS.ByteString] -> Word8 -> Method
+mkMethod :: Maybe Text -> Text -> Text -> Text -> Int -> [BS.ByteString] -> Char -> Method
 mkMethod methodology catName impactName unit colIdx rows delim =
     let !ns = csvMethodNamespace
         !mId = UUID5.generateNamed ns (bsKey $ "method:" <> impactName)
@@ -147,16 +145,6 @@ parseCSVCompartment comp
   where
     lc = T.toCaseFold comp
 
--- | Auto-detect delimiter: semicolon if the line contains ';', else comma.
-detectDelimiter :: BS.ByteString -> Word8
-detectDelimiter line
-    | BC.elem ';' line = 0x3B -- ';'
-    | otherwise = 0x2C -- ','
-
--- | Split a row on the delimiter, decoding to Text.
-splitRow :: Word8 -> BS.ByteString -> [Text]
-splitRow delim = map (TE.decodeUtf8With TEE.lenientDecode) . BS.split delim
-
 -- | Extract methodology from "# methodology: ..." comment.
 extractMethodology :: [BS.ByteString] -> Maybe Text
 extractMethodology = go
@@ -166,12 +154,6 @@ extractMethodology = go
         | BC.isPrefixOf "# methodology:" l =
             Just . T.strip . TE.decodeUtf8With TEE.lenientDecode $ BS.drop 15 l
         | otherwise = go ls
-
--- | Strict double parse, Nothing on failure.
-parseDouble :: Text -> Maybe Double
-parseDouble t = case TR.double t of
-    Right (v, _) -> Just v
-    Left _ -> Nothing
 
 -- | Strip trailing carriage return (Windows CRLF line endings).
 stripCR :: BS.ByteString -> BS.ByteString

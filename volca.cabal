@@ -43,6 +43,7 @@ library
                      , SynonymDB.Types
                      , SynonymDB.Extract
                      , Method.Types
+                     , Method.CSV
                      , Method.Parser
                      , Method.Parser.OlcaSchema
                      , Method.ParserCSV

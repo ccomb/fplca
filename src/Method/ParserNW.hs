@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Parser for standalone normalization/weighting CSV files.
@@ -23,12 +22,13 @@ module Method.ParserNW (
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
-import qualified Data.Text.Read as TR
 
+import Method.CSV (detectDelimiter, parseDouble, splitRow)
 import Method.Types (NormWeightSet (..))
 
 -- | Parse a normalization/weighting CSV file from disk.
@@ -44,7 +44,9 @@ parseNormWeightCSVBytes fallbackName bs =
     let allLines = BC.lines bs
         (comments, rest) = span (\l -> BC.isPrefixOf "#" l || BS.null l) allLines
         name = extractName comments fallbackName
-        delim = detectDelimiter rest
+        delim = case rest of
+            (l : _) -> detectDelimiter l
+            [] -> ';'
      in case dropHeader rest of
             [] -> Left "NW CSV: no data rows after header"
             rows ->
@@ -76,50 +78,23 @@ dropHeader (l : ls)
 
 isHeaderRow :: BS.ByteString -> Bool
 isHeaderRow l =
-    let first = T.toLower . T.strip . decode . head' . splitOn (detectDelimiterLine l) $ l
-     in first == "category" || first == "impact category" || first == "damage category"
+    case splitRow (detectDelimiter l) l of
+        (first : _) ->
+            T.toLower (T.strip first) `elem` ["category", "impact category", "damage category"]
+        [] -> False
 
 -- | Parse one data row: "category;normalization;weighting"
 parseRow :: Char -> BS.ByteString -> (Text, Double, Double)
 parseRow delim line =
-    case splitOn delim line of
-        (cat : norm : weight : _) ->
-            ( T.strip (decode cat)
-            , parseDouble (BC.strip norm)
-            , parseDouble (BC.strip weight)
-            )
-        (cat : norm : _) ->
-            ( T.strip (decode cat)
-            , parseDouble (BC.strip norm)
-            , 0
-            )
+    case map T.strip (splitRow delim line) of
+        (cat : norm : weight : _) -> (cat, num norm, num weight)
+        (cat : norm : _) -> (cat, num norm, 0)
         _ -> ("", 0, 0)
-
--- | Detect delimiter from the first data-like lines.
-detectDelimiter :: [BS.ByteString] -> Char
-detectDelimiter [] = ';'
-detectDelimiter (l : _) = detectDelimiterLine l
-
-detectDelimiterLine :: BS.ByteString -> Char
-detectDelimiterLine l
-    | BC.elem ';' l = ';'
-    | BC.elem '\t' l = '\t'
-    | otherwise = ','
-
-splitOn :: Char -> BS.ByteString -> [BS.ByteString]
-splitOn delim = BC.split delim
+  where
+    num = fromMaybe 0 . parseDouble
 
 decode :: BS.ByteString -> Text
 decode = TE.decodeUtf8With TEE.lenientDecode
-
-parseDouble :: BS.ByteString -> Double
-parseDouble bs = case TR.double (decode bs) of
-    Right (v, _) -> v
-    Left _ -> 0
-
-head' :: [a] -> a
-head' (x : _) = x
-head' [] = error "Method.ParserNW: unexpected empty split"
 
 toLowerASCII :: Char -> Char
 toLowerASCII c
