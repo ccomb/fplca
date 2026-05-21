@@ -867,129 +867,70 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         lcia <- computeCategoryResult dbName db sol activity 5 Nothing method
                         pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
-    -- Batch LCIA endpoint (all methods in a collection)
-    getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
-    getActivityLCIABatch dbName processIdText collectionName = do
+    -- Batch LCIA endpoint (all methods in a collection). The GET variant logs
+    -- timing and per-category detail; the POST (substitution) variant does not.
+    activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> Handler LCIABatchResult
+    activityLCIABatchCore dbName processIdText collectionName mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        -- Look up collection
-        loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
-        collection <- case M.lookup collectionName loadedCollections of
-            Just mc -> return mc
-            Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
-        let methods = mcMethods collection
-            damageCats = mcDamageCategories collection
-            nwSets = mcNormWeightSets collection
-            -- Build damage category lookup: subcategory name → parent name
-            dcLookup =
-                M.fromList
-                    [ (subName, dcName dc)
-                    | dc <- damageCats
-                    , (subName, _) <- dcImpacts dc
-                    ]
-            -- Use first NW set if available
-            mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, activity) -> do
-                t0 <- liftIO getCurrentTime
-                sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
-                let inventory = SharedSolver.csInventory sol
-                t1 <- liftIO getCurrentTime
-                let !invSize = M.size inventory
-                liftIO $
-                    reportProgress Info $
-                        "[LCIA batch] "
-                            <> T.unpack collectionName
-                            <> " for "
-                            <> T.unpack (activityName activity)
-                liftIO $
-                    reportProgress Info $
-                        "  Inventory: "
-                            <> show invSize
-                            <> " flows ("
-                            <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
-                            <> "s)"
-                when (invSize == 0) $
-                    liftIO $
-                        reportProgress Info "  WARNING: inventory is empty — check matrix computation"
-                when (invSize > 0 && invSize <= 5) $
-                    liftIO $
-                        reportProgress Info $
-                            "  Inventory UUIDs: "
-                                <> intercalate ", " (map UUID.toString $ M.keys inventory)
-                scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
-                rawResults <-
-                    liftIO $
-                        mapConcurrently
-                            ( \m ->
-                                computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
-                            )
-                            methods
-                -- Enrich with NW data
-                let results = map (enrichWithNW dcLookup mNW) rawResults
-                    -- Compute formula-based scoring sets
-                    rawScoreMap =
-                        M.fromList
-                            [(lrCategory r, lrScore r) | r <- rawResults]
-                -- Compute each scoring set, logging errors
-                (scoringResults, scoringIndicators) <-
-                    liftIO $ computeAllScoringSets (mcScoringSets collection) rawScoreMap
-                t2 <- liftIO getCurrentTime
-                liftIO $ mapM_ (logBatchCategory invSize) results
-                liftIO $
-                    reportProgress Info $
-                        "  Total: "
-                            <> show (length results)
-                            <> " categories ("
-                            <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
-                            <> "s)"
-                forM_ (M.toList scoringResults) $ \(name, scores) ->
-                    liftIO $
-                        reportProgress Info $
-                            "  Scoring '"
-                                <> T.unpack name
-                                <> "': "
-                                <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
-                return (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
-
-    -- POST: Batch LCIA with substitutions
-    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
-    postActivityLCIABatch dbName processIdText collectionName subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        (processId, activity) <- resolveOrThrow db processIdText
+        (actProcessId, activity) <- resolveOrThrow db processIdText
         (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
         let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
             mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
+        t0 <- liftIO getCurrentTime
+        sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub
+        t1 <- liftIO getCurrentTime
+        let inventory = SharedSolver.csInventory sol
+            !invSize = M.size inventory
+        when (isNothing mSub) $
+            liftIO $ do
+                reportProgress Info $
+                    "[LCIA batch] " <> T.unpack collectionName <> " for " <> T.unpack (activityName activity)
+                reportProgress Info $
+                    "  Inventory: "
+                        <> show invSize
+                        <> " flows ("
+                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
+                        <> "s)"
+                when (invSize == 0) $
+                    reportProgress Info "  WARNING: inventory is empty — check matrix computation"
+                when (invSize > 0 && invSize <= 5) $
+                    reportProgress Info $
+                        "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
         scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
         rawResults <-
             liftIO $
                 mapConcurrently
-                    ( \m ->
-                        computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
-                    )
+                    (\m -> computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
                     methods
         let results = map (enrichWithNW dcLookup mNW) rawResults
-            rawScoreMap =
-                M.fromList
-                    [(lrCategory r, lrScore r) | r <- rawResults]
-        (scoringResults, scoringIndicators) <-
-            liftIO $ computeAllScoringSets scoringSets rawScoreMap
-        return (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
+        (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
+        when (isNothing mSub) $
+            liftIO $ do
+                t2 <- getCurrentTime
+                mapM_ (logBatchCategory invSize) results
+                reportProgress Info $
+                    "  Total: "
+                        <> show (length results)
+                        <> " categories ("
+                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
+                        <> "s)"
+                forM_ (M.toList scoringResults) $ \(name, scores) ->
+                    reportProgress Info $
+                        "  Scoring '"
+                            <> T.unpack name
+                            <> "': "
+                            <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
+        pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+
+    getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
+    getActivityLCIABatch dbName processIdText collectionName =
+        activityLCIABatchCore dbName processIdText collectionName Nothing
+
+    -- POST: Batch LCIA with substitutions
+    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
+    postActivityLCIABatch dbName processIdText collectionName subReq =
+        activityLCIABatchCore dbName processIdText collectionName (Just subReq)
 
     -- POST: Inventory with substitutions
     postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
