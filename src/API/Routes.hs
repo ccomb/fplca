@@ -647,12 +647,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right graphExport -> return graphExport
 
-    -- Activity supply chain endpoint (scaling vector based)
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
-    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        let includeEdges = fromMaybe False includeEdgesParam
-            presetFilters = expandPreset classificationPresets presetParam
+    -- Build the supply-chain filter shared by the GET and POST handlers.
+    buildSupplyChainFilter :: Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Service.SupplyChainFilter
+    buildSupplyChainFilter nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
+        let presetFilters = expandPreset classificationPresets presetParam
             explicitFilters =
                 zipWith3
                     (\s v m -> (s, v, m == "exact"))
@@ -660,30 +658,90 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     classValues
                     (classModes ++ repeat "contains")
             classFilters = presetFilters ++ explicitFilters
+         in Service.SupplyChainFilter
+                { Service.scfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = nameFilter
+                        , Service.afcLocation = locationFilter
+                        , Service.afcProduct = productFilter
+                        , Service.afcClassifications = classFilters
+                        , Service.afcLimit = limitParam
+                        , Service.afcOffset = offsetParam
+                        , Service.afcSort = sortParam
+                        , Service.afcOrder = orderParam
+                        }
+                , Service.scfMaxDepth = maxDepthParam
+                , Service.scfMinQuantity = minQuantity
+                }
+
+    -- Activity supply chain endpoint (scaling vector based). 'Nothing' takes the
+    -- cached solve; 'Just' resolves substitutions through the cross-DB resolver.
+    activitySupplyChainCore :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe SubstitutionRequest -> Handler SupplyChainResponse
+    activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        let includeEdges = fromMaybe False includeEdgesParam
             scf =
-                Service.SupplyChainFilter
-                    { Service.scfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameFilter
-                            , Service.afcLocation = locationFilter
-                            , Service.afcProduct = productFilter
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.scfMaxDepth = maxDepthParam
-                    , Service.scfMinQuantity = minQuantity
-                    }
-        unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-        result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId scf includeEdges
-        case result of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left _ -> throwError err500{errBody = "Internal server error"}
-            Right supplyChain -> return supplyChain
+                buildSupplyChainFilter
+                    nameFilter
+                    limitParam
+                    minQuantity
+                    offsetParam
+                    maxDepthParam
+                    locationFilter
+                    productFilter
+                    presetParam
+                    classSystems
+                    classValues
+                    classModes
+                    sortParam
+                    orderParam
+        case mSub of
+            Nothing -> do
+                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
+                case result of
+                    Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+                    Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+                    Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+                    Left (Service.InvalidUUID _) -> throwError err500{errBody = "Internal server error"}
+                    Left (Service.FlowNotFound _) -> throwError err500{errBody = "Internal server error"}
+                    Right supplyChain -> return supplyChain
+            Just subReq -> do
+                (processId, _) <- resolveOrThrow db processIdText
+                -- Use the cross-DB-aware substitution resolver so qualified PIDs in
+                -- subFrom/subTo are accepted; the virtual cross-DB links it returns
+                -- don't affect the root scaling vector (they drive dep-DB demand),
+                -- which is all the supply-chain navigation reads.
+                scalingResult <-
+                    liftIO $
+                        Service.computeScalingVectorWithSubstitutionsCrossDB
+                            (DM.mkDepSolverLookup dbManager)
+                            db
+                            dbName
+                            sharedSolver
+                            processId
+                            (srSubstitutions subReq)
+                case scalingResult of
+                    Left err -> throwServiceError err
+                    Right (scalingVec, virtualLinks) -> do
+                        unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                        eResp <-
+                            liftIO $
+                                Service.buildSupplyChainFromScalingVectorCrossDB
+                                    unitCfg
+                                    (DM.mkDepSolverLookup dbManager)
+                                    db
+                                    dbName
+                                    processId
+                                    scalingVec
+                                    virtualLinks
+                                    scf
+                                    includeEdges
+                        either throwServiceError pure eResp
+
+    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
+    getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
+        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
 
     -- Activity aggregate endpoint (generic SQL-group-by-style aggregation)
     getActivityAggregate ::
@@ -938,64 +996,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- POST: Supply chain with substitutions
     postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
-    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        let includeEdges = fromMaybe False includeEdgesParam
-            presetFilters = expandPreset classificationPresets presetParam
-            explicitFilters =
-                zipWith3
-                    (\s v m -> (s, v, m == "exact"))
-                    classSystems
-                    classValues
-                    (classModes ++ repeat "contains")
-            classFilters = presetFilters ++ explicitFilters
-            scf =
-                Service.SupplyChainFilter
-                    { Service.scfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameFilter
-                            , Service.afcLocation = locationFilter
-                            , Service.afcProduct = productFilter
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.scfMaxDepth = maxDepthParam
-                    , Service.scfMinQuantity = minQuantityParam
-                    }
-        (processId, _) <- resolveOrThrow db processIdText
-        -- Use the cross-DB-aware substitution resolver so qualified PIDs in
-        -- subFrom/subTo are accepted; the virtual cross-DB links it returns
-        -- don't affect the root scaling vector (they drive dep-DB demand),
-        -- which is all the supply-chain navigation reads.
-        scalingResult <-
-            liftIO $
-                Service.computeScalingVectorWithSubstitutionsCrossDB
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        case scalingResult of
-            Left err -> throwServiceError err
-            Right (scalingVec, virtualLinks) -> do
-                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                eResp <-
-                    liftIO $
-                        Service.buildSupplyChainFromScalingVectorCrossDB
-                            unitCfg
-                            (DM.mkDepSolverLookup dbManager)
-                            db
-                            dbName
-                            processId
-                            scalingVec
-                            virtualLinks
-                            scf
-                            includeEdges
-                either throwServiceError pure eResp
+    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
+        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
 
     -- Activity consumers endpoint (reverse supply chain)
     getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler ConsumersResponse
