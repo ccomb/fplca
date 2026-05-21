@@ -14,6 +14,9 @@
 # MUMPS and the GHC dependency tree from source, so building a foreign
 # architecture under QEMU emulation takes hours — build on a native host of the
 # target architecture instead. The script warns when it detects an emulated build.
+#
+# --platform requires the `docker buildx` plugin; the default host-arch build
+# does not.
 
 set -e
 
@@ -47,13 +50,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# buildx is the only builder that honours --platform together with --load. It
-# ships with Docker since 19.03; fail clearly rather than with a cryptic error.
-if ! docker buildx version >/dev/null 2>&1; then
-    echo "ERROR: 'docker buildx' is not available — install the Docker buildx plugin." >&2
-    exit 1
-fi
-
 GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 if ! git diff --quiet HEAD 2>/dev/null; then
     GIT_HASH="${GIT_HASH}-dirty"
@@ -63,13 +59,18 @@ GIT_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
 # shellcheck source=../versions.env
 source versions.env
 
-# Warn when --platform targets an architecture other than the host's: the
-# Dockerfile compiles OpenBLAS, MUMPS and every GHC dependency from source, so an
-# emulated (QEMU) build runs for hours. Normalize `uname -m` and the platform
-# string to Docker's arch names before comparing.
-BUILD_ARGS=()
+# Pick the build command. A host-arch build uses classic `docker build`, which
+# needs no plugin. `--platform` needs `docker buildx build --load` — the only
+# builder that honours --platform together with --load.
 if [[ -n "$PLATFORM" ]]; then
-    BUILD_ARGS+=(--platform "$PLATFORM")
+    if ! docker buildx version >/dev/null 2>&1; then
+        echo "ERROR: --platform needs 'docker buildx' — install the Docker buildx plugin." >&2
+        exit 1
+    fi
+    DOCKER_BUILD=(docker buildx build --load --platform "$PLATFORM")
+
+    # Warn when the target arch differs from the host: the from-source build
+    # then runs under QEMU emulation and takes hours.
     case "$(uname -m)" in
         x86_64|amd64)  HOST_ARCH="amd64" ;;
         aarch64|arm64) HOST_ARCH="arm64" ;;
@@ -82,13 +83,13 @@ if [[ -n "$PLATFORM" ]]; then
         echo "         Build on a native $TARGET_ARCH host for a fast build." >&2
         echo "         (Emulation also needs QEMU binfmt handlers registered.)" >&2
     fi
+else
+    DOCKER_BUILD=(docker build)
 fi
 
 echo "Building Docker image: tag=$TAG hash=$GIT_HASH git-tag=${GIT_TAG:-none} alpine=$ALPINE_VERSION platform=${PLATFORM:-host}"
 
-docker buildx build \
-    "${BUILD_ARGS[@]}" \
-    --load \
+"${DOCKER_BUILD[@]}" \
     -f docker/Dockerfile \
     --build-arg ALPINE_VERSION="$ALPINE_VERSION" \
     --build-arg GIT_HASH="$GIT_HASH" \
