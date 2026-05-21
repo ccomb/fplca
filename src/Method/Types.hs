@@ -19,7 +19,6 @@ module Method.Types (
     MethodCollection (..),
     DamageCategory (..),
     NormWeightSet (..),
-    emptyMethodCollection,
 
     -- * Scoring sets (formula-based N/W)
     ScoringSet (..),
@@ -156,10 +155,6 @@ data MethodCollection = MethodCollection
     , mcScoringSets :: ![ScoringSet]
     }
     deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
-
--- | Empty method collection (for wrapping plain method lists).
-emptyMethodCollection :: [Method] -> MethodCollection
-emptyMethodCollection ms = MethodCollection ms [] [] []
 
 {- | Formula-based scoring set.
 Variables map short names to impact category names.
