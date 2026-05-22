@@ -1058,11 +1058,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         case Service.resolveActivityAndProcessId db processIdText of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Left e@(Service.MatrixError _) -> internalError e
+            Left e@(Service.InvalidUUID _) -> internalError e
+            Left e@(Service.FlowNotFound _) -> internalError e
             Right (pid, act) ->
                 case Service.validateProcessIdInMatrixIndex db pid of
-                    Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+                    Left e -> internalError e
                     Right () -> return (pid, act)
+      where
+        internalError :: Service.ServiceError -> Handler a
+        internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
 
     throwServiceError :: Service.ServiceError -> Handler a
     throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
@@ -1071,7 +1076,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- and cross-DB unit-conversion failures — all client-submitted invariant
     -- breakages. Surface as 422 like the rest of the cross-DB pipeline.
     throwServiceError (Service.MatrixError msg) = throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-    throwServiceError _ = throwError err500{errBody = "Internal server error"}
+    throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Internal server error"}
+    throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
 
     -- Log a single category result in the batch
     logBatchCategory :: Int -> LCIAResult -> IO ()
