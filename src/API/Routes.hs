@@ -21,7 +21,7 @@ import qualified Data.ByteString.Lazy as BSL
 import Data.List (find, intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.OpenApi (OpenApi, ToSchema)
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -598,17 +598,41 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
                     return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
+    -- Cross-DB inventory solution for an activity. 'Nothing' takes the cached
+    -- no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
+    -- 'Just' applies the substitutions through the uncached path.
+    crossDBSolutionFor :: Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> Handler SharedSolver.CrossDBSolution
+    crossDBSolutionFor dbName db solver pid mSub = case mSub of
+        Nothing -> solutionWithDeps dbManager dbName db solver pid
+        Just subReq -> do
+            requireFullyLinked dbName db
+            unitCfg <- liftIO $ getMergedUnitConfig dbManager
+            eSol <-
+                liftIO $
+                    Service.inventoryWithSubsAndDeps
+                        unitCfg
+                        (DM.mkDepSolverLookup dbManager)
+                        db
+                        dbName
+                        solver
+                        pid
+                        (srSubstitutions subReq)
+            either throwServiceError pure eSol
+
     -- Activity inventory calculation (full supply chain LCI).
     -- Goes through the cross-DB back-substitution path so inventories from
     -- dep DBs are merged into the returned flow map; metadata (flow names,
     -- units) comes from the merged FlowDB/UnitDB snapshot.
-    getActivityInventory :: Text -> Text -> Handler InventoryExport
-    getActivityInventory dbName processIdText = do
+    activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> Handler InventoryExport
+    activityInventoryCore dbName processIdText mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         (processId, activity) <- resolveOrThrow db processIdText
-        inventory <- inventoryWithDeps dbManager dbName db sharedSolver processId
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        return $ Service.convertToInventoryExport db mFlows mUnits processId activity inventory
+        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
+
+    getActivityInventory :: Text -> Text -> Handler InventoryExport
+    getActivityInventory dbName processIdText = activityInventoryCore dbName processIdText Nothing
 
     -- Activity graph endpoint for network visualization
     getActivityGraph :: Text -> Text -> Maybe Double -> Handler GraphExport
@@ -623,12 +647,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Left _ -> throwError err500{errBody = "Internal server error"}
             Right graphExport -> return graphExport
 
-    -- Activity supply chain endpoint (scaling vector based)
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
-    getActivitySupplyChain dbName processId nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        let includeEdges = fromMaybe False includeEdgesParam
-            presetFilters = expandPreset classificationPresets presetParam
+    -- Build the supply-chain filter shared by the GET and POST handlers.
+    buildSupplyChainFilter :: Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Service.SupplyChainFilter
+    buildSupplyChainFilter nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
+        let presetFilters = expandPreset classificationPresets presetParam
             explicitFilters =
                 zipWith3
                     (\s v m -> (s, v, m == "exact"))
@@ -636,30 +658,90 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     classValues
                     (classModes ++ repeat "contains")
             classFilters = presetFilters ++ explicitFilters
+         in Service.SupplyChainFilter
+                { Service.scfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = nameFilter
+                        , Service.afcLocation = locationFilter
+                        , Service.afcProduct = productFilter
+                        , Service.afcClassifications = classFilters
+                        , Service.afcLimit = limitParam
+                        , Service.afcOffset = offsetParam
+                        , Service.afcSort = sortParam
+                        , Service.afcOrder = orderParam
+                        }
+                , Service.scfMaxDepth = maxDepthParam
+                , Service.scfMinQuantity = minQuantity
+                }
+
+    -- Activity supply chain endpoint (scaling vector based). 'Nothing' takes the
+    -- cached solve; 'Just' resolves substitutions through the cross-DB resolver.
+    activitySupplyChainCore :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe SubstitutionRequest -> Handler SupplyChainResponse
+    activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        let includeEdges = fromMaybe False includeEdgesParam
             scf =
-                Service.SupplyChainFilter
-                    { Service.scfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameFilter
-                            , Service.afcLocation = locationFilter
-                            , Service.afcProduct = productFilter
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.scfMaxDepth = maxDepthParam
-                    , Service.scfMinQuantity = minQuantity
-                    }
-        unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-        result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processId scf includeEdges
-        case result of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left _ -> throwError err500{errBody = "Internal server error"}
-            Right supplyChain -> return supplyChain
+                buildSupplyChainFilter
+                    nameFilter
+                    limitParam
+                    minQuantity
+                    offsetParam
+                    maxDepthParam
+                    locationFilter
+                    productFilter
+                    presetParam
+                    classSystems
+                    classValues
+                    classModes
+                    sortParam
+                    orderParam
+        case mSub of
+            Nothing -> do
+                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
+                case result of
+                    Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+                    Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+                    Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+                    Left (Service.InvalidUUID _) -> throwError err500{errBody = "Internal server error"}
+                    Left (Service.FlowNotFound _) -> throwError err500{errBody = "Internal server error"}
+                    Right supplyChain -> return supplyChain
+            Just subReq -> do
+                (processId, _) <- resolveOrThrow db processIdText
+                -- Use the cross-DB-aware substitution resolver so qualified PIDs in
+                -- subFrom/subTo are accepted; the virtual cross-DB links it returns
+                -- don't affect the root scaling vector (they drive dep-DB demand),
+                -- which is all the supply-chain navigation reads.
+                scalingResult <-
+                    liftIO $
+                        Service.computeScalingVectorWithSubstitutionsCrossDB
+                            (DM.mkDepSolverLookup dbManager)
+                            db
+                            dbName
+                            sharedSolver
+                            processId
+                            (srSubstitutions subReq)
+                case scalingResult of
+                    Left err -> throwServiceError err
+                    Right (scalingVec, virtualLinks) -> do
+                        unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                        eResp <-
+                            liftIO $
+                                Service.buildSupplyChainFromScalingVectorCrossDB
+                                    unitCfg
+                                    (DM.mkDepSolverLookup dbManager)
+                                    db
+                                    dbName
+                                    processId
+                                    scalingVec
+                                    virtualLinks
+                                    scf
+                                    includeEdges
+                        either throwServiceError pure eResp
+
+    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
+    getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
+        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
 
     -- Activity aggregate endpoint (generic SQL-group-by-style aggregation)
     getActivityAggregate ::
@@ -757,44 +839,27 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                 isExact = T.drop 1 mode == "exact"
                              in Just (T.strip sys, T.strip val, isExact)
 
-    -- Activity LCIA endpoint (single method within a collection)
+    -- Activity LCIA endpoint (single method within a collection). The GET
+    -- variant honours a top-flows query param and logs the result; the POST
+    -- route carries neither (no top-flows param, no logging).
+    activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> Handler LCIAResult
+    activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
+        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        method <- loadMethodByUUID methodIdText
+        (processId, activity) <- resolveOrThrow db processIdText
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
+        result <- liftIO $ computeCategoryResult dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+        when (isNothing mSub) $ liftIO $ logLCIAResult result method
+        pure result
+
     getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> Handler LCIAResult
     getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
-        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId activity method -> do
-            sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
-            result <-
-                liftIO $
-                    computeCategoryResult
-                        dbName
-                        db
-                        sol
-                        activity
-                        (fromMaybe 5 topFlowsParam)
-                        Nothing
-                        method
-            liftIO $ logLCIAResult result method
-            return result
+        activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
 
     -- POST: LCIA with substitutions
     postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
-    postActivityLCIA dbName processIdText _collectionName methodIdText subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        method <- loadMethodByUUID methodIdText
-        (processId, activity) <- resolveOrThrow db processIdText
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
-        liftIO $ computeCategoryResult dbName db sol activity 5 Nothing method
+    postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
+        activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
 
     -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
     --
@@ -860,211 +925,79 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         lcia <- computeCategoryResult dbName db sol activity 5 Nothing method
                         pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
-    -- Batch LCIA endpoint (all methods in a collection)
-    getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
-    getActivityLCIABatch dbName processIdText collectionName = do
+    -- Batch LCIA endpoint (all methods in a collection). The GET variant logs
+    -- timing and per-category detail; the POST (substitution) variant does not.
+    activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> Handler LCIABatchResult
+    activityLCIABatchCore dbName processIdText collectionName mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        -- Look up collection
-        loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
-        collection <- case M.lookup collectionName loadedCollections of
-            Just mc -> return mc
-            Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
-        let methods = mcMethods collection
-            damageCats = mcDamageCategories collection
-            nwSets = mcNormWeightSets collection
-            -- Build damage category lookup: subcategory name → parent name
-            dcLookup =
-                M.fromList
-                    [ (subName, dcName dc)
-                    | dc <- damageCats
-                    , (subName, _) <- dcImpacts dc
-                    ]
-            -- Use first NW set if available
-            mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, activity) -> do
-                t0 <- liftIO getCurrentTime
-                sol <- solutionWithDeps dbManager dbName db sharedSolver actProcessId
-                let inventory = SharedSolver.csInventory sol
-                t1 <- liftIO getCurrentTime
-                let !invSize = M.size inventory
-                liftIO $
-                    reportProgress Info $
-                        "[LCIA batch] "
-                            <> T.unpack collectionName
-                            <> " for "
-                            <> T.unpack (activityName activity)
-                liftIO $
-                    reportProgress Info $
-                        "  Inventory: "
-                            <> show invSize
-                            <> " flows ("
-                            <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
-                            <> "s)"
-                when (invSize == 0) $
-                    liftIO $
-                        reportProgress Info "  WARNING: inventory is empty — check matrix computation"
-                when (invSize > 0 && invSize <= 5) $
-                    liftIO $
-                        reportProgress Info $
-                            "  Inventory UUIDs: "
-                                <> intercalate ", " (map UUID.toString $ M.keys inventory)
-                scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
-                rawResults <-
-                    liftIO $
-                        mapConcurrently
-                            ( \m ->
-                                computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
-                            )
-                            methods
-                -- Enrich with NW data
-                let results = map (enrichWithNW dcLookup mNW) rawResults
-                    -- Compute formula-based scoring sets
-                    rawScoreMap =
-                        M.fromList
-                            [(lrCategory r, lrScore r) | r <- rawResults]
-                -- Compute each scoring set, logging errors
-                (scoringResults, scoringIndicators) <-
-                    liftIO $ computeAllScoringSets (mcScoringSets collection) rawScoreMap
-                t2 <- liftIO getCurrentTime
-                liftIO $ mapM_ (logBatchCategory invSize) results
-                liftIO $
-                    reportProgress Info $
-                        "  Total: "
-                            <> show (length results)
-                            <> " categories ("
-                            <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
-                            <> "s)"
-                forM_ (M.toList scoringResults) $ \(name, scores) ->
-                    liftIO $
-                        reportProgress Info $
-                            "  Scoring '"
-                                <> T.unpack name
-                                <> "': "
-                                <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
-                return (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
-
-    -- POST: Batch LCIA with substitutions
-    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
-    postActivityLCIABatch dbName processIdText collectionName subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        (processId, activity) <- resolveOrThrow db processIdText
+        (actProcessId, activity) <- resolveOrThrow db processIdText
         (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
         let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
             mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
+        t0 <- liftIO getCurrentTime
+        sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub
+        t1 <- liftIO getCurrentTime
+        let inventory = SharedSolver.csInventory sol
+            !invSize = M.size inventory
+        when (isNothing mSub) $
+            liftIO $ do
+                reportProgress Info $
+                    "[LCIA batch] " <> T.unpack collectionName <> " for " <> T.unpack (activityName activity)
+                reportProgress Info $
+                    "  Inventory: "
+                        <> show invSize
+                        <> " flows ("
+                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
+                        <> "s)"
+                when (invSize == 0) $
+                    reportProgress Info "  WARNING: inventory is empty — check matrix computation"
+                when (invSize > 0 && invSize <= 5) $
+                    reportProgress Info $
+                        "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
         scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
         rawResults <-
             liftIO $
                 mapConcurrently
-                    ( \m ->
-                        computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m
-                    )
+                    (\m -> computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
                     methods
         let results = map (enrichWithNW dcLookup mNW) rawResults
-            rawScoreMap =
-                M.fromList
-                    [(lrCategory r, lrScore r) | r <- rawResults]
-        (scoringResults, scoringIndicators) <-
-            liftIO $ computeAllScoringSets scoringSets rawScoreMap
-        return (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
+        (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
+        when (isNothing mSub) $
+            liftIO $ do
+                t2 <- getCurrentTime
+                mapM_ (logBatchCategory invSize) results
+                reportProgress Info $
+                    "  Total: "
+                        <> show (length results)
+                        <> " categories ("
+                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
+                        <> "s)"
+                forM_ (M.toList scoringResults) $ \(name, scores) ->
+                    reportProgress Info $
+                        "  Scoring '"
+                            <> T.unpack name
+                            <> "': "
+                            <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
+        pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+
+    getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
+    getActivityLCIABatch dbName processIdText collectionName =
+        activityLCIABatchCore dbName processIdText collectionName Nothing
+
+    -- POST: Batch LCIA with substitutions
+    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
+    postActivityLCIABatch dbName processIdText collectionName subReq =
+        activityLCIABatchCore dbName processIdText collectionName (Just subReq)
 
     -- POST: Inventory with substitutions
     postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
-    postActivityInventory dbName processIdText subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        requireFullyLinked dbName db
-        (processId, activity) <- resolveOrThrow db processIdText
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        eSol <-
-            liftIO $
-                Service.inventoryWithSubsAndDeps
-                    unitCfg
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        sol <- either throwServiceError pure eSol
-        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
+    postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
 
     -- POST: Supply chain with substitutions
     postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
-    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantityParam offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        let includeEdges = fromMaybe False includeEdgesParam
-            presetFilters = expandPreset classificationPresets presetParam
-            explicitFilters =
-                zipWith3
-                    (\s v m -> (s, v, m == "exact"))
-                    classSystems
-                    classValues
-                    (classModes ++ repeat "contains")
-            classFilters = presetFilters ++ explicitFilters
-            scf =
-                Service.SupplyChainFilter
-                    { Service.scfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameFilter
-                            , Service.afcLocation = locationFilter
-                            , Service.afcProduct = productFilter
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.scfMaxDepth = maxDepthParam
-                    , Service.scfMinQuantity = minQuantityParam
-                    }
-        (processId, _) <- resolveOrThrow db processIdText
-        -- Use the cross-DB-aware substitution resolver so qualified PIDs in
-        -- subFrom/subTo are accepted; the virtual cross-DB links it returns
-        -- don't affect the root scaling vector (they drive dep-DB demand),
-        -- which is all the supply-chain navigation reads.
-        scalingResult <-
-            liftIO $
-                Service.computeScalingVectorWithSubstitutionsCrossDB
-                    (DM.mkDepSolverLookup dbManager)
-                    db
-                    dbName
-                    sharedSolver
-                    processId
-                    (srSubstitutions subReq)
-        case scalingResult of
-            Left err -> throwServiceError err
-            Right (scalingVec, virtualLinks) -> do
-                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                eResp <-
-                    liftIO $
-                        Service.buildSupplyChainFromScalingVectorCrossDB
-                            unitCfg
-                            (DM.mkDepSolverLookup dbManager)
-                            db
-                            dbName
-                            processId
-                            scalingVec
-                            virtualLinks
-                            scf
-                            includeEdges
-                either throwServiceError pure eResp
+    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
+        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
 
     -- Activity consumers endpoint (reverse supply chain)
     getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler ConsumersResponse
@@ -1125,11 +1058,16 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         case Service.resolveActivityAndProcessId db processIdText of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
             Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+            Left e@(Service.MatrixError _) -> internalError e
+            Left e@(Service.InvalidUUID _) -> internalError e
+            Left e@(Service.FlowNotFound _) -> internalError e
             Right (pid, act) ->
                 case Service.validateProcessIdInMatrixIndex db pid of
-                    Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+                    Left e -> internalError e
                     Right () -> return (pid, act)
+      where
+        internalError :: Service.ServiceError -> Handler a
+        internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
 
     throwServiceError :: Service.ServiceError -> Handler a
     throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
@@ -1138,7 +1076,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- and cross-DB unit-conversion failures — all client-submitted invariant
     -- breakages. Surface as 422 like the rest of the cross-DB pipeline.
     throwServiceError (Service.MatrixError msg) = throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-    throwServiceError _ = throwError err500{errBody = "Internal server error"}
+    throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Internal server error"}
+    throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
 
     -- Log a single category result in the batch
     logBatchCategory :: Int -> LCIAResult -> IO ()

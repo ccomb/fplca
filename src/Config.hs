@@ -23,12 +23,7 @@ module Config (
     applyDataDir,
 
     -- * Default values
-    defaultServerConfig,
     defaultConfig,
-
-    -- * Utilities
-    getDefaultDatabase,
-    getLoadableDatabases,
 
     -- * Dependency resolution
     resolveLoadOrder,
@@ -378,19 +373,6 @@ findDuplicates xs = go [] [] xs
     go seen dups (x : rest)
         | x `elem` seen = go seen (if x `elem` dups then dups else x : dups) rest
         | otherwise = go (x : seen) dups rest
-
--- | Get the default database (or first loadable if none marked default)
-getDefaultDatabase :: Config -> Maybe DatabaseConfig
-getDefaultDatabase cfg =
-    case filter dcDefault (getLoadableDatabases cfg) of
-        (db : _) -> Just db
-        [] -> case getLoadableDatabases cfg of
-            (db : _) -> Just db
-            [] -> Nothing
-
--- | Get all databases configured to load at startup
-getLoadableDatabases :: Config -> [DatabaseConfig]
-getLoadableDatabases = filter dcLoad . cfgDatabases
 
 {- | Expand load=true transitively through depends, then topologically sort.
 Returns Left on cycle, Right with ordered list of DB names to load.
