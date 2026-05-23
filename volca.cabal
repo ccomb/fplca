@@ -53,11 +53,13 @@ library
                      , Method.ChemSynonyms
                      , Method.FlowResolver
                      , API.Routes
+                     , API.BatchImpacts
                      , API.Types
                      , API.JsonOptions
                      , API.DatabaseHandlers
                      , API.Auth
                      , API.MCP
+                     , API.MCP.Enrich
                      , API.OpenApi
                      , API.Resources
                      , API.Licenses
@@ -215,6 +217,8 @@ test-suite lca-tests
                      , EcoSpold1Spec
                      , EcoSpold2Spec
                      , MCPSchemaSpec
+                     , BatchImpactsSpec
+                     , MCPEnrichSpec
                      , NormalizeSpec
                      , BM25Spec
                      , FuzzySpec

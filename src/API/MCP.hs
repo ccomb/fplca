@@ -22,7 +22,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Network.HTTP.Types (hContentType, status200, status202, status405)
-import Network.URI (escapeURIString, isUnreserved)
 import Network.Wai (Application, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.Random (randomIO)
 
@@ -34,13 +33,15 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
+import qualified API.BatchImpacts as BI
+import API.MCP.Enrich (addWebUrl, encodeSegment, enrichBatchResults, enrichResultsWithWebUrl, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
 import qualified Method.Mapping as Mapping
-import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
+import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
 import Plugin.Types ()
@@ -112,10 +113,6 @@ toolSuccessJson rid val =
 newtype McpState = McpState
     { mcpSessionId :: Text
     }
-
--- | Percent-encode a Text value for use as a URL path segment.
-encodeSegment :: Text -> Text
-encodeSegment = T.pack . escapeURIString isUnreserved . T.unpack
 
 mcpApp :: DatabaseManager -> [ClassificationPreset] -> IO Application
 mcpApp dbManager presets = do
@@ -351,6 +348,9 @@ callTool dbManager presets baseUrl rid name args = case name of
     "get_path_to" -> withDb dbManager rid args $ callGetPathTo rid args
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
     "compare_impacts" -> callCompareImpacts dbManager rid args
+    "score_activity" -> callScoreActivity dbManager baseUrl rid args
+    "score_activities" -> callScoreActivities dbManager baseUrl rid args
+    "list_scoring_sets" -> callListScoringSets dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -398,6 +398,27 @@ required fields with @(,,) \<$\> requireText \"a\" args \<*\> requireText \"b\" 
 requireText :: Text -> KeyMap Value -> Either Text Text
 requireText key args =
     maybe (Left ("Missing required parameter: " <> key)) Right (textArg key args)
+
+{- | Optional text argument. Distinguishes three cases that 'requireText'
+silently collapses:
+
+  * key absent (or explicitly @null@) — 'Right Nothing'
+  * present as a string — 'Right (Just ...)'
+  * present but the wrong JSON type — 'Left' with a message naming the
+    actual type, so a typo like @{"collection": 42}@ surfaces instead of
+    being treated as "omitted".
+-}
+optionalText :: Text -> KeyMap Value -> Either Text (Maybe Text)
+optionalText key args = case KM.lookup (fromText key) args of
+    Nothing -> Right Nothing
+    Just Null -> Right Nothing
+    Just (String t) -> Right (Just t)
+    Just (Object _) -> wrongType "object"
+    Just (Array _) -> wrongType "array"
+    Just (Number _) -> wrongType "number"
+    Just (Bool _) -> wrongType "boolean"
+  where
+    wrongType ty = Left ("Parameter '" <> key <> "' must be a string, got " <> ty)
 
 -- | Read an argument that may be either a JSON array of strings or a single string.
 textArrayArg :: Text -> KeyMap Value -> [Text]
@@ -1726,3 +1747,156 @@ callListGeographies dbManager rid args =
                         toolSuccessJson rid $
                             object
                                 ["geographies" .= map mkEntry codes]
+
+-- ============================================================================
+-- score_activity / score_activities / list_scoring_sets
+--
+-- Wrappers around API.BatchImpacts so a single MCP call yields the full
+-- LCIA panel + every configured scoring set + per-indicator breakdown,
+-- removing the N round-trips of get_impacts a comparative study used to
+-- need. Each response is enriched with a 'web_url' deep link to the
+-- matching web UI view so a human can continue the exploration visually.
+-- ============================================================================
+
+-- | Translate a 'BI.BatchError' into the MCP 'toolError' payload.
+batchErrorMsg :: BI.BatchError -> Text
+batchErrorMsg err = case err of
+    BI.CollectionNotLoaded name available ->
+        "Collection not loaded: "
+            <> name
+            <> ". Available collections: "
+            <> T.intercalate ", " available
+    BI.DatabaseNotLoaded name -> "Database not loaded: " <> name
+    BI.ActivityResolutionFailed msg -> msg
+    BI.LinkingIncomplete msg -> msg
+    BI.OtherBatchError code msg -> "HTTP " <> T.pack (show code) <> ": " <> msg
+
+{- | Look up the configured scoring-set names on a loaded method collection.
+Returns the empty list when the collection is not loaded; in that case
+the batch runner has already returned 'BI.CollectionNotLoaded' and the
+filter is never consulted, so the empty result here is harmless. We
+read 'mcScoringSets' directly — not the keys of @scoringResults@ — so
+that a set whose evaluation produced no scores still counts as
+"configured" for the @scoring_sets@ filter.
+-}
+configuredScoringSetNames :: DatabaseManager -> Text -> IO [Text]
+configuredScoringSetNames dbm collName = do
+    loaded <- readTVarIO (dmLoadedMethods dbm)
+    pure $ case M.lookup collName loaded of
+        Just mc -> map ssName (mcScoringSets mc)
+        Nothing -> []
+
+{- | Handler for the 'score_activity' MCP tool.
+
+Returns the full LCIABatchResult shape (per-method scores, per-scoring-set
+aggregate scores, per-indicator breakdown, units) for a single activity,
+enriched with a top-level 'web_url' for the panel view and a per-method
+'web_url' in each @results@ entry. Replaces the @N@ round-trips of
+'get_impacts' a comparative study used to need.
+-}
+callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callScoreActivity dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                dbName <- ExceptT $ pure (requireText "database" args)
+                pidText <- ExceptT $ pure (requireText "process_id" args)
+                coll <- ExceptT $ pure (requireText "collection" args)
+                subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
+                wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
+                let mSub = if null subs then Nothing else Just SubstitutionRequest{srSubstitutions = subs}
+                res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub
+                case res of
+                    Left e -> ExceptT $ pure (Left (batchErrorMsg e))
+                    Right lbr -> do
+                        configured <- liftIO $ configuredScoringSetNames dbManager coll
+                        let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
+                            enriched =
+                                addWebUrl
+                                    topUrl
+                                    (enrichResultsWithWebUrl topUrl (toJSON lbr))
+                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
+            )
+
+{- | Handler for the 'score_activities' MCP tool.
+
+Scores N activities against every method in a collection in one
+multi-RHS MUMPS solve plus parallel characterization. Each successful
+entry carries a top-level @web_url@ (the activity-level impacts page)
+and the same URL is replicated inside its @impacts@ subtree alongside
+per-method @web_url@s, so clients reading either shape land on the
+right link. Unresolved process IDs land in @not_found@ / @invalid@ of
+the response, not as a 'BatchError'.
+-}
+callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callScoreActivities dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> runExceptT
+            ( do
+                dbName <- ExceptT $ pure (requireText "database" args)
+                coll <- ExceptT $ pure (requireText "collection" args)
+                pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
+                wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
+                let topFlows = intArg "top_flows" args
+                res <- liftIO $ BI.runBatchImpacts dbManager dbName coll topFlows pids
+                case res of
+                    Left e -> ExceptT $ pure (Left (batchErrorMsg e))
+                    Right bir -> do
+                        configured <- liftIO $ configuredScoringSetNames dbManager coll
+                        let enriched = enrichBatchResults baseUrl dbName coll (toJSON bir)
+                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets enriched)
+            )
+
+{- | Handler for the 'list_scoring_sets' MCP tool.
+
+Returns the formula-based scoring sets configured on every loaded
+'MethodCollection'. Pure read from the live TVar; no HTTP equivalent.
+When 'collection' is supplied, filters to that one and errors if it is
+not loaded (listing the loaded names in the message).
+
+The projection is explicit (rather than @toJSON ss@) so the wire format
+stays in snake_case and is not silently affected by a future field
+addition to 'ScoringSet'.
+-}
+callListScoringSets :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callListScoringSets dbManager rid args = do
+    loaded <- readTVarIO (dmLoadedMethods dbManager)
+    case optionalText "collection" args of
+        Left err -> return $ toolError rid err
+        Right Nothing -> return $ toolSuccessJson rid (encodeAll loaded)
+        Right (Just collName) -> case M.lookup collName loaded of
+            Nothing ->
+                return $
+                    toolError
+                        rid
+                        ( "Collection not loaded: "
+                            <> collName
+                            <> ". Available collections: "
+                            <> T.intercalate ", " (M.keys loaded)
+                        )
+            Just mc -> return $ toolSuccessJson rid (encodeAll (M.singleton collName mc))
+  where
+    encodeAll :: M.Map Text MethodCollection -> Value
+    encodeAll loaded =
+        object
+            [ "collections"
+                .= [ object
+                        [ "collection" .= cName
+                        , "scoring_sets" .= map encodeScoringSet (mcScoringSets mc)
+                        ]
+                   | (cName, mc) <- M.toList loaded
+                   ]
+            ]
+
+    encodeScoringSet :: ScoringSet -> Value
+    encodeScoringSet ss =
+        object
+            [ "name" .= ssName ss
+            , "unit" .= ssUnit ss
+            , "variables" .= ssVariables ss
+            , "computed" .= ssComputed ss
+            , "normalization" .= ssNormalization ss
+            , "weighting" .= ssWeighting ss
+            , "scores" .= ssScores ss
+            , "display_multiplier" .= ssDisplayMultiplier ss
+            ]

@@ -39,8 +39,8 @@ import qualified GHC.Stats
 import Matrix (Inventory, Vector)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
-import qualified Method.Types as MT
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
+import qualified Method.Types as MT
 import Numeric (showFFloat)
 import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
 import Progress (ProgressLevel (Info, Warning), getLogLines, reportProgress)
@@ -166,13 +166,28 @@ type LCAAPI =
                 :<|> "openapi.json" :> Get '[JSON] Value
            )
 
+{- | Standard prefix for "database not loaded" 404 bodies. Exported so that
+'API.BatchImpacts.translateError' can recover a typed 'DatabaseNotLoaded'
+from the wire body without the two ends silently drifting apart.
+-}
+databaseNotLoadedPrefix :: Text
+databaseNotLoadedPrefix = "Database not loaded: "
+
+-- | Same idea for "collection not loaded" 404 bodies.
+collectionNotLoadedPrefix :: Text
+collectionNotLoadedPrefix = "Collection not loaded: "
+
+-- | Build the 404 body for a not-loaded database / collection by name.
+notLoadedBody :: Text -> Text -> BSL.ByteString
+notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
+
 -- | Get database by name, throw 404 if not loaded
 requireDatabaseByName :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
 requireDatabaseByName dbManager dbName = do
     maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
-        Nothing -> throwError err404{errBody = "Database not loaded: " <> BSL.fromStrict (T.encodeUtf8 dbName)}
+        Nothing -> throwError err404{errBody = notLoadedBody databaseNotLoadedPrefix dbName}
 
 {- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
 the user to load the missing dep DBs (or POST /relink) rather than
@@ -318,8 +333,9 @@ withValidatedActivity db processId action = do
         Left _ -> throwError err400{errBody = "Invalid request"}
         Right activity -> action activity
 
--- | Helper function to validate UUID and lookup flow. Returns a tagged sum
--- so callers can dispatch on tech vs bio.
+{- | Helper function to validate UUID and lookup flow. Returns a tagged sum
+so callers can dispatch on tech vs bio.
+-}
 withValidatedFlow :: Database -> Text -> (Either TechnosphereFlow BiosphereFlow -> Handler a) -> Handler a
 withValidatedFlow db uuid action = do
     case Service.validateUUID uuid of
@@ -372,6 +388,519 @@ expandPreset _ Nothing = []
 expandPreset presets (Just pn) = case find (\p -> Config.cpName p == pn) presets of
     Just p -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
     Nothing -> []
+
+-- ============================================================================
+-- Hoisted helpers — previously in lcaServer's `where`. Lifted to top level so
+-- non-Servant callers (notably src/API/BatchImpacts.hs and any client of the
+-- LCIA batch pipeline outside the Servant Handler stack) can reuse them.
+--
+-- Behavior is byte-identical to the original where-bound versions.
+-- ============================================================================
+
+-- | Enrich a raw LCIA result with damage category mapping and NW scores. Pure.
+enrichWithNW :: M.Map Text Text -> Maybe NormWeightSet -> LCIAResult -> LCIAResult
+enrichWithNW dcLookup mNW result =
+    let dmgCat = M.findWithDefault (lrCategory result) (lrCategory result) dcLookup
+        (normScore, weightScore) = case mNW of
+            Just nw ->
+                let mNorm = M.lookup dmgCat (nwNormalization nw)
+                    mWeight = M.lookup dmgCat (nwWeighting nw)
+                 in case (mNorm, mWeight) of
+                        (Just n, Just w) ->
+                            let ns = lrScore result * n
+                             in (Just ns, Just (ns * w))
+                        _ -> (Nothing, Nothing)
+            Nothing -> (Nothing, Nothing)
+     in result
+            { lrDamageCategory = dmgCat
+            , lrNormalizedScore = normScore
+            , lrWeightedScore = weightScore
+            }
+
+-- | Assemble an LCIABatchResult from the post-characterization parts. Pure.
+mkLCIABatchResult ::
+    [LCIAResult] ->
+    Maybe NormWeightSet ->
+    [NormWeightSet] ->
+    M.Map Text (M.Map Text Double) ->
+    [ScoringSet] ->
+    M.Map Text (M.Map Text ScoringIndicator) ->
+    LCIABatchResult
+mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators =
+    LCIABatchResult
+        { lbrResults = results
+        , lbrSingleScore = Nothing
+        , lbrSingleScoreUnit = Nothing
+        , lbrNormWeightSetName = nwName <$> mNW
+        , lbrAvailableNWsets = map nwName nwSets
+        , lbrScoringResults = scoringResults
+        , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
+        , lbrScoringIndicators = scoringIndicators
+        }
+
+-- | Per-category single-line log within a batch.
+logBatchCategory :: Int -> LCIAResult -> IO ()
+logBatchCategory _invSize result = do
+    let scoreTxt = showFFloat (Just 4) (lrScore result) ""
+    reportProgress Info $
+        "  "
+            <> T.unpack (lrMethodName result)
+            <> ": "
+            <> scoreTxt
+            <> " "
+            <> T.unpack (lrUnit result)
+            <> " ("
+            <> show (lrMappedFlows result)
+            <> " CFs mapped)"
+
+-- | Single-method LCIA log line.
+logLCIAResult :: LCIAResult -> Method -> IO ()
+logLCIAResult result method = do
+    let mapped = lrMappedFlows result
+    reportProgress Info $
+        "[LCIA] "
+            <> T.unpack (methodName method)
+            <> ": "
+            <> showFFloat (Just 4) (lrScore result) ""
+            <> " "
+            <> T.unpack (methodUnit method)
+    reportProgress Info $ "  Flow mapping: " <> show mapped <> " CFs mapped"
+
+{- | Resolve a process_id text against a database, throwing the appropriate
+HTTP status. Validates the resolved ProcessId against the technosphere
+matrix index too — see Service.validateProcessIdInMatrixIndex.
+-}
+resolveOrThrow :: Database -> Text -> Handler (ProcessId, Activity)
+resolveOrThrow db processIdText =
+    case Service.resolveActivityAndProcessId db processIdText of
+        Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+        Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+        Left e@(Service.MatrixError _) -> internalError e
+        Left e@(Service.InvalidUUID _) -> internalError e
+        Left e@(Service.FlowNotFound _) -> internalError e
+        Right (pid, act) ->
+            case Service.validateProcessIdInMatrixIndex db pid of
+                Left e -> internalError e
+                Right () -> return (pid, act)
+  where
+    internalError :: Service.ServiceError -> Handler a
+    internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
+
+{- | Translate a Service-level error into the HTTP status used across the
+cross-DB LCIA paths.
+-}
+throwServiceError :: Service.ServiceError -> Handler a
+throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
+throwServiceError (Service.InvalidProcessId msg) = throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+-- MatrixError covers singular Sherman-Morrison, missing technosphere links,
+-- and cross-DB unit-conversion failures — all client-submitted invariant
+-- breakages. Surface as 422 like the rest of the cross-DB pipeline.
+throwServiceError (Service.MatrixError msg) = throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Internal server error"}
+throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
+
+-- | Load a method collection by name from the live DatabaseManager state.
+loadCollection :: DatabaseManager -> Text -> Handler ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
+loadCollection dbManager collectionName = do
+    loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
+    case M.lookup collectionName loadedCollections of
+        Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
+        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+
+{- | Cross-DB inventory solution for an activity. 'Nothing' takes the cached
+no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
+'Just' applies the substitutions through the uncached path.
+-}
+crossDBSolutionFor :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> Handler SharedSolver.CrossDBSolution
+crossDBSolutionFor dbManager dbName db solver pid mSub = case mSub of
+    Nothing -> solutionWithDeps dbManager dbName db solver pid
+    Just subReq -> do
+        requireFullyLinked dbName db
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        eSol <-
+            liftIO $
+                Service.inventoryWithSubsAndDeps
+                    unitCfg
+                    (DM.mkDepSolverLookup dbManager)
+                    db
+                    dbName
+                    solver
+                    pid
+                    (srSubstitutions subReq)
+        either throwServiceError pure eSol
+
+{- | Look up MethodSetTables for every (DB, scaling) pair in the cross-DB
+solution. Cache-keyed by (dbName, methods).
+-}
+buildPerDbSetTables ::
+    DatabaseManager ->
+    NE.NonEmpty (Text, Database, Vector) ->
+    [Method] ->
+    IO (NE.NonEmpty (Database, Vector, Method.Mapping.MethodSetTables))
+buildPerDbSetTables dbManager scalings methods =
+    traverse
+        ( \(n, d, sv) -> do
+            mst <- DM.mapMethodSetToTablesCached dbManager n d methods
+            pure (d, sv, mst)
+        )
+        scalings
+
+{- | Score every method in 'methods' against the inventory in 'sol' in a
+single dense matvec (non-regional) plus per-method passes (regional).
+-}
+batchedScoresFor ::
+    DatabaseManager ->
+    Text ->
+    Database ->
+    SharedSolver.CrossDBSolution ->
+    [Method] ->
+    IO (M.Map UUID (Either Text Double))
+batchedScoresFor dbManager _dbName _db sol methods = do
+    perDb <- buildPerDbSetTables dbManager (SharedSolver.csScalings sol) methods
+    unitCfg <- getMergedUnitConfig dbManager
+    (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+    hier <- DM.getLocationHierarchy dbManager
+    pure $
+        M.fromList $
+            computeLCIAScoreSetFromTables
+                unitCfg
+                mUnits
+                mFlows
+                (SharedSolver.csInventory sol)
+                hier
+                perDb
+
+{- | Pre-warm per-(db, method) cached tables so subsequent 'batchedScoresFor'
+and 'inventoryContributions' calls hit a warm cache.
+-}
+prepMethodCtx :: DatabaseManager -> Text -> Database -> Method -> IO MethodCtx
+prepMethodCtx dbManager dbName db method = do
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
+    _ <- DM.mapMethodToTablesCached dbManager dbName db method
+    let stats = computeMappingStats mappings
+    pure MethodCtx{mctxMethod = method, mctxMappedFlows = msTotal stats - msUnmatched stats}
+
+{- | Compute LCIA result for a single method against a cross-DB inventory
+solution. 'precomputedScore' short-circuits the per-method scoring loop
+when a batched matvec result is already available.
+-}
+computeCategoryResult ::
+    DatabaseManager ->
+    Text ->
+    Database ->
+    SharedSolver.CrossDBSolution ->
+    Activity ->
+    Int ->
+    Maybe (Either Text Double) ->
+    Method ->
+    IO LCIAResult
+computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore method = do
+    unitCfg <- getMergedUnitConfig dbManager
+    (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
+    tables <- DM.mapMethodToTablesCached dbManager dbName db method
+    let inventory = SharedSolver.csInventory sol
+    let stats = computeMappingStats mappings
+    score <- case precomputedScore of
+        Just (Right s) -> evaluate s
+        Just (Left err) -> do
+            reportProgress Warning $
+                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
+            evaluate (0 :: Double)
+        Nothing ->
+            if M.null (mtRegionalizedCF tables)
+                then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+                else do
+                    hier <- DM.getLocationHierarchy dbManager
+                    perDb <-
+                        forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
+                            tbls <- DM.mapMethodToTablesCached dbManager n d method
+                            pure (d, sv, tbls)
+                    case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of
+                        Right s -> evaluate s
+                        Left err -> do
+                            reportProgress Warning $
+                                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
+                            evaluate (0 :: Double)
+    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
+        functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+        contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+        topContribs = take topFlows contribs
+        topContributors =
+            [ FlowContributionEntry
+                { fcoFlowName = bfName f
+                , fcoContribution = c
+                , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                , fcoFlowId = UUID.toText (bfId f)
+                , fcoCategory = compartmentName (bfCompartment f)
+                , fcoCompartment = compartmentSub (bfCompartment f)
+                , fcoCfValue = cfVal
+                }
+            | (f, cfVal, c) <- topContribs
+            ]
+    unless (null unknownUuids) $
+        reportProgress Warning $
+            "[LCIA "
+                <> T.unpack (methodName method)
+                <> "] "
+                <> show (length unknownUuids)
+                <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
+                <> show (take 3 unknownUuids)
+    pure
+        LCIAResult
+            { lrMethodId = methodId method
+            , lrMethodName = methodName method
+            , lrCategory = methodCategory method
+            , lrDamageCategory = methodCategory method
+            , lrScore = score
+            , lrUnit = methodUnit method
+            , lrNormalizedScore = Nothing
+            , lrWeightedScore = Nothing
+            , lrMappedFlows = msTotal stats - msUnmatched stats
+            , lrFunctionalUnit = functionalUnit
+            , lrTopContributors = topContributors
+            }
+
+{- | Batch fast path: scores via 'batchedScoresFor', then build LCIAResult
+records straight from the precomputed contexts. Skips the per-pid
+'mapConcurrently' over methods entirely. When 'topFlows' is 0
+(the default) 'lrTopContributors' is left empty and the contribution
+walk is skipped; when >0, runs 'inventoryContributions' per method.
+-}
+buildLCIABatchResultCached ::
+    DatabaseManager ->
+    Text ->
+    Database ->
+    ProcessId ->
+    Activity ->
+    MethodCollection ->
+    SharedSolver.CrossDBSolution ->
+    [MethodCtx] ->
+    Int ->
+    IO LCIABatchResult
+buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ctxs topFlows = do
+    let damageCats = mcDamageCategories collection
+        nwSets = mcNormWeightSets collection
+        dcLookup =
+            M.fromList
+                [ (subName, dcName dc)
+                | dc <- damageCats
+                , (subName, _) <- dcImpacts dc
+                ]
+        mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
+        methods = map mctxMethod ctxs
+        inventory = SharedSolver.csInventory sol
+    scoreMap <- batchedScoresFor dbManager dbName db sol methods
+    (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+    let unknownUuids =
+            [ fid
+            | (fid, qty) <- M.toList inventory
+            , qty /= 0
+            , not (M.member fid mFlows)
+            ]
+    unless (null unknownUuids) $
+        reportProgress Warning $
+            "[LCIA batch] pid="
+                <> show actPid
+                <> ": "
+                <> show (length unknownUuids)
+                <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
+                <> show (take 3 unknownUuids)
+    mUnitCfg <-
+        if topFlows > 0
+            then Just <$> getMergedUnitConfig dbManager
+            else pure Nothing
+    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
+        functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+        mkResultIO ctx = do
+            let method = mctxMethod ctx
+            score <- case M.lookup (methodId method) scoreMap of
+                Just (Right s) -> pure s
+                Just (Left err) -> do
+                    reportProgress Warning $
+                        "[LCIA "
+                            <> T.unpack (methodName method)
+                            <> "] pid="
+                            <> show actPid
+                            <> ": "
+                            <> T.unpack err
+                    pure 0
+                Nothing -> pure 0
+            topContributors <- case mUnitCfg of
+                Nothing -> pure []
+                Just unitCfg -> do
+                    tables <- DM.mapMethodToTablesCached dbManager dbName db method
+                    let (rawContribs, _unknownUuids) =
+                            inventoryContributions unitCfg mUnits mFlows inventory tables
+                        sorted = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+                        top = take topFlows sorted
+                    pure
+                        [ FlowContributionEntry
+                            { fcoFlowName = bfName f
+                            , fcoContribution = c
+                            , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                            , fcoFlowId = UUID.toText (bfId f)
+                            , fcoCategory = compartmentName (bfCompartment f)
+                            , fcoCompartment = compartmentSub (bfCompartment f)
+                            , fcoCfValue = cfVal
+                            }
+                        | (f, cfVal, c) <- top
+                        ]
+            pure $
+                enrichWithNW dcLookup mNW $
+                    LCIAResult
+                        { lrMethodId = methodId method
+                        , lrMethodName = methodName method
+                        , lrCategory = methodCategory method
+                        , lrDamageCategory = methodCategory method
+                        , lrScore = score
+                        , lrUnit = methodUnit method
+                        , lrNormalizedScore = Nothing
+                        , lrWeightedScore = Nothing
+                        , lrMappedFlows = mctxMappedFlows ctx
+                        , lrFunctionalUnit = functionalUnit
+                        , lrTopContributors = topContributors
+                        }
+    results <- traverse mkResultIO ctxs
+    let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
+    (scoringResults, scoringIndicators) <-
+        computeAllScoringSets (mcScoringSets collection) rawScoreMap
+    pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
+
+{- | Top-level LCIA batch entry point — Handler-returning. Used by the Servant
+routes (via thin where-aliases) and by API.BatchImpacts.
+-}
+activityLCIABatchH ::
+    DatabaseManager ->
+    Text ->
+    Text ->
+    Text ->
+    Maybe SubstitutionRequest ->
+    Handler LCIABatchResult
+activityLCIABatchH dbManager dbName processIdText collectionName mSub = do
+    (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+    (actProcessId, activity) <- resolveOrThrow db processIdText
+    (methods, damageCats, nwSets, scoringSets) <- loadCollection dbManager collectionName
+    let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
+        mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
+    t0 <- liftIO getCurrentTime
+    sol <- crossDBSolutionFor dbManager dbName db sharedSolver actProcessId mSub
+    t1 <- liftIO getCurrentTime
+    let inventory = SharedSolver.csInventory sol
+        !invSize = M.size inventory
+    when (isNothing mSub) $
+        liftIO $ do
+            reportProgress Info $
+                "[LCIA batch] " <> T.unpack collectionName <> " for " <> T.unpack (activityName activity)
+            reportProgress Info $
+                "  Inventory: "
+                    <> show invSize
+                    <> " flows ("
+                    <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
+                    <> "s)"
+            when (invSize == 0) $
+                reportProgress Info "  WARNING: inventory is empty — check matrix computation"
+            when (invSize > 0 && invSize <= 5) $
+                reportProgress Info $
+                    "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
+    scoreMap <- liftIO $ batchedScoresFor dbManager dbName db sol methods
+    rawResults <-
+        liftIO $
+            mapConcurrently
+                (\m -> computeCategoryResult dbManager dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
+                methods
+    let results = map (enrichWithNW dcLookup mNW) rawResults
+        rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
+    (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
+    when (isNothing mSub) $
+        liftIO $ do
+            t2 <- getCurrentTime
+            mapM_ (logBatchCategory invSize) results
+            reportProgress Info $
+                "  Total: "
+                    <> show (length results)
+                    <> " categories ("
+                    <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
+                    <> "s)"
+            forM_ (M.toList scoringResults) $ \(name, scores) ->
+                reportProgress Info $
+                    "  Scoring '"
+                        <> T.unpack name
+                        <> "': "
+                        <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
+    pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+
+{- | Top-level multi-activity batch impacts. One MUMPS multi-RHS solve for all
+valid PIDs, parallel characterization. Used by the Servant POST route and
+by API.BatchImpacts.
+-}
+batchImpactsH ::
+    DatabaseManager ->
+    Text ->
+    Text ->
+    Maybe Int ->
+    BatchImpactsRequest ->
+    Handler BatchImpactsResponse
+batchImpactsH dbManager dbName collectionName topFlowsParam req = do
+    (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+    loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
+    collection <- case M.lookup collectionName loadedCollections of
+        Just mc -> pure mc
+        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+    let resolved =
+            [ (pidText, Service.resolveActivityAndProcessId db pidText)
+            | pidText <- birProcessIds req
+            ]
+        valid = [(pidText, pidNum, act) | (pidText, Right (pidNum, act)) <- resolved]
+        notFound = [pidText | (pidText, Left (Service.ActivityNotFound _)) <- resolved]
+        invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
+        validPidNums = [pidNum | (_, pidNum, _) <- valid]
+    t0 <- liftIO getCurrentTime
+    sols <- solutionsWithDeps dbManager dbName db sharedSolver validPidNums
+    t1 <- liftIO getCurrentTime
+    ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName db) (mcMethods collection)
+    let topFlows = max 0 (fromMaybe 0 topFlowsParam)
+    let mkEntry ((pidText, pidNum, activity), sol) = do
+            impacts <- buildLCIABatchResultCached dbManager dbName db pidNum activity collection sol ctxs topFlows
+            pure
+                BatchImpactsEntry
+                    { bieProcessId = pidText
+                    , bieActivityName = activityName activity
+                    , bieImpacts = impacts
+                    }
+    entries <- liftIO $ mapM mkEntry (zip valid sols)
+    t2 <- liftIO getCurrentTime
+    liftIO $
+        reportProgress Info $
+            "[batch-impacts] "
+                <> T.unpack dbName
+                <> " / "
+                <> T.unpack collectionName
+                <> ": "
+                <> show (length valid)
+                <> " activities"
+                <> ( if null notFound && null invalid
+                        then ""
+                        else
+                            " ("
+                                <> show (length notFound)
+                                <> " not_found, "
+                                <> show (length invalid)
+                                <> " invalid)"
+                   )
+                <> " — solve "
+                <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
+                <> "s, "
+                <> "total "
+                <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
+                <> "s"
+    pure
+        BatchImpactsResponse
+            { birResults = entries
+            , birNotFound = notFound
+            , birInvalid = invalid
+            }
 
 {- | API server implementation
 DatabaseManager is used to dynamically fetch current database on each request
@@ -603,27 +1132,6 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
                     return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
-    -- Cross-DB inventory solution for an activity. 'Nothing' takes the cached
-    -- no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
-    -- 'Just' applies the substitutions through the uncached path.
-    crossDBSolutionFor :: Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> Handler SharedSolver.CrossDBSolution
-    crossDBSolutionFor dbName db solver pid mSub = case mSub of
-        Nothing -> solutionWithDeps dbManager dbName db solver pid
-        Just subReq -> do
-            requireFullyLinked dbName db
-            unitCfg <- liftIO $ getMergedUnitConfig dbManager
-            eSol <-
-                liftIO $
-                    Service.inventoryWithSubsAndDeps
-                        unitCfg
-                        (DM.mkDepSolverLookup dbManager)
-                        db
-                        dbName
-                        solver
-                        pid
-                        (srSubstitutions subReq)
-            either throwServiceError pure eSol
-
     -- Activity inventory calculation (full supply chain LCI).
     -- Goes through the cross-DB back-substitution path so inventories from
     -- dep DBs are merged into the returned flow map; metadata (flow names,
@@ -632,7 +1140,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     activityInventoryCore dbName processIdText mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
+        sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
 
@@ -852,8 +1360,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (db, sharedSolver) <- requireDatabaseByName dbManager dbName
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
-        result <- liftIO $ computeCategoryResult dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+        sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
+        result <- liftIO $ computeCategoryResult dbManager dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
         when (isNothing mSub) $ liftIO $ logLCIAResult result method
         pure result
 
@@ -912,7 +1420,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 eBaselineSol
         baselineLcia <-
             liftIO $
-                computeCategoryResult dbName db baselineSol activity 5 Nothing method
+                computeCategoryResult dbManager dbName db baselineSol activity 5 Nothing method
         perturbed <-
             liftIO $
                 mapConcurrently
@@ -927,64 +1435,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 case eSol of
                     Left err -> pure (PerturbedEntry p (Left err))
                     Right sol -> do
-                        lcia <- computeCategoryResult dbName db sol activity 5 Nothing method
+                        lcia <- computeCategoryResult dbManager dbName db sol activity 5 Nothing method
                         pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
 
-    -- Batch LCIA endpoint (all methods in a collection). The GET variant logs
-    -- timing and per-category detail; the POST (substitution) variant does not.
+    -- Batch LCIA endpoint (all methods in a collection). Thin alias over the
+    -- top-level activityLCIABatchH; preserves the Servant call sites.
     activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> Handler LCIABatchResult
-    activityLCIABatchCore dbName processIdText collectionName mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        (actProcessId, activity) <- resolveOrThrow db processIdText
-        (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
-        let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
-            mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-        t0 <- liftIO getCurrentTime
-        sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub
-        t1 <- liftIO getCurrentTime
-        let inventory = SharedSolver.csInventory sol
-            !invSize = M.size inventory
-        when (isNothing mSub) $
-            liftIO $ do
-                reportProgress Info $
-                    "[LCIA batch] " <> T.unpack collectionName <> " for " <> T.unpack (activityName activity)
-                reportProgress Info $
-                    "  Inventory: "
-                        <> show invSize
-                        <> " flows ("
-                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
-                        <> "s)"
-                when (invSize == 0) $
-                    reportProgress Info "  WARNING: inventory is empty — check matrix computation"
-                when (invSize > 0 && invSize <= 5) $
-                    reportProgress Info $
-                        "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
-        scoreMap <- liftIO $ batchedScoresFor dbName db sol methods
-        rawResults <-
-            liftIO $
-                mapConcurrently
-                    (\m -> computeCategoryResult dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
-                    methods
-        let results = map (enrichWithNW dcLookup mNW) rawResults
-            rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
-        (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
-        when (isNothing mSub) $
-            liftIO $ do
-                t2 <- getCurrentTime
-                mapM_ (logBatchCategory invSize) results
-                reportProgress Info $
-                    "  Total: "
-                        <> show (length results)
-                        <> " categories ("
-                        <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
-                        <> "s)"
-                forM_ (M.toList scoringResults) $ \(name, scores) ->
-                    reportProgress Info $
-                        "  Scoring '"
-                            <> T.unpack name
-                            <> "': "
-                            <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
-        pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+    activityLCIABatchCore = activityLCIABatchH dbManager
 
     getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
     getActivityLCIABatch dbName processIdText collectionName =
@@ -1057,55 +1514,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
             Right val -> return val
 
-    -- Helpers for POST endpoints with substitutions
-    resolveOrThrow :: Database -> Text -> Handler (ProcessId, Activity)
-    resolveOrThrow db processIdText =
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left e@(Service.MatrixError _) -> internalError e
-            Left e@(Service.InvalidUUID _) -> internalError e
-            Left e@(Service.FlowNotFound _) -> internalError e
-            Right (pid, act) ->
-                case Service.validateProcessIdInMatrixIndex db pid of
-                    Left e -> internalError e
-                    Right () -> return (pid, act)
-      where
-        internalError :: Service.ServiceError -> Handler a
-        internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
-
-    throwServiceError :: Service.ServiceError -> Handler a
-    throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
-    throwServiceError (Service.InvalidProcessId msg) = throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-    -- MatrixError covers singular Sherman-Morrison, missing technosphere links,
-    -- and cross-DB unit-conversion failures — all client-submitted invariant
-    -- breakages. Surface as 422 like the rest of the cross-DB pipeline.
-    throwServiceError (Service.MatrixError msg) = throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-    throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Internal server error"}
-    throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
-
-    -- Log a single category result in the batch
-    logBatchCategory :: Int -> LCIAResult -> IO ()
-    logBatchCategory _invSize result = do
-        let scoreTxt = showFFloat (Just 4) (lrScore result) ""
-        reportProgress Info $
-            "  "
-                <> T.unpack (lrMethodName result)
-                <> ": "
-                <> scoreTxt
-                <> " "
-                <> T.unpack (lrUnit result)
-                <> " ("
-                <> show (lrMappedFlows result)
-                <> " CFs mapped)"
-
-    -- Load a method collection by name
-    loadCollection :: Text -> Handler ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
-    loadCollection collectionName = do
-        loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
-        case M.lookup collectionName loadedCollections of
-            Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
-            Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
+    -- (resolveOrThrow, throwServiceError, logBatchCategory and loadCollection
+    -- now live at the top level — see the block above the `lcaServer` def.
+    -- Call sites in this `where` pass `dbManager` explicitly when needed.)
 
     -- Activity analysis endpoint (dispatches to registered analyzers)
     getActivityAnalyze :: Text -> Text -> Text -> Handler Value
@@ -1224,169 +1635,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- vectors collected during the inventory solve. Regional methods score
     -- as a sum across all participating DBs (root + each dep DB reached at
     -- request time); non-regional methods read the merged inventory only.
-    batchedScoresFor ::
-        Text ->
-        Database ->
-        SharedSolver.CrossDBSolution ->
-        [Method] ->
-        IO (M.Map UUID (Either Text Double))
-    batchedScoresFor _dbName _db sol methods = do
-        perDb <- buildPerDbSetTables (SharedSolver.csScalings sol) methods
-        unitCfg <- getMergedUnitConfig dbManager
-        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-        hier <- DM.getLocationHierarchy dbManager
-        pure $
-            M.fromList $
-                computeLCIAScoreSetFromTables
-                    unitCfg
-                    mUnits
-                    mFlows
-                    (SharedSolver.csInventory sol)
-                    hier
-                    perDb
-
-    -- Look up MethodSetTables for every (DB, scaling) pair in the cross-DB
-    -- solution. 'mapMethodSetToTablesCached' is keyed by (dbName, methods),
-    -- so dep DBs on a first-time request pay a one-shot
-    -- 'fillRegionalActivityWeights' walk against their own biosphere
-    -- triples; subsequent requests hit the cache.
-    buildPerDbSetTables ::
-        NE.NonEmpty (Text, Database, Vector) ->
-        [Method] ->
-        IO (NE.NonEmpty (Database, Vector, Method.Mapping.MethodSetTables))
-    buildPerDbSetTables scalings methods =
-        traverse
-            ( \(n, d, sv) -> do
-                mst <- DM.mapMethodSetToTablesCached dbManager n d methods
-                pure (d, sv, mst)
-            )
-            scalings
-
-    -- Helper: compute LCIA result for a single method against a cross-DB
-    -- inventory solution.
-    --
-    -- The 'CrossDBSolution' carries the merged inventory and per-DB scaling
-    -- vectors. Regional methods score as a sum over each participating DB
-    -- ('sumRegionalizedLCIAScoreCrossDB'); non-regional methods read the
-    -- merged inventory only.
-    --
-    -- 'precomputedScore' short-circuits the per-method scoring loop when a
-    -- batched matvec result is already available (see
-    -- 'mapMethodSetToTablesCached' + 'computeLCIAScoreSetFromTables'). Pass
-    -- 'Nothing' on the single-method paths.
-    computeCategoryResult ::
-        Text ->
-        Database ->
-        SharedSolver.CrossDBSolution ->
-        Activity ->
-        Int ->
-        Maybe (Either Text Double) ->
-        Method ->
-        IO LCIAResult
-    computeCategoryResult dbName db sol activity topFlows precomputedScore method = do
-        unitCfg <- getMergedUnitConfig dbManager
-        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-        mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-        tables <- DM.mapMethodToTablesCached dbManager dbName db method
-        let inventory = SharedSolver.csInventory sol
-        -- Force score evaluation here so mapConcurrently actually parallelizes the work
-        -- (without this, lazy thunks are created and forced later in the main thread)
-        let stats = computeMappingStats mappings
-        score <- case precomputedScore of
-            Just (Right s) -> evaluate s
-            Just (Left err) -> do
-                reportProgress Warning $
-                    "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-                evaluate (0 :: Double)
-            Nothing ->
-                if M.null (mtRegionalizedCF tables)
-                    then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                    else do
-                        hier <- DM.getLocationHierarchy dbManager
-                        perDb <-
-                            forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
-                                tbls <- DM.mapMethodToTablesCached dbManager n d method
-                                pure (d, sv, tbls)
-                        case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of
-                            Right s -> evaluate s
-                            Left err -> do
-                                reportProgress Warning $
-                                    "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-                                evaluate (0 :: Double)
-        let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
-            functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-            contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-            topContribs = take topFlows contribs
-            topContributors =
-                [ FlowContributionEntry
-                    { fcoFlowName = bfName f
-                    , fcoContribution = c
-                    , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                    , fcoFlowId = UUID.toText (bfId f)
-                    , fcoCategory = compartmentName (bfCompartment f)
-                    , fcoCompartment = compartmentSub (bfCompartment f)
-                    , fcoCfValue = cfVal
-                    }
-                | (f, cfVal, c) <- topContribs
-                ]
-        unless (null unknownUuids) $
-            reportProgress Warning $
-                "[LCIA "
-                    <> T.unpack (methodName method)
-                    <> "] "
-                    <> show (length unknownUuids)
-                    <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
-                    <> show (take 3 unknownUuids)
-        pure
-            LCIAResult
-                { lrMethodId = methodId method
-                , lrMethodName = methodName method
-                , lrCategory = methodCategory method
-                , lrDamageCategory = methodCategory method -- default, enriched later
-                , lrScore = score
-                , lrUnit = methodUnit method
-                , lrNormalizedScore = Nothing -- enriched later
-                , lrWeightedScore = Nothing -- enriched later
-                , lrMappedFlows = msTotal stats - msUnmatched stats
-                , lrFunctionalUnit = functionalUnit
-                , lrTopContributors = topContributors
-                }
-
-    -- Enrich a raw LCIA result with damage category mapping and NW scores
-    enrichWithNW :: M.Map Text Text -> Maybe NormWeightSet -> LCIAResult -> LCIAResult
-    enrichWithNW dcLookup mNW result =
-        let dmgCat = M.findWithDefault (lrCategory result) (lrCategory result) dcLookup
-            (normScore, weightScore) = case mNW of
-                Just nw ->
-                    let mNorm = M.lookup dmgCat (nwNormalization nw)
-                        mWeight = M.lookup dmgCat (nwWeighting nw)
-                     in case (mNorm, mWeight) of
-                            (Just n, Just w) ->
-                                let ns = lrScore result * n
-                                 in (Just ns, Just (ns * w))
-                            _ -> (Nothing, Nothing)
-                Nothing -> (Nothing, Nothing)
-         in result
-                { lrDamageCategory = dmgCat
-                , lrNormalizedScore = normScore
-                , lrWeightedScore = weightScore
-                }
-
-    logLCIAResult :: LCIAResult -> Method -> IO ()
-    logLCIAResult result method = do
-        let mapped = lrMappedFlows result
-        reportProgress Info $
-            "[LCIA] "
-                <> T.unpack (methodName method)
-                <> ": "
-                <> showFFloat (Just 4) (lrScore result) ""
-                <> " "
-                <> T.unpack (methodUnit method)
-        reportProgress Info $ "  Flow mapping: " <> show mapped <> " CFs mapped"
-
-    -- Flow detail endpoint. Resolves either side via the tagged-sum from
-    -- 'withValidatedFlow' and projects the per-side accessors uniformly.
+    -- Flow detail endpoint
     getFlowDetail :: Text -> Text -> Handler FlowDetail
     getFlowDetail dbName flowIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
@@ -1698,234 +1947,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         (db, _) <- requireDatabaseByName dbManager dbName
         return $ Service.getClassifications db
 
-    -- Batch impacts: one MUMPS multi-RHS solve for all requested processes,
-    -- followed by parallel characterization. Unresolved process ids are
-    -- returned in notFound/invalid rather than aborting the whole call.
+    -- Batch impacts: thin alias over the top-level batchImpactsH.
     postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> Handler BatchImpactsResponse
-    postImpactsBatch dbName collectionName topFlowsParam req = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-        loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
-        collection <- case M.lookup collectionName loadedCollections of
-            Just mc -> pure mc
-            Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
-        let resolved =
-                [ (pidText, Service.resolveActivityAndProcessId db pidText)
-                | pidText <- birProcessIds req
-                ]
-            valid = [(pidText, pidNum, act) | (pidText, Right (pidNum, act)) <- resolved]
-            notFound = [pidText | (pidText, Left (Service.ActivityNotFound _)) <- resolved]
-            invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
-            validPidNums = [pidNum | (_, pidNum, _) <- valid]
-        t0 <- liftIO getCurrentTime
-        sols <- solutionsWithDeps dbManager dbName db sharedSolver validPidNums
-        t1 <- liftIO getCurrentTime
-        -- Pre-fetch per-method static context ONCE for the whole batch instead
-        -- of paying it inside every per-pid 'buildLCIABatchResult' call. For
-        -- 632 agribalyse pids × 27 methods that drops 17 K cache reads down
-        -- to 27 reads on the batch hot path. The context carries everything
-        -- 'buildLCIABatchResult' needs to construct an LCIAResult without
-        -- re-entering 'mapMethodToFlowsCached' / 'mapMethodToTablesCached'.
-        ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbName db) (mcMethods collection)
-        -- Default top-flows=0: this endpoint exists to compute LCIA across
-        -- many activities in one call, so the cheap default skips the
-        -- per-(pid, method) 'inventoryContributions' walk (~17 K calls on a
-        -- 632-pid × 27-method batch). UI/per-activity callers want
-        -- contributors and use the single-method endpoint, whose default
-        -- stays at 5. Bulk callers that DO want contributors opt in with
-        -- ?top-flows=N.
-        let topFlows = max 0 (fromMaybe 0 topFlowsParam)
-        let mkEntry ((pidText, pidNum, activity), sol) = do
-                impacts <- buildLCIABatchResultCached dbName db pidNum activity collection sol ctxs topFlows
-                pure
-                    BatchImpactsEntry
-                        { bieProcessId = pidText
-                        , bieActivityName = activityName activity
-                        , bieImpacts = impacts
-                        }
-        -- Sequential: inner buildLCIABatchResultCached already runs the
-        -- per-method matvec batched in one pass. Nesting outer concurrency
-        -- over already-saturated CPU work just adds thread churn.
-        entries <- liftIO $ mapM mkEntry (zip valid sols)
-        t2 <- liftIO getCurrentTime
-        liftIO $
-            reportProgress Info $
-                "[batch-impacts] "
-                    <> T.unpack dbName
-                    <> " / "
-                    <> T.unpack collectionName
-                    <> ": "
-                    <> show (length valid)
-                    <> " activities"
-                    <> ( if null notFound && null invalid
-                            then ""
-                            else
-                                " ("
-                                    <> show (length notFound)
-                                    <> " not_found, "
-                                    <> show (length invalid)
-                                    <> " invalid)"
-                       )
-                    <> " — solve "
-                    <> showFFloat (Just 2) (realToFrac (diffUTCTime t1 t0) :: Double) ""
-                    <> "s, "
-                    <> "total "
-                    <> showFFloat (Just 2) (realToFrac (diffUTCTime t2 t0) :: Double) ""
-                    <> "s"
-        pure
-            BatchImpactsResponse
-                { birResults = entries
-                , birNotFound = notFound
-                , birInvalid = invalid
-                }
-
-    -- Build an LCIABatchResult from the post-characterization parts.
-    -- The lbrScoringUnits map is derived from the same [ScoringSet] used to
-    -- evaluate the scoring results; pass it in directly.
-    mkLCIABatchResult ::
-        [LCIAResult] ->
-        Maybe NormWeightSet ->
-        [NormWeightSet] ->
-        M.Map Text (M.Map Text Double) ->
-        [ScoringSet] ->
-        M.Map Text (M.Map Text ScoringIndicator) ->
-        LCIABatchResult
-    mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators =
-        LCIABatchResult
-            { lbrResults = results
-            , lbrSingleScore = Nothing
-            , lbrSingleScoreUnit = Nothing
-            , lbrNormWeightSetName = nwName <$> mNW
-            , lbrAvailableNWsets = map nwName nwSets
-            , lbrScoringResults = scoringResults
-            , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
-            , lbrScoringIndicators = scoringIndicators
-            }
-
-    prepMethodCtx :: Text -> Database -> Method -> IO MethodCtx
-    prepMethodCtx dbName db method = do
-        mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-        -- Force the per-(db, method) tables once here too so subsequent
-        -- 'batchedScoresFor' calls hit a warm cache.
-        _ <- DM.mapMethodToTablesCached dbManager dbName db method
-        let stats = computeMappingStats mappings
-        pure MethodCtx{mctxMethod = method, mctxMappedFlows = msTotal stats - msUnmatched stats}
-
-    -- Batch fast path: scores via 'batchedScoresFor', then build LCIAResult
-    -- records straight from the precomputed contexts. Skips the per-pid
-    -- 'mapConcurrently' over 27 methods entirely. When 'topFlows' is 0
-    -- (the default) 'lrTopContributors' is left empty and the contribution
-    -- walk is skipped; when >0, we run 'inventoryContributions' per method
-    -- using the warmed-up 'MethodTables' from 'mapMethodToTablesCached'.
-    buildLCIABatchResultCached ::
-        Text ->
-        Database ->
-        ProcessId ->
-        Activity ->
-        MethodCollection ->
-        SharedSolver.CrossDBSolution ->
-        [MethodCtx] ->
-        Int ->
-        IO LCIABatchResult
-    buildLCIABatchResultCached dbName db actPid activity collection sol ctxs topFlows = do
-        let damageCats = mcDamageCategories collection
-            nwSets = mcNormWeightSets collection
-            dcLookup =
-                M.fromList
-                    [ (subName, dcName dc)
-                    | dc <- damageCats
-                    , (subName, _) <- dcImpacts dc
-                    ]
-            mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
-            methods = map mctxMethod ctxs
-            inventory = SharedSolver.csInventory sol
-        scoreMap <- batchedScoresFor dbName db sol methods
-        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-        -- Surface inventory flows that aren't in the merged FlowDB once per pid
-        -- (independent of method, independent of topFlows) — the signal is a
-        -- coverage-gap warning on the inventory itself, not on any one method.
-        -- Matches what 'computeCategoryResult' emitted on the non-batch path,
-        -- but de-duplicated: one Warning per pid instead of per (pid, method).
-        let unknownUuids =
-                [ fid
-                | (fid, qty) <- M.toList inventory
-                , qty /= 0
-                , not (M.member fid mFlows)
-                ]
-        unless (null unknownUuids) $
-            reportProgress Warning $
-                "[LCIA batch] pid="
-                    <> show actPid
-                    <> ": "
-                    <> show (length unknownUuids)
-                    <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
-                    <> show (take 3 unknownUuids)
-        -- Only fetch UnitConfig when we'll actually walk the contributions; the
-        -- top-flows=0 default skips this entirely.
-        mUnitCfg <-
-            if topFlows > 0
-                then Just <$> getMergedUnitConfig dbManager
-                else pure Nothing
-        let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
-            functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-            -- Per-pid warning on Left mirrors the non-batch 'computeCategoryResult'
-            -- path. The build-time WARN lists global (flow, location) gaps but
-            -- can't tell a caller which specific pid actually hit one; without
-            -- this line a Left collapses silently to score=0, indistinguishable
-            -- from a true zero in the export.
-            mkResultIO ctx = do
-                let method = mctxMethod ctx
-                score <- case M.lookup (methodId method) scoreMap of
-                    Just (Right s) -> pure s
-                    Just (Left err) -> do
-                        reportProgress Warning $
-                            "[LCIA "
-                                <> T.unpack (methodName method)
-                                <> "] pid="
-                                <> show actPid
-                                <> ": "
-                                <> T.unpack err
-                        pure 0
-                    Nothing -> pure 0
-                topContributors <- case mUnitCfg of
-                    Nothing -> pure []
-                    Just unitCfg -> do
-                        tables <- DM.mapMethodToTablesCached dbManager dbName db method
-                        let (rawContribs, _unknownUuids) =
-                                inventoryContributions unitCfg mUnits mFlows inventory tables
-                            sorted = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-                            top = take topFlows sorted
-                        pure
-                            [ FlowContributionEntry
-                                { fcoFlowName = bfName f
-                                , fcoContribution = c
-                                , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                                , fcoFlowId = UUID.toText (bfId f)
-                                , fcoCategory = compartmentName (bfCompartment f)
-                                , fcoCompartment = compartmentSub (bfCompartment f)
-                                , fcoCfValue = cfVal
-                                }
-                            | (f, cfVal, c) <- top
-                            ]
-                pure $
-                    enrichWithNW dcLookup mNW $
-                        LCIAResult
-                            { lrMethodId = methodId method
-                            , lrMethodName = methodName method
-                            , lrCategory = methodCategory method
-                            , lrDamageCategory = methodCategory method
-                            , lrScore = score
-                            , lrUnit = methodUnit method
-                            , lrNormalizedScore = Nothing
-                            , lrWeightedScore = Nothing
-                            , lrMappedFlows = mctxMappedFlows ctx
-                            , lrFunctionalUnit = functionalUnit
-                            , lrTopContributors = topContributors
-                            }
-        results <- traverse mkResultIO ctxs
-        let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
-        (scoringResults, scoringIndicators) <-
-            computeAllScoringSets (mcScoringSets collection) rawScoreMap
-        pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
+    postImpactsBatch = batchImpactsH dbManager
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).
