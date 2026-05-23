@@ -158,7 +158,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
-import Types (Activity (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), Flow (..), FlowDB, LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), UUID, Unit (..), UnitDB, crossDBBySource, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Compartment (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), TechFlowDB, TechnosphereFlow (..), UUID, Unit (..), UnitDB, crossDBBySource, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
 import qualified UnitConversion
 
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -442,7 +442,7 @@ data DatabaseManager = DatabaseManager
     , dmNoCache :: !Bool -- Caching disabled flag
     , dmPlugins :: !PluginRegistry -- Plugin registry (built-in + external)
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
-    , dmMethodMappingCache :: !(TVar (Map (Text, UUID) [(MethodCF, Maybe (Flow, MatchStrategy))]))
+    , dmMethodMappingCache :: !(TVar (Map (Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
     {- ^ Cached flow mappings: (dbName, methodId) → mappings.
     Invalidated on database/method/synonym reload.
     -}
@@ -469,7 +469,7 @@ data DatabaseManager = DatabaseManager
     suggester's synonym-expansion signal. Empty when no path is configured
     or when the file is missing — suggester degrades to plain Jaccard.
     -}
-    , dmMergedFlowMetadataCache :: !(TVar (Maybe (FlowDB, UnitDB)))
+    , dmMergedFlowMetadataCache :: !(TVar (Maybe (BioFlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
     runs once per rebuild rather than per hot-path call.
@@ -483,7 +483,7 @@ data DatabaseManager = DatabaseManager
 {- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
 The mapping depends only on (database, method), not on the process being evaluated.
 -}
-mapMethodToFlowsCached :: DatabaseManager -> Text -> Database -> Method -> IO [(MethodCF, Maybe (Flow, MatchStrategy))]
+mapMethodToFlowsCached :: DatabaseManager -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodToFlowsCached manager dbName db method = do
     let key = (dbName, methodId method)
     cache <- readTVarIO (dmMethodMappingCache manager)
@@ -838,20 +838,19 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
             reportProgressWithTiming Info ("  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)) dbDuration
             -- Auto-extract synonyms from biosphere flows
             let db = ldDatabase loaded
-                bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
-                !pairs = extractFromEcoSpold2 (dbFlows db) bioUUIDs
+                bioFlowDb = dbBioFlows db
+                !pairs = extractFromEcoSpold2 bioFlowDb
                 !bioFlowsWithSyns =
                     length
                         [ ()
-                        | f <- M.elems (dbFlows db)
-                        , S.member (flowId f) bioUUIDs
-                        , not (M.null (flowSynonyms f))
+                        | f <- M.elems bioFlowDb
+                        , not (M.null (bfSynonyms f))
                         ]
             reportProgress Info $
                 "  [EXTRACT] "
                     <> T.unpack (dcName dbConfig)
                     <> ": "
-                    <> show (S.size bioUUIDs)
+                    <> show (M.size bioFlowDb)
                     <> " bio flows, "
                     <> show bioFlowsWithSyns
                     <> " with synonyms, "
@@ -1085,7 +1084,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
             dbRebuiltResult <-
                 if null transforms
                     then pure (Right dbRaw)
-                    else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbFlows transformed) (sdbUnits transformed)
+                    else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbTechFlows transformed) (sdbBioFlows transformed) (sdbUnits transformed)
 
             case dbRebuiltResult of
                 Left err -> return $ Left err
@@ -1259,11 +1258,11 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
             Left err -> return $ Left err
             Right csvFile -> do
                 reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
+                (activities, techFlowDB, bioFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
                 reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                let simpleDb = SimpleDatabase (buildActivityMap activities) flowDB unitDB
+                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB unitDB
                 linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) flowDB unitDB
+                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB unitDB
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -1288,7 +1287,8 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                     buildDatabaseWithMatrices
                         unitConfig
                         (sdbActivities simpleDb)
-                        (sdbFlows simpleDb)
+                        (sdbTechFlows simpleDb)
+                        (sdbBioFlows simpleDb)
                         (sdbUnits simpleDb)
                 case dbResult of
                     Left err -> return $ Left err
@@ -1367,8 +1367,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                             reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
                             -- Auto-extract synonyms from biosphere flows
                             let db = ldDatabase loaded
-                                bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
-                                pairs = extractFromEcoSpold2 (dbFlows db) bioUUIDs
+                                pairs = extractFromEcoSpold2 (dbBioFlows db)
                             autoCreateFlowSynonyms
                                 manager
                                 dbName
@@ -1453,7 +1452,7 @@ relinkDatabase manager dbName = do
                 rawStats =
                     Loader.findAllCrossDBLinks
                         ctx
-                        (dbFlows db)
+                        (dbTechFlows db)
                         (dbUnits db)
                         activityMap
                 newStats = rawStats{cdlTotalInputs = totalInputs}
@@ -2223,7 +2222,8 @@ finalizeDatabase manager dbName = do
                                         buildDatabaseWithMatrices
                                             unitConfig
                                             (sdbActivities (sdSimpleDB staged))
-                                            (sdbFlows (sdSimpleDB staged))
+                                            (sdbTechFlows (sdSimpleDB staged))
+                                            (sdbBioFlows (sdSimpleDB staged))
                                             (sdbUnits (sdSimpleDB staged))
                                     case dbResult of
                                         Left err -> return $ Left err
@@ -2579,7 +2579,10 @@ regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
 getLocationHierarchy :: DatabaseManager -> IO (M.Map Text [Text])
 getLocationHierarchy manager = pure (M.map snd (dmGeographies manager))
 
-getMergedFlowMetadata :: DatabaseManager -> IO (FlowDB, UnitDB)
+-- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
+-- flows are not merged here because characterization (the only consumer of
+-- this cache) targets biosphere flows exclusively.
+getMergedFlowMetadata :: DatabaseManager -> IO (BioFlowDB, UnitDB)
 getMergedFlowMetadata manager = do
     cached <- readTVarIO (dmMergedFlowMetadataCache manager)
     case cached of
@@ -2587,29 +2590,29 @@ getMergedFlowMetadata manager = do
         Nothing -> do
             loaded <- readTVarIO (dmLoadedDbs manager)
             let dbs = map ldDatabase (M.elems loaded)
-                flowMaps = map dbFlows dbs
+                bioMaps = map dbBioFlows dbs
                 unitMaps = map dbUnits dbs
-                !mergedFlows = M.unions flowMaps
+                !mergedBios = M.unions bioMaps
                 !mergedUnits = M.unions unitMaps
-                flowHits = collisions flowFingerprint flowMaps
+                bioHits = collisions bioFingerprint bioMaps
                 unitHits = collisions unitFingerprint unitMaps
-            unless (null flowHits) $
+            unless (null bioHits) $
                 reportProgress Warning $
-                    "[merged FlowDB] "
-                        <> show (length flowHits)
-                        <> " UUID collision(s) with divergent flow metadata; keeping first. Samples: "
-                        <> show (take 3 flowHits)
+                    "[merged BioFlowDB] "
+                        <> show (length bioHits)
+                        <> " UUID collision(s) with divergent biosphere flow metadata; keeping first. Samples: "
+                        <> show (take 3 bioHits)
             unless (null unitHits) $
                 reportProgress Warning $
                     "[merged UnitDB] "
                         <> show (length unitHits)
                         <> " UUID collision(s) with divergent unit metadata; keeping first. Samples: "
                         <> show (take 3 unitHits)
-            let !snap = (mergedFlows, mergedUnits)
+            let !snap = (mergedBios, mergedUnits)
             atomically $ writeTVar (dmMergedFlowMetadataCache manager) (Just snap)
             pure snap
   where
-    flowFingerprint f = (flowName f, flowCategory f, flowSubcompartment f)
+    bioFingerprint f = (bfName f, compartmentName (bfCompartment f), compartmentSub (bfCompartment f))
     unitFingerprint = unitName
 
     collisions :: (Ord fp) => (v -> fp) -> [Map UUID v] -> [UUID]

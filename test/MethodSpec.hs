@@ -20,7 +20,8 @@ import Method.ParserNW (parseNormWeightCSVBytes)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import Method.Types
 import SynonymDB
-import Types (Flow (..), FlowType (..))
+import qualified Types as VT
+import Types (BiosphereFlow (..))
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
@@ -970,17 +971,15 @@ toCRLF = BL.toStrict . BL.intercalate "\r\n" . BL.split 0x0A . BL.fromStrict
 withBOM :: BS.ByteString -> BS.ByteString
 withBOM = BS.append "\xEF\xBB\xBF"
 
--- Helper to create a test Flow
-mkTestFlow :: UUID.UUID -> T.Text -> Flow
+-- Helper to create a test biosphere flow
+mkTestFlow :: UUID.UUID -> T.Text -> BiosphereFlow
 mkTestFlow uuid name =
-    Flow
-        { flowId = uuid
-        , flowName = name
-        , flowUnitId = UUID.nil
-        , flowType = Biosphere
-        , flowCategory = "air"
-        , flowSubcompartment = Nothing
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
-        , flowSynonyms = M.empty
+    BiosphereFlow
+        { bfId = uuid
+        , bfName = name
+        , bfUnitId = UUID.nil
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfSynonyms = M.empty
+        , bfCompartment = VT.Compartment "air" Nothing
         }

@@ -13,6 +13,7 @@ module Service.Aggregate (
     AggregateParams (..),
     AggScope (..),
     AggregateFn (..),
+    ExchangeKind (..),
     emptyAggregateParams,
     aggregate,
 ) where
@@ -48,10 +49,10 @@ import SharedSolver (DepSolverLookup, SharedSolver, computeInventoryMatrixWithDe
 import qualified SharedSolver
 import Types (
     Activity,
+    BioFlowDB,
+    BiosphereFlow (..),
     Database (..),
-    Flow (..),
-    FlowDB,
-    FlowType (..),
+    TechnosphereFlow (..),
     UnitDB,
     exchangeAmount,
     exchangeFlowId,
@@ -66,6 +67,12 @@ import UnitConversion (UnitConfig)
 -- ---------------------------------------------------------------------------
 
 data AggScope = ScopeDirect | ScopeSupplyChain | ScopeBiosphere
+    deriving (Eq, Show)
+
+-- | Local discriminator for filtering by exchange variant. Replaces the
+-- former 'FlowType' discriminator, which is gone now that 'Flow' is split
+-- into 'TechnosphereFlow' and 'BiosphereFlow'.
+data ExchangeKind = KindTechnosphere | KindBiosphere
     deriving (Eq, Show)
 
 data AggregateFn = AggSum | AggCount | AggShare
@@ -83,7 +90,7 @@ data AggregateParams = AggregateParams
     , apFilterUnit :: Maybe Text -- exact unit name
     , apFilterClassifications :: [ClassEntry]
     , apFilterTargetName :: Maybe Text -- only ScopeDirect technosphere
-    , apFilterExchangeType :: Maybe FlowType -- only ScopeDirect
+    , apFilterExchangeType :: Maybe ExchangeKind -- only ScopeDirect
     , apFilterIsReference :: Maybe Bool
     , apGroupBy :: Maybe Text
     , apAggregate :: AggregateFn
@@ -120,7 +127,7 @@ data AggRow = AggRow
     , rowIsReference :: !(Maybe Bool)
     , rowTargetName :: !(Maybe Text) -- only direct technosphere
     , rowLocation :: !(Maybe Text) -- only supply_chain
-    , rowExchangeType :: !(Maybe FlowType) -- only direct / biosphere
+    , rowExchangeType :: !(Maybe ExchangeKind) -- only direct / biosphere
     , rowClassifications :: !(M.Map Text Text)
     }
 
@@ -130,7 +137,7 @@ data AggRow = AggRow
 
 aggregate ::
     UnitConfig ->
-    FlowDB -> -- merged (root + deps) for biosphere scope
+    BioFlowDB -> -- merged (root + deps) for biosphere scope
     UnitDB -> -- merged (root + deps) for biosphere scope
     Database ->
     Text -> -- root DB name (for tagging supply-chain entries)
@@ -198,7 +205,7 @@ rowsFromDirect db act =
   where
     mkRow (ExchangeDetail ex flow _flowUnit _unit exUnitName target) =
         AggRow
-            { rowName = flowName flow
+            { rowName = either tfName bfName flow
             , rowFlowId = UUID.toText (exchangeFlowId ex)
             , rowUnit = exUnitName
             , rowQuantity = exchangeAmount ex
@@ -206,8 +213,8 @@ rowsFromDirect db act =
             , rowIsReference = Just (exchangeIsReference ex)
             , rowTargetName = fmap prsName target
             , rowLocation = fmap prsLocation target
-            , rowExchangeType = Just (if isTechnosphereExchange ex then Technosphere else Biosphere)
-            , rowClassifications = M.empty -- flow-level classifications not yet on Flow; use filter_name instead
+            , rowExchangeType = Just (if isTechnosphereExchange ex then KindTechnosphere else KindBiosphere)
+            , rowClassifications = M.empty
             }
 
 rowsFromSupplyChain :: SupplyChainResponse -> [AggRow]
@@ -234,15 +241,15 @@ rowsFromBiosphere export =
   where
     mkRow (InventoryFlowDetail flow qty uName isEmission _cat) =
         AggRow
-            { rowName = flowName flow
-            , rowFlowId = UUID.toText (flowId flow)
+            { rowName = bfName flow
+            , rowFlowId = UUID.toText (bfId flow)
             , rowUnit = uName
             , rowQuantity = qty
             , rowIsInput = Just (not isEmission)
             , rowIsReference = Nothing
             , rowTargetName = Nothing
             , rowLocation = Nothing
-            , rowExchangeType = Just Biosphere
+            , rowExchangeType = Just KindBiosphere
             , rowClassifications = M.empty
             }
 

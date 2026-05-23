@@ -22,9 +22,10 @@ import Test.Hspec
 
 import Matrix (Inventory)
 import Method.Mapping
-import Method.Types (Compartment (..), Method (..), MethodCF (..))
 import qualified Method.Types as MT
-import Types (Database, Flow (..), FlowType (..), Unit (..))
+import Method.Types (Compartment (..), Method (..), MethodCF (..))
+import qualified Types as VT
+import Types (BiosphereFlow (..), Database, Unit (..))
 import qualified UnitConversion
 
 -- ---------------------------------------------------------------------------
@@ -37,18 +38,16 @@ mkUuid n = UUID.fromWords (fromIntegral n) 0 0 0
 mkUnit :: UUID -> Text -> Unit
 mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}
 
-mkFlow :: UUID -> Text -> UUID -> Flow
+mkFlow :: UUID -> Text -> UUID -> BiosphereFlow
 mkFlow fid name uId =
-    Flow
-        { flowId = fid
-        , flowName = name
-        , flowCategory = "air"
-        , flowSubcompartment = Nothing
-        , flowUnitId = uId
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    BiosphereFlow
+        { bfId = fid
+        , bfName = name
+        , bfUnitId = uId
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = VT.Compartment "air" Nothing
         }
 
 mkCF :: UUID -> Double -> MethodCF
@@ -370,13 +369,11 @@ spec = do
                 uidKg = mkUuid 200
                 flowUns =
                     (mkFlow fidUns "water" uidKg)
-                        { flowCategory = "water"
-                        , flowSubcompartment = Just "(unspecified)"
+                        { bfCompartment = VT.Compartment "water" (Just "(unspecified)")
                         }
                 flowOcean =
                     (mkFlow fidOcean "water" uidKg)
-                        { flowCategory = "water"
-                        , flowSubcompartment = Just "ocean"
+                        { bfCompartment = VT.Compartment "water" (Just "ocean")
                         }
                 cfUns =
                     (mkCF fidUns 3.0)
@@ -416,8 +413,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowOcean =
                     (mkFlow fid "water" uidKg)
-                        { flowCategory = "water"
-                        , flowSubcompartment = Just "ocean"
+                        { bfCompartment = VT.Compartment "water" (Just "ocean")
                         }
                 cfEmpty =
                     (mkCF fid 2.0)
@@ -442,7 +438,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowAny =
                     (mkFlow fid "water" uidKg)
-                        { flowSubcompartment = Just "groundwater, long-term"
+                        { bfCompartment = VT.Compartment "air" (Just "groundwater, long-term")
                         }
                 cf =
                     (mkCF fid 4.0)

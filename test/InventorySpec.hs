@@ -28,8 +28,8 @@ spec = do
 
             case (co2Flow, zincFlow) of
                 (Just co2, Just zinc) -> do
-                    let co2Amount = M.findWithDefault 0.0 (flowId co2) inventory
-                    let zincAmount = M.findWithDefault 0.0 (flowId zinc) inventory
+                    let co2Amount = M.findWithDefault 0.0 (bfId co2) inventory
+                    let zincAmount = M.findWithDefault 0.0 (bfId zinc) inventory
 
                     -- Golden values: CO2 = 0.96 kg, Zinc = 0.00072 kg
                     withinTolerance defaultTolerance sampleMin3ExpectedCO2 co2Amount

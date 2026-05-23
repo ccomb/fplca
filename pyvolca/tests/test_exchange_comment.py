@@ -28,18 +28,19 @@ def _ewu(tag: str, *, ex_comment: str | None, inner_comment: str | None) -> dict
         "isInput": True,
     }
     if tag == "TechnosphereExchange":
-        inner["isReference"] = False
+        inner["role"] = "Input"
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
         "exchange": inner,
         "flowName": "wheat",
-        "flowCategory": "technosphere" if tag == "TechnosphereExchange" else "air",
         "unitName": "kg",
         "targetActivity": None,
         "targetLocation": None,
         "targetProcessId": None,
     }
+    if tag == "BiosphereExchange":
+        out["compartment"] = {"name": "air", "sub": None}
     if ex_comment is not None:
         out["exComment"] = ex_comment
     return out
@@ -53,14 +54,17 @@ def _ed(tag: str, *, inner_comment: str | None, ex_comment: str | None = None) -
         "isInput": True,
     }
     if tag == "TechnosphereExchange":
-        inner["isReference"] = False
+        inner["role"] = "Input"
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
         "exchange": inner,
-        "flow": {"name": "wheat", "category": "technosphere"},
         "exchangeUnitName": "kg",
     }
+    if tag == "TechnosphereExchange":
+        out["flow"] = {"Left": {"name": "wheat"}}
+    else:
+        out["flow"] = {"Right": {"name": "wheat", "compartment": {"name": "air", "sub": None}}}
     if ex_comment is not None:
         out["exComment"] = ex_comment
     return out

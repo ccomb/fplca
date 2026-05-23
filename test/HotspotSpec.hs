@@ -20,7 +20,7 @@ spec = do
                 Nothing -> expectationFailure "CO2 flow not found in SAMPLE.min3"
                 Just co2 -> do
                     scalingVec <- computeScalingVector db 0
-                    let cfMap = M.singleton (flowId co2) 1.0
+                    let cfMap = M.singleton (bfId co2) 1.0
                     let contribs = computeProcessLCIAContributions db scalingVec cfMap
                     let nonZero = M.filter (\v -> abs v > 1e-15) contribs
                     -- In SAMPLE.min3 only Z emits CO2 directly
@@ -33,7 +33,7 @@ spec = do
                 Nothing -> expectationFailure "CO2 flow not found in SAMPLE.min3"
                 Just co2 -> do
                     scalingVec <- computeScalingVector db 0
-                    let cfMap = M.singleton (flowId co2) 1.0
+                    let cfMap = M.singleton (bfId co2) 1.0
                     let contribs = computeProcessLCIAContributions db scalingVec cfMap
                     let total = sum (M.elems contribs)
                     withinTolerance defaultTolerance sampleMin3ExpectedCO2 total
@@ -47,7 +47,7 @@ spec = do
                 Nothing -> expectationFailure "CO2 flow not found in SAMPLE.min3"
                 Just co2 -> do
                     scalingVec <- computeScalingVector db 0
-                    let cfMap = M.singleton (flowId co2) 1.0
+                    let cfMap = M.singleton (bfId co2) 1.0
                     let nonZero =
                             M.filter (\v -> abs v > 1e-15) $
                                 computeProcessLCIAContributions db scalingVec cfMap

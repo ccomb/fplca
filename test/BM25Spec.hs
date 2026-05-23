@@ -43,8 +43,7 @@ mkRefOutput fid =
         { techFlowId = fid
         , techAmount = 1.0
         , techUnitId = nil
-        , techIsInput = False
-        , techIsReference = True
+        , techRole = ReferenceProduct
         , techActivityLinkId = nil
         , techProcessLinkId = Nothing
         , techLocation = ""
@@ -52,18 +51,15 @@ mkRefOutput fid =
         , techPedigree = Nothing
         }
 
-mkFlow :: UUID -> Text -> Flow
+mkFlow :: UUID -> Text -> TechnosphereFlow
 mkFlow fid name =
-    Flow
-        { flowId = fid
-        , flowName = name
-        , flowCategory = ""
-        , flowSubcompartment = Nothing
-        , flowUnitId = nil
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    TechnosphereFlow
+        { tfId = fid
+        , tfName = name
+        , tfUnitId = nil
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
         }
 
 f1 :: UUID

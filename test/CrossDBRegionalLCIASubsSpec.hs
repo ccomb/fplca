@@ -54,7 +54,7 @@ spec = describe "cross-DB regional LCIA via substitution path" $ do
              in sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
 

@@ -53,6 +53,7 @@ import qualified Data.Vector.Unboxed as U
 
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, fillBroadcastVector, fillRegionalActivityWeights)
 import Method.Types (FlowDirection (..), MethodCF (..))
+import qualified Types as VT
 import Types
 import UnitConversion (UnitConfig (..), UnitDef (..))
 
@@ -82,18 +83,16 @@ kgUnitConfig =
         , ucOriginalKeys = M.fromList [("kg", "kg")]
         }
 
-testFlow :: Flow
+testFlow :: BiosphereFlow
 testFlow =
-    Flow
-        { flowId = flowUUID
-        , flowName = "Carbon dioxide"
-        , flowCategory = "air"
-        , flowSubcompartment = Nothing
-        , flowUnitId = unitId kgUnit
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    BiosphereFlow
+        { bfId = flowUUID
+        , bfName = "Carbon dioxide"
+        , bfUnitId = unitId kgUnit
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = VT.Compartment "air" Nothing
         }
 
 mkActivity :: Int -> Text -> Activity
@@ -113,7 +112,7 @@ mkActivity _ loc =
         }
 
 emptyIndexes :: Indexes
-emptyIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty
+emptyIndexes = Indexes M.empty M.empty M.empty M.empty
 
 {- | Build a synthetic single-DB fixture parameterized by:
 * @offset@: starting index for activity UUIDs (so root and dep don't collide)
@@ -141,13 +140,14 @@ mkDB offset locs bioTriples =
             , dbActivityProductsIndex = M.empty
             , dbProductIndex = emptyProductIndex
             , dbActivities = activities
-            , dbFlows = M.singleton flowUUID testFlow
+            , dbTechFlows = M.empty
+            , dbBioFlows = M.singleton flowUUID testFlow
             , dbUnits = M.singleton (unitId kgUnit) kgUnit
             , dbIndexes = emptyIndexes
             , dbTechnosphereTriples = U.empty
             , dbBiosphereTriples = triples
             , dbActivityIndex = actIdx
-            , dbBiosphereFlows = V.singleton flowUUID
+            , dbBiosphereOrder = V.singleton flowUUID
             , dbActivityCount = fromIntegral n
             , dbBiosphereCount = 1
             , dbCrossDBLinks = []
@@ -190,7 +190,7 @@ linkAt consumerDb supplierDb supplierName supIdx coeff =
                 }
      in consumerDb{dbCrossDBLinks = link : dbCrossDBLinks consumerDb}
 
-regionalMappings :: [(Text, Double)] -> [(MethodCF, Maybe (Flow, MatchStrategy))]
+regionalMappings :: [(Text, Double)] -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 regionalMappings = map (\(loc, v) -> (cf loc v, Just (testFlow, ByName)))
   where
     cf loc v =
@@ -205,14 +205,14 @@ regionalMappings = map (\(loc, v) -> (cf loc v, Just (testFlow, ByName)))
             , mcfConsumerLocation = Just loc
             }
 
-buildTables :: Database -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
+buildTables :: Database -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildTables db mappings =
     let raw = buildMethodTables M.empty mappings
-        withBroadcast = fillBroadcastVector kgUnitConfig (dbUnits db) (dbFlows db) raw
+        withBroadcast = fillBroadcastVector kgUnitConfig (dbUnits db) (dbBioFlows db) raw
      in fillRegionalActivityWeights
             kgUnitConfig
             (dbUnits db)
-            (dbFlows db)
+            (dbBioFlows db)
             db
             M.empty
             withBroadcast

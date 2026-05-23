@@ -404,7 +404,7 @@ for the wire when the DB differs from the root.
 crossDBProcessContributions ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     DepSolverLookup ->
     -- | root DB
     Database ->

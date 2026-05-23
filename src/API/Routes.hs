@@ -39,7 +39,8 @@ import qualified GHC.Stats
 import Matrix (Inventory, Vector)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
-import Method.Types (DamageCategory (..), FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
+import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
+import qualified Method.Types as MT
 import Numeric (showFFloat)
 import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
 import Progress (ProgressLevel (Info, Warning), getLogLines, reportProgress)
@@ -285,15 +286,15 @@ mkCrossDBContrib ::
     DatabaseManager ->
     -- | root DB name
     Text ->
-    -- | merged flowDB
-    FlowDB ->
+    -- | merged biosphere flow DB
+    BioFlowDB ->
     -- | merged unitDB
     UnitDB ->
     -- | total score (for share %)
     Double ->
     ((Text, ProcessId), Double) ->
     IO ActivityContribution
-mkCrossDBContrib dbManager rootDbName flowDB unitDB score ((depDbName, pid), c) = do
+mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c) = do
     mLd <- DM.getDatabase dbManager depDbName
     pure $ case mLd of
         Just ld ->
@@ -303,7 +304,8 @@ mkCrossDBContrib dbManager rootDbName flowDB unitDB score ((depDbName, pid), c) 
                     if depDbName == rootDbName
                         then processIdToText d pid
                         else depDbName <> "::" <> processIdToText d pid
-                (prodName, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo flowDB unitDB) mAct
+                -- Reference products are technosphere; pull from the dep DB's tech flows.
+                (prodName, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
              in ActivityContribution
                     { acProcessId = pidText
                     , acActivityName = maybe "" activityName mAct
@@ -331,8 +333,10 @@ withValidatedActivity db processId action = do
         Left _ -> throwError err400{errBody = "Invalid request"}
         Right activity -> action activity
 
--- | Helper function to validate UUID and lookup flow
-withValidatedFlow :: Database -> Text -> (Flow -> Handler a) -> Handler a
+{- | Helper function to validate UUID and lookup flow. Returns a tagged sum
+so callers can dispatch on tech vs bio.
+-}
+withValidatedFlow :: Database -> Text -> (Either TechnosphereFlow BiosphereFlow -> Handler a) -> Handler a
 withValidatedFlow db uuid action = do
     case Service.validateUUID uuid of
         Left (Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
@@ -341,9 +345,11 @@ withValidatedFlow db uuid action = do
             case UUID.fromText validUuidText of
                 Nothing -> throwError err400{errBody = "Invalid UUID format"}
                 Just validUuid ->
-                    case M.lookup validUuid (dbFlows db) of
-                        Nothing -> throwError err404{errBody = "Flow not found"}
-                        Just flow -> action flow
+                    case M.lookup validUuid (dbTechFlows db) of
+                        Just flow -> action (Left flow)
+                        Nothing -> case M.lookup validUuid (dbBioFlows db) of
+                            Just flow -> action (Right flow)
+                            Nothing -> throwError err404{errBody = "Flow not found"}
 
 -- | Login request body
 newtype LoginRequest = LoginRequest
@@ -616,19 +622,19 @@ computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore
                             reportProgress Warning $
                                 "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
                             evaluate (0 :: Double)
-    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
+    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
         functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
         (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
         contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
         topContribs = take topFlows contribs
         topContributors =
             [ FlowContributionEntry
-                { fcoFlowName = flowName f
+                { fcoFlowName = bfName f
                 , fcoContribution = c
                 , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                , fcoFlowId = UUID.toText (flowId f)
-                , fcoCategory = flowCategory f
-                , fcoCompartment = flowSubcompartment f
+                , fcoFlowId = UUID.toText (bfId f)
+                , fcoCategory = compartmentName (bfCompartment f)
+                , fcoCompartment = compartmentSub (bfCompartment f)
                 , fcoCfValue = cfVal
                 }
             | (f, cfVal, c) <- topContribs
@@ -705,7 +711,7 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
         if topFlows > 0
             then Just <$> getMergedUnitConfig dbManager
             else pure Nothing
-    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits activity
+    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
         functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
         mkResultIO ctx = do
             let method = mctxMethod ctx
@@ -731,12 +737,12 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
                         top = take topFlows sorted
                     pure
                         [ FlowContributionEntry
-                            { fcoFlowName = flowName f
+                            { fcoFlowName = bfName f
                             , fcoContribution = c
                             , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                            , fcoFlowId = UUID.toText (flowId f)
-                            , fcoCategory = flowCategory f
-                            , fcoCompartment = flowSubcompartment f
+                            , fcoFlowId = UUID.toText (bfId f)
+                            , fcoCategory = compartmentName (bfCompartment f)
+                            , fcoCompartment = compartmentSub (bfCompartment f)
                             , fcoCfValue = cfVal
                             }
                         | (f, cfVal, c) <- top
@@ -1292,8 +1298,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 _ -> throwError err400{errBody = "scope must be one of: direct | supply_chain | biosphere"}
             exchangeType <- case fexchangeTypeParam of
                 Nothing -> return Nothing
-                Just "technosphere" -> return (Just Technosphere)
-                Just "biosphere" -> return (Just Biosphere)
+                Just "technosphere" -> return (Just Agg.KindTechnosphere)
+                Just "biosphere" -> return (Just Agg.KindBiosphere)
                 Just _ -> throwError err400{errBody = "filter_exchange_type must be one of: technosphere | biosphere"}
             case (exchangeType, scope) of
                 (Just _, Agg.ScopeBiosphere) ->
@@ -1534,7 +1540,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                     , acInventory = inventory
                                     , acMethods = methods
                                     , acParameters = M.empty
-                                    , acFlowDB = mFlows
+                                    , acTechFlowDB = M.empty
+                                    , acBioFlowDB = mFlows
                                     , acUnitDB = mUnits
                                     }
                         liftIO $ ahAnalyze analyzer ctx
@@ -1553,12 +1560,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
                 topFlows =
                     [ FlowContributionEntry
-                        { fcoFlowName = flowName f
+                        { fcoFlowName = bfName f
                         , fcoContribution = c
                         , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                        , fcoFlowId = UUID.toText (flowId f)
-                        , fcoCategory = flowCategory f
-                        , fcoCompartment = flowSubcompartment f
+                        , fcoFlowId = UUID.toText (bfId f)
+                        , fcoCategory = compartmentName (bfCompartment f)
+                        , fcoCompartment = compartmentSub (bfCompartment f)
                         , fcoCfValue = cfVal
                         }
                     | (f, cfVal, c) <- take lim contribs
@@ -1633,16 +1640,17 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getFlowDetail dbName flowIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedFlow db flowIdText $ \flow -> do
-            let usageCount = Service.getFlowUsageCount db (flowId flow)
-            let flowUnitName = getUnitNameForFlow (dbUnits db) flow
-            return $ FlowDetail flow flowUnitName usageCount
+            let fid = either tfId bfId flow
+                unitName' = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db)) flow
+                usageCount = Service.getFlowUsageCount db fid
+            return $ FlowDetail flow unitName' usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Text -> Handler [ActivitySummary]
     getFlowActivities dbName flowIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedFlow db flowIdText $ \flow ->
-            return $ Service.getActivitiesUsingFlow db (flowId flow)
+            return $ Service.getActivitiesUsingFlow db (either tfId bfId flow)
 
     -- List all available methods (from loaded collections)
     getMethods :: Handler [MethodSummary]
@@ -1701,12 +1709,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         { ufaFlowRef = mcfFlowRef cf
                         , ufaFlowName = mcfFlowName cf
                         , ufaDirection = case mcfDirection cf of
-                            Input -> "Input"
-                            Output -> "Output"
+                            MT.Input -> "Input"
+                            MT.Output -> "Output"
                         }
                     | (cf, Nothing) <- mappings
                     ]
-            uniqueDbFlows = S.size $ S.fromList [flowId f | (_, Just (f, _)) <- mappings]
+            uniqueDbFlows = S.size $ S.fromList [bfId f | (_, Just (f, _)) <- mappings]
         return
             MappingStatus
                 { mstMethodId = methodId method
@@ -1733,9 +1741,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             -- Build reverse index: DB flow UUID → (MethodCF, MatchStrategy)
             reverseIndex =
                 M.fromList
-                    [(flowId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
+                    [(bfId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
             -- Build entries for all biosphere flows
-            entries = map (buildFlowEntry db reverseIndex) (V.toList (dbBiosphereFlows db))
+            entries = map (buildFlowEntry db reverseIndex) (V.toList (dbBiosphereOrder db))
             matchedCount = length [() | e <- entries, isJust (fceCfValue e)]
         return
             FlowCFMapping
@@ -1748,12 +1756,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     buildFlowEntry :: Database -> M.Map UUID (MethodCF, MatchStrategy) -> UUID -> FlowCFEntry
     buildFlowEntry db reverseIndex uuid =
-        let mFlow = M.lookup uuid (dbFlows db)
+        let mFlow = M.lookup uuid (dbBioFlows db)
             mMatch = M.lookup uuid reverseIndex
          in FlowCFEntry
                 { fceFlowId = uuid
-                , fceFlowName = maybe "" flowName mFlow
-                , fceFlowCategory = maybe "" flowCategory mFlow
+                , fceFlowName = maybe "" bfName mFlow
+                , fceFlowCategory = maybe "" (compartmentName . bfCompartment) mFlow
                 , fceCfValue = fmap (mcfValue . fst) mMatch
                 , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
                 , fceMatchStrategy = fmap (strategyToText . snd) mMatch
@@ -1778,7 +1786,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         let matched =
                 [ (cf, f, strat)
                 | (cf, Just (f, strat)) <- mappings
-                , matchesQuery queryLower (mcfFlowName cf) (flowName f)
+                , matchesQuery queryLower (mcfFlowName cf) (bfName f)
                 ]
             sorted = sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
             top = take lim sorted
@@ -1788,13 +1796,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     , cheCfValue = mcfValue cf
                     , cheCfUnit = mcfUnit cf
                     , cheDirection = case mcfDirection cf of
-                        Input -> "Input"
-                        Output -> "Output"
-                    , cheDbFlowName = flowName f
-                    , cheFlowId = UUID.toText (flowId f)
-                    , cheFlowUnit = getUnitNameForFlow (dbUnits db) f
-                    , cheCategory = flowCategory f
-                    , cheCompartment = flowSubcompartment f
+                        MT.Input -> "Input"
+                        MT.Output -> "Output"
+                    , cheDbFlowName = bfName f
+                    , cheFlowId = UUID.toText (bfId f)
+                    , cheFlowUnit = getUnitNameForBioFlow (dbUnits db) f
+                    , cheCategory = compartmentName (bfCompartment f)
+                    , cheCompartment = compartmentSub (bfCompartment f)
                     , cheMatchStrategy = strategyToText strat
                     }
         return
@@ -1875,8 +1883,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             { mfaFlowRef = mcfFlowRef cf
             , mfaFlowName = mcfFlowName cf
             , mfaDirection = case mcfDirection cf of
-                Input -> "Input"
-                Output -> "Output"
+                MT.Input -> "Input"
+                MT.Output -> "Output"
             , mfaValue = mcfValue cf
             }
 
@@ -2003,7 +2011,12 @@ searchFlowsInternal :: Database -> Service.FlowFilter -> Handler (SearchResults 
 searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam, Service.ffSort = sortParam, Service.ffOrder = orderParam} = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
-        allResults = [FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow)) | flow <- flows]
+        nameOf = either tfName bfName
+        idOf = either tfId bfId
+        unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
+        synonymsOf = either tfSynonyms bfSynonyms
+        categoryOf = either (const "") (compartmentName . bfCompartment)
+        allResults = [FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)) | flow <- flows]
         isDesc = orderParam == Just "desc"
         fsCmp = case sortParam of
             Just "category" -> \a b -> compare (fsrCategory a) (fsrCategory b)

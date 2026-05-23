@@ -58,7 +58,7 @@ import Data.UUID (UUID)
 import Matrix (Inventory)
 import Method.Types (Method, MethodCF)
 import SynonymDB (SynonymDB)
-import Types (Activity, ActivityMap, Database, Flow, FlowDB, SimpleDatabase, UnitDB)
+import Types (Activity, ActivityMap, BioFlowDB, BiosphereFlow, Database, SimpleDatabase, TechFlowDB, UnitDB)
 
 -- | How a plugin handle is implemented
 data PluginBackend
@@ -80,7 +80,8 @@ data ImportHandle = ImportHandle
 
 data ImportResult = ImportResult
     { irActivities :: !ActivityMap
-    , irFlows :: !FlowDB
+    , irTechFlows :: !TechFlowDB
+    , irBioFlows :: !BioFlowDB
     , irUnits :: !UnitDB
     , irWarnings :: ![Text]
     }
@@ -136,9 +137,9 @@ data MapperHandle = MapperHandle
     }
 
 data MapContext = MapContext
-    { mcFlowsByUUID :: !(Map UUID Flow)
-    , mcFlowsByName :: !(Map Text [Flow])
-    , mcFlowsByCAS :: !(Map Text [Flow])
+    { mcBioFlowsByUUID :: !BioFlowDB -- Biosphere flows by UUID (CF matching targets these)
+    , mcBioFlowsByName :: !(Map Text [BiosphereFlow])
+    , mcBioFlowsByCAS :: !(Map Text [BiosphereFlow])
     , mcSynonymDB :: !SynonymDB
     , mcActivities :: !(Map Text [Activity])
     }
@@ -218,11 +219,13 @@ data AnalyzeContext = AnalyzeContext
     , acInventory :: !Inventory
     , acMethods :: ![Method]
     , acParameters :: !(Map Text Value)
-    , acFlowDB :: !FlowDB
-    {- ^ Merged flow metadata across every loaded DB. The 'Inventory' passed
-    in may be cross-DB-merged, so analyzers that characterize or enrich
-    by flow UUID should look up through these rather than @dbFlows acDatabase@
-    (which would silently drop dep-DB flows).
+    , acTechFlowDB :: !TechFlowDB
+    , acBioFlowDB :: !BioFlowDB
+    {- ^ Merged flow metadata across every loaded DB, split by kind. The
+    'Inventory' passed in may be cross-DB-merged, so analyzers that
+    characterize or enrich by flow UUID should look up through these rather
+    than the per-database fields on @acDatabase@ (which would silently drop
+    dep-DB flows).
     -}
     , acUnitDB :: !UnitDB
     }

@@ -172,6 +172,7 @@ def readme_namespace() -> dict[str, Any]:
         AggregateResult,
         BiosphereExchange,
         Client,
+        Compartment,
         ConsumerResult,
         ConsumersResponse,
         FlowContribution,
@@ -213,18 +214,16 @@ def readme_namespace() -> dict[str, Any]:
         exchanges=[
             TechnosphereExchange(
                 flow_name="soft wheat grain, conventional",
-                flow_category="agricultural",
                 amount=1.31,
                 unit="kg",
-                is_input=True,
-                is_reference=False,
+                role="Input",
                 target_activity="Soft wheat grain production, FR",
                 target_location="FR",
                 target_process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
             ),
             BiosphereExchange(
                 flow_name="Carbon dioxide, fossil",
-                flow_category="air",
+                compartment=Compartment(name="air"),
                 amount=0.41,
                 unit="kg",
                 is_input=False,
