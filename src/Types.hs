@@ -65,14 +65,16 @@ data Compartment = Compartment
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
--- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
--- source dataset omitted the compartment. Use 'bfCompartment' directly when
--- you need to distinguish "absent" from "empty string".
+{- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
+source dataset omitted the compartment. Use 'bfCompartment' directly when
+you need to distinguish "absent" from "empty string".
+-}
 bfCompartmentName :: BiosphereFlow -> Text
 bfCompartmentName = maybe "" compartmentName . bfCompartment
 
--- | The biosphere flow's sub-compartment (e.g. "high. pop."), or @Nothing@
--- when neither the source nor the medium recorded one.
+{- | The biosphere flow's sub-compartment (e.g. "high. pop."), or @Nothing@
+when neither the source nor the medium recorded one.
+-}
 bfCompartmentSub :: BiosphereFlow -> Maybe Text
 bfCompartmentSub = (>>= compartmentSub) . bfCompartment
 
@@ -144,11 +146,12 @@ data BiosphereFlow = BiosphereFlow
     , bfSynonyms :: !(M.Map Text (S.Set Text))
     , bfCAS :: !(Maybe Text)
     , bfSubstanceId :: !(Maybe Int)
-    , -- | The source dataset's compartment (medium + optional sub) for this
-      -- flow, or @Nothing@ when the source omitted it. Distinguishing
-      -- "no compartment recorded" from "the empty string" is required to
-      -- avoid silently broadening LCIA matches in 'Method.Mapping'.
-      bfCompartment :: !(Maybe Compartment)
+    , bfCompartment :: !(Maybe Compartment)
+    {- ^ The source dataset's compartment (medium + optional sub) for this
+    flow, or @Nothing@ when the source omitted it. Distinguishing
+    "no compartment recorded" from "the empty string" is required to
+    avoid silently broadening LCIA matches in 'Method.Mapping'.
+    -}
     }
     deriving (Generic, NFData, Store)
 
@@ -903,6 +906,39 @@ unresolvedCount = sum . map fst . M.elems . cdlUnresolvedProducts
 crossDBBySource :: CrossDBLinkingStats -> M.Map Text Int
 crossDBBySource = M.fromListWith (+) . map (\l -> (cdlSourceDatabase l, 1)) . cdlLinks
 
+{- | Minimal set of source databases needed to preserve every link's best
+supplier choice. A DB is included iff at least one link cannot be supplied
+by any already-included DB at the same score (its tied set is disjoint
+from the running selection). Ties between equally-valid DBs are broken
+alphabetically for determinism.
+
+This is the canonical pre-selection rule: any DB that wins links only
+"by tie-break" against an already-needed DB is dropped as redundant.
+-}
+computeMinimalSelectedDeps :: [CrossDBLink] -> [Text]
+computeMinimalSelectedDeps links =
+    let tiedSets = [S.insert (cdlSourceDatabase l) (S.fromList (cdlTiedAlternatives l)) | l <- links]
+        essential = S.unions [s | s <- tiedSets, S.size s == 1]
+        uncovered = filter (S.null . S.intersection essential) tiedSets
+     in S.toAscList (greedyCover essential uncovered)
+  where
+    greedyCover :: S.Set Text -> [S.Set Text] -> S.Set Text
+    greedyCover covered [] = covered
+    greedyCover covered uncov =
+        let pick = S.findMin (S.unions uncov)
+            covered' = S.insert pick covered
+            uncov' = filter (S.notMember pick) uncov
+         in greedyCover covered' uncov'
+
+{- | Databases that contributed at least one resolved link but are redundant
+under 'computeMinimalSelectedDeps'. Useful to surface in the setup UI as
+"available but not needed".
+-}
+crossDBRedundantSources :: [CrossDBLink] -> [Text] -> [Text]
+crossDBRedundantSources links selected =
+    let winners = S.fromList (map cdlSourceDatabase links)
+     in S.toAscList (winners `S.difference` S.fromList selected)
+
 {- | Cross-database link: records that an exchange in this database
 sources from a supplier in another database.
 
@@ -932,6 +968,11 @@ data CrossDBLink = CrossDBLink
     -- ^ Supplier location (for display)
     , cdlSourceDatabase :: !Text
     -- ^ Source database name
+    , cdlTiedAlternatives :: ![Text]
+    {- ^ Other source databases whose best candidate matched the winner's score.
+    A non-empty list means this link could equivalently be supplied from
+    another database — used to compute the minimal dependency pre-selection.
+    -}
     }
     deriving (Generic, NFData, Store, Show, Eq)
 

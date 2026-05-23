@@ -1278,20 +1278,21 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
             Just flow ->
                 let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
                  in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
-                        CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc warnings ->
+                        result@CrossDBLinked{} ->
                             let !crossLink =
                                     CrossDBLink
                                         { cdlConsumerActUUID = consumerActUUID
                                         , cdlConsumerProdUUID = consumerProdUUID
-                                        , cdlSupplierActUUID = supplierActUUID
-                                        , cdlSupplierProdUUID = supplierProdUUID
+                                        , cdlSupplierActUUID = cdlrActivityUUID result
+                                        , cdlSupplierProdUUID = cdlrProductUUID result
                                         , cdlCoefficient = amt
                                         , cdlExchangeUnit = flowUnitName
-                                        , cdlFlowName = prodName
-                                        , cdlLocation = supplierLoc
-                                        , cdlSourceDatabase = dbName
+                                        , cdlFlowName = cdlrProductName result
+                                        , cdlLocation = cdlrLocation result
+                                        , cdlSourceDatabase = cdlrDatabaseName result
+                                        , cdlTiedAlternatives = cdlrTiedDatabases result
                                         }
-                                fallbacks = [(prodName, req, actLoc) | UpperLocationUsed req actLoc <- warnings]
+                                fallbacks = [(cdlrProductName result, req, actLoc) | UpperLocationUsed req actLoc <- cdlrWarnings result]
                              in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks 0
                         CrossDBNotLinked blocker ->
                             CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] 0

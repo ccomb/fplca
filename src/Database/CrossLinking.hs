@@ -124,10 +124,20 @@ data CrossDBCandidate = CrossDBCandidate
 
 -- | Result of cross-database linking attempt
 data CrossDBLinkResult
-    = -- | Success: actUUID, prodUUID, dbName, score, productName, location, warnings
-      CrossDBLinked !UUID !UUID !Text !Int !Text !Text ![LinkWarning]
-    | -- | Failed: reason for failure
-      CrossDBNotLinked !LinkBlocker
+    = CrossDBLinked
+        { cdlrActivityUUID :: !UUID
+        , cdlrProductUUID :: !UUID
+        , cdlrDatabaseName :: !Text
+        , cdlrScore :: !Int
+        , cdlrProductName :: !Text
+        , cdlrLocation :: !Text
+        , cdlrWarnings :: ![LinkWarning]
+        , cdlrTiedDatabases :: ![Text]
+        {- ^ Other databases whose best candidate ties the winner's score.
+        Used to detect redundant dependencies at staging time.
+        -}
+        }
+    | CrossDBNotLinked !LinkBlocker
 
 -- | Non-blocking warning: link succeeded but with caveats
 data LinkWarning
@@ -298,9 +308,10 @@ buildIndexedDatabase dbName synDB db =
             , idbBySynonymGroup = bySynonym
             }
 
--- | Build supplier entries from a SimpleDatabase. Reference exchanges of
--- production processes are always technosphere outputs, so the supplier flow
--- lives in `sdbTechFlows`.
+{- | Build supplier entries from a SimpleDatabase. Reference exchanges of
+production processes are always technosphere outputs, so the supplier flow
+lives in `sdbTechFlows`.
+-}
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
     [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
@@ -339,8 +350,9 @@ buildIndexedDatabaseFromDB dbName synDB db =
             , idbBySynonymGroup = bySynonym
             }
 
--- | Build supplier entries from a full Database. Same invariant as
--- 'buildSupplierEntries' above: reference exchanges are technosphere.
+{- | Build supplier entries from a full Database. Same invariant as
+'buildSupplierEntries' above: reference exchanges are technosphere.
+-}
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
     [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
@@ -398,18 +410,32 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                             -- Score by effective location
                             let scoredCandidates = map (scoreEntry effectiveLocation) unitCompatible
                                 !best = maximumBy (comparing cdbScore) scoredCandidates
+                                -- Other databases whose best candidate matches the winner's score.
+                                -- Dedup by DB name to avoid counting multiple intra-DB ties.
+                                tied =
+                                    let winnerDB = cdbDatabaseName best
+                                        winnerScore = cdbScore best
+                                        sameScoreDBs =
+                                            [ cdbDatabaseName c
+                                            | c <- scoredCandidates
+                                            , cdbScore c == winnerScore
+                                            , cdbDatabaseName c /= winnerDB
+                                            ]
+                                     in M.keys (M.fromList [(d, ()) | d <- sameScoreDBs])
                              in if cdbScore best >= lcThreshold
                                     then
                                         -- Build warnings (only when original location was explicit)
                                         let warnings = if T.null location then [] else buildWarnings effectiveLocation (cdbLocation best)
                                          in CrossDBLinked
-                                                (cdbActivityUUID best)
-                                                (cdbProductUUID best)
-                                                (cdbDatabaseName best)
-                                                (cdbScore best)
-                                                (cdbProductName best)
-                                                (cdbLocation best)
-                                                warnings
+                                                { cdlrActivityUUID = cdbActivityUUID best
+                                                , cdlrProductUUID = cdbProductUUID best
+                                                , cdlrDatabaseName = cdbDatabaseName best
+                                                , cdlrScore = cdbScore best
+                                                , cdlrProductName = cdbProductName best
+                                                , cdlrLocation = cdbLocation best
+                                                , cdlrWarnings = warnings
+                                                , cdlrTiedDatabases = tied
+                                                }
                                     else CrossDBNotLinked (LocationUnavailable effectiveLocation)
   where
     lookupExact :: Text -> IndexedDatabase -> [(Text, SupplierEntry)]

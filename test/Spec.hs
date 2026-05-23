@@ -37,6 +37,7 @@ import qualified MatrixExportSpec
 import qualified MethodSetTablesSpec
 import qualified MethodSpec
 import qualified MethodUploadSpec
+import qualified MinimalCoverSpec
 import qualified NestedSubstitutionSpec
 import qualified NormalizeSpec
 import qualified OlcaSchemaSpec
@@ -74,6 +75,7 @@ main = hspec $ do
         describe "Loop-Aware Tree" TreeSpec.spec
         describe "Service Layer" ServiceSpec.spec
         describe "Cross-Database Linking" CrossLinkingSpec.spec
+        describe "Minimal Dependency Cover" MinimalCoverSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Cross-DB Regional LCIA" CrossDBRegionalLCIASpec.spec
         describe "Cross-DB Regional LCIA (substitution path)" CrossDBRegionalLCIASubsSpec.spec

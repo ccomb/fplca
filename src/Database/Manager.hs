@@ -104,7 +104,7 @@ import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
 import Data.Either (lefts, rights)
-import Data.List (isPrefixOf, nub, sortOn, unsnoc)
+import Data.List (isPrefixOf, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust)
@@ -158,7 +158,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), UUID, Unit (..), UnitDB, bfCompartmentName, bfCompartmentSub, crossDBBySource, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), UUID, Unit (..), UnitDB, bfCompartmentName, bfCompartmentSub, computeMinimalSelectedDeps, crossDBBySource, crossDBRedundantSources, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
 import qualified UnitConversion
 
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -267,6 +267,11 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -- ^ Top missing suppliers
     , dsiSelectedDeps :: ![Text]
     -- ^ Currently selected dependencies
+    , dsiRedundantDeps :: ![Text]
+    {- ^ Databases that match links but are redundant under the minimal cover
+    (every link they win can be re-supplied by another selected DB at the
+    same score). Surfaced to the UI to explain why they were not pre-selected.
+    -}
     , dsiSuggestions :: ![DependencySuggestion]
     -- ^ Suggested dependencies
     , dsiIsReady :: !Bool
@@ -297,6 +302,7 @@ instance ToJSON DatabaseSetupInfo where
             , "unresolvedLinks" .= dsiUnresolvedLinks
             , "missingSuppliers" .= dsiMissingSuppliers
             , "selectedDependencies" .= dsiSelectedDeps
+            , "redundantDependencies" .= dsiRedundantDeps
             , "suggestions" .= dsiSuggestions
             , "isReady" .= dsiIsReady
             , "unknownUnits" .= dsiUnknownUnits
@@ -1648,25 +1654,51 @@ stageUploadedDatabase manager dbConfig = do
             case loadResult of
                 Left err -> return $ Left err
                 Right (simpleDb, stats) -> do
-                    -- Create staged database
-                    let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts stats)]
+                    -- Minimal-cover pre-selection: drop DBs whose links are all
+                    -- substitutable by another DB at the same score. If that
+                    -- shrinks the dependency set, re-run linking restricted to
+                    -- the chosen DBs so sdCrossDBLinks stays consistent with
+                    -- sdSelectedDeps (no dangling supplier UUIDs at finalize).
+                    let minimalDeps = computeMinimalSelectedDeps (Loader.cdlLinks stats)
+                        contributingDeps = M.keys (Loader.crossDBBySource stats)
+                    (finalStats, finalDB) <-
+                        if S.fromList minimalDeps == S.fromList contributingDeps
+                            then return (stats, simpleDb)
+                            else do
+                                let selectedSet = S.fromList minimalDeps
+                                    restrictedIndexes =
+                                        [idx | (n, idx) <- M.toList indexedDbs, S.member n selectedSet]
+                                reportProgress Info $
+                                    "  Minimal cover: dropping redundant deps "
+                                        <> show (S.toList (S.fromList contributingDeps `S.difference` selectedSet))
+                                        <> ", re-linking against "
+                                        <> show minimalDeps
+                                (simpleDb', stats') <-
+                                    Loader.fixActivityLinksWithCrossDB
+                                        restrictedIndexes
+                                        synonymDB
+                                        unitConfig
+                                        (M.map snd (dmGeographies manager))
+                                        simpleDb
+                                return (stats', simpleDb')
+
+                    let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts finalStats)]
                         fromScan =
-                            if null fromStats && Loader.crossDBLinksCount stats == 0
-                                then [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList (Loader.collectUnlinkedProductNames simpleDb)]
+                            if null fromStats && Loader.crossDBLinksCount finalStats == 0
+                                then [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList (Loader.collectUnlinkedProductNames finalDB)]
                                 else fromStats
                         staged =
                             StagedDatabase
-                                { sdSimpleDB = simpleDb
+                                { sdSimpleDB = finalDB
                                 , sdConfig = dbConfig
-                                , sdUnlinkedCount = Loader.unresolvedCount stats
+                                , sdUnlinkedCount = Loader.unresolvedCount finalStats
                                 , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) fromScan
-                                , sdSelectedDeps = nub $ M.keys (Loader.crossDBBySource stats)
-                                , sdCrossDBLinks = Loader.cdlLinks stats
-                                , sdLinkingStats = stats
+                                , sdSelectedDeps = minimalDeps
+                                , sdCrossDBLinks = Loader.cdlLinks finalStats
+                                , sdLinkingStats = finalStats
                                 , sdCachedDB = Nothing
                                 }
 
-                    -- Store in staged map
                     atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
                     reportProgress Info $ "  [OK] Staged: " <> T.unpack (dcDisplayName dbConfig)
                     return $ Right ()
@@ -1907,6 +1939,7 @@ buildStagedSetupInfo staged configs indexedDbs =
             , dsiUnresolvedLinks = unresolvedLinks
             , dsiMissingSuppliers = missingSuppliers
             , dsiSelectedDeps = sdSelectedDeps staged
+            , dsiRedundantDeps = crossDBRedundantSources (cdlLinks stats) (sdSelectedDeps staged)
             , dsiSuggestions = suggestions
             , dsiIsReady = isReady
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
@@ -1949,6 +1982,7 @@ buildLoadedSetupInfo config db =
             , dsiUnresolvedLinks = nUnresolved
             , dsiMissingSuppliers = missingSuppliers
             , dsiSelectedDeps = dbDependsOn db
+            , dsiRedundantDeps = [] -- Finalized DBs have no redundant deps to surface
             , dsiSuggestions = [] -- No suggestions for loaded databases
             , dsiIsReady = True
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
@@ -2579,9 +2613,10 @@ regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
 getLocationHierarchy :: DatabaseManager -> IO (M.Map Text [Text])
 getLocationHierarchy manager = pure (M.map snd (dmGeographies manager))
 
--- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
--- flows are not merged here because characterization (the only consumer of
--- this cache) targets biosphere flows exclusively.
+{- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
+flows are not merged here because characterization (the only consumer of
+this cache) targets biosphere flows exclusively.
+-}
 getMergedFlowMetadata :: DatabaseManager -> IO (BioFlowDB, UnitDB)
 getMergedFlowMetadata manager = do
     cached <- readTVarIO (dmMergedFlowMetadataCache manager)

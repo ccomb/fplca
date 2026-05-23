@@ -796,12 +796,13 @@ getFlowUsageCount db flowUUID =
         Nothing -> 0
         Just activityUUIDs -> length activityUUIDs
 
--- | Get flows used by an activity as lightweight summaries. Each exchange
--- lookup is resolved against the appropriate side (tech vs bio) and wrapped
--- in 'ApiFlow' to preserve the discriminator for downstream JSON encoders.
--- An exchange whose flow UUID resolves on neither side becomes an
--- 'ApiUnresolvedFlow' entry rather than being silently dropped — so the
--- consumer never sees a shorter list than the activity actually carries.
+{- | Get flows used by an activity as lightweight summaries. Each exchange
+lookup is resolved against the appropriate side (tech vs bio) and wrapped
+in 'ApiFlow' to preserve the discriminator for downstream JSON encoders.
+An exchange whose flow UUID resolves on neither side becomes an
+'ApiUnresolvedFlow' entry rather than being silently dropped — so the
+consumer never sees a shorter list than the activity actually carries.
+-}
 getActivityFlowSummaries :: Database -> Activity -> [FlowSummary]
 getActivityFlowSummaries db activity = map mkSummary (exchanges activity)
   where
@@ -1043,7 +1044,8 @@ convertActivityForAPI unitCfg db processId activity =
         Nothing -> M.empty
 
     convertExchangeWithUnit exchange =
-        let -- Look up the flow in the appropriate side (tech vs bio) based on exchange variant.
+        let
+            -- Look up the flow in the appropriate side (tech vs bio) based on exchange variant.
             techFlowInfo = case exchange of
                 TechnosphereExchange{techFlowId = fid} -> M.lookup fid (dbTechFlows db)
                 BiosphereExchange{} -> Nothing
@@ -1087,7 +1089,8 @@ convertActivityForAPI unitCfg db processId activity =
                 (_, Just bf) -> bfName bf
                 _ -> "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
             compartment = bfCompartment =<< bioFlowInfo
-         in ExchangeWithUnit
+         in
+            ExchangeWithUnit
                 { ewuExchange = exchange
                 , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
                 , ewuFlowName = flowNameTxt
@@ -1099,8 +1102,9 @@ convertActivityForAPI unitCfg db processId activity =
                 , ewuPedigree = exchangePedigree exchange
                 }
 
--- | Get reference product name from activity exchanges. Reference products
--- are always technosphere.
+{- | Get reference product name from activity exchanges. Reference products
+are always technosphere.
+-}
 getReferenceProductName :: TechFlowDB -> Activity -> Maybe Text
 getReferenceProductName flows activity =
     case [ex | ex <- exchanges activity, exchangeIsReference ex] of
@@ -1160,8 +1164,9 @@ getTargetActivity db exchange = do
             , prsAllocationFormula = activityAllocationFormula targetActivity
             }
 
--- | Get reference product as FlowDetail (if exists). Reference products are
--- technosphere by definition.
+{- | Get reference product as FlowDetail (if exists). Reference products are
+technosphere by definition.
+-}
 getActivityReferenceProductDetail :: Database -> Activity -> Maybe FlowDetail
 getActivityReferenceProductDetail db activity = do
     refExchange <- case filter exchangeIsReference (exchanges activity) of
@@ -1302,8 +1307,9 @@ getFlowInfo db flowIdText = do
                             Right $ toJSON $ FlowDetail (ApiBioFlow flow) (getUnitNameForBioFlow (dbUnits db) flow) usageCount
                         Nothing -> Left $ FlowNotFound flowIdText
 
--- | Get activities that use a specific flow as JSON (for CLI). Resolves
--- against either flow side so biosphere flow IDs work too.
+{- | Get activities that use a specific flow as JSON (for CLI). Resolves
+against either flow side so biosphere flow IDs work too.
+-}
 getFlowActivities :: Database -> Text -> Either ServiceError Value
 getFlowActivities db flowIdText = do
     case UUID.fromText flowIdText of
@@ -2471,6 +2477,7 @@ mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
             , cdlFlowName = activityName supAct
             , cdlLocation = activityLocation supAct
             , cdlSourceDatabase = depDbName
+            , cdlTiedAlternatives = []
             }
 
 {- | Find the static 'CrossDBLink' matching @(rootConsumer, depDbName, depSupplierUUIDs)@.

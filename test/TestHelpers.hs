@@ -124,5 +124,6 @@ linkDatabases consumerDb supplierDb supplierName coeff =
                 , cdlFlowName = "synthetic-test-link"
                 , cdlLocation = "GLO"
                 , cdlSourceDatabase = supplierName
+                , cdlTiedAlternatives = []
                 }
      in consumerDb{dbCrossDBLinks = link : dbCrossDBLinks consumerDb}
