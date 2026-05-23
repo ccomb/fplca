@@ -34,6 +34,7 @@ import API.Types (
     InventoryFlowDetail (..),
     SupplyChainEntry (..),
     SupplyChainResponse (..),
+    apiFlowName,
  )
 import Matrix (buildDemandVectorFromIndex)
 import Service (
@@ -52,7 +53,6 @@ import Types (
     BioFlowDB,
     BiosphereFlow (..),
     Database (..),
-    TechnosphereFlow (..),
     UnitDB,
     exchangeAmount,
     exchangeFlowId,
@@ -205,7 +205,7 @@ rowsFromDirect db act =
   where
     mkRow (ExchangeDetail ex flow _flowUnit _unit exUnitName target) =
         AggRow
-            { rowName = either tfName bfName flow
+            { rowName = apiFlowName flow
             , rowFlowId = UUID.toText (exchangeFlowId ex)
             , rowUnit = exUnitName
             , rowQuantity = exchangeAmount ex

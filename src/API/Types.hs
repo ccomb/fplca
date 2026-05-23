@@ -7,6 +7,7 @@ module API.Types where
 
 import API.JsonOptions (strippedParseJSON, strippedToEncoding, strippedToJSON)
 import Data.Aeson
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -14,7 +15,72 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (BiosphereFlow, Compartment, Exchange, Pedigree, TechnosphereFlow, UUID, Unit)
+import Types (BiosphereFlow (..), Compartment, Exchange, Pedigree, TechnosphereFlow (..), UUID, Unit)
+
+{- | Tagged wire representation of either side of the flow split.
+
+Encodes as @{"kind":"technosphere","flow":{…TechnosphereFlow…}}@ or
+@{"kind":"biosphere","flow":{…BiosphereFlow…}}@. The tag is the active
+constructor; clients dispatch on @kind@ before reading @flow@.
+
+We could derive this via Aeson's @TaggedObject@ sum encoding, but the
+constructor names would leak into the wire, and the per-side flow records
+would be flattened in-place rather than nested under @flow@. The hand-rolled
+instances are short and they keep the on-the-wire shape symmetric with the
+Exchange variant tag used elsewhere in the response.
+-}
+data ApiFlow
+    = ApiTechFlow !TechnosphereFlow
+    | ApiBioFlow !BiosphereFlow
+    | -- | The exchange referenced a flow UUID that resolved on neither side.
+      -- Surfaced so consumers can spot a broken link instead of silently
+      -- receiving a shorter list or a stub named @"unknown"@.
+      ApiUnresolvedFlow !UUID
+    deriving (Generic)
+
+apiFlowId :: ApiFlow -> UUID
+apiFlowId (ApiTechFlow f) = tfId f
+apiFlowId (ApiBioFlow f) = bfId f
+apiFlowId (ApiUnresolvedFlow uuid) = uuid
+
+-- | Best-effort name for display. For unresolved flows we return the
+-- @<unresolved flow UUID>@ sentinel — the same shape already used by
+-- 'ExchangeWithUnit'.
+apiFlowName :: ApiFlow -> Text
+apiFlowName (ApiTechFlow f) = tfName f
+apiFlowName (ApiBioFlow f) = bfName f
+apiFlowName (ApiUnresolvedFlow uuid) = unresolvedFlowName uuid
+
+-- | Sentinel display name for an exchange whose flow UUID resolves on
+-- neither side. Kept in one place so HTTP and graph paths agree.
+unresolvedFlowName :: UUID -> Text
+unresolvedFlowName uuid = "<unresolved flow " <> T.pack (show uuid) <> ">"
+
+apiFlowSynonyms :: ApiFlow -> M.Map Text (S.Set Text)
+apiFlowSynonyms (ApiTechFlow f) = tfSynonyms f
+apiFlowSynonyms (ApiBioFlow f) = bfSynonyms f
+apiFlowSynonyms (ApiUnresolvedFlow _) = M.empty
+
+-- | Lift the internal @Either@ used during flow lookup into the wire wrapper.
+apiFlowOfEither :: Either TechnosphereFlow BiosphereFlow -> ApiFlow
+apiFlowOfEither = either ApiTechFlow ApiBioFlow
+
+instance ToJSON ApiFlow where
+    toJSON (ApiTechFlow f) = object ["kind" .= ("technosphere" :: Text), "flow" .= f]
+    toJSON (ApiBioFlow f) = object ["kind" .= ("biosphere" :: Text), "flow" .= f]
+    toJSON (ApiUnresolvedFlow uuid) = object ["kind" .= ("unresolved" :: Text), "id" .= uuid]
+    toEncoding (ApiTechFlow f) = pairs ("kind" .= ("technosphere" :: Text) <> "flow" .= f)
+    toEncoding (ApiBioFlow f) = pairs ("kind" .= ("biosphere" :: Text) <> "flow" .= f)
+    toEncoding (ApiUnresolvedFlow uuid) = pairs ("kind" .= ("unresolved" :: Text) <> "id" .= uuid)
+
+instance FromJSON ApiFlow where
+    parseJSON = withObject "ApiFlow" $ \o -> do
+        kind <- o .: "kind" :: Parser Text
+        case kind of
+            "technosphere" -> ApiTechFlow <$> o .: "flow"
+            "biosphere" -> ApiBioFlow <$> o .: "flow"
+            "unresolved" -> ApiUnresolvedFlow <$> o .: "id"
+            other -> fail $ "ApiFlow.kind must be \"technosphere\", \"biosphere\", or \"unresolved\", got: " <> T.unpack other
 
 -- | Search response combining results and count
 data SearchResults a = SearchResults
@@ -191,9 +257,9 @@ data GraphEdge = GraphEdge
     deriving (Generic)
 
 -- | Lightweight flow information for lists. Carries either a tech or a bio
--- flow; the active variant doubles as the discriminator in the wire response.
+-- flow; the @ApiFlow@ tag is the wire discriminator.
 data FlowSummary = FlowSummary
-    { fsFlow :: Either TechnosphereFlow BiosphereFlow
+    { fsFlow :: ApiFlow
     , fsUnitName :: Text -- Unit name for the flow
     , fsUsageCount :: Int -- How many activities use this flow
     , fsRole :: FlowRole -- Role in this specific activity
@@ -736,7 +802,7 @@ data ActivityStats = ActivityStats
 
 -- | Flow with additional metadata. Carries either a tech or bio flow.
 data FlowDetail = FlowDetail
-    { fdFlow :: Either TechnosphereFlow BiosphereFlow
+    { fdFlow :: ApiFlow
     , fdUnitName :: Text -- Unit name for the flow
     , fdUsageCount :: Int -- How many activities use this flow
     }
@@ -746,7 +812,7 @@ data FlowDetail = FlowDetail
 -- The carried flow's variant lines up with the Exchange variant.
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
-    , edFlow :: Either TechnosphereFlow BiosphereFlow
+    , edFlow :: ApiFlow
     , edFlowUnitName :: Text -- Unit name for the flow's default unit
     , edUnit :: Unit -- Unit information for the exchange
     , edExchangeUnitName :: Text -- Unit name for the exchange's specific unit

@@ -4,7 +4,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
@@ -716,25 +716,31 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                           targetActivityUUID = case processIdToUUIDs db targetProcessId of
                             Just (actUUID, _prodUUID) -> Just actUUID
                             Nothing -> Nothing
-                          -- Get flow information from the source activity's exchanges
-                          flowInfo = do
+                          -- Find the technosphere-input exchange that points to
+                          -- this target activity, so we can recover both the
+                          -- flow UUID and (if known) its name + unit.
+                          matchingExchange = do
                             srcAct <- sourceActivity
                             targetUUID <- targetActivityUUID
-                            -- Find the exchange that corresponds to this technosphere connection
-                            -- Use pattern matching to filter technosphere inputs
-                            let techExchanges =
-                                    [ ex
-                                    | ex <- exchanges srcAct
-                                    , case ex of
-                                        TechnosphereExchange{techRole = Input} -> True
-                                        TechnosphereExchange{} -> False
-                                        BiosphereExchange{} -> False
-                                    ]
-                            case [ex | ex <- techExchanges, exchangeActivityLinkId ex == Just targetUUID] of
-                                (ex : _) -> M.lookup (exchangeFlowId ex) flows
-                                [] -> Nothing
-                          uName = maybe "unknown" (getUnitNameForTechFlow units) flowInfo
-                          flowNameText = maybe "Unknown flow" tfName flowInfo
+                            L.find
+                                ( \ex -> case ex of
+                                    TechnosphereExchange{techRole = Input} ->
+                                        exchangeActivityLinkId ex == Just targetUUID
+                                    TechnosphereExchange{} -> False
+                                    BiosphereExchange{} -> False
+                                )
+                                (exchanges srcAct)
+                          flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
+                          -- When the supplier flow isn't in the tech map, the
+                          -- exchange UUID is the only debug handle we have.
+                          -- Surface it via the same sentinel shape as
+                          -- ExchangeWithUnit / ApiUnresolvedFlow so the graph
+                          -- doesn't silently mask a broken link.
+                          uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
+                          flowNameText = case (flowInfo, matchingExchange) of
+                            (Just f, _) -> tfName f
+                            (Nothing, Just ex) -> unresolvedFlowName (exchangeFlowId ex)
+                            (Nothing, Nothing) -> "<unresolved flow>"
                        in case (sourceNodeId, targetNodeId) of
                             (Just src, Just tgt) ->
                                 Just $ GraphEdge src tgt (realToFrac value) uName flowNameText
@@ -792,21 +798,24 @@ getFlowUsageCount db flowUUID =
 
 -- | Get flows used by an activity as lightweight summaries. Each exchange
 -- lookup is resolved against the appropriate side (tech vs bio) and wrapped
--- in 'Either' to preserve the discriminator for downstream JSON encoders.
+-- in 'ApiFlow' to preserve the discriminator for downstream JSON encoders.
+-- An exchange whose flow UUID resolves on neither side becomes an
+-- 'ApiUnresolvedFlow' entry rather than being silently dropped — so the
+-- consumer never sees a shorter list than the activity actually carries.
 getActivityFlowSummaries :: Database -> Activity -> [FlowSummary]
-getActivityFlowSummaries db activity =
-    [ summary
-    | exchange <- exchanges activity
-    , Just summary <- [mkSummary exchange]
-    ]
+getActivityFlowSummaries db activity = map mkSummary (exchanges activity)
   where
-    mkSummary ex = case ex of
-        TechnosphereExchange{techFlowId = fid} ->
-            (\f -> FlowSummary (Left f) (getUnitNameForTechFlow (dbUnits db) f) (getFlowUsageCount db (tfId f)) (determineFlowRole ex))
-                <$> M.lookup fid (dbTechFlows db)
-        BiosphereExchange{bioFlowId = fid} ->
-            (\f -> FlowSummary (Right f) (getUnitNameForBioFlow (dbUnits db) f) (getFlowUsageCount db (bfId f)) (determineFlowRole ex))
-                <$> M.lookup fid (dbBioFlows db)
+    mkSummary ex =
+        let role = determineFlowRole ex
+            exUnit = getUnitNameForExchange (dbUnits db) ex
+            fid = exchangeFlowId ex
+         in case ex of
+                TechnosphereExchange{} -> case M.lookup fid (dbTechFlows db) of
+                    Just f -> FlowSummary (ApiTechFlow f) (getUnitNameForTechFlow (dbUnits db) f) (getFlowUsageCount db (tfId f)) role
+                    Nothing -> FlowSummary (ApiUnresolvedFlow fid) exUnit 0 role
+                BiosphereExchange{} -> case M.lookup fid (dbBioFlows db) of
+                    Just f -> FlowSummary (ApiBioFlow f) (getUnitNameForBioFlow (dbUnits db) f) (getFlowUsageCount db (bfId f)) role
+                    Nothing -> FlowSummary (ApiUnresolvedFlow fid) exUnit 0 role
 
     determineFlowRole ex
         | exchangeIsReference ex = ReferenceProductFlow
@@ -1161,7 +1170,7 @@ getActivityReferenceProductDetail db activity = do
     flow <- M.lookup (exchangeFlowId refExchange) (dbTechFlows db)
     let usageCount = getFlowUsageCount db (tfId flow)
     let uName = getUnitNameForTechFlow (dbUnits db) flow
-    return $ FlowDetail (Left flow) uName usageCount
+    return $ FlowDetail (ApiTechFlow flow) uName usageCount
 
 -- | Get activities that use a specific flow as ActivitySummary list
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
@@ -1193,35 +1202,43 @@ same convention the @/activity/{pid}@ endpoint uses.
 -}
 getActivityExchangeDetails :: Database -> Activity -> (Exchange -> Bool) -> [ExchangeDetail]
 getActivityExchangeDetails db activity filterFn =
-    [ detail
-    | exchange <- exchanges activity
-    , filterFn exchange
-    , Just detail <- [mkDetail exchange]
-    ]
+    map mkDetail (filter filterFn (exchanges activity))
   where
-    mkDetail exchange = case exchange of
-        TechnosphereExchange{techFlowId = fid} -> do
-            flow <- M.lookup fid (dbTechFlows db)
-            unit <- M.lookup (exchangeUnitId exchange) (dbUnits db)
-            pure $
-                ExchangeDetail
-                    exchange
-                    (Left flow)
-                    (getUnitNameForTechFlow (dbUnits db) flow)
-                    unit
-                    (getUnitNameForExchange (dbUnits db) exchange)
-                    (resolveTechTarget exchange flow)
-        BiosphereExchange{bioFlowId = fid} -> do
-            flow <- M.lookup fid (dbBioFlows db)
-            unit <- M.lookup (exchangeUnitId exchange) (dbUnits db)
-            pure $
-                ExchangeDetail
-                    exchange
-                    (Right flow)
-                    (getUnitNameForBioFlow (dbUnits db) flow)
-                    unit
-                    (getUnitNameForExchange (dbUnits db) exchange)
-                    Nothing -- Biosphere flows have no target activity
+    -- A missing flow or unit row used to drop the exchange entirely. We now
+    -- surface an unresolved-flow entry instead, so the returned list always
+    -- has one element per matching exchange and the gap is reportable.
+    mkDetail exchange =
+        let unitForExchange = M.findWithDefault unresolvedUnit (exchangeUnitId exchange) (dbUnits db)
+            exUnitName = getUnitNameForExchange (dbUnits db) exchange
+            fid = exchangeFlowId exchange
+            unresolved flow = ExchangeDetail exchange flow "" unitForExchange exUnitName Nothing
+         in case exchange of
+                TechnosphereExchange{} -> case M.lookup fid (dbTechFlows db) of
+                    Just flow ->
+                        ExchangeDetail
+                            exchange
+                            (ApiTechFlow flow)
+                            (getUnitNameForTechFlow (dbUnits db) flow)
+                            unitForExchange
+                            exUnitName
+                            (resolveTechTarget exchange flow)
+                    Nothing -> unresolved (ApiUnresolvedFlow fid)
+                BiosphereExchange{} -> case M.lookup fid (dbBioFlows db) of
+                    Just flow ->
+                        ExchangeDetail
+                            exchange
+                            (ApiBioFlow flow)
+                            (getUnitNameForBioFlow (dbUnits db) flow)
+                            unitForExchange
+                            exUnitName
+                            Nothing -- Biosphere flows have no target activity
+                    Nothing -> unresolved (ApiUnresolvedFlow fid)
+
+    -- Sentinel returned only when the exchange's unit UUID itself failed
+    -- to resolve. The exchange unit name field already surfaces the same
+    -- gap via 'getUnitNameForExchange', so consumers see the missing unit
+    -- in both the structured Unit and the exUnitName string.
+    unresolvedUnit = Unit{unitId = UUID.nil, unitName = "<unresolved unit>", unitSymbol = "", unitComment = ""}
 
     -- Cross-DB link lookup by consumer's flow name, built once per activity
     -- for O(log n) per-exchange resolution.
@@ -1279,10 +1296,10 @@ getFlowInfo db flowIdText = do
             let usageCount = getFlowUsageCount db fId
              in case M.lookup fId (dbTechFlows db) of
                     Just flow ->
-                        Right $ toJSON $ FlowDetail (Left flow) (getUnitNameForTechFlow (dbUnits db) flow) usageCount
+                        Right $ toJSON $ FlowDetail (ApiTechFlow flow) (getUnitNameForTechFlow (dbUnits db) flow) usageCount
                     Nothing -> case M.lookup fId (dbBioFlows db) of
                         Just flow ->
-                            Right $ toJSON $ FlowDetail (Right flow) (getUnitNameForBioFlow (dbUnits db) flow) usageCount
+                            Right $ toJSON $ FlowDetail (ApiBioFlow flow) (getUnitNameForBioFlow (dbUnits db) flow) usageCount
                         Nothing -> Left $ FlowNotFound flowIdText
 
 -- | Get activities that use a specific flow as JSON (for CLI). Resolves

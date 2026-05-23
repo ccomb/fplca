@@ -19,7 +19,7 @@ import API.Resources (Resource)
 import qualified API.Resources as R
 import API.Types
 import Control.Lens ((%~), (&), (.~), (?~), (^.))
-import Data.Aeson (Value)
+import Data.Aeson (Value, toJSON)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
 import qualified Data.OpenApi.Lens as OA
@@ -120,6 +120,58 @@ instance ToSchema SubstitutionRequest where declareNamedSchema = genericDeclareN
 instance ToSchema Substitution where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema SensitivityResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+
+-- Manual schema for ApiFlow — discriminated by 'kind' so OpenAPI consumers
+-- see a real tagged union instead of a generic Either.
+instance ToSchema ApiFlow where
+    declareNamedSchema _ = do
+        techRef <- declareSchemaRef (Proxy :: Proxy TechnosphereFlow)
+        bioRef <- declareSchemaRef (Proxy :: Proxy BiosphereFlow)
+        let kindEnum =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_
+                        ?~ [ toJSON ("technosphere" :: Text)
+                           , toJSON ("biosphere" :: Text)
+                           , toJSON ("unresolved" :: Text)
+                           ]
+            tech =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("technosphere" :: Text)]))
+                            , ("flow", techRef)
+                            ]
+                    & required .~ ["kind", "flow"]
+            bio =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("biosphere" :: Text)]))
+                            , ("flow", bioRef)
+                            ]
+                    & required .~ ["kind", "flow"]
+            unresolved =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("unresolved" :: Text)]))
+                            , ("id", Inline (mempty & type_ ?~ OpenApiString & format ?~ "uuid"))
+                            ]
+                    & required .~ ["kind", "id"]
+        pure $
+            NamedSchema (Just "ApiFlow") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline kindEnum)
+                            ]
+                    & required .~ ["kind"]
+                    & OA.oneOf ?~ [Inline tech, Inline bio, Inline unresolved]
 
 -- Manual schema: the Either inside PerturbedEntry is flattened by ToJSON
 -- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
