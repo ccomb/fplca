@@ -34,9 +34,11 @@ import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..))
+import qualified API.BatchImpacts as BI
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
+import qualified Data.Vector as V
 import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
 import qualified Method.Mapping as Mapping
@@ -351,6 +353,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "get_path_to" -> withDb dbManager rid args $ callGetPathTo rid args
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
     "compare_impacts" -> callCompareImpacts dbManager rid args
+    "score_activity" -> callScoreActivity dbManager baseUrl rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1713,3 +1716,100 @@ callListGeographies dbManager rid args =
                         toolSuccessJson rid $
                             object
                                 ["geographies" .= map mkEntry codes]
+
+-- ============================================================================
+-- score_activity / score_activities / list_scoring_sets
+--
+-- Wrappers around API.BatchImpacts so a single MCP call yields the full
+-- LCIA panel + every configured scoring set + per-indicator breakdown,
+-- removing the N round-trips of get_impacts a comparative study used to
+-- need. Each response is enriched with a 'web_url' deep link to the
+-- matching web UI view so a human can continue the exploration visually.
+-- ============================================================================
+
+-- | Translate a 'BI.BatchError' into the MCP 'toolError' payload.
+batchErrorMsg :: BI.BatchError -> Text
+batchErrorMsg err = case err of
+    BI.CollectionNotLoaded name available ->
+        "Collection not loaded: "
+            <> name
+            <> ". Available collections: "
+            <> T.intercalate ", " available
+    BI.DatabaseNotLoaded name -> "Database not loaded: " <> name
+    BI.ActivityResolutionFailed msg -> msg
+    BI.LinkingIncomplete msg -> msg
+    BI.OtherBatchError code msg -> "HTTP " <> T.pack (show code) <> ": " <> msg
+
+{- | Add a 'web_url' field to a JSON object at the top level. No-op for
+non-Object values (defensive — the serialized 'LCIABatchResult' /
+'BatchImpactsResponse' shapes are always objects).
+-}
+addWebUrl :: Text -> Value -> Value
+addWebUrl url v = case v of
+    Object km -> Object (KM.insert (fromText "web_url") (String url) km)
+    other -> other
+
+{- | Enrich the @results@ array of a serialized 'LCIABatchResult' with a
+per-method 'web_url' built from the per-method @method_id@.
+-}
+enrichResultsWithWebUrl :: Text -> Value -> Value
+enrichResultsWithWebUrl baseUrlForCategory v = case v of
+    Object km ->
+        let resultsKey = fromText "results"
+            enrichOne (Object km') = case KM.lookup (fromText "method_id") km' of
+                Just (String mid) ->
+                    Object
+                        ( KM.insert
+                            (fromText "web_url")
+                            (String (baseUrlForCategory <> "/" <> mid))
+                            km'
+                        )
+                _ -> Object km'
+            enrichOne other = other
+            enrichArray (Array rs) = Array (V.map enrichOne rs)
+            enrichArray other = other
+            updated = case KM.lookup resultsKey km of
+                Just rs -> KM.insert resultsKey (enrichArray rs) km
+                Nothing -> km
+         in Object updated
+    other -> other
+
+-- | Activity-level impacts page URL (the LCIA batch view in the web UI).
+scoreActivityWebUrl :: Text -> Text -> Text -> Text -> Text
+scoreActivityWebUrl baseUrl dbName pidText coll =
+    baseUrl
+        <> "/db/"
+        <> dbName
+        <> "/activity/"
+        <> pidText
+        <> "/impacts/"
+        <> encodeSegment coll
+
+{- | Handler for the 'score_activity' MCP tool.
+
+Returns the full LCIABatchResult shape (per-method scores, per-scoring-set
+aggregate scores, per-indicator breakdown, units) for a single activity,
+enriched with a top-level 'web_url' for the panel view and a per-method
+'web_url' in each @results@ entry. Replaces the @N@ round-trips of
+'get_impacts' a comparative study used to need.
+-}
+callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callScoreActivity dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> ( runExceptT $ do
+                dbName <- ExceptT $ pure (requireText "database" args)
+                pidText <- ExceptT $ pure (requireText "process_id" args)
+                coll <- ExceptT $ pure (requireText "collection" args)
+                subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
+                let mSub = if null subs then Nothing else Just SubstitutionRequest{srSubstitutions = subs}
+                res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub
+                case res of
+                    Left e -> ExceptT $ pure (Left (batchErrorMsg e))
+                    Right lbr ->
+                        let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
+                            enriched =
+                                addWebUrl
+                                    topUrl
+                                    (enrichResultsWithWebUrl topUrl (toJSON lbr))
+                         in pure (toolSuccessJson rid enriched)
+            )

@@ -64,6 +64,9 @@ data Resource
     | GetPathTo
     | GetConsumers
     | CompareImpacts
+    | ScoreActivity
+    | ScoreActivities
+    | ListScoringSets
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -140,6 +143,9 @@ apiPath r = case r of
     GetPathTo -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "path-to"])
     GetConsumers -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "consumers"])
     CompareImpacts -> Nothing -- MCP-only audit tool: cross-DB diff, no canonical HTTP route
+    ScoreActivity -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "impacts", "{collection}"])
+    ScoreActivities -> Just (POST, ["db", "{dbName}", "impacts", "{collection}"])
+    ListScoringSets -> Nothing -- MCP-only: scoring sets are configuration metadata, no REST equivalent yet
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -177,6 +183,9 @@ mcpName r = case r of
     GetPathTo -> "get_path_to"
     GetConsumers -> "get_consumers"
     CompareImpacts -> "compare_impacts"
+    ScoreActivity -> "score_activity"
+    ScoreActivities -> "score_activities"
+    ListScoringSets -> "list_scoring_sets"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -210,6 +219,9 @@ cliName r = case r of
     GetPathTo -> "path-to"
     GetConsumers -> "consumers"
     CompareImpacts -> "compare-impacts"
+    ScoreActivity -> "score-activity"
+    ScoreActivities -> "score-activities"
+    ListScoringSets -> "scoring-sets"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -342,6 +354,35 @@ description r = case r of
         \field is delta.relative_pct — the metric to drive down by adding \
         \synonym pairs to data/flows.csv or by regenerating the chem_synonyms \
         \snapshot."
+    ScoreActivity ->
+        "LCA / ACV — compute the full LCIA panel + every configured scoring \
+        \set for an activity in one call. Returns per-method impact scores, \
+        \per-scoring-set aggregate scores, per-scoring-set indicator \
+        \breakdown (one entry per scoring variable), display units, and a \
+        \web_url to the matching view. Use this when you would otherwise \
+        \call get_impacts N times across every method of a collection — \
+        \replaces N round-trips with one batched solve. Discover available \
+        \scoring sets with list_scoring_sets."
+    ScoreActivities ->
+        "LCA / ACV — score N activities against every method in a collection \
+        \in one call. Returns one entry per activity with the full LCIA \
+        \panel and all configured scoring sets (same shape as \
+        \score_activity), each entry carrying a web_url to its impacts \
+        \page. Unresolved process IDs land in not_found / invalid. \
+        \Replaces N × M round-trips of get_impacts with one MUMPS \
+        \multi-RHS solve plus parallel characterization. Set top_flows>0 \
+        \only when you need per-method drill-downs; the default skips \
+        \them for bulk callers."
+    ListScoringSets ->
+        "LCA / ACV — list formula-based scoring sets defined in loaded \
+        \method collections. A scoring set is a configured aggregation of \
+        \LCIA category scores into one or more weighted/normalized 'score' \
+        \values (e.g. an overall single score plus per-area-of-protection \
+        \sub-scores). For each set returns: name, display unit, variables \
+        \referenced (with the impact category each binds to), computed \
+        \intermediates, normalization and weighting factors, and the score \
+        \formulas. Use the returned set names as keys when interpreting \
+        \score_activity / score_activities responses."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -534,4 +575,19 @@ params r = case r of
         , Param "process_id_b" "string" Required "Process ID in database_b (activityUUID_productUUID format)"
         , Param "method_id_b" "string" Required "Method UUID for the B side"
         , Param "top_flows" "integer" Optional "Per-side flow drill-down depth (default 10)"
+        ]
+    ScoreActivity ->
+        [ pDatabase
+        , pProcessId
+        , Param "collection" "string" Required "Method collection name (use list_methods to discover)"
+        , pSubstitutions
+        ]
+    ScoreActivities ->
+        [ pDatabase
+        , Param "collection" "string" Required "Method collection name"
+        , Param "process_ids" "array" Required "Process IDs to score (activityUUID_productUUID). All resolved in one multi-RHS solve."
+        , Param "top_flows" "integer" Optional "Per-(activity, method) top contributors to include (default 0 — bulk-friendly, skips the per-method contribution walk)."
+        ]
+    ListScoringSets ->
+        [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."
         ]

@@ -282,6 +282,7 @@ Available tools (auto-derived from a single resource registry shared with the RE
 | `get_path_to` | Shortest supply-chain path from one activity to another |
 | `get_inventory` | LCI biosphere flows (top N by quantity) |
 | `get_impacts` | LCIA score for an activity and method (accepts substitutions) |
+| `score_activity` | Full LCIA panel + every configured scoring set for one activity (replaces N×get_impacts calls) |
 | `get_contributing_flows` | Top biosphere flows contributing to an LCIA score |
 | `get_contributing_activities` | Top upstream activities contributing to an LCIA score |
 | `get_flow_mapping` | CF-to-flow mapping coverage for a method |
