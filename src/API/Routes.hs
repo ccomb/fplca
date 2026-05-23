@@ -165,13 +165,28 @@ type LCAAPI =
                 :<|> "openapi.json" :> Get '[JSON] Value
            )
 
+{- | Standard prefix for "database not loaded" 404 bodies. Exported so that
+'API.BatchImpacts.translateError' can recover a typed 'DatabaseNotLoaded'
+from the wire body without the two ends silently drifting apart.
+-}
+databaseNotLoadedPrefix :: Text
+databaseNotLoadedPrefix = "Database not loaded: "
+
+-- | Same idea for "collection not loaded" 404 bodies.
+collectionNotLoadedPrefix :: Text
+collectionNotLoadedPrefix = "Collection not loaded: "
+
+-- | Build the 404 body for a not-loaded database / collection by name.
+notLoadedBody :: Text -> Text -> BSL.ByteString
+notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
+
 -- | Get database by name, throw 404 if not loaded
 requireDatabaseByName :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
 requireDatabaseByName dbManager dbName = do
     maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
-        Nothing -> throwError err404{errBody = "Database not loaded: " <> BSL.fromStrict (T.encodeUtf8 dbName)}
+        Nothing -> throwError err404{errBody = notLoadedBody databaseNotLoadedPrefix dbName}
 
 {- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
 the user to load the missing dep DBs (or POST /relink) rather than
@@ -484,7 +499,7 @@ loadCollection dbManager collectionName = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
         Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
-        Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
+        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
 
 {- | Cross-DB inventory solution for an activity. 'Nothing' takes the cached
 no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
@@ -826,7 +841,7 @@ batchImpactsH dbManager dbName collectionName topFlowsParam req = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     collection <- case M.lookup collectionName loadedCollections of
         Just mc -> pure mc
-        Nothing -> throwError err404{errBody = "Collection not loaded: " <> BSL.fromStrict (T.encodeUtf8 collectionName)}
+        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
     let resolved =
             [ (pidText, Service.resolveActivityAndProcessId db pidText)
             | pidText <- birProcessIds req

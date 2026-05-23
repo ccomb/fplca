@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {- | Pure-IO wrappers around the LCIA batch entry points exposed by
 "API.Routes". They let non-Servant callers (notably the MCP tool
 layer) invoke the batch and multi-activity solves without going through
@@ -8,10 +6,11 @@ of an opaque 'ServerError'.
 
 The wrappers delegate to 'activityLCIABatchH' and 'batchImpactsH' via
 'Servant.runHandler', then translate the resulting 'ServerError' back
-to a domain-shaped 'BatchError'. The translation matches a fixed set
-of throw sites in "API.Routes" by HTTP status + body prefix; anything
-unrecognised collapses into 'OtherBatchError' (status + verbatim body)
-so failures surface rather than being silently flattened.
+to a domain-shaped 'BatchError'. The "Collection not loaded" /
+"Database not loaded" body prefixes are imported from "API.Routes"
+('collectionNotLoadedPrefix', 'databaseNotLoadedPrefix') so the two
+ends share a single source of truth — drift one and the build breaks
+here.
 -}
 module API.BatchImpacts (
     BatchError (..),
@@ -20,7 +19,7 @@ module API.BatchImpacts (
     translateError,
 ) where
 
-import API.Routes (activityLCIABatchH, batchImpactsH)
+import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, databaseNotLoadedPrefix)
 import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, LCIABatchResult, SubstitutionRequest)
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.ByteString.Lazy as BSL
@@ -123,20 +122,17 @@ loadedCollectionNames dbm = M.keys <$> readTVarIO (dmLoadedMethods dbm)
 
 {- | Translate a Servant 'ServerError' back to the typed 'BatchError' sum.
 
-The match is by HTTP status + body prefix. The throw sites in
-"API.Routes" that this targets are stable: 'loadCollection' produces
-@404 "Collection not loaded: ..."@, 'resolveOrThrow' produces
-@404 "Activity not found"@ and @400 \<msg\>@, the cross-DB pipeline
-routes 'MatrixError' to @422 \<msg\>@. Anything else falls through to
-'OtherBatchError' rather than being silently coerced.
+The match is by HTTP status + body prefix. The prefix constants are
+imported from "API.Routes" so the throw site and the translator move
+together; changing one without the other breaks compilation here.
 -}
 translateError :: [Text] -> ServerError -> BatchError
 translateError availableCollections se
     | code == 404
-    , Just rest <- T.stripPrefix collectionPrefix body =
+    , Just rest <- T.stripPrefix collectionNotLoadedPrefix body =
         CollectionNotLoaded rest availableCollections
     | code == 404
-    , Just rest <- T.stripPrefix databasePrefix body =
+    , Just rest <- T.stripPrefix databaseNotLoadedPrefix body =
         DatabaseNotLoaded rest
     | code == 404 = ActivityResolutionFailed body
     | code == 400 = ActivityResolutionFailed body
@@ -145,5 +141,3 @@ translateError availableCollections se
   where
     code = errHTTPCode se
     body = TE.decodeUtf8 (BSL.toStrict (errBody se))
-    collectionPrefix = "Collection not loaded: "
-    databasePrefix = "Database not loaded: "
