@@ -77,11 +77,10 @@ runActivityLCIABatch ::
     Maybe SubstitutionRequest ->
     IO (Either BatchError LCIABatchResult)
 runActivityLCIABatch dbm dbName pid coll mSub = do
-    avail <- loadedCollectionNames dbm
     res <- Servant.runHandler (activityLCIABatchH dbm dbName pid coll mSub)
-    pure $ case res of
-        Right lbr -> Right lbr
-        Left se -> Left (translateError avail se)
+    case res of
+        Right lbr -> pure (Right lbr)
+        Left se -> Left <$> translateErrorIO dbm se
 
 {- | Score N activities against every method in a collection in one
 multi-RHS MUMPS solve plus parallel characterization. Unresolved process
@@ -100,7 +99,6 @@ runBatchImpacts ::
     [Text] ->
     IO (Either BatchError BatchImpactsResponse)
 runBatchImpacts dbm dbName coll topFlows pids = do
-    avail <- loadedCollectionNames dbm
     res <-
         Servant.runHandler
             ( batchImpactsH
@@ -110,9 +108,19 @@ runBatchImpacts dbm dbName coll topFlows pids = do
                 topFlows
                 (BatchImpactsRequest{birProcessIds = pids})
             )
-    pure $ case res of
-        Right r -> Right r
-        Left se -> Left (translateError avail se)
+    case res of
+        Right r -> pure (Right r)
+        Left se -> Left <$> translateErrorIO dbm se
+
+{- | IO-flavoured translator: snapshot the loaded-collection names from the
+live TVar only when we actually need them (i.e. on a failure path) and
+hand them to the pure 'translateError'. On the happy path the TVar is
+not read at all.
+-}
+translateErrorIO :: DatabaseManager -> ServerError -> IO BatchError
+translateErrorIO dbm se = do
+    avail <- loadedCollectionNames dbm
+    pure (translateError avail se)
 
 {- | Snapshot of currently-loaded method collection names. Read lock-free
 from the live TVar; used to enrich 'CollectionNotLoaded' messages.
