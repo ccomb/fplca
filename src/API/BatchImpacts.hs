@@ -17,6 +17,7 @@ module API.BatchImpacts (
     BatchError (..),
     runActivityLCIABatch,
     runBatchImpacts,
+    translateError,
 ) where
 
 import API.Routes (activityLCIABatchH, batchImpactsH)
