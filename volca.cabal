@@ -53,6 +53,7 @@ library
                      , Method.ChemSynonyms
                      , Method.FlowResolver
                      , API.Routes
+                     , API.BatchImpacts
                      , API.Types
                      , API.JsonOptions
                      , API.DatabaseHandlers
