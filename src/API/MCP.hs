@@ -10,6 +10,7 @@ module API.MCP (mcpApp, toolDefinitions) where
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
 import Data.Aeson.Key (fromText)
+import qualified Data.Aeson.Key as Key
 import Data.Aeson.KeyMap (KeyMap)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
@@ -1779,6 +1780,42 @@ enrichResultsWithWebUrl baseUrlForCategory v = case v of
          in Object updated
     other -> other
 
+{- | If 'requested' is non-empty, restrict the scoring-related maps on a
+serialized 'LCIABatchResult' (or a per-entry @impacts@ subtree) to those
+scoring set names. Errors with the list of configured set names when any
+requested name is unknown — silently dropping a typo'd name would leave
+the caller with a smaller-than-expected payload and no signal.
+-}
+filterScoringSets :: [Text] -> Value -> Either Text Value
+filterScoringSets [] v = Right v
+filterScoringSets requested v = case v of
+    Object km ->
+        let srKey = fromText "scoringResults"
+            suKey = fromText "scoringUnits"
+            siKey = fromText "scoringIndicators"
+            available = case KM.lookup srKey km of
+                Just (Object o) -> map Key.toText (KM.keys o)
+                _ -> []
+            requestedSet = requested
+            missing = [r | r <- requestedSet, r `notElem` available]
+            keep k _ = Key.toText k `elem` requestedSet
+            restrict (Object o) = Object (KM.filterWithKey keep o)
+            restrict other = other
+            restrictAt k m = case KM.lookup k m of
+                Just inner -> KM.insert k (restrict inner) m
+                Nothing -> m
+            applied = restrictAt siKey . restrictAt suKey . restrictAt srKey $ km
+         in if not (null missing)
+                then
+                    Left
+                        ( "Unknown scoring set(s): "
+                            <> T.intercalate ", " missing
+                            <> ". Configured on this collection: "
+                            <> T.intercalate ", " available
+                        )
+                else Right (Object applied)
+    _ -> Right v
+
 -- | Activity-level impacts page URL (the LCIA batch view in the web UI).
 scoreActivityWebUrl :: Text -> Text -> Text -> Text -> Text
 scoreActivityWebUrl baseUrl dbName pidText coll =
@@ -1806,6 +1843,7 @@ callScoreActivity dbManager baseUrl rid args =
                 pidText <- ExceptT $ pure (requireText "process_id" args)
                 coll <- ExceptT $ pure (requireText "collection" args)
                 subs <- ExceptT $ pure (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
+                wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
                 let mSub = if null subs then Nothing else Just SubstitutionRequest{srSubstitutions = subs}
                 res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub
                 case res of
@@ -1816,7 +1854,7 @@ callScoreActivity dbManager baseUrl rid args =
                                 addWebUrl
                                     topUrl
                                     (enrichResultsWithWebUrl topUrl (toJSON lbr))
-                         in pure (toolSuccessJson rid enriched)
+                         in ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets wantedSets enriched)
             )
 
 {- | Handler for the 'score_activities' MCP tool.
@@ -1834,14 +1872,41 @@ callScoreActivities dbManager baseUrl rid args =
                 dbName <- ExceptT $ pure (requireText "database" args)
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
+                wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
                 let topFlows = intArg "top_flows" args
                 res <- liftIO $ BI.runBatchImpacts dbManager dbName coll topFlows pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right bir ->
                         let enriched = enrichBatchResults baseUrl dbName coll (toJSON bir)
-                         in pure (toolSuccessJson rid enriched)
+                         in ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch wantedSets enriched)
             )
+
+{- | Apply 'filterScoringSets' to every @impacts@ subtree of a serialized
+'BatchImpactsResponse'. Fails fast on the first entry that references an
+unknown scoring set name — the configuration is collection-wide, so a
+bad name fails identically for every entry.
+-}
+filterScoringSetsBatch :: [Text] -> Value -> Either Text Value
+filterScoringSetsBatch [] v = Right v
+filterScoringSetsBatch wanted v = case v of
+    Object km ->
+        let resultsKey = fromText "results"
+            impactsKey = fromText "impacts"
+            filterEntry (Object entryKM) = case KM.lookup impactsKey entryKM of
+                Just impactsValue -> do
+                    filteredImpacts <- filterScoringSets wanted impactsValue
+                    pure (Object (KM.insert impactsKey filteredImpacts entryKM))
+                Nothing -> Right (Object entryKM)
+            filterEntry other = Right other
+            filterArray (Array rs) = Array <$> traverse filterEntry rs
+            filterArray other = Right other
+         in case KM.lookup resultsKey km of
+                Just rs -> do
+                    rs' <- filterArray rs
+                    Right (Object (KM.insert resultsKey rs' km))
+                Nothing -> Right v
+    _ -> Right v
 
 {- | Enrich each entry of a serialized 'BatchImpactsResponse' with a
 @web_url@ pointing at the activity-level impacts page. Per-method

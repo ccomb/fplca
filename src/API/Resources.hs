@@ -424,6 +424,24 @@ pSubstitutions =
         \PIDs can be bare (root DB) or qualified as dbName::pid (cross-DB). \
         \When empty or absent, the call behaves as a plain GET."
 
+{- | Optional filter for score_activity / score_activities: when supplied,
+the response's scoring-related maps (scoringResults / scoringUnits /
+scoringIndicators) are restricted to these scoring set names. When
+omitted or empty, every scoring set configured on the collection is
+returned. An unknown name is a hard error (lists what's configured).
+-}
+pScoringSetsFilter :: Param
+pScoringSetsFilter =
+    Param
+        "scoring_sets"
+        "array"
+        Optional
+        "Restrict the response's scoringResults / scoringUnits / \
+        \scoringIndicators to these scoring set names (use \
+        \list_scoring_sets to discover). Omit or pass [] to keep every \
+        \scoring set configured on the collection. An unknown name \
+        \fails the call with the list of available names."
+
 -- | Parameters accepted by a resource operation.
 params :: Resource -> [Param]
 params r = case r of
@@ -581,12 +599,14 @@ params r = case r of
         , pProcessId
         , Param "collection" "string" Required "Method collection name (use list_methods to discover)"
         , pSubstitutions
+        , pScoringSetsFilter
         ]
     ScoreActivities ->
         [ pDatabase
         , Param "collection" "string" Required "Method collection name"
         , Param "process_ids" "array" Required "Process IDs to score (activityUUID_productUUID). All resolved in one multi-RHS solve."
         , Param "top_flows" "integer" Optional "Per-(activity, method) top contributors to include (default 0 — bulk-friendly, skips the per-method contribution walk)."
+        , pScoringSetsFilter
         ]
     ListScoringSets ->
         [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."
