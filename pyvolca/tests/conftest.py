@@ -226,7 +226,7 @@ def readme_namespace() -> dict[str, Any]:
                 compartment=Compartment(name="air"),
                 amount=0.41,
                 unit="kg",
-                is_input=False,
+                direction="Emission",
             ),
         ],
     )

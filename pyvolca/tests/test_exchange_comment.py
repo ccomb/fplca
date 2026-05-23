@@ -25,10 +25,11 @@ def _ewu(tag: str, *, ex_comment: str | None, inner_comment: str | None) -> dict
     inner: dict = {
         "tag": tag,
         "amount": 1.0,
-        "isInput": True,
     }
     if tag == "TechnosphereExchange":
         inner["role"] = "Input"
+    else:
+        inner["direction"] = "Resource"
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
@@ -51,10 +52,11 @@ def _ed(tag: str, *, inner_comment: str | None, ex_comment: str | None = None) -
     inner: dict = {
         "tag": tag,
         "amount": 1.0,
-        "isInput": True,
     }
     if tag == "TechnosphereExchange":
         inner["role"] = "Input"
+    else:
+        inner["direction"] = "Resource"
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
@@ -62,9 +64,9 @@ def _ed(tag: str, *, inner_comment: str | None, ex_comment: str | None = None) -
         "exchangeUnitName": "kg",
     }
     if tag == "TechnosphereExchange":
-        out["flow"] = {"Left": {"name": "wheat"}}
+        out["flow"] = {"kind": "technosphere", "flow": {"name": "wheat"}}
     else:
-        out["flow"] = {"Right": {"name": "wheat", "compartment": {"name": "air", "sub": None}}}
+        out["flow"] = {"kind": "biosphere", "flow": {"name": "wheat", "compartment": {"name": "air", "sub": None}}}
     if ex_comment is not None:
         out["exComment"] = ex_comment
     return out

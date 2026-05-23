@@ -330,9 +330,13 @@ def _exchange_comment(ewu: dict | None, inner: dict) -> str | None:
     return inner.get("comment")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Compartment:
-    """Biosphere compartment (medium + optional subcompartment)."""
+    """Biosphere compartment (medium + optional subcompartment).
+
+    Frozen so it's hashable and immutable — callers can use it as a dict key
+    when grouping flows by compartment, and accidental mutation is rejected.
+    """
 
     name: str
     sub: str | None = None
@@ -396,6 +400,13 @@ class TechnosphereExchange:
         )
 
 
+BioDirection = Literal["Resource", "Emission"]
+
+
+def _direction_is_input(direction: BioDirection) -> bool:
+    return direction == "Resource"
+
+
 @dataclass
 class BiosphereExchange:
     """An exchange with the environment (resource extraction or emission)."""
@@ -404,10 +415,14 @@ class BiosphereExchange:
     compartment: Compartment | None
     amount: float
     unit: str
-    is_input: bool  # True = resource extraction, False = emission
+    direction: BioDirection  # "Resource" = extraction, "Emission" = release
     comment: str | None = None
 
     is_biosphere: bool = True  # discriminator for callers using duck typing
+
+    @property
+    def is_input(self) -> bool:
+        return _direction_is_input(self.direction)
 
     @classmethod
     def from_json(cls, ewu: dict) -> "BiosphereExchange":
@@ -417,7 +432,7 @@ class BiosphereExchange:
             compartment=Compartment.from_json(ewu.get("compartment")),
             amount=inner["amount"],
             unit=ewu["unitName"],
-            is_input=inner["isInput"],
+            direction=inner["direction"],
             comment=_exchange_comment(ewu, inner),
         )
 
@@ -443,20 +458,25 @@ def parse_exchange(ewu: dict) -> Exchange:
 def parse_exchange_detail(ed: dict) -> Exchange:
     """Parse an ``ExchangeDetail`` JSON dict (returned by GET /activity/{pid}/inputs|outputs).
 
-    The flow is a tagged sum: ``{"Left": <techFlow>}`` or
-    ``{"Right": <bioFlow>}``. Compartment lives on biosphere flows only.
+    The flow is a tagged sum: ``{"kind": "technosphere", "flow": <techFlow>}``
+    or ``{"kind": "biosphere", "flow": <bioFlow>}``. The flow's ``kind`` lines
+    up with the exchange variant tag.
     """
     inner = ed["exchange"]
-    flow_outer = ed.get("flow", {})
-    tech_flow = flow_outer.get("Left") or {}
-    bio_flow = flow_outer.get("Right") or {}
+    flow_outer = ed.get("flow") or {}
+    flow_kind = flow_outer.get("kind")
+    flow_payload = flow_outer.get("flow") or {}
     unit = ed.get("exchangeUnitName", "")
     comment = _exchange_comment(ed, inner)
     tag = inner.get("tag")
     if tag == "TechnosphereExchange":
+        if flow_kind not in (None, "technosphere"):
+            raise ValueError(
+                f"TechnosphereExchange carried flow kind {flow_kind!r}"
+            )
         target = ed.get("targetActivity") or {}
         return TechnosphereExchange(
-            flow_name=tech_flow.get("name", ""),
+            flow_name=flow_payload.get("name", ""),
             amount=inner["amount"],
             unit=unit,
             role=inner["role"],
@@ -466,12 +486,16 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             comment=comment,
         )
     if tag == "BiosphereExchange":
+        if flow_kind not in (None, "biosphere"):
+            raise ValueError(
+                f"BiosphereExchange carried flow kind {flow_kind!r}"
+            )
         return BiosphereExchange(
-            flow_name=bio_flow.get("name", ""),
-            compartment=Compartment.from_json(bio_flow.get("compartment")),
+            flow_name=flow_payload.get("name", ""),
+            compartment=Compartment.from_json(flow_payload.get("compartment")),
             amount=inner["amount"],
             unit=unit,
-            is_input=inner["isInput"],
+            direction=inner["direction"],
             comment=comment,
         )
     raise ValueError(f"Unknown exchange variant tag: {tag!r}")
