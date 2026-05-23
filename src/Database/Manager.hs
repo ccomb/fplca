@@ -93,6 +93,9 @@ module Database.Manager (
 
     -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
     loadDatabaseRawWithCrossDB,
+
+    -- * Internal (for tests: pure dependency-list builder)
+    buildDependencyChoices,
 ) where
 
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
