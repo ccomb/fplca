@@ -691,33 +691,32 @@ callAggregate dbManager rid args (db, solver) =
                 Left err -> return $ toolError rid err
                 Right scope -> case aggFnFromArg of
                     Left err -> return $ toolError rid err
-                    Right fn -> do
-                        let params =
-                                Agg.AggregateParams
-                                    { Agg.apScope = scope
-                                    , Agg.apIsInput = boolArg "is_input" args
-                                    , Agg.apMaxDepth = intArg "max_depth" args
-                                    , Agg.apFilterName = textArg "filter_name" args
-                                    , Agg.apFilterNameNot =
-                                        maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
-                                    , Agg.apFilterUnit = textArg "filter_unit" args
-                                    , Agg.apFilterClassifications =
-                                        mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
-                                    , Agg.apFilterTargetName = textArg "filter_target_name" args
-                                    , Agg.apFilterExchangeType = case textArg "filter_exchange_type" args of
-                                        Just "technosphere" -> Just Agg.KindTechnosphere
-                                        Just "biosphere" -> Just Agg.KindBiosphere
-                                        _ -> Nothing
-                                    , Agg.apFilterIsReference = boolArg "filter_is_reference" args
-                                    , Agg.apGroupBy = textArg "group_by" args
-                                    , Agg.apAggregate = fn
-                                    }
-                        unitCfg <- DM.getMergedUnitConfig dbManager
-                        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-                        result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
-                        case result of
-                            Left err -> return $ toolError rid (T.pack $ show err)
-                            Right agg -> return $ toolSuccessJson rid (toJSON agg)
+                    Right fn -> case filterExchangeTypeFromArg of
+                        Left err -> return $ toolError rid err
+                        Right filterExchangeType -> do
+                            let params =
+                                    Agg.AggregateParams
+                                        { Agg.apScope = scope
+                                        , Agg.apIsInput = boolArg "is_input" args
+                                        , Agg.apMaxDepth = intArg "max_depth" args
+                                        , Agg.apFilterName = textArg "filter_name" args
+                                        , Agg.apFilterNameNot =
+                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
+                                        , Agg.apFilterUnit = textArg "filter_unit" args
+                                        , Agg.apFilterClassifications =
+                                            mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
+                                        , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                        , Agg.apFilterExchangeType = filterExchangeType
+                                        , Agg.apFilterIsReference = boolArg "filter_is_reference" args
+                                        , Agg.apGroupBy = textArg "group_by" args
+                                        , Agg.apAggregate = fn
+                                        }
+                            unitCfg <- DM.getMergedUnitConfig dbManager
+                            (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+                            result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
+                            case result of
+                                Left err -> return $ toolError rid (T.pack $ show err)
+                                Right agg -> return $ toolSuccessJson rid (toJSON agg)
   where
     scopeFromArg = case textArg "scope" args of
         Just "direct" -> Right Agg.ScopeDirect
@@ -731,6 +730,14 @@ callAggregate dbManager rid args (db, solver) =
         Just "count" -> Right Agg.AggCount
         Just "share" -> Right Agg.AggShare
         Just other -> Left ("Invalid aggregate fn: " <> other)
+    -- Mirror /api/aggregate's strict parsing: a typo like
+    -- @filter_exchange_type=tecnosphere@ used to silently return unfiltered
+    -- results; surface it via toolError instead.
+    filterExchangeTypeFromArg = case textArg "filter_exchange_type" args of
+        Nothing -> Right Nothing
+        Just "technosphere" -> Right (Just Agg.KindTechnosphere)
+        Just "biosphere" -> Right (Just Agg.KindBiosphere)
+        Just other -> Left ("filter_exchange_type must be one of: technosphere | biosphere (got " <> other <> ")")
     parseClassFilter raw =
         let (sys, rest) = T.breakOn "=" raw
          in if T.null rest
