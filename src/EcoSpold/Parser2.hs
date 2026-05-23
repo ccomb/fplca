@@ -359,9 +359,12 @@ parseWithXeno xmlContent processId =
                     -- Use pending group values if attribute values are empty
                     let finalInputGroup = if T.null (edInputGroup edata) then psPendingInputGroup state else edInputGroup edata
                         finalOutputGroup = if T.null (edOutputGroup edata) then psPendingOutputGroup state else edOutputGroup edata
+                        -- Empty compartment when missing: same sentinel as ILCD so
+                        -- the LCIA cascade keys converge on identical lookups
+                        -- regardless of source format.
                         compName = case edCompartments edata of
                             (c : _) -> c
-                            [] -> "unspecified"
+                            [] -> ""
                         subCompartment = case edSubcompartments edata of
                             (s : _) | not (T.null s) -> Just s
                             _ -> Nothing
