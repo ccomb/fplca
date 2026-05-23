@@ -354,6 +354,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
     "compare_impacts" -> callCompareImpacts dbManager rid args
     "score_activity" -> callScoreActivity dbManager baseUrl rid args
+    "score_activities" -> callScoreActivities dbManager baseUrl rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1813,3 +1814,56 @@ callScoreActivity dbManager baseUrl rid args =
                                     (enrichResultsWithWebUrl topUrl (toJSON lbr))
                          in pure (toolSuccessJson rid enriched)
             )
+
+{- | Handler for the 'score_activities' MCP tool.
+
+Scores N activities against every method in a collection in one
+multi-RHS MUMPS solve plus parallel characterization. Each successful
+entry's @impacts@ subtree is enriched with a 'web_url' to its impacts
+page in the web UI. Unresolved process IDs land in @not_found@ /
+@invalid@ of the response, not as a 'BatchError'.
+-}
+callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
+callScoreActivities dbManager baseUrl rid args =
+    either (toolError rid) id
+        <$> ( runExceptT $ do
+                dbName <- ExceptT $ pure (requireText "database" args)
+                coll <- ExceptT $ pure (requireText "collection" args)
+                pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
+                let topFlows = intArg "top_flows" args
+                res <- liftIO $ BI.runBatchImpacts dbManager dbName coll topFlows pids
+                case res of
+                    Left e -> ExceptT $ pure (Left (batchErrorMsg e))
+                    Right bir ->
+                        let enriched = enrichBatchResults baseUrl dbName coll (toJSON bir)
+                         in pure (toolSuccessJson rid enriched)
+            )
+
+{- | Enrich each entry of a serialized 'BatchImpactsResponse' with a
+@web_url@ pointing at the activity-level impacts page. Per-method
+@web_url@s inside each entry's @impacts.results@ are also added by
+reusing 'enrichResultsWithWebUrl'.
+-}
+enrichBatchResults :: Text -> Text -> Text -> Value -> Value
+enrichBatchResults baseUrl dbName coll v = case v of
+    Object km ->
+        let resultsKey = fromText "results"
+            impactsKey = fromText "impacts"
+            processIdKey = fromText "process_id"
+            enrichEntry (Object km') = case KM.lookup processIdKey km' of
+                Just (String pidText) ->
+                    let url = scoreActivityWebUrl baseUrl dbName pidText coll
+                        enrichedImpacts = case KM.lookup impactsKey km' of
+                            Just impactsValue ->
+                                addWebUrl url (enrichResultsWithWebUrl url impactsValue)
+                            Nothing -> Object KM.empty
+                     in Object (KM.insert impactsKey enrichedImpacts km')
+                _ -> Object km'
+            enrichEntry other = other
+            enrichArray (Array rs) = Array (V.map enrichEntry rs)
+            enrichArray other = other
+            updated = case KM.lookup resultsKey km of
+                Just rs -> KM.insert resultsKey (enrichArray rs) km
+                Nothing -> km
+         in Object updated
+    other -> other
