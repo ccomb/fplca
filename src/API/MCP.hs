@@ -1758,7 +1758,10 @@ enrichResultsWithWebUrl :: Text -> Value -> Value
 enrichResultsWithWebUrl baseUrlForCategory v = case v of
     Object km ->
         let resultsKey = fromText "results"
-            enrichOne (Object km') = case KM.lookup (fromText "method_id") km' of
+            -- The JSON shape comes from strippedToJSON on LCIAResult, which
+            -- drops the 'lr' prefix and keeps camelCase ('methodId', not
+            -- 'method_id'). Stay aligned with the wire format.
+            enrichOne (Object km') = case KM.lookup (fromText "methodId") km' of
                 Just (String mid) ->
                     Object
                         ( KM.insert
@@ -1850,7 +1853,9 @@ enrichBatchResults baseUrl dbName coll v = case v of
     Object km ->
         let resultsKey = fromText "results"
             impactsKey = fromText "impacts"
-            processIdKey = fromText "process_id"
+            -- strippedToJSON on BatchImpactsEntry drops 'bie' prefix and
+            -- keeps camelCase: the field is 'processId', not 'process_id'.
+            processIdKey = fromText "processId"
             enrichEntry (Object km') = case KM.lookup processIdKey km' of
                 Just (String pidText) ->
                     let url = scoreActivityWebUrl baseUrl dbName pidText coll
