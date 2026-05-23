@@ -293,3 +293,45 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             let sdb = Types.toSimpleDatabase db
             M.null (collectUnlinkedProductNames sdb) `shouldBe` True
+
+    -- ---------------------------------------------------------------------
+    -- activityNormFactor — exercises every TechRole branch so the
+    -- treatment-process (ReferenceInput) case can't silently regress to
+    -- the "no reference output" 1.0 fallback.
+    -- ---------------------------------------------------------------------
+    describe "activityNormFactor" $ do
+        let actUUID = actUUID1
+            prodUUID = flowUUID1
+            wasteUUID = flowUUID2
+            withRole role amt fid =
+                TechnosphereExchange
+                    { techFlowId = fid
+                    , techAmount = amt
+                    , techUnitId = UUID.nil
+                    , techRole = role
+                    , techActivityLinkId = UUID.nil
+                    , techProcessLinkId = Nothing
+                    , techLocation = ""
+                    , techComment = Nothing
+                    , techPedigree = Nothing
+                    }
+        it "returns the reference output amount for a normal producer" $ do
+            let act = minimalActivity "producer" "GLO" [withRole ReferenceProduct 3.0 prodUUID]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 3.0
+
+        it "returns abs(reference-input amount) for a treatment process" $ do
+            -- ReferenceInput is the only role that drives the refInputs fallback;
+            -- SimaPro waste-treatment processes encode a negative amount.
+            let act = minimalActivity "incineration" "GLO" [withRole ReferenceInput (-2.5) wasteUUID]
+            activityNormFactor act (actUUID, wasteUUID) `shouldBe` 2.5
+
+        it "falls back to 1.0 when no reference exchange is present" $ do
+            let act = minimalActivity "empty" "GLO" [withRole Input 1.0 wasteUUID]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 1.0
+
+        it "subtracts self-loop consumption from the reference output" $ do
+            let selfInput =
+                    (withRole Input 0.2 prodUUID){techActivityLinkId = actUUID}
+                refOut = withRole ReferenceProduct 1.0 prodUUID
+                act = minimalActivity "self-looper" "GLO" [refOut, selfInput]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 0.8

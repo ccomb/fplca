@@ -6,6 +6,7 @@ module SimaProParserSpec (spec) where
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.Text (Text)
 import Expr (evaluate, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
@@ -30,17 +31,14 @@ import Test.Hspec
 import Types (
     Activity (..),
     BiosphereFlow,
-    Compartment (..),
     Exchange (..),
     Pedigree (..),
     TechRole (..),
     TechnosphereFlow,
     UUID,
     Unit (..),
-    bfCompartment,
-    bfName,
-    compartmentName,
     exchangeComment,
+    exchangeFlowId,
     exchangeIsInput,
     exchangeIsReference,
     exchangePedigree,
@@ -406,6 +404,14 @@ refProductAmount act = case [ techAmount e
     (a : _) -> Just a
     _ -> Nothing
 
+-- Helper: lookup the single activity with the given name; errors on miss
+-- so test failures point at the assertion line rather than a Maybe noise.
+findByName :: HasCallStack => Text -> [Activity] -> Activity
+findByName name acts = case [a | a <- acts, activityName a == name] of
+    [a] -> a
+    [] -> error $ "findByName: no activity named " <> show name
+    _ -> error $ "findByName: more than one activity named " <> show name
+
 spec :: Spec
 spec = do
     describe "SimaPro expression evaluator" $ do
@@ -507,6 +513,33 @@ spec = do
             (activities, _, _, _) <- parseTestCSV
             let cls = activityClassification (head activities)
             M.lookup "Category" cls `shouldBe` Just "material"
+
+        it "keeps per-activity Category when the same product is consumed downstream" $ do
+            -- Producer's reference product and a downstream Materials/fuels input
+            -- both name "Tomato sauce" (same generated flow UUID), but each
+            -- activity must keep its own Category on activityClassification.
+            (activities, techFlowDB, _, _) <- parseSharedFlowCategoryCSV
+            let producer = findByName "Tomato Recipe" activities
+                consumer = findByName "Tomato Packaging" activities
+            M.lookup "Category" (activityClassification producer)
+                `shouldBe` Just "Agricultural\\Food\\Recipes"
+            M.lookup "Category" (activityClassification consumer)
+                `shouldBe` Just "Agricultural\\Food\\Packaging"
+            let producerRefFlow =
+                    head
+                        [ exchangeFlowId ex
+                        | ex@TechnosphereExchange{} <- exchanges producer
+                        , exchangeIsReference ex
+                        , not (exchangeIsInput ex)
+                        ]
+                consumerInputFlows =
+                    [ exchangeFlowId ex
+                    | ex@TechnosphereExchange{} <- exchanges consumer
+                    , exchangeIsInput ex
+                    , not (exchangeIsReference ex)
+                    ]
+            consumerInputFlows `shouldContain` [producerRefFlow]
+            M.member producerRefFlow techFlowDB `shouldBe` True
 
     describe "SimaPro waste treatment parsing" $ do
         it "parses waste treatment processes (Waste treatment section)" $ do
