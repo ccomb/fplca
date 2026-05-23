@@ -37,6 +37,7 @@ import qualified MatrixExportSpec
 import qualified MethodSetTablesSpec
 import qualified MethodSpec
 import qualified MethodUploadSpec
+import qualified MinimalCoverIntegrationSpec
 import qualified MinimalCoverSpec
 import qualified NestedSubstitutionSpec
 import qualified NormalizeSpec
@@ -76,6 +77,7 @@ main = hspec $ do
         describe "Service Layer" ServiceSpec.spec
         describe "Cross-Database Linking" CrossLinkingSpec.spec
         describe "Minimal Dependency Cover" MinimalCoverSpec.spec
+        describe "Minimal Dependency Cover (integration)" MinimalCoverIntegrationSpec.spec
         describe "Cross-DB Inventory" CrossDBInventorySpec.spec
         describe "Cross-DB Regional LCIA" CrossDBRegionalLCIASpec.spec
         describe "Cross-DB Regional LCIA (substitution path)" CrossDBRegionalLCIASubsSpec.spec
