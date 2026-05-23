@@ -30,7 +30,7 @@ mkFlow fid name cat msub =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = VT.Compartment cat msub
+        , bfCompartment = Just (VT.Compartment cat msub)
         }
 
 mkCF :: Text -> Maybe Text -> Double -> MethodCF

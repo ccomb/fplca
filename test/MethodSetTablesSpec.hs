@@ -47,7 +47,7 @@ mkFlow fid name uId =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = VT.Compartment "air" Nothing
+        , bfCompartment = Just (VT.Compartment "air" Nothing)
         }
 
 mkCF :: UUID -> Double -> MethodCF
@@ -369,11 +369,11 @@ spec = do
                 uidKg = mkUuid 200
                 flowUns =
                     (mkFlow fidUns "water" uidKg)
-                        { bfCompartment = VT.Compartment "water" (Just "(unspecified)")
+                        { bfCompartment = Just (VT.Compartment "water" (Just "(unspecified)"))
                         }
                 flowOcean =
                     (mkFlow fidOcean "water" uidKg)
-                        { bfCompartment = VT.Compartment "water" (Just "ocean")
+                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
                         }
                 cfUns =
                     (mkCF fidUns 3.0)
@@ -413,7 +413,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowOcean =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = VT.Compartment "water" (Just "ocean")
+                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
                         }
                 cfEmpty =
                     (mkCF fid 2.0)
@@ -438,7 +438,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowAny =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = VT.Compartment "air" (Just "groundwater, long-term")
+                        { bfCompartment = Just (VT.Compartment "air" (Just "groundwater, long-term"))
                         }
                 cf =
                     (mkCF fid 4.0)

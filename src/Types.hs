@@ -65,6 +65,28 @@ data Compartment = Compartment
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
+-- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
+-- source dataset omitted the compartment. Use 'bfCompartment' directly when
+-- you need to distinguish "absent" from "empty string".
+bfCompartmentName :: BiosphereFlow -> Text
+bfCompartmentName = maybe "" compartmentName . bfCompartment
+
+-- | The biosphere flow's sub-compartment (e.g. "high. pop."), or @Nothing@
+-- when neither the source nor the medium recorded one.
+bfCompartmentSub :: BiosphereFlow -> Maybe Text
+bfCompartmentSub = (>>= compartmentSub) . bfCompartment
+
+{- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
+biosphere side also gets named variants instead of a load-bearing 'Bool'.
+
+* @Resource@ — extraction from the environment (e.g. crude oil, ore, water
+  withdrawal). Acts as an input to the activity.
+* @Emission@ — release into the environment (e.g. CO₂ to air, P to water).
+  Acts as an output from the activity.
+-}
+data BioDirection = Resource | Emission
+    deriving (Eq, Show, Generic, NFData, Store)
+
 {- | Role of a technosphere exchange within its host activity. Names the four
 valid combinations of (input?, reference?). `ReferenceInput` is the
 treatment-process case where the activity is defined by the waste flow it
@@ -122,7 +144,11 @@ data BiosphereFlow = BiosphereFlow
     , bfSynonyms :: !(M.Map Text (S.Set Text))
     , bfCAS :: !(Maybe Text)
     , bfSubstanceId :: !(Maybe Int)
-    , bfCompartment :: !Compartment
+    , -- | The source dataset's compartment (medium + optional sub) for this
+      -- flow, or @Nothing@ when the source omitted it. Distinguishing
+      -- "no compartment recorded" from "the empty string" is required to
+      -- avoid silently broadening LCIA matches in 'Method.Mapping'.
+      bfCompartment :: !(Maybe Compartment)
     }
     deriving (Generic, NFData, Store)
 
@@ -167,7 +193,7 @@ data Exchange
         { bioFlowId :: !UUID -- Flow being exchanged
         , bioAmount :: !Double -- Quantity exchanged
         , bioUnitId :: !UUID -- Unit of measurement
-        , bioIsInput :: !Bool -- True for resource extraction, False for emissions
+        , bioDirection :: !BioDirection -- 'Resource' for extraction, 'Emission' for release
         , bioLocation :: !Text -- Exchange location (EcoSpold1) or "" (EcoSpold2)
         , bioComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , bioPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
@@ -193,7 +219,9 @@ exchangeIsInput TechnosphereExchange{techRole = role} = case role of
     ReferenceInput -> True
     ReferenceProduct -> False
     Coproduct -> False
-exchangeIsInput BiosphereExchange{bioIsInput = isInp} = isInp
+exchangeIsInput BiosphereExchange{bioDirection = dir} = case dir of
+    Resource -> True
+    Emission -> False
 
 exchangeIsReference :: Exchange -> Bool
 exchangeIsReference TechnosphereExchange{techRole = role} = case role of
@@ -930,6 +958,9 @@ instance FromJSON Exchange where
 
 instance ToJSON TechRole
 instance FromJSON TechRole
+
+instance ToJSON BioDirection
+instance FromJSON BioDirection
 
 instance ToJSON Compartment where
     toJSON = genericToJSON stripLowerPrefix

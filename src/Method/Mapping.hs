@@ -239,13 +239,12 @@ pickByCompartment (f : fs) (Just comp) = Just $
         Nothing -> fromMaybe f (find (mediumMatch comp) (f : fs))
   where
     exactCompMatch (Compartment med sub _) fl =
-        let c = bfCompartment fl
-            cat = T.toLower (VT.compartmentName c)
-            subcomp = maybe "" T.toLower (VT.compartmentSub c)
+        let cat = T.toLower (VT.bfCompartmentName fl)
+            subcomp = maybe "" T.toLower (VT.bfCompartmentSub fl)
          in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
 
     mediumMatch (Compartment med _ _) fl =
-        matchMedium med (T.toLower (VT.compartmentName (bfCompartment fl)))
+        matchMedium med (T.toLower (VT.bfCompartmentName fl))
 
     matchMedium med cat
         | T.null med = True
@@ -618,13 +617,13 @@ buildMethodTables cmap mappings =
         Just comp ->
             let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
                 !cfSubN = T.toLower (T.strip cfSubRaw)
-                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
+                rawCategory = T.toLower (VT.bfCompartmentName flow)
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
+                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
                      in if T.null s then rawSubFromCat else s
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
@@ -1095,13 +1094,13 @@ lookupCascadeCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
         Nothing -> Nothing
         Just flow ->
             let name = normalizeName (bfName flow)
-                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
+                rawCategory = T.toLower (VT.bfCompartmentName flow)
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
+                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
                      in if T.null s then rawSubFromCat else s
                 Compartment normMedRaw normSub _ =
                     normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
@@ -1511,13 +1510,13 @@ lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
         Nothing -> Nothing
         Just flow ->
             let name = normalizeName (bfName flow)
-                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
+                rawCategory = T.toLower (VT.bfCompartmentName flow)
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
+                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
                      in if T.null s then rawSubFromCat else s
                 Compartment normMedRaw normSub _ =
                     normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
@@ -1561,7 +1560,7 @@ findSimilarCFs syns idx flow maxN
     | otherwise =
         let flowName' = bfName flow
             flowCAS' = bfCAS flow
-            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ VT.compartmentName (bfCompartment flow)
+            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ VT.bfCompartmentName flow
 
             flowRawTokens = S.fromList (T.words (normalizeName flowName'))
             flowExpTokens = expandedTokens syns flowName'
@@ -1669,8 +1668,8 @@ findUncharacterized _ unitDB flowDB inventory tables syns idx opts
          in [ UncharacterizedFlow
                 { ucfFlowId = bfId flow
                 , ucfFlowName = bfName flow
-                , ucfCategory = VT.compartmentName (bfCompartment flow)
-                , ucfSubcomp = VT.compartmentSub (bfCompartment flow)
+                , ucfCategory = VT.bfCompartmentName flow
+                , ucfSubcomp = VT.bfCompartmentSub flow
                 , ucfFlowUnit = flowUnitText flow
                 , ucfQuantity = qty
                 , ucfAbsWeight = w

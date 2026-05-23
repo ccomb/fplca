@@ -74,7 +74,7 @@ testFlow =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = VT.Compartment "air" Nothing
+        , bfCompartment = Just (VT.Compartment "air" Nothing)
         }
 
 mkActivity :: Text -> Activity

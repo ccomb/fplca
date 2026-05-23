@@ -99,7 +99,7 @@ mkFlow fid uid i =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Compartment "air" Nothing
+        , bfCompartment = Just (Compartment "air" Nothing)
         }
 
 mkCF :: UUID -> Double -> MethodCF

@@ -9,7 +9,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..))
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfEither)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
@@ -633,8 +633,8 @@ computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore
                 , fcoContribution = c
                 , fcoSharePct = if score /= 0 then c / score * 100 else 0
                 , fcoFlowId = UUID.toText (bfId f)
-                , fcoCategory = compartmentName (bfCompartment f)
-                , fcoCompartment = compartmentSub (bfCompartment f)
+                , fcoCategory = bfCompartmentName f
+                , fcoCompartment = bfCompartmentSub f
                 , fcoCfValue = cfVal
                 }
             | (f, cfVal, c) <- topContribs
@@ -741,8 +741,8 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
                             , fcoContribution = c
                             , fcoSharePct = if score /= 0 then c / score * 100 else 0
                             , fcoFlowId = UUID.toText (bfId f)
-                            , fcoCategory = compartmentName (bfCompartment f)
-                            , fcoCompartment = compartmentSub (bfCompartment f)
+                            , fcoCategory = bfCompartmentName f
+                            , fcoCompartment = bfCompartmentSub f
                             , fcoCfValue = cfVal
                             }
                         | (f, cfVal, c) <- top
@@ -1564,8 +1564,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         , fcoContribution = c
                         , fcoSharePct = if score /= 0 then c / score * 100 else 0
                         , fcoFlowId = UUID.toText (bfId f)
-                        , fcoCategory = compartmentName (bfCompartment f)
-                        , fcoCompartment = compartmentSub (bfCompartment f)
+                        , fcoCategory = bfCompartmentName f
+                        , fcoCompartment = bfCompartmentSub f
                         , fcoCfValue = cfVal
                         }
                     | (f, cfVal, c) <- take lim contribs
@@ -1643,7 +1643,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             let fid = either tfId bfId flow
                 unitName' = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db)) flow
                 usageCount = Service.getFlowUsageCount db fid
-            return $ FlowDetail flow unitName' usageCount
+            return $ FlowDetail (apiFlowOfEither flow) unitName' usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Text -> Handler [ActivitySummary]
@@ -1761,7 +1761,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
          in FlowCFEntry
                 { fceFlowId = uuid
                 , fceFlowName = maybe "" bfName mFlow
-                , fceFlowCategory = maybe "" (compartmentName . bfCompartment) mFlow
+                , fceFlowCategory = maybe "" bfCompartmentName mFlow
                 , fceCfValue = fmap (mcfValue . fst) mMatch
                 , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
                 , fceMatchStrategy = fmap (strategyToText . snd) mMatch
@@ -1801,8 +1801,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     , cheDbFlowName = bfName f
                     , cheFlowId = UUID.toText (bfId f)
                     , cheFlowUnit = getUnitNameForBioFlow (dbUnits db) f
-                    , cheCategory = compartmentName (bfCompartment f)
-                    , cheCompartment = compartmentSub (bfCompartment f)
+                    , cheCategory = bfCompartmentName f
+                    , cheCompartment = bfCompartmentSub f
                     , cheMatchStrategy = strategyToText strat
                     }
         return
@@ -2015,7 +2015,7 @@ searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLim
         idOf = either tfId bfId
         unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
         synonymsOf = either tfSynonyms bfSynonyms
-        categoryOf = either (const "") (compartmentName . bfCompartment)
+        categoryOf = either (const "") bfCompartmentName
         allResults = [FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)) | flow <- flows]
         isDesc = orderParam == Just "desc"
         fsCmp = case sortParam of

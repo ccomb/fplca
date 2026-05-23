@@ -275,9 +275,9 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, allUnits)
             , bfCompartment = toCompartment (ilcdCompartment info)
             }
 
-    toCompartment Nothing = Compartment "" Nothing
+    toCompartment Nothing = Nothing
     toCompartment (Just (MT.Compartment m sc _)) =
-        Compartment m (if T.null sc then Nothing else Just sc)
+        Just $ Compartment m (if T.null sc then Nothing else Just sc)
 
     resolveUnit info =
         Data.Maybe.fromMaybe UUID.nil $
@@ -560,7 +560,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p =
                         { bioFlowId = flowUUID
                         , bioAmount = ierAmount raw
                         , bioUnitId = fUnitId
-                        , bioIsInput = isInput
+                        , bioDirection = if isInput then Resource else Emission
                         , bioLocation = ierLocation raw
                         , bioComment = ierComment raw
                         , bioPedigree = Nothing
@@ -607,15 +607,17 @@ fixActivityExchanges :: SupplierIndex -> Activity -> Activity
 fixActivityExchanges idx act =
     act{exchanges = map fixEx (exchanges act)}
   where
-    fixEx ex@TechnosphereExchange{techFlowId = fid, techRole = role}
-        | role == Input || role == ReferenceInput =
-            case M.lookup fid idx of
-                Just (actUUID, prodUUID) ->
-                    ex
-                        { techFlowId = prodUUID
-                        , techRole = Input
-                        , techActivityLinkId = actUUID
-                        }
-                Nothing -> ex
-        | otherwise = ex
+    -- Only relink plain @Input@ exchanges. @ReferenceInput@ is the activity's
+    -- own waste-treatment reference flow — it appears in the supplier index
+    -- (it is a reference exchange) but rewriting it would point the activity
+    -- at itself and erase the role, breaking 'activityNormFactor'.
+    fixEx ex@TechnosphereExchange{techFlowId = fid, techRole = Input} =
+        case M.lookup fid idx of
+            Just (actUUID, prodUUID) ->
+                ex
+                    { techFlowId = prodUUID
+                    , techActivityLinkId = actUUID
+                    }
+            Nothing -> ex
+    fixEx ex@TechnosphereExchange{} = ex
     fixEx ex@BiosphereExchange{} = ex

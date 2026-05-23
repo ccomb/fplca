@@ -50,7 +50,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Compartment (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -691,33 +691,32 @@ callAggregate dbManager rid args (db, solver) =
                 Left err -> return $ toolError rid err
                 Right scope -> case aggFnFromArg of
                     Left err -> return $ toolError rid err
-                    Right fn -> do
-                        let params =
-                                Agg.AggregateParams
-                                    { Agg.apScope = scope
-                                    , Agg.apIsInput = boolArg "is_input" args
-                                    , Agg.apMaxDepth = intArg "max_depth" args
-                                    , Agg.apFilterName = textArg "filter_name" args
-                                    , Agg.apFilterNameNot =
-                                        maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
-                                    , Agg.apFilterUnit = textArg "filter_unit" args
-                                    , Agg.apFilterClassifications =
-                                        mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
-                                    , Agg.apFilterTargetName = textArg "filter_target_name" args
-                                    , Agg.apFilterExchangeType = case textArg "filter_exchange_type" args of
-                                        Just "technosphere" -> Just Agg.KindTechnosphere
-                                        Just "biosphere" -> Just Agg.KindBiosphere
-                                        _ -> Nothing
-                                    , Agg.apFilterIsReference = boolArg "filter_is_reference" args
-                                    , Agg.apGroupBy = textArg "group_by" args
-                                    , Agg.apAggregate = fn
-                                    }
-                        unitCfg <- DM.getMergedUnitConfig dbManager
-                        (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-                        result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
-                        case result of
-                            Left err -> return $ toolError rid (T.pack $ show err)
-                            Right agg -> return $ toolSuccessJson rid (toJSON agg)
+                    Right fn -> case filterExchangeTypeFromArg of
+                        Left err -> return $ toolError rid err
+                        Right filterExchangeType -> do
+                            let params =
+                                    Agg.AggregateParams
+                                        { Agg.apScope = scope
+                                        , Agg.apIsInput = boolArg "is_input" args
+                                        , Agg.apMaxDepth = intArg "max_depth" args
+                                        , Agg.apFilterName = textArg "filter_name" args
+                                        , Agg.apFilterNameNot =
+                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
+                                        , Agg.apFilterUnit = textArg "filter_unit" args
+                                        , Agg.apFilterClassifications =
+                                            mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
+                                        , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                        , Agg.apFilterExchangeType = filterExchangeType
+                                        , Agg.apFilterIsReference = boolArg "filter_is_reference" args
+                                        , Agg.apGroupBy = textArg "group_by" args
+                                        , Agg.apAggregate = fn
+                                        }
+                            unitCfg <- DM.getMergedUnitConfig dbManager
+                            (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+                            result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
+                            case result of
+                                Left err -> return $ toolError rid (T.pack $ show err)
+                                Right agg -> return $ toolSuccessJson rid (toJSON agg)
   where
     scopeFromArg = case textArg "scope" args of
         Just "direct" -> Right Agg.ScopeDirect
@@ -731,6 +730,14 @@ callAggregate dbManager rid args (db, solver) =
         Just "count" -> Right Agg.AggCount
         Just "share" -> Right Agg.AggShare
         Just other -> Left ("Invalid aggregate fn: " <> other)
+    -- Mirror /api/aggregate's strict parsing: a typo like
+    -- @filter_exchange_type=tecnosphere@ used to silently return unfiltered
+    -- results; surface it via toolError instead.
+    filterExchangeTypeFromArg = case textArg "filter_exchange_type" args of
+        Nothing -> Right Nothing
+        Just "technosphere" -> Right (Just Agg.KindTechnosphere)
+        Just "biosphere" -> Right (Just Agg.KindBiosphere)
+        Just other -> Left ("filter_exchange_type must be one of: technosphere | biosphere (got " <> other <> ")")
     parseClassFilter raw =
         let (sys, rest) = T.breakOn "=" raw
          in if T.null rest
@@ -1040,8 +1047,8 @@ callGetImpacts dbManager baseUrl rid args =
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
                                         , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "cf_value" .= cfVal
                                         , "flow_unit" .= getUnitNameForBioFlow mUnits f
                                         ]
@@ -1172,8 +1179,8 @@ callCompareImpacts dbManager rid args =
                     common =
                         [ object
                             [ "flow_name" .= bfName f
-                            , "category" .= compartmentName (bfCompartment f)
-                            , "compartment" .= compartmentSub (bfCompartment f)
+                            , "category" .= bfCompartmentName f
+                            , "compartment" .= bfCompartmentSub f
                             , "a_contrib" .= cA
                             , "b_contrib" .= cB
                             , "delta" .= (cA - cB)
@@ -1225,8 +1232,8 @@ callCompareImpacts dbManager rid args =
     encodeContrib f c =
         object
             [ "flow_name" .= bfName f
-            , "category" .= compartmentName (bfCompartment f)
-            , "compartment" .= compartmentSub (bfCompartment f)
+            , "category" .= bfCompartmentName f
+            , "compartment" .= bfCompartmentSub f
             , "contribution" .= c
             ]
 
@@ -1235,8 +1242,8 @@ callCompareImpacts dbManager rid args =
     flowKey :: BiosphereFlow -> (Text, Text, Text)
     flowKey f =
         ( T.toLower (T.strip (bfName f))
-        , T.toLower (compartmentName (bfCompartment f))
-        , maybe "" T.toLower (compartmentSub (bfCompartment f))
+        , T.toLower (bfCompartmentName f)
+        , maybe "" T.toLower (bfCompartmentSub f)
         )
 
 {- | Pull side-specific args (suffixed @_a@ / @_b@) up to the standard names
@@ -1431,8 +1438,8 @@ callGetCharacterization dbManager rid args =
                                         , "db_flow_name" .= bfName f
                                         , "flow_id" .= UUID.toText (bfId f)
                                         , "flow_unit" .= getUnitNameForBioFlow (dbUnits db) f
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "match_strategy" .= show strat
                                         ]
                             return $
@@ -1668,8 +1675,8 @@ callGetContributingFlows dbManager baseUrl rid args =
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
                                         , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "cf_value" .= cfVal
                                         ]
                                    | (f, cfVal, c) <- top

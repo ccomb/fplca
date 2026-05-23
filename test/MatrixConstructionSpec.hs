@@ -149,7 +149,7 @@ spec = do
                         { bioFlowId = bioFlowUUID
                         , bioAmount = rawBioAmount
                         , bioUnitId = kgUnitId
-                        , bioIsInput = False
+                        , bioDirection = Emission
                         , bioLocation = ""
                         , bioComment = Nothing
                         , bioPedigree = Nothing
@@ -170,7 +170,7 @@ spec = do
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
-                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Compartment "air" Nothing))
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
                 unitDB =
                     M.fromList
                         [ (jUnitId, Unit jUnitId "j" "j" "")
@@ -219,7 +219,7 @@ spec = do
                         { bioFlowId = bioFlowUUID
                         , bioAmount = 0.0
                         , bioUnitId = kgUnitId
-                        , bioIsInput = False
+                        , bioDirection = Emission
                         , bioLocation = ""
                         , bioComment = Nothing
                         , bioPedigree = Nothing
@@ -240,7 +240,7 @@ spec = do
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
-                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Compartment "air" Nothing))
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
                 unitDB =
                     M.fromList
                         [ (jUnitId, Unit jUnitId "j" "j" "")
