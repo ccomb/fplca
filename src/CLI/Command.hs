@@ -515,7 +515,7 @@ executeFlowMappingCommand registry fmt database manager opts = do
                         dbBioCount = fromIntegral (Types.dbBiosphereCount database) :: Int
                         characterizedUUIDs =
                             S.fromList
-                                [Types.flowId f | (_cf, Just (f, _)) <- mappings]
+                                [Types.bfId f | (_cf, Just (f, _)) <- mappings]
                         characterizedCount = S.size characterizedUUIDs
                         uncharacterizedCount = dbBioCount - characterizedCount
                         charCoverage =
@@ -551,7 +551,7 @@ executeFlowMappingCommand registry fmt database manager opts = do
                                                 ++ "] "
                                                 ++ T.unpack (mcfFlowName cf)
                                                 ++ " → "
-                                                ++ T.unpack (Types.flowName f)
+                                                ++ T.unpack (Types.bfName f)
                                     )
                                     [(cf, f, strat) | (cf, Just (f, strat)) <- mappings]
 
@@ -599,10 +599,10 @@ executeFlowMappingCommand registry fmt database manager opts = do
                                                     toJSON
                                                         [ object
                                                             [ "cfName" .= mcfFlowName cf
-                                                            , "dbFlowName" .= Types.flowName f
+                                                            , "dbFlowName" .= Types.bfName f
                                                             , "strategy" .= strategyText strat
                                                             , "cfUUID" .= mcfFlowRef cf
-                                                            , "dbFlowUUID" .= Types.flowId f
+                                                            , "dbFlowUUID" .= Types.bfId f
                                                             ]
                                                         | (cf, Just (f, strat)) <- mappings
                                                         ]
@@ -641,10 +641,10 @@ strategyText NoMatch = "none"
 -- | Get names of biosphere flows not matched by any CF
 uncharacterizedFlowNames :: Types.Database -> S.Set UUID.UUID -> [Text]
 uncharacterizedFlowNames db characterized =
-    [ Types.flowName f
-    | uuid <- V.toList (Types.dbBiosphereFlows db)
+    [ Types.bfName f
+    | uuid <- V.toList (Types.dbBiosphereOrder db)
     , not (S.member uuid characterized)
-    , Just f <- [M.lookup uuid (Types.dbFlows db)]
+    , Just f <- [M.lookup uuid (Types.dbBioFlows db)]
     ]
 
 -- | Report service errors to stderr and exit

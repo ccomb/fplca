@@ -9,10 +9,11 @@ import Numeric.Natural (Natural)
 import Types
 import UnitConversion (UnitConfig, convertExchangeAmount)
 
-isTechnosphereInput :: FlowDB -> Exchange -> Bool
-isTechnosphereInput _ ex =
+isTechnosphereInput :: Exchange -> Bool
+isTechnosphereInput ex =
     case ex of
-        TechnosphereExchange{techIsInput = isInput, techIsReference = isRef} -> isInput && not isRef
+        TechnosphereExchange{techRole = Input} -> True
+        TechnosphereExchange{} -> False
         BiosphereExchange{} -> False
 
 {- | Get converted exchange amount ensuring unit compatibility.
@@ -74,7 +75,7 @@ buildNode cfg activityUUID visited depth = do
                             techInputs =
                                 [ ex
                                 | ex <- exchanges activity
-                                , isTechnosphereInput (dbFlows (tcDatabase cfg)) ex
+                                , isTechnosphereInput ex
                                 ]
                         children <- buildChildren cfg techInputs visited' (depth + 1)
                         pure $
@@ -86,13 +87,13 @@ buildNode cfg activityUUID visited depth = do
 with its converted amount and recursing. Bails out early when the node
 budget runs out so the tree stays within the 300-node envelope.
 -}
-buildChildren :: TreeConfig -> [Exchange] -> S.Set UUID -> Int -> State Int [(Double, Flow, LoopAwareTree)]
+buildChildren :: TreeConfig -> [Exchange] -> S.Set UUID -> Int -> State Int [(Double, TechnosphereFlow, LoopAwareTree)]
 buildChildren _ [] _ _ = pure []
 buildChildren cfg (ex : exs) visited depth = do
     budget <- get
     if budget <= 0
         then pure []
-        else case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbFlows (tcDatabase cfg))) of
+        else case (exchangeActivityLinkId ex, M.lookup (exchangeFlowId ex) (dbTechFlows (tcDatabase cfg))) of
             (Just targetUUID, Just flow) -> do
                 let amount = getConvertedExchangeAmount (tcUnitConfig cfg) (tcDatabase cfg) ex targetUUID
                 subtree <- buildNode cfg targetUUID visited depth

@@ -94,7 +94,8 @@ import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
 import SynonymDB
-import Types (Activity (..), Database (..), Flow (..), FlowDB, ProcessId, SparseTriple (..), Unit (..), UnitDB)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
+import qualified Types as VT
 import UnitConversion (UnitConfig, convertUnit, isKnownUnit)
 
 -- | Matching strategy used to find a flow
@@ -136,9 +137,9 @@ data MappingStats = MappingStats
 buildMapContext :: Database -> MapContext
 buildMapContext db =
     MapContext
-        { mcFlowsByUUID = dbFlows db
-        , mcFlowsByName = dbFlowsByName db
-        , mcFlowsByCAS = dbFlowsByCAS db
+        { mcBioFlowsByUUID = dbBioFlows db
+        , mcBioFlowsByName = dbFlowsByName db
+        , mcBioFlowsByCAS = dbFlowsByCAS db
         , mcSynonymDB = fromMaybe emptySynonymDB (dbSynonymDB db)
         , mcActivities = M.empty
         }
@@ -150,7 +151,7 @@ mapMethodFlows ::
     [MapperHandle] ->
     MapContext ->
     Method ->
-    IO [(MethodCF, Maybe (Flow, MatchStrategy))]
+    IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodFlows mappers ctx method =
     mapM (\cf -> fmap (cf,) (mapSingleFlow mappers ctx cf)) (methodFactors method)
 
@@ -161,7 +162,7 @@ mapSingleFlow ::
     [MapperHandle] ->
     MapContext ->
     MethodCF ->
-    IO (Maybe (Flow, MatchStrategy))
+    IO (Maybe (BiosphereFlow, MatchStrategy))
 mapSingleFlow mappers ctx cf = go mappers
   where
     go [] = pure Nothing
@@ -169,12 +170,12 @@ mapSingleFlow mappers ctx cf = go mappers
         result <- mhMatch m ctx (MatchCF cf)
         case result of
             Just mr
-                | Just flow <- M.lookup (mrTargetId mr) (mcFlowsByUUID ctx) ->
+                | Just flow <- M.lookup (mrTargetId mr) (mcBioFlowsByUUID ctx) ->
                     pure $ Just (flow, strategyFromText (mrStrategy mr))
             _ -> go ms
 
 -- | Convenience wrapper: map method CFs using the given mappers + DB.
-mapMethodToFlows :: [MapperHandle] -> Database -> Method -> IO [(MethodCF, Maybe (Flow, MatchStrategy))]
+mapMethodToFlows :: [MapperHandle] -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodToFlows mappers db = mapMethodFlows mappers (buildMapContext db)
 
 -- | Convert strategy text back to MatchStrategy
@@ -192,29 +193,29 @@ strategyFromText t = case T.toLower t of
 -- ──────────────────────────────────────────────
 
 -- | Find flow by exact UUID match
-findFlowByUUID :: M.Map UUID Flow -> UUID -> Maybe Flow
+findFlowByUUID :: M.Map UUID BiosphereFlow -> UUID -> Maybe BiosphereFlow
 findFlowByUUID flowsByUUID uuid = M.lookup uuid flowsByUUID
 
 -- | Find flow by CAS number with compartment preference
-findFlowByCAS :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowByCAS :: M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
 findFlowByCAS flowsByCAS cas mComp =
     M.lookup cas flowsByCAS >>= \flows -> pickByCompartment flows mComp
 
 -- | Find flow by normalized name match (compartment-aware)
-findFlowByName :: M.Map Text [Flow] -> Text -> Maybe Flow
+findFlowByName :: M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
 findFlowByName flowsByName name = findFlowByNameComp flowsByName name Nothing
 
 -- | Find flow by normalized name with compartment preference
-findFlowByNameComp :: M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowByNameComp :: M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
 findFlowByNameComp flowsByName name mComp =
     M.lookup (normalizeName name) flowsByName >>= \flows -> pickByCompartment flows mComp
 
 -- | Find flow via synonym group (compartment-aware)
-findFlowBySynonym :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Flow
+findFlowBySynonym :: SynonymDB -> M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
 findFlowBySynonym synDB flowsByName name = findFlowBySynonymComp synDB flowsByName name Nothing
 
 -- | Find flow via synonym group with compartment preference
-findFlowBySynonymComp :: SynonymDB -> M.Map Text [Flow] -> Text -> Maybe Compartment -> Maybe Flow
+findFlowBySynonymComp :: SynonymDB -> M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
 findFlowBySynonymComp synDB flowsByName name mComp =
     case lookupSynonymGroup synDB name of
         Nothing -> Nothing
@@ -224,10 +225,12 @@ findFlowBySynonymComp synDB flowsByName name mComp =
   where
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
 
-{- | Pick the best flow match based on compartment preference.
-Returns Nothing for an empty candidate list.
+{- | Pick the best flow match based on compartment preference. The flow's own
+compartment now lives in 'bfCompartment' as a structured 'Types.Compartment'
+(medium + optional sub); we compare against the method-side 3-field
+'Method.Types.Compartment' here.
 -}
-pickByCompartment :: [Flow] -> Maybe Compartment -> Maybe Flow
+pickByCompartment :: [BiosphereFlow] -> Maybe Compartment -> Maybe BiosphereFlow
 pickByCompartment [] _ = Nothing
 pickByCompartment (f : _) Nothing = Just f
 pickByCompartment (f : fs) (Just comp) = Just $
@@ -236,12 +239,13 @@ pickByCompartment (f : fs) (Just comp) = Just $
         Nothing -> fromMaybe f (find (mediumMatch comp) (f : fs))
   where
     exactCompMatch (Compartment med sub _) fl =
-        let cat = T.toLower (flowCategory fl)
-            subcomp = maybe "" T.toLower (flowSubcompartment fl)
+        let c = bfCompartment fl
+            cat = T.toLower (VT.compartmentName c)
+            subcomp = maybe "" T.toLower (VT.compartmentSub c)
          in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
 
     mediumMatch (Compartment med _ _) fl =
-        matchMedium med (T.toLower (flowCategory fl))
+        matchMedium med (T.toLower (VT.compartmentName (bfCompartment fl)))
 
     matchMedium med cat
         | T.null med = True
@@ -250,7 +254,7 @@ pickByCompartment (f : fs) (Just comp) = Just $
         | otherwise = False
 
 -- | Compute statistics about mapping results
-computeMappingStats :: [(MethodCF, Maybe (Flow, MatchStrategy))] -> MappingStats
+computeMappingStats :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MappingStats
 computeMappingStats mappings =
     MappingStats
         { msTotal = length mappings
@@ -509,9 +513,9 @@ preferBetter@.
 -}
 expandSynonymMappings ::
     SynonymDB ->
-    M.Map Text [Flow] ->
-    [(MethodCF, Maybe (Flow, MatchStrategy))] ->
-    [(MethodCF, Maybe (Flow, MatchStrategy))]
+    M.Map Text [BiosphereFlow] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 expandSynonymMappings synDB flowsByName mappings =
     mappings ++ concatMap expand mappings
   where
@@ -547,12 +551,12 @@ expandSynonymMappings synDB flowsByName mappings =
 -- @resources/land@ via the compartment map), so it's simpler to let
 -- the table keys do the filtering.
 
-buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> MethodTables
+buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap mappings =
     MethodTables
         { mtUuidCF =
             M.fromList
-                [ (flowId flow, (mcfValue cf, mcfUnit cf))
+                [ (bfId flow, (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, ByUUID)) <- mappings
                 ]
         , mtExactCF =
@@ -586,7 +590,7 @@ buildMethodTables cmap mappings =
             -- fallback CF. CFs with subcomp "(unspecified)" / empty are
             -- wildcards and match any flow subcomp.
             M.fromList
-                [ ((flowId flow, loc), (mcfValue cf, mcfUnit cf))
+                [ ((bfId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
                 , Just loc <- [mcfConsumerLocation cf]
                 , cfSubcompMatchesFlow cf flow
@@ -607,20 +611,20 @@ buildMethodTables cmap mappings =
     -- that rewrites a subcomp can't desynchronise the filter from the sibling
     -- 'mtExactCF' / 'mtFallbackCF' tables or the 'lookupCascadeCF' read path.
     -- Flow subcomp resolution mirrors 'lookupCascadeCF': prefer the explicit
-    -- 'flowSubcompartment' field, fall back to the tail of "<medium>/<sub>"
-    -- parsed from 'flowCategory'.
+    -- 'compartmentSub' field, fall back to the tail of "<medium>/<sub>"
+    -- parsed from the compartment name.
     cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
         Nothing -> True
         Just comp ->
             let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
                 !cfSubN = T.toLower (T.strip cfSubRaw)
-                rawCategory = T.toLower (flowCategory flow)
+                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
                      in if T.null s then rawSubFromCat else s
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
@@ -646,8 +650,8 @@ buildMethodTables cmap mappings =
 
     -- Use matched flow's name only for name/synonym matches
     nameKey cf mflow = normalizeName $ case mflow of
-        Just (flow, ByName) -> flowName flow
-        Just (flow, BySynonym) -> flowName flow
+        Just (flow, ByName) -> bfName flow
+        Just (flow, BySynonym) -> bfName flow
         _ -> mcfFlowName cf
 
 {- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
@@ -679,7 +683,7 @@ dimensionally-incompatible flow/CF unit pairs land an effective CF of @0@
 (matching the per-flow scoring path) rather than silently keeping the
 unconverted quantity and contaminating the score.
 -}
-fillBroadcastVector :: UnitConfig -> UnitDB -> FlowDB -> MethodTables -> MethodTables
+fillBroadcastVector :: UnitConfig -> UnitDB -> BioFlowDB -> MethodTables -> MethodTables
 fillBroadcastVector unitConfig unitDB flowDB tables =
     tables{mtBroadcast = M.mapMaybeWithKey buildEntry flowDB}
   where
@@ -721,7 +725,7 @@ the right answer.
 fillRegionalActivityWeights ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Database ->
     M.Map Text [Text] ->
     MethodTables ->
@@ -733,7 +737,7 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     nCols = fromIntegral (dbActivityCount db) :: Int
     actIdx = dbActivityIndex db
     activities = dbActivities db
-    bioFlows = dbBiosphereFlows db
+    bioFlows = dbBiosphereOrder db
     bioTriples = dbBiosphereTriples db
     regional = mtRegionalizedCF tables
 
@@ -861,7 +865,7 @@ conversion when 'mtBroadcast' is empty. Tests and back-compat callers that use
 'buildMethodTables' directly hit the legacy path; the cached
 'mapMethodToTablesCached' fills the broadcast and gets the fast path.
 -}
-computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> MethodTables -> LCIAOutcome
+computeLCIAScoreFromTables :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> MethodTables -> LCIAOutcome
 computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
     let (!score, !charSum, !invSum) = M.foldlWithKey' step (0, 0, 0) inventory
      in LCIAOutcome
@@ -899,7 +903,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
 -}
-computeLCIAScore :: UnitConfig -> UnitDB -> FlowDB -> Inventory -> [(MethodCF, Maybe (Flow, MatchStrategy))] -> LCIAOutcome
+computeLCIAScore :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
     computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
 
@@ -922,7 +926,7 @@ the partial 'Right'.
 computeLCIAScoreAuto ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Database ->
     -- | Scaling vector @s@ (only consulted if the method is regionalized)
     Vector ->
@@ -962,7 +966,7 @@ non-regionalized methods continue to use 'computeLCIAScoreFromTables'.
 computeRegionalizedLCIAScore ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Database ->
     -- | Scaling vector @s@ from 'Matrix.computeScalingVector'
     Vector ->
@@ -1057,7 +1061,7 @@ can act on them.
 sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     M.Map Text [Text] ->
     {- | Per-DB triples: one per database participating in the cross-DB solve
     (root + dep DBs in the same order returned by 'SharedSolver.csScalings').
@@ -1084,20 +1088,20 @@ converges on the same canonical form — a compartments.csv rule like
 against ILCD-style bare media without requiring an explicit (medium, sub)
 pair for every combination.
 -}
-lookupCascadeCF :: MethodTables -> FlowDB -> UUID -> Maybe (Double, Text)
+lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe (Double, Text)
 lookupCascadeCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv
     Nothing -> case M.lookup fid flowDB of
         Nothing -> Nothing
         Just flow ->
-            let name = normalizeName (flowName flow)
-                rawCategory = T.toLower (flowCategory flow)
+            let name = normalizeName (bfName flow)
+                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
                      in if T.null s then rawSubFromCat else s
                 Compartment normMedRaw normSub _ =
                     normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
@@ -1128,13 +1132,13 @@ convertAndMultiply ::
     {- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
     the identity factor (no flow record means no flow unit known).
     -}
-    Maybe Flow ->
+    Maybe BiosphereFlow ->
     -- | (CF value, CF unit)
     (Double, Text) ->
     Double ->
     Double
 convertAndMultiply unitConfig unitDB mflow (cfVal, cfUnit) qty =
-    let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (flowUnitId f) unitDB)
+    let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
         converted = convertForCharacterization unitConfig flowUnit cfUnit qty
      in converted * cfVal
 
@@ -1159,10 +1163,10 @@ uncharacterized and silently omitted — that matches the behaviour of
 inventoryContributions ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Inventory ->
     MethodTables ->
-    ([(Flow, Double, Double)], [UUID])
+    ([(BiosphereFlow, Double, Double)], [UUID])
 inventoryContributions unitConfig unitDB flowDB inventory tables =
     M.foldlWithKey' step ([], []) inventory
   where
@@ -1183,7 +1187,7 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
                      in ((flow, cfVal, contribution) : contribs, unknowns)
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
-'MethodTables' + a merged 'FlowDB'. Mirrors
+'MethodTables' + a merged 'BioFlowDB'. Mirrors
 'Matrix.computeProcessLCIAContributions' but lets dep-DB flows land a CF
 via (name, medium, subcompartment) fallback — same lookup path as
 'inventoryContributions' — so this helper can be called per-DB while
@@ -1196,7 +1200,7 @@ flow-unit → CF-unit conversion) to the process owning @colIdx@.
 processContributionsFromTables ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Database ->
     Vector ->
     MethodTables ->
@@ -1205,7 +1209,7 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
     U.foldl' step M.empty (dbBiosphereTriples db)
   where
     actIdx = dbActivityIndex db
-    bioFlows = dbBiosphereFlows db
+    bioFlows = dbBiosphereOrder db
     nFlows = V.length bioFlows
     nActs = V.length actIdx
 
@@ -1382,7 +1386,7 @@ constraint makes the impossible state (no DBs participated) unrepresentable.
 computeLCIAScoreSetFromTables ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Inventory ->
     M.Map Text [Text] ->
     {- | Non-empty per-DB triples: 'NE.head' is root, tail is each participating
@@ -1411,7 +1415,7 @@ whose mappings caught none of the method's regional CFs.
 scoreRegionalCrossDB ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     M.Map Text [Text] ->
     V.Vector MethodSetEntry ->
     NonEmpty (Database, Vector, MethodSetTables) ->
@@ -1446,7 +1450,7 @@ would have caught via name/compartment cascade.
 scoreBatched ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     BatchedTables ->
     Inventory ->
     [(UUID, Either Text Double)]
@@ -1500,20 +1504,20 @@ scoreBatched unitCfg unitDB flowDB bt inventory
 per-function @lookupCF@ helpers inlined elsewhere in this module, but
 exposed so 'findUncharacterized' can ask whether a flow has any CF at all.
 -}
-lookupCFForFlow :: MethodTables -> UUID -> Maybe Flow -> Maybe (Double, Text)
+lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe (Double, Text)
 lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
     Just cfv -> Just cfv
     Nothing -> case mFlow of
         Nothing -> Nothing
         Just flow ->
-            let name = normalizeName (flowName flow)
-                rawCategory = T.toLower (flowCategory flow)
+            let name = normalizeName (bfName flow)
+                rawCategory = T.toLower (VT.compartmentName (bfCompartment flow))
                 (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
                     (m, rest)
                         | T.null rest -> (m, T.empty)
                         | otherwise -> (m, T.drop 1 rest)
                 rawSub =
-                    let s = T.toLower (fromMaybe T.empty (flowSubcompartment flow))
+                    let s = T.toLower (fromMaybe T.empty (VT.compartmentSub (bfCompartment flow)))
                      in if T.null s then rawSubFromCat else s
                 Compartment normMedRaw normSub _ =
                     normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
@@ -1551,13 +1555,13 @@ scan cheap even on methods with thousands of CFs.
 Empty result list = no signal above zero. Caller should treat that as
 \"this flow is genuinely uncharacterized by the method\", not a bug.
 -}
-findSimilarCFs :: ChemSynonyms -> MethodIndex -> Flow -> Int -> [SimilarCF]
+findSimilarCFs :: ChemSynonyms -> MethodIndex -> BiosphereFlow -> Int -> [SimilarCF]
 findSimilarCFs syns idx flow maxN
     | maxN <= 0 = []
     | otherwise =
-        let flowName' = flowName flow
-            flowCAS' = flowCAS flow
-            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ flowCategory flow
+        let flowName' = bfName flow
+            flowCAS' = bfCAS flow
+            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ VT.compartmentName (bfCompartment flow)
 
             flowRawTokens = S.fromList (T.words (normalizeName flowName'))
             flowExpTokens = expandedTokens syns flowName'
@@ -1639,7 +1643,7 @@ diagnostics are disabled (@uoMaxFlows == 0@ / @uoMaxSimilar == 0@).
 findUncharacterized ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Inventory ->
     MethodTables ->
     ChemSynonyms ->
@@ -1663,10 +1667,10 @@ findUncharacterized _ unitDB flowDB inventory tables syns idx opts
                 take (uoMaxFlows opts) $
                     sortOn (\(_, _, w) -> Down w) unmatched
          in [ UncharacterizedFlow
-                { ucfFlowId = flowId flow
-                , ucfFlowName = flowName flow
-                , ucfCategory = flowCategory flow
-                , ucfSubcomp = flowSubcompartment flow
+                { ucfFlowId = bfId flow
+                , ucfFlowName = bfName flow
+                , ucfCategory = VT.compartmentName (bfCompartment flow)
+                , ucfSubcomp = VT.compartmentSub (bfCompartment flow)
                 , ucfFlowUnit = flowUnitText flow
                 , ucfQuantity = qty
                 , ucfAbsWeight = w
@@ -1676,7 +1680,7 @@ findUncharacterized _ unitDB flowDB inventory tables syns idx opts
             ]
   where
     !totalAbs = M.foldr (\q s -> s + abs q) 0 inventory
-    flowUnitText flow = maybe "" unitName (M.lookup (flowUnitId flow) unitDB)
+    flowUnitText flow = maybe "" unitName (M.lookup (bfUnitId flow) unitDB)
 
 {- | Score an inventory and attach diagnostics in one call.
 
@@ -1689,7 +1693,7 @@ suggester work is wasted.
 computeLCIAScoreWithDiagnostics ::
     UnitConfig ->
     UnitDB ->
-    FlowDB ->
+    BioFlowDB ->
     Inventory ->
     MethodTables ->
     ChemSynonyms ->

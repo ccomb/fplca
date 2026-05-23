@@ -43,9 +43,9 @@ import Method.Types (Method (..), MethodCF (..))
 import qualified Method.Types as MT
 import qualified Plugin.Builtin as Builtin
 import Types (
+    BiosphereFlow (..),
+    Compartment (..),
     Database (..),
-    Flow (..),
-    FlowType (..),
     Indexes (..),
     ProductIndex (..),
     Unit (..),
@@ -90,18 +90,16 @@ mkUnit uid name =
         , unitComment = ""
         }
 
-mkFlow :: UUID -> UUID -> Int -> Flow
+mkFlow :: UUID -> UUID -> Int -> BiosphereFlow
 mkFlow fid uid i =
-    Flow
-        { flowId = fid
-        , flowName = T.pack ("flow-" <> show i)
-        , flowCategory = "air"
-        , flowSubcompartment = Nothing
-        , flowUnitId = uid
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    BiosphereFlow
+        { bfId = fid
+        , bfName = T.pack ("flow-" <> show i)
+        , bfUnitId = uid
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Compartment "air" Nothing
         }
 
 mkCF :: UUID -> Double -> MethodCF
@@ -145,13 +143,14 @@ emptyDatabase =
         , dbActivityProductsIndex = M.empty
         , dbProductIndex = ProductIndex M.empty M.empty M.empty
         , dbActivities = V.empty
-        , dbFlows = M.empty
+        , dbTechFlows = M.empty
+        , dbBioFlows = M.empty
         , dbUnits = M.empty
-        , dbIndexes = Indexes M.empty M.empty M.empty M.empty M.empty M.empty
+        , dbIndexes = Indexes M.empty M.empty M.empty M.empty
         , dbTechnosphereTriples = U.empty
         , dbBiosphereTriples = U.empty
         , dbActivityIndex = V.empty
-        , dbBiosphereFlows = V.empty
+        , dbBiosphereOrder = V.empty
         , dbActivityCount = 0
         , dbBiosphereCount = 0
         , dbCrossDBLinks = []
@@ -165,7 +164,7 @@ emptyDatabase =
         }
 
 data SynFixture = SynFixture
-    { fxFlowDB :: !(M.Map UUID Flow)
+    { fxFlowDB :: !(M.Map UUID BiosphereFlow)
     , fxUnitDB :: !(M.Map UUID Unit)
     , fxUnitCfg :: !UC.UnitConfig
     , fxInventory :: !Inventory
@@ -337,7 +336,7 @@ registerReal = do
                             putStrLn "[bench] lcia.real.score_method: mapping CFs to flows + filling broadcast..."
                             mappings <- mapMethodToFlows Builtin.defaultMappers db method
                             let unitDB = dbUnits db
-                                flowDB = dbFlows db
+                                flowDB = dbBioFlows db
                                 tables0 = buildMethodTables M.empty mappings
                                 !tables = fillBroadcastVector UC.defaultUnitConfig unitDB flowDB tables0
                                 !nCFs = length (methodFactors method)

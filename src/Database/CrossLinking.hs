@@ -69,7 +69,7 @@ import Data.UUID (UUID)
 
 import qualified Data.Vector as V
 import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
-import Types (Activity (..), Database (..), Exchange (..), Flow (..), LinkBlocker (..), SimpleDatabase (..), getActivity)
+import Types (Activity (..), Database (..), LinkBlocker (..), SimpleDatabase (..), TechnosphereFlow (..), exchangeFlowId, exchangeIsReference, exchanges, getActivity)
 import qualified UnitConversion as UC
 
 {- | Pre-indexed database for fast cross-DB supplier lookup
@@ -298,23 +298,17 @@ buildIndexedDatabase dbName synDB db =
             , idbBySynonymGroup = bySynonym
             }
 
--- | Build supplier entries from a SimpleDatabase
+-- | Build supplier entries from a SimpleDatabase. Reference exchanges of
+-- production processes are always technosphere outputs, so the supplier flow
+-- lives in `sdbTechFlows`.
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
-    [ (flowName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (flowName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
-    , isReferenceExchange ex
-    , Just flow <- [M.lookup (getExchangeFlowId ex) (sdbFlows db)]
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
     ]
-  where
-    isReferenceExchange :: Exchange -> Bool
-    isReferenceExchange TechnosphereExchange{techIsReference = isRef} = isRef
-    isReferenceExchange BiosphereExchange{} = False
-
-    getExchangeFlowId :: Exchange -> UUID
-    getExchangeFlowId TechnosphereExchange{techFlowId = fid} = fid
-    getExchangeFlowId BiosphereExchange{bioFlowId = fid} = fid
 
 {- | Build an indexed database from a full Database (used when loading from cache)
 This is the preferred method as it works with cached databases
@@ -345,24 +339,17 @@ buildIndexedDatabaseFromDB dbName synDB db =
             , idbBySynonymGroup = bySynonym
             }
 
--- | Build supplier entries from a full Database
+-- | Build supplier entries from a full Database. Same invariant as
+-- 'buildSupplierEntries' above: reference exchanges are technosphere.
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
-    [ (flowName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (flowName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
-    , isReferenceExchange ex
-    , Just flow <- [M.lookup (getExchangeFlowId ex) (dbFlows db)]
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
     ]
-  where
-    isReferenceExchange :: Exchange -> Bool
-    isReferenceExchange TechnosphereExchange{techIsReference = isRef} = isRef
-    isReferenceExchange BiosphereExchange{} = False
-
-    getExchangeFlowId :: Exchange -> UUID
-    getExchangeFlowId TechnosphereExchange{techFlowId = fid} = fid
-    getExchangeFlowId BiosphereExchange{bioFlowId = fid} = fid
 
 {- | Find a supplier across all loaded databases (using pre-built indexes)
 This is the fast O(1) lookup version

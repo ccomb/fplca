@@ -38,8 +38,7 @@ activityWithRefExchange fid =
                 { techFlowId = fid
                 , techAmount = 1.0
                 , techUnitId = UUID.nil
-                , techIsInput = False
-                , techIsReference = True
+                , techRole = ReferenceProduct
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
@@ -70,8 +69,7 @@ activityWithInputExchange fid =
                 { techFlowId = fid
                 , techAmount = 0.5
                 , techUnitId = UUID.nil
-                , techIsInput = True
-                , techIsReference = False
+                , techRole = Input
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
@@ -115,26 +113,24 @@ spec = do
             M.lookup "ILCDCategories" (activityClassification act)
                 `shouldBe` Just "Energy/Hard coal"
 
-        it "has two flows (Coal product + CO2 elementary)" $ do
+        it "has two flows (Coal product + CO2 elementary) split across tech and bio" $ do
             Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
-            M.size (sdbFlows db) `shouldBe` 2
+            (M.size (sdbTechFlows db) + M.size (sdbBioFlows db)) `shouldBe` 2
 
-        it "CO2 flow is Biosphere type" $ do
+        it "CO2 flow is biosphere" $ do
             Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
             let co2uuid = read "aaaaaaaa-0000-0000-0000-000000000003"
-            fmap (\f -> flowType f == Biosphere) (M.lookup co2uuid (sdbFlows db))
-                `shouldBe` Just True
+            M.member co2uuid (sdbBioFlows db) `shouldBe` True
 
-        it "Coal flow is Technosphere type" $ do
+        it "Coal flow is technosphere" $ do
             Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
             let coaluuid = read "aaaaaaaa-0000-0000-0000-000000000004"
-            fmap (\f -> flowType f == Technosphere) (M.lookup coaluuid (sdbFlows db))
-                `shouldBe` Just True
+            M.member coaluuid (sdbTechFlows db) `shouldBe` True
 
         it "CO2 has CAS number 124-38-9" $ do
             Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
             let co2uuid = read "aaaaaaaa-0000-0000-0000-000000000003"
-            fmap flowCAS (M.lookup co2uuid (sdbFlows db)) `shouldBe` Just (Just "124-38-9")
+            fmap bfCAS (M.lookup co2uuid (sdbBioFlows db)) `shouldBe` Just (Just "124-38-9")
 
         it "activity has two exchanges" $ do
             Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
@@ -233,9 +229,9 @@ spec = do
                 act = activityWithRefExchange flowUUID1
                 fixed = fixActivityExchanges idx act
             case exchanges fixed of
-                [TechnosphereExchange{techFlowId = fid, techIsReference = isRef}] -> do
+                [TechnosphereExchange{techFlowId = fid, techRole = role}] -> do
                     fid `shouldBe` flowUUID1 -- unchanged
-                    isRef `shouldBe` True
+                    role `shouldBe` ReferenceProduct
                 _ -> expectationFailure "expected one TechnosphereExchange"
 
     -- -----------------------------------------------------------------------

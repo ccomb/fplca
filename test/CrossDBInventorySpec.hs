@@ -143,27 +143,23 @@ spec = do
             unitDB = M.singleton (unitId unitKg) unitKg
 
             flowRoot =
-                Flow
+                BiosphereFlow
                     uuidRoot
                     "Methane, biogenic"
-                    "air"
-                    (Just "low. pop.")
                     (unitId unitKg)
-                    Biosphere
                     M.empty
                     Nothing
                     Nothing
+                    (Compartment "air" (Just "low. pop."))
             flowDep =
-                Flow
+                BiosphereFlow
                     uuidDep
                     "Carbon dioxide, fossil"
-                    "air"
-                    (Just "low. pop.")
                     (unitId unitKg)
-                    Biosphere
                     M.empty
                     Nothing
                     Nothing
+                    (Compartment "air" (Just "low. pop."))
 
             rootOnlyFlowDB = M.singleton uuidRoot flowRoot
             mergedFlowDB = M.fromList [(uuidRoot, flowRoot), (uuidDep, flowDep)]
@@ -198,7 +194,7 @@ spec = do
 
         it "characterizes dep-DB flows when the merged flowDB is supplied" $ do
             let (contribs, unknowns) = inventoryContributions defaultUnitConfig unitDB mergedFlowDB inventory tables
-                namesWithContrib = [(flowName f, c) | (f, _, c) <- contribs]
+                namesWithContrib = [(bfName f, c) | (f, _, c) <- contribs]
             -- uuidGone remains unknown (it's in no flowDB at all); uuidRoot and
             -- uuidDep should both produce contributions.
             unknowns `shouldBe` [uuidGone]

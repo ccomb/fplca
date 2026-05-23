@@ -52,10 +52,10 @@ spec = do
         it "parses compartments without truncation" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            -- Check that compartments are parsed fully
-            let flows = M.elems (dbFlows db)
-            let categoriesNotEmpty = filter (\f -> not $ T.null $ flowCategory f) flows
-            length categoriesNotEmpty `shouldSatisfy` (>= 0)
+            -- Biosphere flows now carry a structured compartment; technosphere flows have none.
+            let bios = M.elems (dbBioFlows db)
+            let compartmentsNotEmpty = filter (\f -> not (T.null (compartmentName (bfCompartment f)))) bios
+            length compartmentsNotEmpty `shouldSatisfy` (>= 0)
 
     describe "EcoSpold Parser - SAMPLE.min (Self-Loops)" $ do
         it "parses circular dependencies" $ do
@@ -77,17 +77,17 @@ spec = do
         it "deduplicates flows correctly" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let flowCount = M.size (dbFlows db)
+            let totalFlows = M.size (dbTechFlows db) + M.size (dbBioFlows db)
             -- SAMPLE.min3 should have exactly 2 unique flows (CO2, Zinc)
-            flowCount `shouldSatisfy` (>= 2)
+            totalFlows `shouldSatisfy` (>= 2)
 
         it "stores flow metadata" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
 
-            let flows = M.elems (dbFlows db)
-            -- All flows should have names
-            let flowsWithNames = filter (\f -> not $ T.null $ flowName f) flows
-            length flowsWithNames `shouldBe` length flows
+            let techNamed = length (filter (not . T.null . tfName) (M.elems (dbTechFlows db)))
+                bioNamed = length (filter (not . T.null . bfName) (M.elems (dbBioFlows db)))
+                total = M.size (dbTechFlows db) + M.size (dbBioFlows db)
+            (techNamed + bioNamed) `shouldBe` total
 
     describe "EcoSpold2 Parser - Classifications" $ do
         it "parses classifications from EcoSpold2" $ do

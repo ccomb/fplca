@@ -37,7 +37,7 @@ emptyCsvUncertainty = ";;;;;"
 -- | Matrix debug information container
 data MatrixDebugInfo = MatrixDebugInfo
     { mdActivities :: ActivityDB
-    , mdFlows :: M.Map UUID Flow
+    , mdBioFlows :: BioFlowDB -- B-matrix rows are biosphere flows
     , mdTechTriples :: U.Vector SparseTriple
     , mdBioTriples :: U.Vector SparseTriple
     , mdActivityIndex :: V.Vector Int32
@@ -54,11 +54,11 @@ data MatrixDebugInfo = MatrixDebugInfo
 extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> IO MatrixDebugInfo
 extractMatrixDebugInfo database targetUUID flowFilter = do
     let activities = dbActivities database
-        flows = dbFlows database
+        bioFlows = dbBioFlows database
         techTriples = dbTechnosphereTriples database
         bioTriples = dbBiosphereTriples database
         activityIndexVec = dbActivityIndex database
-        bioFlowUUIDs = dbBiosphereFlows database
+        bioFlowUUIDs = dbBiosphereOrder database
         activityCount = dbActivityCount database
         bioFlowCount = dbBiosphereCount database
 
@@ -83,14 +83,17 @@ extractMatrixDebugInfo database targetUUID flowFilter = do
             Nothing -> bioTriples
             Just filterText ->
                 let matchingFlowIndices =
-                        [ idx | (uuid, idx) <- zip (V.toList bioFlowUUIDs) ([0 ..] :: [Int]), Just flow <- [M.lookup uuid flows], T.toLower filterText `T.isInfixOf` T.toLower (flowName flow)
+                        [ idx
+                        | (uuid, idx) <- zip (V.toList bioFlowUUIDs) ([0 ..] :: [Int])
+                        , Just flow <- [M.lookup uuid bioFlows]
+                        , T.toLower filterText `T.isInfixOf` T.toLower (bfName flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
                  in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples
     return
         MatrixDebugInfo
             { mdActivities = activities
-            , mdFlows = flows
+            , mdBioFlows = bioFlows
             , mdTechTriples = techTriples
             , mdBioTriples = filteredBioTriples
             , mdActivityIndex = activityIndexVec
@@ -147,7 +150,7 @@ exportSupplyChainData filePath debugInfo = do
 exportBiosphereMatrixData :: FilePath -> MatrixDebugInfo -> IO ()
 exportBiosphereMatrixData filePath debugInfo = do
     let database = mdDatabase debugInfo
-        flows = mdFlows debugInfo
+        flows = mdBioFlows debugInfo
         activities = mdActivities debugInfo
         bioTriples = mdBioTriples debugInfo
         bioFlowUUIDs = mdBioFlowUUIDs debugInfo
@@ -164,7 +167,7 @@ exportBiosphereMatrixData filePath debugInfo = do
             let rowInt = fromIntegral row :: Int
                 colInt = fromIntegral col :: Int
              in [ maybe "unknown" show (getFlowUUID rowInt)
-                , maybe "unknown" (T.unpack . flowName) (getFlow rowInt)
+                , maybe "unknown" (T.unpack . bfName) (getFlow rowInt)
                 , maybe "unknown" T.unpack (getFlowUnit rowInt)
                 , maybe "unknown" (T.unpack . processIdToText database) (getActivityProcessId colInt)
                 , maybe "unknown" (T.unpack . activityName) (lookupActivity colInt)
@@ -177,10 +180,10 @@ exportBiosphereMatrixData filePath debugInfo = do
                 if rowIdx < V.length bioFlowUUIDs
                     then Just (bioFlowUUIDs V.! rowIdx)
                     else Nothing
-            getFlow :: Int -> Maybe Flow
+            getFlow :: Int -> Maybe BiosphereFlow
             getFlow rowIdx = getFlowUUID rowIdx >>= flip M.lookup flows
             getFlowUnit :: Int -> Maybe Text
-            getFlowUnit rowIdx = fmap (getUnitNameForFlow (dbUnits database)) (getFlow rowIdx)
+            getFlowUnit rowIdx = fmap (getUnitNameForBioFlow (dbUnits database)) (getFlow rowIdx)
             getActivityProcessId :: Int -> Maybe ProcessId
             getActivityProcessId colIdx =
                 L.find
@@ -227,7 +230,7 @@ exportIEIndex :: FilePath -> Database -> IO ()
 exportIEIndex filePath db = do
     let activities = dbActivities db
         processIdTable = dbProcessIdTable db
-        flows = dbFlows db
+        techFlows = dbTechFlows db
 
         rows =
             V.toList $
@@ -235,8 +238,8 @@ exportIEIndex filePath db = do
                     ( \idx (_actUuid, prodUuid) ->
                         let activity = activities V.! idx
                             refProduct = case [ex | ex <- exchanges activity, exchangeIsReference ex] of
-                                (ex : _) -> case M.lookup (exchangeFlowId ex) flows of
-                                    Just flow -> flowName flow
+                                (ex : _) -> case M.lookup (exchangeFlowId ex) techFlows of
+                                    Just flow -> tfName flow
                                     Nothing -> T.pack (show prodUuid)
                                 [] -> T.pack (show prodUuid)
                             unit = activityUnit activity
@@ -261,21 +264,19 @@ exportIEIndex filePath db = do
 -- | Export ee_index.csv (Elementary Exchanges)
 exportEEIndex :: FilePath -> Database -> IO ()
 exportEEIndex filePath db = do
-    let bioFlowUUIDs = dbBiosphereFlows db
-        flows = dbFlows db
+    let bioFlowUUIDs = dbBiosphereOrder db
+        bioFlows = dbBioFlows db
 
         rows =
             zipWith
                 ( \flowUuid idx ->
-                    case M.lookup flowUuid flows of
+                    case M.lookup flowUuid bioFlows of
                         Just flow ->
-                            let category = flowCategory flow
-                                (compartment, subcompartment) = case T.splitOn "/" category of
-                                    [] -> ("unspecified", "")
-                                    [c] -> (T.strip c, "")
-                                    (c : s : _) -> (T.strip c, T.strip s)
-                                unit = getUnitNameForFlow (dbUnits db) flow
-                             in escapeCsvField (flowName flow)
+                            let comp = bfCompartment flow
+                                compartment = compartmentName comp
+                                subcompartment = maybe "" id (compartmentSub comp)
+                                unit = getUnitNameForBioFlow (dbUnits db) flow
+                             in escapeCsvField (bfName flow)
                                     <> ";"
                                     <> escapeCsvField compartment
                                     <> ";"

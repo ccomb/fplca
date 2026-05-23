@@ -767,7 +767,7 @@ processBlockToActivity ::
     UnitConversion.UnitConfig ->
     ([(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)]) ->
     ProcessBlock ->
-    [(Activity, [Flow], [Unit])]
+    [(Activity, [TechnosphereFlow], [BiosphereFlow], [Unit])]
 processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
     let
         -- Build parameter environment: input params first, then calculated params
@@ -806,8 +806,8 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
 
         -- Convert all rows in one pass, collecting exchanges/flows/units together
         avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
-        techTriples = map (techRowToExchange env True) (pbMaterials ++ pbElectricity)
-        wasteTriples = map (techRowToExchange env True) pbWasteToTreatment
+        techTriples = map (techRowToExchange env) (pbMaterials ++ pbElectricity)
+        wasteTriples = map (techRowToExchange env) pbWasteToTreatment
         bioTriples =
             map (bioRowToExchange env True "resource") pbResources
                 ++ map (bioRowToExchange env False "air") pbEmissionsAir
@@ -816,26 +816,24 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                 ++ map (bioRowToExchange env False "waste") pbFinalWaste
 
         -- Tech rows may have zero amounts (Maybe Exchange), others always have exchanges
-        techExchanges = [e | (Just e, _, _) <- techTriples ++ wasteTriples]
-        techFlows = [f | (_, f, _) <- techTriples ++ wasteTriples]
-        techUnits = [u | (_, _, u) <- techTriples ++ wasteTriples]
+        techRowExchanges = [e | (Just e, _, _) <- techTriples ++ wasteTriples]
+        techRowFlows = [f | (_, f, _) <- techTriples ++ wasteTriples]
+        techRowUnits = [u | (_, _, u) <- techTriples ++ wasteTriples]
 
         sharedExchanges =
             map (\(e, _, _) -> e) avoidedTriples
-                ++ techExchanges
+                ++ techRowExchanges
                 ++ map (\(e, _, _) -> e) bioTriples
-        sharedFlows =
-            map (\(_, f, _) -> f) avoidedTriples
-                ++ techFlows
-                ++ map (\(_, f, _) -> f) bioTriples
+        sharedTechFlows = map (\(_, f, _) -> f) avoidedTriples ++ techRowFlows
+        sharedBioFlows = map (\(_, f, _) -> f) bioTriples
         sharedUnits =
             S.toList . S.fromList $
                 map (\(_, _, u) -> unitName u) avoidedTriples
-                    ++ map unitName techUnits
+                    ++ map unitName techRowUnits
                     ++ map (\(_, _, u) -> unitName u) bioTriples
 
         -- Create one activity per product
-        makeActivity :: ProductRow -> (Activity, [Flow], [Unit])
+        makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit])
         makeActivity prod =
             let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
                 effUnitName = unitName productUnit
@@ -874,12 +872,13 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                         , activityAllocationPercent = Just allocPercent
                         , activityAllocationFormula = allocFormula
                         }
-                allFlows = productFlow : sharedFlows
+                allTechFlows = productFlow : sharedTechFlows
+                allBioFlows = sharedBioFlows
                 allUnits =
                     map
                         (\name -> Unit (generateUnitUUID name) name name "")
                         (S.toList . S.fromList $ effUnitName : sharedUnits)
-             in (activity, allFlows, allUnits)
+             in (activity, allTechFlows, allBioFlows, allUnits)
      in
         map makeActivity pbProducts
 
@@ -906,7 +905,7 @@ If the unit is unknown to the config or its dimension has no base unit, the
 raw values are kept (the downstream matrix builder in 'Database.hs' surfaces
 unknown-unit errors with a clear message).
 -}
-productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, Flow, Unit)
+productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
 productToExchange unitCfg env isRef ProductRow{..} =
     let cleanName = fst (extractLocation prName)
         rawAmount = resolveAmount env prAmountRaw prAmount
@@ -923,8 +922,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 { techFlowId = flowUUID
                 , techAmount = amount
                 , techUnitId = unitUUID
-                , techIsInput = False
-                , techIsReference = isRef
+                , techRole = if isRef then ReferenceProduct else Coproduct
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
@@ -932,16 +930,13 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 , techPedigree = Nothing
                 }
         flow =
-            Flow
-                { flowId = flowUUID
-                , flowName = cleanName
-                , flowCategory = prCategory
-                , flowSubcompartment = Nothing
-                , flowUnitId = unitUUID
-                , flowType = Technosphere
-                , flowSynonyms = M.empty
-                , flowCAS = Nothing
-                , flowSubstanceId = Nothing
+            TechnosphereFlow
+                { tfId = flowUUID
+                , tfName = cleanName
+                , tfUnitId = unitUUID
+                , tfSynonyms = M.empty
+                , tfCAS = Nothing
+                , tfSubstanceId = Nothing
                 }
         unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
@@ -994,8 +989,8 @@ parsePedigreePrefix raw =
 {- | Convert technosphere row to exchange (if non-zero), flow, and unit.
 Always returns the flow/unit; exchange is Nothing for zero-amount rows.
 -}
-techRowToExchange :: M.Map Text Double -> Bool -> TechExchangeRow -> (Maybe Exchange, Flow, Unit)
-techRowToExchange env isInput TechExchangeRow{..} =
+techRowToExchange :: M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
+techRowToExchange env TechExchangeRow{..} =
     let (cleanName, location) = extractLocation terName
         flowUUID = generateFlowUUID cleanName "" terUnit
         unitUUID = generateUnitUUID terUnit
@@ -1010,8 +1005,7 @@ techRowToExchange env isInput TechExchangeRow{..} =
                             { techFlowId = flowUUID
                             , techAmount = resolvedAmount
                             , techUnitId = unitUUID
-                            , techIsInput = isInput
-                            , techIsReference = False
+                            , techRole = Input
                             , techActivityLinkId = UUID.nil
                             , techProcessLinkId = Nothing
                             , techLocation = location
@@ -1019,16 +1013,13 @@ techRowToExchange env isInput TechExchangeRow{..} =
                             , techPedigree = pedigree
                             }
         flow =
-            Flow
-                { flowId = flowUUID
-                , flowName = cleanName
-                , flowCategory = ""
-                , flowSubcompartment = Nothing
-                , flowUnitId = unitUUID
-                , flowType = Technosphere
-                , flowSynonyms = M.empty
-                , flowCAS = Nothing
-                , flowSubstanceId = Nothing
+            TechnosphereFlow
+                { tfId = flowUUID
+                , tfName = cleanName
+                , tfUnitId = unitUUID
+                , tfSynonyms = M.empty
+                , tfCAS = Nothing
+                , tfSubstanceId = Nothing
                 }
         unit = Unit{unitId = unitUUID, unitName = terUnit, unitSymbol = terUnit, unitComment = ""}
      in (exchange, flow, unit)
@@ -1037,13 +1028,9 @@ techRowToExchange env isInput TechExchangeRow{..} =
 The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
 and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
 -}
-bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, Flow, Unit)
+bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange env isInput compartment BioExchangeRow{..} =
-    let category =
-            if T.null berCompartment
-                then compartment
-                else compartment <> "/" <> berCompartment
-        -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
+    let -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
         -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
         -- SimaPro-style method) characterises them via suffix-keyed CFs of
         -- matching name, so collapsing them to a canonical name breaks
@@ -1071,16 +1058,14 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 , bioPedigree = pedigree
                 }
         flow =
-            Flow
-                { flowId = flowUUID
-                , flowName = cleanName
-                , flowCategory = category
-                , flowSubcompartment = subcomp
-                , flowUnitId = unitUUID
-                , flowType = Biosphere
-                , flowSynonyms = M.empty
-                , flowCAS = Nothing
-                , flowSubstanceId = Nothing
+            BiosphereFlow
+                { bfId = flowUUID
+                , bfName = cleanName
+                , bfUnitId = unitUUID
+                , bfSynonyms = M.empty
+                , bfCAS = Nothing
+                , bfSubstanceId = Nothing
+                , bfCompartment = Compartment compartment subcomp
                 }
         unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
      in (exchange, flow, unit)
@@ -1224,7 +1209,7 @@ Reference-product amounts are normalized to the canonical base unit of their
 dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
 construction yields per-base-unit columns — matching Brightway conventions.
 -}
-parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], FlowDB, UnitDB)
+parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, UnitDB)
 parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
@@ -1255,27 +1240,33 @@ parseSimaProCSV unitCfg path = do
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
     converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
-    let activities = map (\(a, _, _) -> a) converted
-        allFlows = concatMap (\(_, f, _) -> f) converted
-        allUnits = concatMap (\(_, _, u) -> u) converted
+    let activities = map (\(a, _, _, _) -> a) converted
+        allTechFlows = concatMap (\(_, tf, _, _) -> tf) converted
+        allBioFlows = concatMap (\(_, _, bf, _) -> bf) converted
+        allUnits = concatMap (\(_, _, _, u) -> u) converted
 
-    -- Build deduplicated maps
-    let flowDB = M.fromList [(flowId f, f) | f <- allFlows]
+    -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
+    -- by construction (tech flows hash with empty compartment, bio flows hash
+    -- with their compartment), so two plain M.fromList calls suffice.
+    let techFlowDB = M.fromList [(tfId f, f) | f <- allTechFlows]
+        bioFlowDB = M.fromList [(bfId f, f) | f <- allBioFlows]
         unitDB = M.fromList [(unitId u, u) | u <- allUnits]
 
     -- Force evaluation before returning
     let !numActivities = length activities
-    let !numFlows = M.size flowDB
+    let !numTechFlows = M.size techFlowDB
+    let !numBioFlows = M.size bioFlowDB
     let !numUnits = M.size unitDB
 
     endTime <- getCurrentTime
     let duration = realToFrac (diffUTCTime endTime startTime) :: Double
     reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
     reportProgress Info $ printf "  Activities: %d processes" numActivities
-    reportProgress Info $ printf "  Flows: %d unique" numFlows
+    reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
+    reportProgress Info $ printf "  Biosphere flows: %d unique" numBioFlows
     reportProgress Info $ printf "  Units: %d unique" numUnits
 
-    return (activities, flowDB, unitDB)
+    return (activities, techFlowDB, bioFlowDB, unitDB)
   where
     -- Strip Windows \r from ByteString (fast, often no-op)
     stripCR :: BS.ByteString -> BS.ByteString

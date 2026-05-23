@@ -479,7 +479,7 @@ An exchange with the environment (resource extraction or emission).
 | Field | Type | Default |
 |-------|------|---------|
 | `flow_name` | `str` | — |
-| `flow_category` | `str` | — |
+| `compartment` | `Compartment \| None` | — |
 | `amount` | `float` | — |
 | `unit` | `str` | — |
 | `is_input` | `bool` | — |
@@ -499,6 +499,15 @@ Multiple filters are AND-combined by the server.
 | `system` | `str` | — |
 | `value` | `str` | — |
 | `mode` | `str` | 'contains' |
+
+### `Compartment`
+
+Biosphere compartment (medium + optional subcompartment).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `name` | `str` | — |
+| `sub` | `str \| None` | None |
 
 ### `ConsumerResult`
 
@@ -701,19 +710,15 @@ One per-variable entry inside ``LCIABatchResult.scoring_indicators``.
 
 ### `TechnosphereExchange`
 
-An exchange with another activity (input or output of an intermediate product).
-
-Built from an `ExchangeWithUnit` envelope: outer fields like flowName/unitName
-live next to an inner `exchange` object (the discriminated `Exchange` sum).
+An exchange with another activity. Carries no compartment — the
+producing activity's classifications describe the product taxonomy.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `flow_name` | `str` | — |
-| `flow_category` | `str` | — |
 | `amount` | `float` | — |
 | `unit` | `str` | — |
-| `is_input` | `bool` | — |
-| `is_reference` | `bool` | — |
+| `role` | `Literal['ReferenceProduct', 'Coproduct', 'ReferenceInput', 'Input']` | — |
 | `target_activity` | `str \| None` | — |
 | `target_location` | `str \| None` | — |
 | `target_process_id` | `str \| None` | — |
@@ -755,6 +760,10 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange]`.
+
+### `TechRole`
+
+Type alias: `Literal['ReferenceProduct', 'Coproduct', 'ReferenceInput', 'Input']`.
 
 <!-- END: api-reference -->
 

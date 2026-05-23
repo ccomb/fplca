@@ -21,18 +21,15 @@ flowUUID1 = read "aaaaaaaa-0000-0000-0000-000000000001"
 flowUUID2 = read "bbbbbbbb-0000-0000-0000-000000000002"
 actUUID1 = read "cccccccc-0000-0000-0000-000000000001"
 
-minimalFlow :: UUID.UUID -> Text -> Flow
+minimalFlow :: UUID.UUID -> Text -> TechnosphereFlow
 minimalFlow fid name =
-    Flow
-        { flowId = fid
-        , flowName = name
-        , flowCategory = ""
-        , flowSubcompartment = Nothing
-        , flowUnitId = UUID.nil
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    TechnosphereFlow
+        { tfId = fid
+        , tfName = name
+        , tfUnitId = UUID.nil
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
         }
 
 minimalActivity :: Text -> Text -> [Exchange] -> Activity
@@ -57,8 +54,7 @@ refExchange fid =
         { techFlowId = fid
         , techAmount = 1.0
         , techUnitId = UUID.nil
-        , techIsInput = False
-        , techIsReference = True
+        , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = "GLO"
@@ -72,8 +68,7 @@ inputExchange fid loc =
         { techFlowId = fid
         , techAmount = 0.5
         , techUnitId = UUID.nil
-        , techIsInput = True
-        , techIsReference = False
+        , techRole = Input
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = loc
@@ -99,19 +94,19 @@ spec = do
             normalizeText "" `shouldBe` ""
 
     -- -----------------------------------------------------------------------
-    -- mergeFlows
+    -- mergeTechFlows
     -- -----------------------------------------------------------------------
-    describe "mergeFlows" $ do
+    describe "mergeTechFlows" $ do
         it "unions synonyms from both flows" $ do
-            let a = (minimalFlow flowUUID1 "CO2"){flowSynonyms = M.singleton "en" (S.fromList ["carbon dioxide"])}
-                b = (minimalFlow flowUUID1 "CO2"){flowSynonyms = M.singleton "en" (S.fromList ["CO2"])}
-                merged = mergeFlows a b
-            M.lookup "en" (flowSynonyms merged) `shouldBe` Just (S.fromList ["carbon dioxide", "CO2"])
+            let a = (minimalFlow flowUUID1 "CO2"){tfSynonyms = M.singleton "en" (S.fromList ["carbon dioxide"])}
+                b = (minimalFlow flowUUID1 "CO2"){tfSynonyms = M.singleton "en" (S.fromList ["CO2"])}
+                merged = mergeTechFlows a b
+            M.lookup "en" (tfSynonyms merged) `shouldBe` Just (S.fromList ["carbon dioxide", "CO2"])
 
         it "keeps all other fields from the first flow" $ do
             let a = minimalFlow flowUUID1 "flow-a"
                 b = minimalFlow flowUUID2 "flow-b"
-            flowName (mergeFlows a b) `shouldBe` "flow-a"
+            tfName (mergeTechFlows a b) `shouldBe` "flow-a"
 
     -- -----------------------------------------------------------------------
     -- generateActivityUUIDFromActivity
@@ -298,3 +293,45 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             let sdb = Types.toSimpleDatabase db
             M.null (collectUnlinkedProductNames sdb) `shouldBe` True
+
+    -- ---------------------------------------------------------------------
+    -- activityNormFactor — exercises every TechRole branch so the
+    -- treatment-process (ReferenceInput) case can't silently regress to
+    -- the "no reference output" 1.0 fallback.
+    -- ---------------------------------------------------------------------
+    describe "activityNormFactor" $ do
+        let actUUID = actUUID1
+            prodUUID = flowUUID1
+            wasteUUID = flowUUID2
+            withRole role amt fid =
+                TechnosphereExchange
+                    { techFlowId = fid
+                    , techAmount = amt
+                    , techUnitId = UUID.nil
+                    , techRole = role
+                    , techActivityLinkId = UUID.nil
+                    , techProcessLinkId = Nothing
+                    , techLocation = ""
+                    , techComment = Nothing
+                    , techPedigree = Nothing
+                    }
+        it "returns the reference output amount for a normal producer" $ do
+            let act = minimalActivity "producer" "GLO" [withRole ReferenceProduct 3.0 prodUUID]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 3.0
+
+        it "returns abs(reference-input amount) for a treatment process" $ do
+            -- ReferenceInput is the only role that drives the refInputs fallback;
+            -- SimaPro waste-treatment processes encode a negative amount.
+            let act = minimalActivity "incineration" "GLO" [withRole ReferenceInput (-2.5) wasteUUID]
+            activityNormFactor act (actUUID, wasteUUID) `shouldBe` 2.5
+
+        it "falls back to 1.0 when no reference exchange is present" $ do
+            let act = minimalActivity "empty" "GLO" [withRole Input 1.0 wasteUUID]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 1.0
+
+        it "subtracts self-loop consumption from the reference output" $ do
+            let selfInput =
+                    (withRole Input 0.2 prodUUID){techActivityLinkId = actUUID}
+                refOut = withRole ReferenceProduct 1.0 prodUUID
+                act = minimalActivity "self-looper" "GLO" [refOut, selfInput]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 0.8

@@ -63,7 +63,7 @@ import Method.Types (Method (..), MethodCF (..))
 import SynonymDB (emptySynonymDB)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
-import Types (Database (..), Flow (..))
+import Types (Database (..), BiosphereFlow (..))
 
 -- | Default registry with all built-in plugins
 defaultRegistry :: PluginRegistry
@@ -105,8 +105,8 @@ uuidMapper =
         , mhPriority = 0
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (flowId f) "uuid" 1.0) $
-                    Mapping.findFlowByUUID (mcFlowsByUUID ctx) (mcfFlowRef cf)
+                fmap (\f -> MapResult (bfId f) "uuid" 1.0) $
+                    Mapping.findFlowByUUID (mcBioFlowsByUUID ctx) (mcfFlowRef cf)
             _ -> Nothing
         }
 
@@ -119,8 +119,8 @@ casMapper =
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf -> do
                 cas <- mcfCAS cf
-                flow <- Mapping.findFlowByCAS (mcFlowsByCAS ctx) cas (mcfCompartment cf)
-                pure $ MapResult (flowId flow) "cas" 1.0
+                flow <- Mapping.findFlowByCAS (mcBioFlowsByCAS ctx) cas (mcfCompartment cf)
+                pure $ MapResult (bfId flow) "cas" 1.0
             _ -> Nothing
         }
 
@@ -132,8 +132,8 @@ nameMapper =
         , mhPriority = 20
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (flowId f) "name" 0.9) $
-                    Mapping.findFlowByNameComp (mcFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                fmap (\f -> MapResult (bfId f) "name" 0.9) $
+                    Mapping.findFlowByNameComp (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
             _ -> Nothing
         }
 
@@ -145,8 +145,8 @@ synonymMapper =
         , mhPriority = 30
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (flowId f) "synonym" 0.8) $
-                    Mapping.findFlowBySynonymComp (mcSynonymDB ctx) (mcFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                fmap (\f -> MapResult (bfId f) "synonym" 0.8) $
+                    Mapping.findFlowBySynonymComp (mcSynonymDB ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
             _ -> Nothing
         }
 
@@ -165,9 +165,9 @@ lciaAnalyzer =
                 methods = acMethods ctx
                 mapCtx =
                     MapContext
-                        { mcFlowsByUUID = dbFlows db
-                        , mcFlowsByName = dbFlowsByName db
-                        , mcFlowsByCAS = dbFlowsByCAS db
+                        { mcBioFlowsByUUID = dbBioFlows db
+                        , mcBioFlowsByName = dbFlowsByName db
+                        , mcBioFlowsByCAS = dbFlowsByCAS db
                         , mcSynonymDB = fromMaybe emptySynonymDB (dbSynonymDB db)
                         , mcActivities = M.empty
                         }
@@ -179,7 +179,7 @@ lciaAnalyzer =
                             toJSON $
                                 M.fromList
                                     [ ("method" :: String, toJSON (show m))
-                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acFlowDB ctx) inv mappings)))
+                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acBioFlowDB ctx) inv mappings)))
                                     ]
                     )
                     methods
@@ -259,15 +259,15 @@ nameSearcher =
         , shPriority = 0
         , shSearch = \db query -> do
             let queryLower = T.toLower (sqText query)
-                flows = M.elems (dbFlows db)
+                flows = M.elems (dbBioFlows db)
                 matches =
                     [ (f, score)
                     | f <- flows
-                    , let nameLower = T.toLower (flowName f)
+                    , let nameLower = T.toLower (bfName f)
                           synMatches =
                             any
                                 (\syns -> any (T.isInfixOf queryLower . T.toLower) (S.toList syns))
-                                (M.elems (flowSynonyms f))
+                                (M.elems (bfSynonyms f))
                     , T.isInfixOf queryLower nameLower || synMatches
                     , let score =
                             if queryLower == nameLower
@@ -278,7 +278,7 @@ nameSearcher =
                                         else 0.7
                     ]
                 limited = take (sqLimit query) matches
-            pure [SearchResult (flowId f) (flowName f) s M.empty | (f, s) <- limited]
+            pure [SearchResult (bfId f) (bfName f) s M.empty | (f, s) <- limited]
         }
 
 -- | CAS number search: exact CAS match on dbFlowsByCAS index
@@ -292,7 +292,7 @@ casSearcher =
             let cas = sqText query
             pure $ case M.lookup cas (dbFlowsByCAS db) of
                 Just flows ->
-                    [SearchResult (flowId f) (flowName f) 1.0 (M.singleton "cas" cas) | f <- take (sqLimit query) flows]
+                    [SearchResult (bfId f) (bfName f) 1.0 (M.singleton "cas" cas) | f <- take (sqLimit query) flows]
                 Nothing -> []
         }
 
@@ -312,11 +312,11 @@ searchWithPlugins searchers db query = do
 -- ──────────────────────────────────────────────
 
 {- | Contribution of a single flow to the LCIA score.
-Returns (MethodCF, Flow, contribution_value) when the flow is present in the inventory.
+Returns (MethodCF, BiosphereFlow, contribution_value) when the flow is present in the inventory.
 -}
-flowContribution :: Inventory -> (MethodCF, Maybe (Flow, MatchStrategy)) -> Maybe (MethodCF, Flow, Double)
+flowContribution :: Inventory -> (MethodCF, Maybe (BiosphereFlow, MatchStrategy)) -> Maybe (MethodCF, BiosphereFlow, Double)
 flowContribution inv (cf, Just (flow, _))
-    | Just qty <- M.lookup (flowId flow) inv = Just (cf, flow, qty * mcfValue cf)
+    | Just qty <- M.lookup (bfId flow) inv = Just (cf, flow, qty * mcfValue cf)
 flowContribution _ _ = Nothing
 
 {- | Hotspot analyzer: for each method, return top-N flows by contribution to the score.
@@ -333,7 +333,7 @@ hotspotAnalyzer =
                 methods = acMethods ctx
                 mapCtx = Mapping.buildMapContext db
                 topN = 20
-                flowDB = acFlowDB ctx
+                flowDB = acBioFlowDB ctx
                 unitDB = acUnitDB ctx
             results <- mapM (analyzeMethod flowDB unitDB mapCtx inv topN) methods
             pure $ toJSON results
@@ -359,7 +359,7 @@ hotspotAnalyzer =
                         , toJSON
                             [ toJSON $
                                 M.fromList
-                                    [ ("flowName" :: String, toJSON (flowName f))
+                                    [ ("flowName" :: String, toJSON (bfName f))
                                     , ("cfValue", toJSON cfVal)
                                     , ("contribution", toJSON contrib)
                                     , ("percent", toJSON (if total /= 0 then contrib / total * 100 else 0 :: Double))

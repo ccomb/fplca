@@ -18,7 +18,7 @@ streamParseActivityAndFlowsFromFile derives a synthetic ProcessId from the
 filename and rejects names that don't match `actUUID_prodUUID`, so we copy
 the fixture into a temp path with that shape.
 -}
-withFixture :: ((Activity, [Flow], [Unit]) -> IO ()) -> IO ()
+withFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [Unit]) -> IO ()) -> IO ()
 withFixture k = withSystemTempDirectory "es2-spec" $ \dir -> do
     bytes <- BS.readFile "test-data/electricity-production.spold"
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
@@ -31,7 +31,7 @@ withFixture k = withSystemTempDirectory "es2-spec" $ \dir -> do
 spec :: Spec
 spec = describe "per-exchange comments" $ do
     it "captures English <comment> on intermediateExchange and elementaryExchange" $
-        withFixture $ \(act, _, _) ->
+        withFixture $ \(act, _, _, _) ->
             map exchangeComment (exchanges act)
                 `shouldMatchList` [ Just "Coal input for electricity generation"
                                   , Just "Electricity output (reference product)"
@@ -41,10 +41,10 @@ spec = describe "per-exchange comments" $ do
 
     it "preserves all four exchanges" $
         withFixture $
-            \(act, _, _) -> length (exchanges act) `shouldBe` 4
+            \(act, _, _, _) -> length (exchanges act) `shouldBe` 4
 
     it "comments contain no &-entity artefacts" $
-        withFixture $ \(act, _, _) ->
+        withFixture $ \(act, _, _, _) ->
             let comments = [c | ex <- exchanges act, Just c <- [exchangeComment ex]]
              in all (not . T.isInfixOf "&") comments `shouldBe` True
 
@@ -55,7 +55,7 @@ spec = describe "per-exchange comments" $ do
         result <- streamParseActivityAndFlowsFromFile "test-data/sawnwood-properties_12345678-1234-5678-9abc-12345678aaaa.spold"
         case result of
             Left err -> expectationFailure $ "Parse failed: " ++ err
-            Right (act, _, _) ->
+            Right (act, _, _, _) ->
                 map exchangeComment (exchanges act)
                     `shouldMatchList` [ Nothing -- ex1 has no top-level comment, only property comments
                                       , Just "Adhesive applied during pressing" -- ex2's exchange-level comment, NOT the noisy property comment

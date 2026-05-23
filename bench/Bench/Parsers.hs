@@ -176,7 +176,7 @@ registerSimaPro = do
         Nothing -> pure []
         Just path -> do
             -- Parse once to learn N_actual; the bench measurement re-parses fresh.
-            (acts, _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
+            (acts, _, _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
             let !n = length acts
             pure
                 [ BenchSpec
@@ -191,7 +191,7 @@ registerSimaPro = do
                     , bsMetric = "seconds"
                     , bsFixture = J.Fixture{J.fSource = F.fixtureSourceLabel F.Agribalyse, J.fSlice = "whole file"}
                     , bsAction = nfIO $ do
-                        (acts', _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
+                        (acts', _, _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
                         evaluate (length acts')
                     }
                 ]

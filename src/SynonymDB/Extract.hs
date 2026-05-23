@@ -21,22 +21,21 @@ import qualified Data.Text.Encoding as T
 import Data.UUID (UUID)
 
 import Method.FlowResolver (ILCDFlowInfo (..))
-import Types (Flow (..), FlowDB)
+import Types (BioFlowDB, BiosphereFlow (..))
 
 {- | Extract synonym pairs from EcoSpold2 biosphere flows.
 For each flow with English synonyms, generates (flowName, synonym) pairs.
 -}
-extractFromEcoSpold2 :: FlowDB -> S.Set UUID -> [(Text, Text)]
-extractFromEcoSpold2 flowDB bioUUIDs =
+extractFromEcoSpold2 :: BioFlowDB -> [(Text, Text)]
+extractFromEcoSpold2 bioFlowDB =
     S.toList $
         S.fromList
-            [ (flowName f, syn)
-            | f <- M.elems flowDB
-            , S.member (flowId f) bioUUIDs
-            , syns <- maybe [] S.toList (M.lookup "en" (flowSynonyms f))
+            [ (bfName f, syn)
+            | f <- M.elems bioFlowDB
+            , syns <- maybe [] S.toList (M.lookup "en" (bfSynonyms f))
             , let syn = T.strip syns
             , not (T.null syn)
-            , syn /= flowName f
+            , syn /= bfName f
             ]
 
 {- | Extract synonym pairs from ILCD flow definitions.

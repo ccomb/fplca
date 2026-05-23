@@ -42,8 +42,8 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> FlowDB -> UnitDB -> IO (Either Text Database)
-buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
+buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> UnitDB -> IO (Either Text Database)
+buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
 
     -- Step 1: Build UUID interning tables from Map keys
@@ -71,7 +71,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
         dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
 
         -- Build indexes (now using Vector)
-        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable flowDB
+        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable
 
         -- Build supplier reference unit lookup: ProcessId -> unit name of reference product
         -- Used to convert exchange amounts to the supplier's unit for correct A-matrix coefficients
@@ -226,7 +226,7 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
             reportMatrixOperation ("Final matrix stats: " ++ show (VU.length techTriples) ++ " tech entries, " ++ show (VU.length bioTriples) ++ " bio entries")
 
             reportMatrixOperation "Building product index"
-            let !productIndex = buildProductIndex dbActivities dbProcessIdTable flowDB
+            let !productIndex = buildProductIndex dbActivities dbProcessIdTable techFlowDB
             reportMatrixOperation ("Product index: " ++ show (M.size (piByUUID productIndex)) ++ " products indexed")
 
             return $
@@ -238,13 +238,14 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                         , dbActivityProductsIndex = dbActivityProductsIndex
                         , dbProductIndex = productIndex
                         , dbActivities = dbActivities
-                        , dbFlows = flowDB
+                        , dbTechFlows = techFlowDB
+                        , dbBioFlows = bioFlowDB
                         , dbUnits = unitDB
                         , dbIndexes = indexes
                         , dbTechnosphereTriples = techTriples
                         , dbBiosphereTriples = bioTriples
                         , dbActivityIndex = V.generate (fromIntegral activityCount) fromIntegral
-                        , dbBiosphereFlows = bioFlowUUIDs
+                        , dbBiosphereOrder = bioFlowUUIDs
                         , dbActivityCount = activityCount
                         , dbBiosphereCount = bioFlowCount
                         , dbCrossDBLinks = []
@@ -257,17 +258,16 @@ buildDatabaseWithMatrices unitConfig activityMap flowDB unitDB = do
                         , dbBM25Index = Nothing
                         }
 
--- | Build indexes with ProcessIds
-buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> FlowDB -> Indexes
-buildIndexesWithProcessIds activityVec processIdTable flowDB =
+-- | Build activity-level indexes (name / location / flow / unit). Flow-side
+-- taxonomy lives on activities or biosphere compartments and is queried via
+-- the flow databases directly, so no separate flow index is built here.
+buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> Indexes
+buildIndexesWithProcessIds activityVec processIdTable =
     let
-        -- Convert Vector to temporary Map for index building
-        -- We use the ProcessId-to-UUID mapping for lookups
         activityUUIDs = [actUUID | (actUUID, _) <- V.toList processIdTable]
         activities = V.toList activityVec
         activityPairs = zip activityUUIDs activities
 
-        -- Build indexes using activity UUIDs
         nameIdx =
             M.fromListWith
                 (++)
@@ -288,37 +288,20 @@ buildIndexesWithProcessIds activityVec processIdTable flowDB =
             M.fromListWith
                 (++)
                 [(activityUnit activity, [uuid]) | (uuid, activity) <- activityPairs]
-
-        flowCatIdx =
-            M.fromListWith
-                (++)
-                [(flowCategory flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
-
-        flowTypeIdx =
-            M.fromListWith
-                (++)
-                [(flowType flow, [flowId]) | (flowId, flow) <- M.toList flowDB]
      in
-        -- Memory optimization: Removed exchange indexes (exchangeIdx, procExchangeIdx, refProdIdx,
-        -- inputIdx, outputIdx) that duplicated 600K Exchange records across 5 maps.
-        -- Exchanges can be accessed directly from Activity.exchanges when needed.
-        -- This saves ~3-4GB of RAM on Ecoinvent 3.12.
-
         Indexes
             { idxByName = nameIdx
             , idxByLocation = locationIdx
             , idxByFlow = flowIdx
             , idxByUnit = unitIdx
-            , idxFlowByCategory = flowCatIdx
-            , idxFlowByType = flowTypeIdx
             }
 
 {- | Build ProductIndex for product-based lookups
 Used for: (1) SimaPro upstream link resolution, (2) future product search
 Maps product flow UUIDs and names to the activities that produce them
 -}
-buildProductIndex :: V.Vector Activity -> V.Vector (UUID, UUID) -> FlowDB -> ProductIndex
-buildProductIndex activities processIdTable flowDb =
+buildProductIndex :: V.Vector Activity -> V.Vector (UUID, UUID) -> TechFlowDB -> ProductIndex
+buildProductIndex activities processIdTable techFlowDb =
     let
         -- Build list of (ProcessId, productUUID, productName, location) for each activity
         entries =
@@ -326,8 +309,8 @@ buildProductIndex activities processIdTable flowDb =
             | (pid, (_, prodUUID)) <- zip [0 ..] (V.toList processIdTable)
             , let act = activities V.! fromIntegral pid
             , let actLoc = activityLocation act
-            , Just flow <- [M.lookup prodUUID flowDb]
-            , let prodName = T.toLower (flowName flow)
+            , Just flow <- [M.lookup prodUUID techFlowDb]
+            , let prodName = T.toLower (tfName flow)
             ]
      in
         ProductIndex
@@ -422,11 +405,11 @@ applyStructuredFilters db geoParam productParam classFilters exactMatch candidat
                      in [(pid, a) | (pid, a) <- candidates, T.isInfixOf geoLower (T.toLower (activityLocation a))]
 
         getProductNames a' =
-            [ flowName flow
+            [ tfName flow
             | ex <- exchanges a'
             , exchangeIsReference ex
             , not (exchangeIsInput ex)
-            , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+            , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
             ]
 
         productFiltered = case productParam of
@@ -481,15 +464,16 @@ findActivitiesByFields db nameParam geoParam productParam classFilters exactMatc
         exactMatch
         (findActivityNameCandidates db nameParam exactMatch)
 
--- | Search flows by synonym
-findFlowsBySynonym :: Database -> Text -> [Flow]
+-- | Search flows by synonym across both technosphere and biosphere maps.
+-- Result tagged with the flow kind so consumers can render the appropriate shape.
+findFlowsBySynonym :: Database -> Text -> [Either TechnosphereFlow BiosphereFlow]
 findFlowsBySynonym db query =
     let queryLower = T.toLower query
-        flows = M.elems (dbFlows db)
-     in [ f
-        | f <- flows
-        , T.isInfixOf queryLower (T.toLower (flowName f))
-            || any
-                (any (T.isInfixOf queryLower . T.toLower) . S.toList)
-                (M.elems (flowSynonyms f))
-        ]
+        matchesTech f =
+            T.isInfixOf queryLower (T.toLower (tfName f))
+                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (tfSynonyms f))
+        matchesBio f =
+            T.isInfixOf queryLower (T.toLower (bfName f))
+                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (bfSynonyms f))
+     in [Left f | f <- M.elems (dbTechFlows db), matchesTech f]
+            ++ [Right f | f <- M.elems (dbBioFlows db), matchesBio f]

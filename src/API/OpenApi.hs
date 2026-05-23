@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (Exchange, Flow, FlowType, Pedigree, Unit)
+import Types (BiosphereFlow, Compartment, Exchange, Pedigree, TechRole, TechnosphereFlow, Unit)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -41,9 +41,11 @@ instance ToSchema Value where
     declareNamedSchema _ = pure $ NamedSchema (Just "JsonValue") mempty
 
 -- Domain types
-instance ToSchema FlowType
+instance ToSchema TechRole
+instance ToSchema Compartment where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Unit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Flow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+instance ToSchema TechnosphereFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+instance ToSchema BiosphereFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Pedigree where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Exchange where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 
