@@ -1069,10 +1069,14 @@ convertActivityForAPI unitCfg db processId activity =
                                     Nothing -> (Nothing, Nothing, Nothing)
                     | otherwise -> (Nothing, Nothing, Nothing)
                 BiosphereExchange{} -> (Nothing, Nothing, Nothing)
+            -- When neither the tech nor the bio map knows the exchange flow
+            -- UUID we surface the raw UUID rather than a generic "unknown" —
+            -- that way the consumer can tell which flow failed to resolve and
+            -- the gap is debuggable instead of silently misnamed.
             flowNameTxt = case (techFlowInfo, bioFlowInfo) of
                 (Just tf, _) -> tfName tf
                 (_, Just bf) -> bfName bf
-                _ -> "unknown"
+                _ -> "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
             compartment = bfCompartment <$> bioFlowInfo
          in ExchangeWithUnit
                 { ewuExchange = exchange
