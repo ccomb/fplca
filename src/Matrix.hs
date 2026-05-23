@@ -523,7 +523,7 @@ applyBiosphereMatrix :: Database -> Vector -> Inventory
 applyBiosphereMatrix db supplyVec =
     let bioFlowCount = fromIntegral (dbBiosphereCount db) :: Int
         bioTriples = dbBiosphereTriples db
-        bioFlows = dbBiosphereFlows db
+        bioFlows = dbBiosphereOrder db
         supplyLen = U.length supplyVec
         inventoryVec = U.create $ do
             mv <- MU.replicate bioFlowCount 0.0
@@ -562,7 +562,7 @@ computeProcessLCIAContributions ::
 computeProcessLCIAContributions db scalingVec cfMap =
     let actIdx = dbActivityIndex db
         bioTriples = dbBiosphereTriples db
-        bioFlows = dbBiosphereFlows db
+        bioFlows = dbBiosphereOrder db
         -- Build inverse map: matrix column index → ProcessId
         colToProcess :: M.Map Int ProcessId
         colToProcess =

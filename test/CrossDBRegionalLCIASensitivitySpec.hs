@@ -91,7 +91,7 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
                     `shouldBe` Right 5.0
@@ -132,7 +132,7 @@ spec = describe "cross-DB regional LCIA via sensitivity propagation" $ do
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
                     `shouldBe` Right 10.0

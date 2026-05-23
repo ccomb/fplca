@@ -216,20 +216,20 @@ cross-DB-merged inventories (whose flow UUIDs can originate in any loaded
 dep DB) can be decoded against a merged metadata snapshot. For single-DB
 callers, pass @dbFlows db@ / @dbUnits db@ directly.
 -}
-convertToInventoryExport :: Database -> FlowDB -> UnitDB -> ProcessId -> Activity -> Inventory -> InventoryExport
-convertToInventoryExport db flowDB unitDB processId rootActivity inventory =
+convertToInventoryExport :: Database -> BioFlowDB -> UnitDB -> ProcessId -> Activity -> Inventory -> InventoryExport
+convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
     let
-        -- Filter out flows with zero quantities to reduce noise in the results
+        -- Inventory flows are biosphere by construction (rows of B matrix).
         inventoryList = M.toList inventory
 
         !flowDetails =
             [ InventoryFlowDetail flow quantity uName isEmission category
             | (flowUUID, quantity) <- inventoryList
-            , quantity /= 0 -- Exclude flows with zero quantities
-            , Just flow <- [M.lookup flowUUID flowDB]
-            , let !uName = getUnitNameForFlow unitDB flow
-                  !isEmission = not (isResourceExtraction flow quantity)
-                  !category = flowCategory flow
+            , quantity /= 0
+            , Just flow <- [M.lookup flowUUID bioFlowDB]
+            , let !uName = getUnitNameForBioFlow unitDB flow
+                  !isEmission = not (isResourceExtraction flow)
+                  !category = compartmentName (bfCompartment flow)
             ]
 
         !emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
@@ -244,7 +244,7 @@ convertToInventoryExport db flowDB unitDB processId rootActivity inventory =
                 M.toList $
                     M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
 
-        !(prodName, prodAmount, prodUnit) = getReferenceProductInfo flowDB unitDB rootActivity
+        !(prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) unitDB rootActivity
 
         !metadata =
             InventoryMetadata
@@ -273,15 +273,14 @@ convertToInventoryExport db flowDB unitDB processId rootActivity inventory =
      in
         InventoryExport metadata flowDetails statistics
 
-{- | Determine if a flow represents resource extraction based on flow category
-Since B matrix now stores all flows as positive (Ecoinvent convention), we use category instead of sign
-EcoSpold2: "natural resource/in ground", SimaPro: "resource/in ground"
+{- | Determine if a biosphere flow represents resource extraction based on its
+compartment. Now type-restricted to BiosphereFlow — technosphere can't reach
+this code path at compile time.
 -}
-isResourceExtraction :: Flow -> Double -> Bool
-isResourceExtraction flow _ =
-    let cat = T.toLower (flowCategory flow)
-     in flowType flow == Biosphere
-            && ("natural resource" `T.isPrefixOf` cat || "resource" `T.isPrefixOf` cat)
+isResourceExtraction :: BiosphereFlow -> Bool
+isResourceExtraction flow =
+    let cat = T.toLower (compartmentName (bfCompartment flow))
+     in "natural resource" `T.isPrefixOf` cat || "resource" `T.isPrefixOf` cat
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> IO (Either ServiceError Value)
@@ -291,7 +290,7 @@ getActivityInventory db processIdText =
         Right (processId, activity) -> do
             -- Matrix computation (will not fail if validation passed)
             inventory <- computeInventoryMatrix db processId
-            let !inventoryExport = convertToInventoryExport db (dbFlows db) (dbUnits db) processId activity inventory
+            let !inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
             return $ Right $ toJSON inventoryExport
 
 -- | Shared solver-aware activity inventory export for concurrent processing
@@ -317,7 +316,7 @@ getActivityInventoryWithSharedSolver validators sharedSolver db processIdText = 
                             let bioFlowCount = dbBiosphereCount db
                                 bioTriples = dbBiosphereTriples db
                                 activityIndex = dbActivityIndex db
-                                bioFlowUUIDs = dbBiosphereFlows db
+                                bioFlowUUIDs = dbBiosphereOrder db
                                 demandVec = buildDemandVectorFromIndex activityIndex processId
 
                             -- Use shared solver (lazy factorization on first call, cached thereafter)
@@ -339,7 +338,7 @@ getActivityInventoryWithSharedSolver validators sharedSolver db processIdText = 
                                             MatrixError $
                                                 T.intercalate "; " [viMessage i | i <- postIssues, viSeverity i == Error]
                                 else do
-                                    let inventoryExport = convertToInventoryExport db (dbFlows db) (dbUnits db) processId activity inventory
+                                    let inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
                                     return $ Right inventoryExport
 
 -- | Simple stats tracking for tree processing
@@ -383,10 +382,10 @@ findProcessIdByProductFlowWithFallback unitCfg db flowUUID =
         Just pid -> Just pid
         Nothing ->
             -- Fallback: look up the flow to get its name and unit
-            case M.lookup flowUUID (dbFlows db) of
+            case M.lookup flowUUID (dbTechFlows db) of
                 Just inputFlow ->
-                    let inputName = T.toLower (flowName inputFlow)
-                        inputUnit = getUnitNameForFlow (dbUnits db) inputFlow
+                    let inputName = T.toLower (tfName inputFlow)
+                        inputUnit = getUnitNameForTechFlow (dbUnits db) inputFlow
                         -- Get candidates by normalized name
                         candidates = searchProductsByName db inputName
                         -- Filter to only dimensionally compatible units
@@ -467,29 +466,28 @@ extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAc
                     (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a)))
                     allBiosphereExchanges
         processBiosphere ex (nodeAcc', edgeAcc') =
-            case M.lookup (exchangeFlowId ex) (dbFlows db) of
+            case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
                 Nothing -> (nodeAcc', edgeAcc')
                 Just flow ->
-                    let flowIdText = UUID.toText (flowId flow)
+                    let flowIdText = UUID.toText (bfId flow)
                         isEmission = not (exchangeIsInput ex) -- False = emission, True = resource
                         nodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
-                        compartment = extractCompartment (flowCategory flow)
+                        compartmentTxt = compartmentName (bfCompartment flow)
                         biosphereNode =
                             ExportNode
                                 { enId = flowIdText
-                                , enName = flowName flow
-                                , enDescription = [flowCategory flow]
+                                , enName = bfName flow
+                                , enDescription = [compartmentTxt]
                                 , enLocation = ""
-                                , enUnit = getUnitNameForFlow (dbUnits db) flow
+                                , enUnit = getUnitNameForBioFlow (dbUnits db) flow
                                 , enNodeType = nodeType
                                 , enDepth = depth
                                 , enLoopTarget = Nothing
                                 , enParentId = Just activityProcessId
                                 , enChildrenCount = 0
-                                , enCompartment = Just compartment
+                                , enCompartment = Just compartmentTxt
                                 }
                         nodeAcc'' = M.insert flowIdText biosphereNode nodeAcc'
-                        -- Create edge with correct direction
                         (edgeFrom, edgeTo, edgeType) =
                             if isEmission
                                 then (activityProcessId, flowIdText, BiosphereEmissionEdge)
@@ -498,9 +496,9 @@ extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAc
                             TreeEdge
                                 { teFrom = edgeFrom
                                 , teTo = edgeTo
-                                , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
+                                , teFlow = FlowInfo (bfId flow) (bfName flow) compartmentTxt
                                 , teQuantity = exchangeAmount ex
-                                , teUnit = getUnitNameForFlow (dbUnits db) flow
+                                , teUnit = getUnitNameForBioFlow (dbUnits db) flow
                                 , teEdgeType = edgeType
                                 }
                         edgeAcc'' = edge : edgeAcc'
@@ -580,11 +578,11 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                 let (childNodes, childEdges, childStats') = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc' edgeAcc'
                     edge =
                         TreeEdge
-                            { teFrom = currentProcessId -- Now ProcessId format
-                            , teTo = getTreeNodeId db subtree -- This now returns ProcessId format
-                            , teFlow = FlowInfo (flowId flow) (flowName flow) (flowCategory flow)
+                            { teFrom = currentProcessId
+                            , teTo = getTreeNodeId db subtree
+                            , teFlow = FlowInfo (tfId flow) (tfName flow) ""
                             , teQuantity = quantity
-                            , teUnit = getUnitNameForFlow (dbUnits db) flow
+                            , teUnit = getUnitNameForTechFlow (dbUnits db) flow
                             , teEdgeType = TechnosphereEdge
                             }
                     newStats = combineStats statsAcc childStats'
@@ -703,7 +701,7 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
             let techTriples = dbTechnosphereTriples db
                 activities = dbActivities db
                 units = dbUnits db
-                flows = dbFlows db
+                flows = dbTechFlows db
 
                 -- Build edges: iterate through sparse triplets
                 edges =
@@ -728,19 +726,15 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                     [ ex
                                     | ex <- exchanges srcAct
                                     , case ex of
-                                        TechnosphereExchange{techIsInput = isInput, techIsReference = isRef} -> isInput && not isRef
+                                        TechnosphereExchange{techRole = Input} -> True
+                                        TechnosphereExchange{} -> False
                                         BiosphereExchange{} -> False
                                     ]
-                            -- Match by target activity UUID
                             case [ex | ex <- techExchanges, exchangeActivityLinkId ex == Just targetUUID] of
                                 (ex : _) -> M.lookup (exchangeFlowId ex) flows
-                                [] -> Nothing -- No matching exchange found
-                          uName = case flowInfo of
-                            Just flow -> getUnitNameForFlow units flow
-                            Nothing -> "unknown"
-                          flowNameText = case flowInfo of
-                            Just flow -> flowName flow
-                            Nothing -> "Unknown flow"
+                                [] -> Nothing
+                          uName = maybe "unknown" (getUnitNameForTechFlow units) flowInfo
+                          flowNameText = maybe "Unknown flow" tfName flowInfo
                        in case (sourceNodeId, targetNodeId) of
                             (Just src, Just tgt) ->
                                 Just $ GraphEdge src tgt (realToFrac value) uName flowNameText
@@ -796,14 +790,24 @@ getFlowUsageCount db flowUUID =
         Nothing -> 0
         Just activityUUIDs -> length activityUUIDs
 
--- | Get flows used by an activity as lightweight summaries
+-- | Get flows used by an activity as lightweight summaries. Each exchange
+-- lookup is resolved against the appropriate side (tech vs bio) and wrapped
+-- in 'Either' to preserve the discriminator for downstream JSON encoders.
 getActivityFlowSummaries :: Database -> Activity -> [FlowSummary]
 getActivityFlowSummaries db activity =
-    [ FlowSummary flow (getUnitNameForFlow (dbUnits db) flow) (getFlowUsageCount db (flowId flow)) (determineFlowRole exchange)
+    [ summary
     | exchange <- exchanges activity
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
+    , Just summary <- [mkSummary exchange]
     ]
   where
+    mkSummary ex = case ex of
+        TechnosphereExchange{techFlowId = fid} ->
+            (\f -> FlowSummary (Left f) (getUnitNameForTechFlow (dbUnits db) f) (getFlowUsageCount db (tfId f)) (determineFlowRole ex))
+                <$> M.lookup fid (dbTechFlows db)
+        BiosphereExchange{bioFlowId = fid} ->
+            (\f -> FlowSummary (Right f) (getUnitNameForBioFlow (dbUnits db) f) (getFlowUsageCount db (bfId f)) (determineFlowRole ex))
+                <$> M.lookup fid (dbBioFlows db)
+
     determineFlowRole ex
         | exchangeIsReference ex = ReferenceProductFlow
         | exchangeIsInput ex = InputFlow
@@ -819,17 +823,26 @@ searchFlows db FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offs
         offset = maybe 0 (max 0) offsetParam
         rawResults = findFlowsBySynonym db query
         isDesc = orderParam == Just "desc"
+        -- Projection helpers: pick the per-side accessor for a tagged flow.
+        nameOf = either tfName bfName
+        idOf = either tfId bfId
+        unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
+        synonymsOf = either tfSynonyms bfSynonyms
+        categoryOf = either (const "") (compartmentName . bfCompartment)
         flowCmp = case sortParam of
-            Just "category" -> \a b -> compare (flowCategory a) (flowCategory b)
-            Just "unit" -> \a b -> compare (getUnitNameForFlow (dbUnits db) a) (getUnitNameForFlow (dbUnits db) b)
-            _ -> \a b -> compare (flowName a) (flowName b)
+            Just "category" -> \a b -> compare (categoryOf a) (categoryOf b)
+            Just "unit" -> \a b -> compare (unitOf a) (unitOf b)
+            _ -> \a b -> compare (nameOf a) (nameOf b)
         allResults = L.sortBy (if isDesc then flip flowCmp else flowCmp) rawResults
         total = length allResults
         dropped = drop offset allResults
         taken = take (limit + 1) dropped
         hasMore = length taken > limit
         pagedResults = take limit taken
-        flowResults = map (\flow -> FlowSearchResult (flowId flow) (flowName flow) (flowCategory flow) (getUnitNameForFlow (dbUnits db) flow) (M.map S.toList (flowSynonyms flow))) pagedResults
+        flowResults =
+            map
+                (\flow -> FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)))
+                pagedResults
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
     return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
@@ -920,7 +933,7 @@ searchActivities db (SearchFilter core exactMatch) = do
         activityResults =
             map
                 ( \(processId, activity) ->
-                    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) activity
+                    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
                      in ActivitySummary
                             (processIdToText db processId)
                             (activityName activity)
@@ -994,7 +1007,7 @@ convertActivityForAPI unitCfg db processId activity =
     let allProducts = case processIdToUUIDs db processId of
             Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
             Nothing -> []
-        (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) activity
+        (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
      in ActivityForAPI
             { pfaProcessId = processIdToText db processId
             , pfaName = activityName activity
@@ -1021,27 +1034,30 @@ convertActivityForAPI unitCfg db processId activity =
         Nothing -> M.empty
 
     convertExchangeWithUnit exchange =
-        let flowInfo = M.lookup (exchangeFlowId exchange) (dbFlows db)
+        let -- Look up the flow in the appropriate side (tech vs bio) based on exchange variant.
+            techFlowInfo = case exchange of
+                TechnosphereExchange{techFlowId = fid} -> M.lookup fid (dbTechFlows db)
+                BiosphereExchange{} -> Nothing
+            bioFlowInfo = case exchange of
+                BiosphereExchange{bioFlowId = fid} -> M.lookup fid (dbBioFlows db)
+                TechnosphereExchange{} -> Nothing
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
-                TechnosphereExchange{techFlowId = fId, techIsInput = isInput, techActivityLinkId = linkId}
-                    | isInput && linkId /= UUID.nil ->
-                        -- EcoSpold path: use explicit activity link
+                TechnosphereExchange{techFlowId = fId, techRole = role, techActivityLinkId = linkId}
+                    | (role == Input || role == ReferenceInput) && linkId /= UUID.nil ->
                         case findActivityByActivityUUID db linkId of
                             Just targetActivity ->
                                 let maybeProcessId = findProcessIdByActivityUUID db linkId
                                     processIdText = fmap (processIdToText db) maybeProcessId
                                  in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
                             Nothing -> (Nothing, Nothing, Nothing)
-                    | isInput ->
+                    | role == Input || role == ReferenceInput ->
                         -- SimaPro path: linkId is nil, resolve by product flow UUID
-                        -- Uses fallback to name+unit matching when UUID lookup fails (e.g., tkm vs kgkm)
                         case findProcessIdByProductFlowWithFallback unitCfg db fId of
                             Just pid
                                 | Just act <- getActivity db pid ->
                                     (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
                             _ ->
-                                -- Try cross-DB links
-                                case flowInfo >>= \flow -> M.lookup (T.toLower (flowName flow)) crossDBLinkMap of
+                                case techFlowInfo >>= \flow -> M.lookup (T.toLower (tfName flow)) crossDBLinkMap of
                                     Just link ->
                                         let crossPid =
                                                 cdlSourceDatabase link
@@ -1053,15 +1069,16 @@ convertActivityForAPI unitCfg db processId activity =
                                     Nothing -> (Nothing, Nothing, Nothing)
                     | otherwise -> (Nothing, Nothing, Nothing)
                 BiosphereExchange{} -> (Nothing, Nothing, Nothing)
+            flowNameTxt = case (techFlowInfo, bioFlowInfo) of
+                (Just tf, _) -> tfName tf
+                (_, Just bf) -> bfName bf
+                _ -> "unknown"
+            compartment = bfCompartment <$> bioFlowInfo
          in ExchangeWithUnit
                 { ewuExchange = exchange
                 , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
-                , ewuFlowName = maybe "unknown" flowName flowInfo
-                , ewuFlowCategory = case flowInfo of
-                    Just flow -> case isTechnosphereExchange exchange of
-                        True -> "technosphere"
-                        False -> flowCategory flow -- This will now include compartment info like "water/ground-, long-term"
-                    Nothing -> "unknown"
+                , ewuFlowName = flowNameTxt
+                , ewuCompartment = compartment
                 , ewuTargetActivity = targetActivityName
                 , ewuTargetLocation = targetActivityLocation
                 , ewuTargetProcessId = targetProcessId
@@ -1069,19 +1086,20 @@ convertActivityForAPI unitCfg db processId activity =
                 , ewuPedigree = exchangePedigree exchange
                 }
 
--- | Get reference product name from activity exchanges
-getReferenceProductName :: M.Map UUID Flow -> Activity -> Maybe Text
+-- | Get reference product name from activity exchanges. Reference products
+-- are always technosphere.
+getReferenceProductName :: TechFlowDB -> Activity -> Maybe Text
 getReferenceProductName flows activity =
     case [ex | ex <- exchanges activity, exchangeIsReference ex] of
-        (ex : _) -> fmap flowName (M.lookup (exchangeFlowId ex) flows)
+        (ex : _) -> fmap tfName (M.lookup (exchangeFlowId ex) flows)
         [] -> Nothing
 
 -- | Get reference product info (name, amount, unit) from activity exchanges
-getReferenceProductInfo :: M.Map UUID Flow -> UnitDB -> Activity -> (Text, Double, Text)
+getReferenceProductInfo :: TechFlowDB -> UnitDB -> Activity -> (Text, Double, Text)
 getReferenceProductInfo flows units activity =
     case [ex | ex <- exchanges activity, exchangeIsReference ex] of
         (ex : _) ->
-            let name = maybe "" flowName (M.lookup (exchangeFlowId ex) flows)
+            let name = maybe "" tfName (M.lookup (exchangeFlowId ex) flows)
                 amount = exchangeAmount ex
                 uName = getUnitNameForExchange units ex
              in (name, amount, uName)
@@ -1094,7 +1112,7 @@ getAllProductsForActivity db activityUUID =
         Just processIds ->
             [ let mAct = findActivityByProcessId db pid
                   (prodName, prodAmount, prodUnit) = case mAct of
-                    Just a -> getReferenceProductInfo (dbFlows db) (dbUnits db) a
+                    Just a -> getReferenceProductInfo (dbTechFlows db) (dbUnits db) a
                     Nothing -> ("Unknown", 1.0, "")
                in ActivitySummary
                     { prsProcessId = processIdToText db pid
@@ -1116,7 +1134,7 @@ getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
     targetActivity <- findActivityByActivityUUID db targetId
     processId <- findProcessIdForActivity db targetActivity
-    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) targetActivity
+    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) targetActivity
     return $
         ActivitySummary
             { prsProcessId = processIdToText db processId
@@ -1129,16 +1147,17 @@ getTargetActivity db exchange = do
             , prsAllocationFormula = activityAllocationFormula targetActivity
             }
 
--- | Get reference product as FlowDetail (if exists)
+-- | Get reference product as FlowDetail (if exists). Reference products are
+-- technosphere by definition.
 getActivityReferenceProductDetail :: Database -> Activity -> Maybe FlowDetail
 getActivityReferenceProductDetail db activity = do
     refExchange <- case filter exchangeIsReference (exchanges activity) of
         [] -> Nothing
         (ex : _) -> Just ex
-    flow <- M.lookup (exchangeFlowId refExchange) (dbFlows db)
-    let usageCount = getFlowUsageCount db (flowId flow)
-    let uName = getUnitNameForFlow (dbUnits db) flow
-    return $ FlowDetail flow uName usageCount
+    flow <- M.lookup (exchangeFlowId refExchange) (dbTechFlows db)
+    let usageCount = getFlowUsageCount db (tfId flow)
+    let uName = getUnitNameForTechFlow (dbUnits db) flow
+    return $ FlowDetail (Left flow) uName usageCount
 
 -- | Get activities that use a specific flow as ActivitySummary list
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
@@ -1147,7 +1166,7 @@ getActivitiesUsingFlow db flowUUID =
         Nothing -> []
         Just activityUUIDs ->
             let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
-             in [ let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbFlows db) (dbUnits db) proc
+             in [ let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) proc
                    in ActivitySummary
                         (processIdToText db processId)
                         (activityName proc)
@@ -1170,19 +1189,36 @@ same convention the @/activity/{pid}@ endpoint uses.
 -}
 getActivityExchangeDetails :: Database -> Activity -> (Exchange -> Bool) -> [ExchangeDetail]
 getActivityExchangeDetails db activity filterFn =
-    [ ExchangeDetail
-        exchange
-        flow
-        (getUnitNameForFlow (dbUnits db) flow)
-        unit
-        (getUnitNameForExchange (dbUnits db) exchange)
-        (resolveTarget exchange flow)
+    [ detail
     | exchange <- exchanges activity
     , filterFn exchange
-    , Just flow <- [M.lookup (exchangeFlowId exchange) (dbFlows db)]
-    , Just unit <- [M.lookup (exchangeUnitId exchange) (dbUnits db)]
+    , Just detail <- [mkDetail exchange]
     ]
   where
+    mkDetail exchange = case exchange of
+        TechnosphereExchange{techFlowId = fid} -> do
+            flow <- M.lookup fid (dbTechFlows db)
+            unit <- M.lookup (exchangeUnitId exchange) (dbUnits db)
+            pure $
+                ExchangeDetail
+                    exchange
+                    (Left flow)
+                    (getUnitNameForTechFlow (dbUnits db) flow)
+                    unit
+                    (getUnitNameForExchange (dbUnits db) exchange)
+                    (resolveTechTarget exchange flow)
+        BiosphereExchange{bioFlowId = fid} -> do
+            flow <- M.lookup fid (dbBioFlows db)
+            unit <- M.lookup (exchangeUnitId exchange) (dbUnits db)
+            pure $
+                ExchangeDetail
+                    exchange
+                    (Right flow)
+                    (getUnitNameForBioFlow (dbUnits db) flow)
+                    unit
+                    (getUnitNameForExchange (dbUnits db) exchange)
+                    Nothing -- Biosphere flows have no target activity
+
     -- Cross-DB link lookup by consumer's flow name, built once per activity
     -- for O(log n) per-exchange resolution.
     crossLinkByFlow :: M.Map Text CrossDBLink
@@ -1195,13 +1231,13 @@ getActivityExchangeDetails db activity filterFn =
                 ]
         Nothing -> M.empty
 
-    resolveTarget exchange flow =
+    resolveTechTarget exchange flow =
         case getTargetActivity db exchange of
             Just s -> Just s
             Nothing -> crossDBTarget flow
 
     crossDBTarget flow =
-        case M.lookup (T.toLower (flowName flow)) crossLinkByFlow of
+        case M.lookup (T.toLower (tfName flow)) crossLinkByFlow of
             Nothing -> Nothing
             Just link ->
                 let qualifiedPid =
@@ -1230,19 +1266,20 @@ getActivityInputDetails db activity = getActivityExchangeDetails db activity exc
 getActivityOutputDetails :: Database -> Activity -> [ExchangeDetail]
 getActivityOutputDetails db activity = getActivityExchangeDetails db activity (not . exchangeIsInput)
 
--- | Get flow info as JSON (for CLI)
+-- | Get flow info as JSON (for CLI). Resolves against either flow side.
 getFlowInfo :: Database -> Text -> Either ServiceError Value
 getFlowInfo db flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
         Just fId ->
-            case M.lookup fId (dbFlows db) of
-                Nothing -> Left $ FlowNotFound flowIdText
-                Just flow ->
-                    let usageCount = getFlowUsageCount db fId
-                        uName = getUnitNameForFlow (dbUnits db) flow
-                        flowDetail = FlowDetail flow uName usageCount
-                     in Right $ toJSON flowDetail
+            let usageCount = getFlowUsageCount db fId
+             in case M.lookup fId (dbTechFlows db) of
+                    Just flow ->
+                        Right $ toJSON $ FlowDetail (Left flow) (getUnitNameForTechFlow (dbUnits db) flow) usageCount
+                    Nothing -> case M.lookup fId (dbBioFlows db) of
+                        Just flow ->
+                            Right $ toJSON $ FlowDetail (Right flow) (getUnitNameForBioFlow (dbUnits db) flow) usageCount
+                        Nothing -> Left $ FlowNotFound flowIdText
 
 -- | Get activities that use a specific flow as JSON (for CLI)
 getFlowActivities :: Database -> Text -> Either ServiceError Value
@@ -1250,7 +1287,7 @@ getFlowActivities db flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
         Just fId ->
-            case M.lookup fId (dbFlows db) of
+            case M.lookup fId (dbTechFlows db) of
                 Nothing -> Left $ FlowNotFound flowIdText
                 Just _ ->
                     let activities = getActivitiesUsingFlow db fId
@@ -1437,11 +1474,11 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
         nameMatchesPid pid = maybe True (IS.member (fromIntegral pid)) mNameSet
 
         getProductNames activity =
-            [ flowName flow
+            [ tfName flow
             | ex <- exchanges activity
             , exchangeIsReference ex
             , not (exchangeIsInput ex)
-            , Just flow <- [M.lookup (exchangeFlowId ex) (dbFlows db)]
+            , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
             ]
 
         matchesFilters activity pid =
@@ -1555,7 +1592,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
                 , prsProduct =
                     fromMaybe
                         (activityName rootActivity)
-                        (getReferenceProductName (dbFlows db) rootActivity)
+                        (getReferenceProductName (dbTechFlows db) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = activityAllocationPercent rootActivity
@@ -1616,7 +1653,7 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                 , prsProduct =
                     fromMaybe
                         (activityName rootActivity)
-                        (getReferenceProductName (dbFlows rootDb) rootActivity)
+                        (getReferenceProductName (dbTechFlows rootDb) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = activityAllocationPercent rootActivity
@@ -2516,7 +2553,7 @@ getConsumers db dbName processIdText cnf = do
             , locationMatches activity
             , classMatches activity
             , let (prodName, prodAmount, prodUnit) =
-                    getReferenceProductInfo (dbFlows db) (dbUnits db) activity
+                    getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
             , productMatches prodName
             ]
 

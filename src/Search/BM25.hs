@@ -24,16 +24,15 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 
-import Data.UUID (UUID)
 import Search.BM25.Types (BM25Index (..))
 import Search.Normalize (tokenize)
-import Types (Activity, Database (..), Flow, activityName, exchangeFlowId, exchangeIsInput, exchangeIsReference, exchanges, flowName)
+import Types (Activity, Database (..), TechFlowDB, activityName, exchangeFlowId, exchangeIsInput, exchangeIsReference, exchanges, tfName)
 
 {- | Populate the BM25 index field on a Database. Called after
 initializeRuntimeFields during database load. Idempotent.
 -}
 addBM25Index :: Database -> Database
-addBM25Index db = db{dbBM25Index = Just (buildIndex (dbActivities db) (dbFlows db))}
+addBM25Index db = db{dbBM25Index = Just (buildIndex (dbActivities db) (dbTechFlows db))}
 
 -- BM25 hyperparameters. Defaults from the canonical Okapi BM25 paper.
 k1 :: Double
@@ -47,7 +46,7 @@ Document text per activity = activity name + reference product name.
 Location is intentionally excluded: it's a structured filter (geoParam),
 not a ranking signal.
 -}
-buildIndex :: V.Vector Activity -> Map UUID Flow -> BM25Index
+buildIndex :: V.Vector Activity -> TechFlowDB -> BM25Index
 buildIndex activities flowDb =
     let n = V.length activities
         tokensByDoc :: V.Vector [Text]
@@ -114,7 +113,7 @@ tokenTrigrams t
          in M.keys (M.fromList [(tg, ()) | tg <- raw]) -- dedupe
 
 -- | Extract searchable tokens for one activity: name + reference product name(s).
-documentTokens :: Map UUID Flow -> Activity -> [Text]
+documentTokens :: TechFlowDB -> Activity -> [Text]
 documentTokens flowDb a =
     tokenize (activityName a)
         ++ concatMap productTokens (exchanges a)
@@ -123,7 +122,7 @@ documentTokens flowDb a =
         | exchangeIsReference ex
         , not (exchangeIsInput ex)
         , Just flow <- M.lookup (exchangeFlowId ex) flowDb =
-            tokenize (flowName flow)
+            tokenize (tfName flow)
         | otherwise = []
 
 -- | Count term frequencies in a document.

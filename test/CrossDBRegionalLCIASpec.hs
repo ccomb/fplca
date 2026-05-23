@@ -85,7 +85,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 computeRegionalizedLCIAScore
                     kgUnitConfig
                     (dbUnits rootDb)
-                    (dbFlows rootDb)
+                    (dbBioFlows rootDb)
                     rootDb
                     rootScaling
                     M.empty
@@ -120,7 +120,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
                     `shouldBe` Right 5.0
@@ -167,7 +167,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
                     `shouldBe` Right 0.0
@@ -209,7 +209,7 @@ spec = describe "cross-DB regional LCIA" $ do
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
-                    (dbFlows depDb)
+                    (dbBioFlows depDb)
                     M.empty
                     perDb
                     `shouldBe` Right 0.0
@@ -262,7 +262,7 @@ spec = describe "cross-DB regional LCIA" $ do
                             MM.computeLCIAScoreFromTables
                                 kgUnitConfig
                                 (dbUnits rootDb)
-                                (dbFlows rootDb)
+                                (dbBioFlows rootDb)
                                 (SS.csInventory sol)
                                 universalTables
                     MM.loScore outcome `shouldBe` 3.0
@@ -295,7 +295,7 @@ spec = describe "cross-DB regional LCIA" $ do
                     sumRegionalizedLCIAScoreCrossDB
                         kgUnitConfig
                         (dbUnits rootStandalone)
-                        (dbFlows rootStandalone)
+                        (dbBioFlows rootStandalone)
                         M.empty
                         perDb
                         `shouldBe` Right 7.0

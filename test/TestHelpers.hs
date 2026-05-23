@@ -37,7 +37,7 @@ loadSampleDatabaseWithPath path = do
     case loadResult of
         Left err -> error $ "Failed to load test database: " ++ show err
         Right simpleDb -> do
-            dbResult <- buildDatabaseWithMatrices defaultUnitConfig (sdbActivities simpleDb) (sdbFlows simpleDb) (sdbUnits simpleDb)
+            dbResult <- buildDatabaseWithMatrices defaultUnitConfig (sdbActivities simpleDb) (sdbTechFlows simpleDb) (sdbBioFlows simpleDb) (sdbUnits simpleDb)
             case dbResult of
                 Left err -> error $ "Failed to build matrix: " ++ show err
                 Right db -> return db
@@ -53,11 +53,11 @@ assertVectorNear _label tolerance actualVec expectedList = do
     length actual `shouldBe` length expectedList
     zipWithM_ (\a e -> withinTolerance tolerance e a `shouldBe` True) actual expectedList
 
--- | Find a flow by name in the database
-findFlowByName :: Database -> Text -> Maybe Flow
+-- | Find a biosphere flow by name in the database (test helper).
+findFlowByName :: Database -> Text -> Maybe BiosphereFlow
 findFlowByName db name =
-    let flows = M.elems (dbFlows db)
-     in case filter (\f -> T.toLower (flowName f) == T.toLower name) flows of
+    let flows = M.elems (dbBioFlows db)
+     in case filter (\f -> T.toLower (bfName f) == T.toLower name) flows of
             (f : _) -> Just f
             [] -> Nothing
 

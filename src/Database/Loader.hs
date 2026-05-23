@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 
 {- |
 Module      : Database.Loader
@@ -61,7 +62,8 @@ module Database.Loader (
 
     -- * Internal (exposed for testing)
     normalizeText,
-    mergeFlows,
+    mergeTechFlows,
+    mergeBioFlows,
     generateActivityUUIDFromActivity,
     getReferenceProductUUID,
     UnlinkedSummary (..),
@@ -81,7 +83,7 @@ import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
 import Data.Either (partitionEithers)
-import Data.List (sort, sortBy, sortOn, unzip7)
+import Data.List (sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
@@ -126,12 +128,23 @@ import qualified UnitConversion as UC
 cacheMagic :: BS.ByteString
 cacheMagic = "VOLCACHE"
 
-{- | Merge two Flow records with the same UUID, combining their synonyms.
-When multiple .spold files reference the same biosphere flow, each may carry
-different synonyms. M.fromListWith mergeFlows ensures no synonym is lost.
+{- | Merge two technosphere flows with the same UUID, combining their synonyms.
+When multiple .spold files reference the same flow each may carry different
+synonyms; M.fromListWith mergeTechFlows ensures no synonym is lost.
 -}
-mergeFlows :: Flow -> Flow -> Flow
-mergeFlows a b = a{flowSynonyms = M.unionWith S.union (flowSynonyms a) (flowSynonyms b)}
+mergeTechFlows :: TechnosphereFlow -> TechnosphereFlow -> TechnosphereFlow
+mergeTechFlows a b = a{tfSynonyms = M.unionWith S.union (tfSynonyms a) (tfSynonyms b)}
+
+-- | Biosphere counterpart of 'mergeTechFlows'.
+mergeBioFlows :: BiosphereFlow -> BiosphereFlow -> BiosphereFlow
+mergeBioFlows a b = a{bfSynonyms = M.unionWith S.union (bfSynonyms a) (bfSynonyms b)}
+
+-- | 8-element unzip helper (Data.List ships 7-tuple as max).
+unzip8 :: [(a, b, c, d, e, f, g, h)] -> ([a], [b], [c], [d], [e], [f], [g], [h])
+unzip8 = foldr step ([], [], [], [], [], [], [], [])
+  where
+    step (a, b, c, d, e, f, g, h) (as, bs, cs, ds, es, fs, gs, hs) =
+        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs)
 
 {- |
 Schema signature automatically derived from the Database type structure.
@@ -287,28 +300,28 @@ normalizeText = T.toLower . T.strip . normalizeUnicode
 {- | Build supplier index: (normalizedProductName, location) → (activityUUID, productUUID)
 For each activity, we index it by its reference product name + activity location
 -}
-buildSupplierIndex :: ActivityMap -> FlowDB -> SupplierIndex
-buildSupplierIndex activities flowDb =
+buildSupplierIndex :: ActivityMap -> TechFlowDB -> SupplierIndex
+buildSupplierIndex activities techFlowDb =
     M.fromList
-        [ ((normalizeText (flowName flow), activityLocation act), (actUUID, prodUUID))
+        [ ((normalizeText (tfName flow), activityLocation act), (actUUID, prodUUID))
         | ((actUUID, prodUUID), act) <- M.toList activities
         , ex <- exchanges act
         , exchangeIsReference ex
-        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+        , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
         ]
 
 {- | Build name-only supplier index for SimaPro linking
 Uses the normalized product name + extracted prefixes (no location required).
 Exact names take priority via M.union.
 -}
-buildSupplierIndexByName :: ActivityMap -> FlowDB -> NameOnlyIndex
-buildSupplierIndexByName activities flowDb =
+buildSupplierIndexByName :: ActivityMap -> TechFlowDB -> NameOnlyIndex
+buildSupplierIndexByName activities techFlowDb =
     let entries =
-            [ (flowName flow, (actUUID, prodUUID))
+            [ (tfName flow, (actUUID, prodUUID))
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
             , exchangeIsReference ex
-            , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+            , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
             ]
         exactIndex = M.fromList [(normalizeText name, val) | (name, val) <- entries]
         prefixIndex =
@@ -324,14 +337,14 @@ buildSupplierIndexByName activities flowDb =
 Used when exchange has no location attribute to find the activity's actual location
 Maps normalizedProductName → (activityUUID, productUUID, activityLocation)
 -}
-buildSupplierIndexByNameWithLocation :: ActivityMap -> FlowDB -> SupplierByNameWithLocation
-buildSupplierIndexByNameWithLocation activities flowDb =
+buildSupplierIndexByNameWithLocation :: ActivityMap -> TechFlowDB -> SupplierByNameWithLocation
+buildSupplierIndexByNameWithLocation activities techFlowDb =
     M.fromList
-        [ (normalizeText (flowName flow), (actUUID, prodUUID, activityLocation act))
+        [ (normalizeText (tfName flow), (actUUID, prodUUID, activityLocation act))
         | ((actUUID, prodUUID), act) <- M.toList activities
         , ex <- exchanges act
         , exchangeIsReference ex
-        , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
+        , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
         ]
 
 {- | Fix EcoSpold1 activity links by resolving supplier references.
@@ -342,9 +355,9 @@ Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO
 fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> IO SimpleDatabase
 fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
     -- Build supplier index
-    let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbFlows db)
+    let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbTechFlows db)
     -- Build name-only index with location for exchanges missing location attribute
-    let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbFlows db)
+    let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbTechFlows db)
     reportProgress Info $
         printf
             "Built supplier index with %d entries for activity linking (%d location aliases, %d name-only entries, %d dataset-number entries)"
@@ -361,7 +374,7 @@ fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
                 , elcNameIndex = nameIndex
                 , elcDatasetIndex = dsIndex
                 , elcSupplierLinks = supplierLinks
-                , elcFlowDB = sdbFlows db
+                , elcFlowDB = sdbTechFlows db
                 }
         (fixedActivities, summary) = fixAllActivities ctx (sdbActivities db)
 
@@ -390,7 +403,7 @@ data ExchangeLinkContext = ExchangeLinkContext
     , elcNameIndex :: !SupplierByNameWithLocation
     , elcDatasetIndex :: !DatasetNumberIndex
     , elcSupplierLinks :: !(M.Map UUID.UUID Int)
-    , elcFlowDB :: !FlowDB
+    , elcFlowDB :: !TechFlowDB
     }
 
 -- | Fix all activities and return statistics with unlinked summary
@@ -415,11 +428,11 @@ Unlinked exchanges stay unlinked for cross-DB resolution.
 Returns (fixed exchange, UnlinkedSummary)
 -}
 fixExchangeLink :: ExchangeLinkContext -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{techFlowId = fid, techIsInput = isInp, techLocation = loc}
-    | isInp =
+fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+    | role == Input || role == ReferenceInput =
         let linked actUUID prodUUID = (ex{techFlowId = prodUUID, techActivityLinkId = actUUID}, UnlinkedSummary M.empty 1 1 0)
             unlinked flow lookupLoc =
-                let ue = UnlinkedExchange (flowName flow) lookupLoc
+                let ue = UnlinkedExchange (tfName flow) lookupLoc
                  in (ex, UnlinkedSummary (M.singleton consumerName [ue]) 1 0 1)
          in case M.lookup fid elcFlowDB of
                 Just flow ->
@@ -427,23 +440,23 @@ fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{tec
                     case M.lookup fid elcSupplierLinks >>= \dsNum -> M.lookup dsNum elcDatasetIndex of
                         Just (actUUID, prodUUID)
                             | Just supplierFlow <- M.lookup prodUUID elcFlowDB
-                            , normalizeText (flowName supplierFlow) == normalizeText (flowName flow) ->
+                            , normalizeText (tfName supplierFlow) == normalizeText (tfName flow) ->
                                 linked actUUID prodUUID
                         _ ->
                             -- Tier 2: name + location lookup
                             let normalizedLoc = fromMaybe loc (M.lookup loc elcLocationAliases)
                                 lookupLoc
                                     | T.null normalizedLoc =
-                                        case M.lookup (normalizeText (flowName flow)) elcNameIndex of
+                                        case M.lookup (normalizeText (tfName flow)) elcNameIndex of
                                             Just (_, _, actLoc) -> actLoc
                                             Nothing -> normalizedLoc
                                     | otherwise = normalizedLoc
-                                key = (normalizeText (flowName flow), lookupLoc)
+                                key = (normalizeText (tfName flow), lookupLoc)
                              in case M.lookup key elcSupplierIndex of
                                     Just (actUUID, prodUUID) -> linked actUUID prodUUID
                                     Nothing ->
                                         -- Tier 3: name-only fallback (safe for EcoSpold1 where names include {LOCATION})
-                                        case M.lookup (normalizeText (flowName flow)) elcNameIndex of
+                                        case M.lookup (normalizeText (tfName flow)) elcNameIndex of
                                             Just (actUUID, prodUUID, _) -> linked actUUID prodUUID
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
@@ -500,7 +513,7 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
-    (activities, flowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
+    (activities, techFlowDB, bioFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
 
     if null activities
         then return $ Left "No activities found in SimaPro CSV file."
@@ -514,7 +527,7 @@ loadSimaProCSV unitConfig csvPath = do
                         ]
 
             -- Build initial database
-            let simpleDb = SimpleDatabase procMap flowDB unitDB
+            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB unitDB
 
             -- Fix activity links using supplier lookup (same as EcoSpold1)
             Right <$> fixSimaProActivityLinks simpleDb
@@ -524,11 +537,11 @@ Uses name-only matching (no location required) for SimaPro technosphere inputs
 -}
 fixSimaProActivityLinks :: SimpleDatabase -> IO SimpleDatabase
 fixSimaProActivityLinks db = do
-    let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbFlows db)
+    let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbTechFlows db)
     reportProgress Info $ printf "Built name-only supplier index with %d entries for SimaPro linking" (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, summary) = fixAllActivitiesByName nameIndex (sdbFlows db) (sdbActivities db)
+    let (fixedActivities, summary) = fixAllActivitiesByName nameIndex (sdbTechFlows db) (sdbActivities db)
 
     reportProgress Info $
         printf
@@ -544,39 +557,37 @@ fixSimaProActivityLinks db = do
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities using name-only matching
-fixAllActivitiesByName :: NameOnlyIndex -> FlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
-fixAllActivitiesByName idx flowDb activities =
-    let results = M.map (\act -> fixActivityExchangesByName idx flowDb act) activities
+fixAllActivitiesByName :: NameOnlyIndex -> TechFlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
+fixAllActivitiesByName idx techFlowDb activities =
+    let results = M.map (fixActivityExchangesByName idx techFlowDb) activities
         summaries = map snd $ M.elems results
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
 -- | Fix activity exchanges using name-only matching
-fixActivityExchangesByName :: NameOnlyIndex -> FlowDB -> Activity -> (Activity, UnlinkedSummary)
-fixActivityExchangesByName idx flowDb act =
-    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx flowDb (activityName act)) (exchanges act)
+fixActivityExchangesByName :: NameOnlyIndex -> TechFlowDB -> Activity -> (Activity, UnlinkedSummary)
+fixActivityExchangesByName idx techFlowDb act =
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx techFlowDb (activityName act)) (exchanges act)
         combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
-{- | Fix a single exchange's activity link using name-only matching
-Returns (fixed exchange, UnlinkedSummary)
+{- | Fix a single exchange's activity link using name-only matching.
+Inputs and non-reference outputs (coproducts / avoided-production credits)
+are eligible for relinking. Returns (fixed exchange, UnlinkedSummary).
 -}
-fixExchangeLinkByName :: NameOnlyIndex -> FlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLinkByName idx flowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techIsInput = isInp, techIsReference = isRef, techLocation = loc}
-    | isInp || not isRef -- Inputs + co-product outputs (avoided production credits)
-        =
-        case M.lookup fid flowDb of
+fixExchangeLinkByName :: NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
+fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+    | role == Input || role == ReferenceInput || role == Coproduct =
+        case M.lookup fid techFlowDb of
             Just flow ->
-                let key = normalizeText (flowName flow)
+                let key = normalizeText (tfName flow)
                     relink actUUID prodUUID = ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
                  in case M.lookup key idx of
                         Just (actUUID, prodUUID) ->
-                            -- Found supplier: update both activityLinkId AND flowId to match supplier's reference product
                             (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
                         Nothing ->
-                            -- Fallback: try splitting compound name at separators
-                            let prefixes = extractProductPrefixes (flowName flow)
+                            let prefixes = extractProductPrefixes (tfName flow)
                                 tryPrefix [] = Nothing
                                 tryPrefix (p : ps) = case M.lookup (normalizeText p) idx of
                                     Just result -> Just result
@@ -585,15 +596,14 @@ fixExchangeLinkByName idx flowDb consumerName ex@TechnosphereExchange{techFlowId
                                     Just (actUUID, prodUUID) ->
                                         (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
                                     Nothing ->
-                                        -- Supplier not found - collect unlinked exchange info
-                                        let unlinked = UnlinkedExchange (flowName flow) loc
+                                        let unlinked = UnlinkedExchange (tfName flow) loc
                                             unlinkedMap = M.singleton consumerName [unlinked]
                                          in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
-                -- Flow not in database - shouldn't happen but be safe
+                -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)
-    | otherwise = (ex, emptyUnlinkedSummary) -- Not a linkable exchange (outputs/references)
-fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary) -- No supplier linking
+    | otherwise = (ex, emptyUnlinkedSummary) -- Reference products: nothing to relink
+fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
@@ -644,9 +654,10 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let successResults = [r | Right r <- results]
-                let (procMaps, flowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip7 successResults
+                let (procMaps, techFlowMaps, bioFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip8 successResults
                 let !finalProcMap = M.unions procMaps
-                let !finalFlowMap = M.unionsWith mergeFlows flowMaps
+                let !finalTechFlowMap = M.unionsWith mergeTechFlows techFlowMaps
+                let !finalBioFlowMap = M.unionsWith mergeBioFlows bioFlowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
                 let !finalSupplierLinks = M.unions supplierLinksLists
@@ -657,15 +668,17 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let avgFilesPerSec = fromIntegral totalFiles / totalDuration
                 let totalRawFlows = sum rawFlowCounts
                 let totalRawUnits = sum rawUnitCounts
-                let flowDeduplication = if totalRawFlows > 0 then 100.0 * (1.0 - fromIntegral (M.size finalFlowMap) / fromIntegral totalRawFlows) else 0.0 :: Double
+                let totalFlows = M.size finalTechFlowMap + M.size finalBioFlowMap
+                let flowDeduplication = if totalRawFlows > 0 then 100.0 * (1.0 - fromIntegral totalFlows / fromIntegral totalRawFlows) else 0.0 :: Double
                 let unitDeduplication = if totalRawUnits > 0 then 100.0 * (1.0 - fromIntegral (M.size finalUnitMap) / fromIntegral totalRawUnits) else 0.0 :: Double
 
                 reportProgress Info $ printf "Parsing completed (%s, %.1f files/sec):" (formatDuration totalDuration) avgFilesPerSec
                 reportProgress Info $ printf "  Activities: %d processes" (M.size finalProcMap)
                 reportProgress Info $
                     printf
-                        "  Flows: %d unique (%.1f%% deduplication from %d raw)"
-                        (M.size finalFlowMap)
+                        "  Flows: %d tech + %d bio (%.1f%% deduplication from %d raw)"
+                        (M.size finalTechFlowMap)
+                        (M.size finalBioFlowMap)
                         flowDeduplication
                         totalRawFlows
                 reportProgress Info $
@@ -677,52 +690,49 @@ loadEcoSpoldDirectory locationAliases dir = do
                 reportMemoryUsage "Final parsing memory usage"
 
                 -- For EcoSpold1: fix activity links using supplier lookup table
-                let simpleDb = SimpleDatabase finalProcMap finalFlowMap finalUnitMap
+                let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap finalUnitMap
                 if isEcoSpold1
                     then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex finalSupplierLinks simpleDb
                     else return $ Right simpleDb
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, FlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
     processWorker _startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
-        -- Parse all files for this worker using appropriate parser
-        -- Both paths return (Activity, [Flow], [Unit], Int, M.Map UUID Int)
-        -- For EcoSpold2: dataset number = 0, supplier links = empty
+        -- Parse all files for this worker using appropriate parser.
+        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int).
+        -- For EcoSpold2: dataset number = 0, supplier links = empty (fields padded here).
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else \f -> fmap (fmap (\(a, fs, us) -> (a, fs, us, 0, M.empty))) (streamParseActivityAndFlowsFromFile f)
+                    else fmap (fmap (\(a, ts, bs, us) -> (a, ts, bs, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
-        -- Pair each result with its file path, then partition
-        let paired = zipWith (\f r -> fmap (\v -> (f, v)) r) workerFiles workerResults
+        let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
         let (okFiles, okResults) = unzip oks
-        let procs = [a | (a, _, _, _, _) <- okResults]
-            flowLists = [fs | (_, fs, _, _, _) <- okResults]
-            unitLists = [us | (_, _, us, _, _) <- okResults]
-            dsNums = [n | (_, _, _, n, _) <- okResults]
-            supplierLinksList = [sl | (_, _, _, _, sl) <- okResults]
-        let !allFlows = concat flowLists
+        let procs = [a | (a, _, _, _, _, _) <- okResults]
+            techLists = [ts | (_, ts, _, _, _, _) <- okResults]
+            bioLists = [bs | (_, _, bs, _, _, _) <- okResults]
+            unitLists = [us | (_, _, _, us, _, _) <- okResults]
+            dsNums = [n | (_, _, _, _, n, _) <- okResults]
+            supplierLinksList = [sl | (_, _, _, _, _, sl) <- okResults]
+        let !allTechs = concat techLists
+        let !allBios = concat bioLists
         let !allUnits = concat unitLists
 
-        -- Build maps for this worker - extract UUID pairs from filenames
-        -- For EcoSpold1: generate UUIDs from numeric dataset number
-        -- For EcoSpold2: parse UUIDs from filename (activityUUID_productUUID.spold)
         let procEntries = zipWith (buildProcEntry isEcoSpold1) okFiles procs
 
-        -- Check for any filename parsing errors
         case [e | Left e <- procEntries] of
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let !procMap = M.fromList [e | Right e <- procEntries]
-                let !flowMap = M.fromListWith mergeFlows [(flowId f, f) | f <- allFlows]
+                let !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
+                let !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
-                -- Build dataset number index: dsNum → (actUUID, prodUUID)
                 let !dsIndex =
                         M.fromList
                             [(n, key) | (n, Right (key, _)) <- zip dsNums procEntries, n /= 0]
@@ -731,18 +741,19 @@ loadEcoSpoldDirectory locationAliases dir = do
                 workerEndTime <- getCurrentTime
                 let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
                 let filesPerSec = fromIntegral (length workerFiles) / workerDuration
-                let rawFlowCount = length allFlows
+                let rawFlowCount = length allTechs + length allBios
                 let rawUnitCount = length allUnits
                 reportProgress Info $
                     printf
-                        "Worker %d completed: %d activities, %d flows (%s, %.1f files/sec)"
+                        "Worker %d completed: %d activities, %d tech + %d bio flows (%s, %.1f files/sec)"
                         workerNum
                         (M.size procMap)
-                        (M.size flowMap)
+                        (M.size techFlowMap)
+                        (M.size bioFlowMap)
                         (formatDuration workerDuration)
                         filesPerSec
 
-                return $ Right (procMap, flowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
+                return $ Right (procMap, techFlowMap, bioFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
@@ -772,29 +783,27 @@ loadSingleEcoSpold1File locationAliases filepath = do
 
     -- Build activity map from all parsed activities
     let expanded = map buildProcEntryFromResult results
-        !procMap = M.fromList [(key, act) | (key, act) <- expanded]
-        !flowMap = M.fromListWith mergeFlows [(flowId f, f) | (_, flows, _, _, _) <- results, f <- flows]
-        !unitMap = M.fromList [(unitId u, u) | (_, _, units, _, _) <- results, u <- units]
-        -- Build dataset number index: dsNum → (actUUID, prodUUID)
+        !procMap = M.fromList expanded
+        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _) <- results, f <- techs]
+        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _) <- results, f <- bios]
+        !unitMap = M.fromList [(unitId u, u) | (_, _, _, units, _, _) <- results, u <- units]
         !dsIndex =
             M.fromList
-                [(dsNum, key) | ((_, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
-        -- Merge supplier links from all datasets
-        !supplierLinks = M.unions [sl | (_, _, _, _, sl) <- results]
-        simpleDb = SimpleDatabase procMap flowMap unitMap
+                [(dsNum, key) | ((_, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
+        !supplierLinks = M.unions [sl | (_, _, _, _, _, sl) <- results]
+        simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap unitMap
 
-    -- Report statistics
-    let totalFlows = sum [length flows | (_, flows, _, _, _) <- results]
-    let totalUnits = sum [length units | (_, _, units, _, _) <- results]
+    let totalTechs = sum [length techs | (_, techs, _, _, _, _) <- results]
+    let totalBios = sum [length bios | (_, _, bios, _, _, _) <- results]
+    let totalUnits = sum [length units | (_, _, _, units, _, _) <- results]
     reportProgress Info $ printf "  Activities: %d processes" (M.size procMap)
-    reportProgress Info $ printf "  Flows: %d unique (from %d raw)" (M.size flowMap) totalFlows
+    reportProgress Info $ printf "  Flows: %d tech + %d bio (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (totalTechs + totalBios)
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
-    -- Fix activity links using supplier lookup
     Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
-    buildProcEntryFromResult :: (Activity, [Flow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
-    buildProcEntryFromResult (activity, _, _, _, _) =
+    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult (activity, _, _, _, _, _) =
         let actUUID = generateActivityUUIDFromActivity activity
             prodUUID = getReferenceProductUUID activity
          in ((actUUID, prodUUID), activity)
@@ -1168,7 +1177,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier db = do
             let stats =
                     findAllCrossDBLinks
                         linkingCtx
-                        (sdbFlows db)
+                        (sdbTechFlows db)
                         (sdbUnits db)
                         (sdbActivities db)
 
@@ -1185,11 +1194,12 @@ collectUnlinkedProductNames :: SimpleDatabase -> M.Map T.Text Int
 collectUnlinkedProductNames db =
     M.fromListWith
         (+)
-        [ (flowName flow, 1)
+        [ (tfName flow, 1)
         | act <- M.elems (sdbActivities db)
-        , TechnosphereExchange{techFlowId = fid, techIsInput = True, techActivityLinkId = linkId} <- exchanges act
+        , ex@TechnosphereExchange{techFlowId = fid, techActivityLinkId = linkId} <- exchanges act
+        , exchangeIsInput ex
         , linkId == UUID.nil
-        , Just flow <- [M.lookup fid (sdbFlows db)]
+        , Just flow <- [M.lookup fid (sdbTechFlows db)]
         ]
 
 -- | Count unlinked technosphere exchanges in a database
@@ -1203,8 +1213,8 @@ countUnlinkedExchanges db =
         ]
   where
     isUnlinkedTechInput :: Exchange -> Bool
-    isUnlinkedTechInput TechnosphereExchange{techIsInput = isInp, techActivityLinkId = linkId} =
-        isInp && linkId == UUID.nil
+    isUnlinkedTechInput ex@TechnosphereExchange{techActivityLinkId = linkId} =
+        exchangeIsInput ex && linkId == UUID.nil
     isUnlinkedTechInput BiosphereExchange{} = False
 
 -- | Count total technosphere input exchanges in a database
@@ -1218,7 +1228,7 @@ countTotalTechInputs db =
         ]
   where
     isTechInput :: Exchange -> Bool
-    isTechInput TechnosphereExchange{techIsInput = isInp} = isInp
+    isTechInput ex@TechnosphereExchange{} = exchangeIsInput ex
     isTechInput BiosphereExchange{} = False
 
 {- | Find all cross-database links without modifying activities
@@ -1226,61 +1236,49 @@ Returns statistics including the CrossDBLinks for chained solving
 -}
 findAllCrossDBLinks ::
     LinkingContext ->
-    FlowDB ->
+    TechFlowDB ->
     UnitDB ->
     ActivityMap ->
     CrossDBLinkingStats
-findAllCrossDBLinks ctx flowDb unitDb activities =
-    let results = M.mapWithKey (findActivityCrossDBLinks ctx flowDb unitDb) activities
+findAllCrossDBLinks ctx techFlowDb unitDb activities =
+    let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb unitDb) activities
      in foldr mergeCrossDBStats emptyCrossDBLinkingStats (M.elems results)
 
 -- | Find cross-database links for one activity's exchanges
 findActivityCrossDBLinks ::
     LinkingContext ->
-    FlowDB ->
+    TechFlowDB ->
     UnitDB ->
     -- | Consumer activity key (actUUID, prodUUID)
     (UUID.UUID, UUID.UUID) ->
     Activity ->
     CrossDBLinkingStats
-findActivityCrossDBLinks ctx flowDb unitDb (consumerActUUID, consumerProdUUID) act =
-    let stats = map (findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
+findActivityCrossDBLinks ctx techFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
+    let stats = map (findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
      in foldr mergeCrossDBStats emptyCrossDBLinkingStats stats
 
-{- | Find cross-database link for a single exchange
+{- | Find cross-database link for a single exchange.
 
 Only attempts cross-DB linking if:
-1. Exchange is a technosphere input
+1. Exchange is a technosphere input (or reference input on a treatment process)
 2. Exchange is currently unlinked (activityLinkId is nil)
-
-When a link is found, a CrossDBLink is created and returned in stats.
-The exchange itself is NOT modified.
 -}
 findExchangeCrossDBLink ::
     LinkingContext ->
-    FlowDB ->
+    TechFlowDB ->
     UnitDB ->
-    -- | Consumer activity UUID
     UUID.UUID ->
-    -- | Consumer product UUID
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID TechnosphereExchange{techFlowId = fid, techAmount = amt, techIsInput = isInp, techActivityLinkId = linkId, techLocation = loc}
-    | isInp && linkId == UUID.nil -- Unlinked technosphere input
-        =
-        case M.lookup fid flowDb of
-            Nothing ->
-                -- Flow not found in FlowDB - can't name it
-                emptyCrossDBLinkingStats
+findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
+    | exchangeIsInput ex && linkId == UUID.nil =
+        case M.lookup fid techFlowDb of
+            Nothing -> emptyCrossDBLinkingStats
             Just flow ->
-                -- Get unit name from UnitDB
-                let flowUnitName = case M.lookup (flowUnitId flow) unitDb of
-                        Just u -> unitName u
-                        Nothing -> "" -- Unknown unit
-                 in case findSupplierAcrossDatabases ctx (flowName flow) loc flowUnitName of
+                let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
+                 in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
                         CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc warnings ->
-                            -- Successfully found cross-DB supplier
                             let !crossLink =
                                     CrossDBLink
                                         { cdlConsumerActUUID = consumerActUUID
@@ -1293,13 +1291,11 @@ findExchangeCrossDBLink ctx flowDb unitDb consumerActUUID consumerProdUUID Techn
                                         , cdlLocation = supplierLoc
                                         , cdlSourceDatabase = dbName
                                         }
-                                fallbacks = [(prodName, req, act) | UpperLocationUsed req act <- warnings]
+                                fallbacks = [(prodName, req, actLoc) | UpperLocationUsed req actLoc <- warnings]
                              in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks 0
                         CrossDBNotLinked blocker ->
-                            -- Record as unresolved with the blocker reason
-                            CrossDBLinkingStats [] (M.singleton (flowName flow) (1, blocker)) S.empty [] 0
-    | otherwise =
-        emptyCrossDBLinkingStats
+                            CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] 0
+    | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
 
 -- | Report cross-database linking statistics

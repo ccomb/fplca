@@ -14,7 +14,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (Exchange, Flow, Pedigree, UUID, Unit)
+import Types (BiosphereFlow, Compartment, Exchange, Pedigree, TechnosphereFlow, UUID, Unit)
 
 -- | Search response combining results and count
 data SearchResults a = SearchResults
@@ -91,7 +91,7 @@ data InventoryMetadata = InventoryMetadata
     deriving (Generic)
 
 data InventoryFlowDetail = InventoryFlowDetail
-    { ifdFlow :: Flow
+    { ifdFlow :: BiosphereFlow -- Inventory flows are always biosphere
     , ifdQuantity :: Double
     , ifdUnitName :: Text
     , ifdIsEmission :: Bool -- True for emissions, False for resource extraction
@@ -190,9 +190,10 @@ data GraphEdge = GraphEdge
     }
     deriving (Generic)
 
--- | Lightweight flow information for lists
+-- | Lightweight flow information for lists. Carries either a tech or a bio
+-- flow; the active variant doubles as the discriminator in the wire response.
 data FlowSummary = FlowSummary
-    { fsFlow :: Flow -- Core flow data
+    { fsFlow :: Either TechnosphereFlow BiosphereFlow
     , fsUnitName :: Text -- Unit name for the flow
     , fsUsageCount :: Int -- How many activities use this flow
     , fsRole :: FlowRole -- Role in this specific activity
@@ -663,12 +664,14 @@ parseSubRef (RootDb rootDb) raw = case T.breakOn (T.pack "::") raw of
         | T.null rest -> (rootDb, pid)
         | otherwise -> (pid, T.drop 2 rest)
 
--- | Exchange with unit and flow information for API responses
+-- | Exchange with unit and flow information for API responses.
+-- Compartment is biosphere-only; technosphere exchanges have no taxonomy here
+-- (their classification lives on the producing activity).
 data ExchangeWithUnit = ExchangeWithUnit
     { ewuExchange :: Exchange
     , ewuUnitName :: Text -- Unit name for the exchange
     , ewuFlowName :: Text -- Name of the flow being exchanged
-    , ewuFlowCategory :: Text -- Category/compartment (for biosphere) or "technosphere"
+    , ewuCompartment :: Maybe Compartment -- Biosphere compartment, Nothing for technosphere
     , ewuTargetActivity :: Maybe Text -- For technosphere: name of target activity
     , ewuTargetLocation :: Maybe Text -- For technosphere: location of target activity
     , ewuTargetProcessId :: Maybe Text -- For technosphere: ProcessId for navigation (activityUUID_productUUID)
@@ -731,18 +734,19 @@ data ActivityStats = ActivityStats
     }
     deriving (Generic)
 
--- | Flow with additional metadata
+-- | Flow with additional metadata. Carries either a tech or bio flow.
 data FlowDetail = FlowDetail
-    { fdFlow :: Flow
+    { fdFlow :: Either TechnosphereFlow BiosphereFlow
     , fdUnitName :: Text -- Unit name for the flow
     , fdUsageCount :: Int -- How many activities use this flow
     }
     deriving (Generic)
 
--- | Exchange with flow, unit, and target activity information
+-- | Exchange with flow, unit, and target activity information.
+-- The carried flow's variant lines up with the Exchange variant.
 data ExchangeDetail = ExchangeDetail
     { edExchange :: Exchange
-    , edFlow :: Flow
+    , edFlow :: Either TechnosphereFlow BiosphereFlow
     , edFlowUnitName :: Text -- Unit name for the flow's default unit
     , edUnit :: Unit -- Unit information for the exchange
     , edExchangeUnitName :: Text -- Unit name for the exchange's specific unit
@@ -831,7 +835,6 @@ instance ToJSON ActivityMetadata where toJSON = strippedToJSON; toEncoding = str
 instance ToJSON ActivityLinks where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON ActivityStats where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON InventoryFlowDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON Flow where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON FlowSummary where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON InventoryExport where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON ExchangeDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding

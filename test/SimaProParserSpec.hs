@@ -29,14 +29,22 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (
     Activity (..),
+    BiosphereFlow,
+    Compartment (..),
     Exchange (..),
-    Flow,
     Pedigree (..),
+    TechRole (..),
+    TechnosphereFlow,
     UUID,
     Unit (..),
+    bfCompartment,
+    bfName,
+    compartmentName,
     exchangeComment,
+    exchangeIsInput,
+    exchangeIsReference,
     exchangePedigree,
-    flowName,
+    tfName,
  )
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
 
@@ -89,7 +97,7 @@ testCSV =
         ]
 
 -- | Parse the test CSV via a temp file
-parseTestCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseTestCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseTestCSV = withSystemTempFile "test.csv" $ \path handle -> do
     BS.hPut handle testCSV
     hClose handle
@@ -176,16 +184,72 @@ wasteNoAllocCSV =
         ]
 
 -- | Parse the 6-field waste treatment CSV via a temp file
-parseWasteNoAllocCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseWasteNoAllocCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseWasteNoAllocCSV = withSystemTempFile "waste-noalloc-test.csv" $ \path handle -> do
     BS.hPut handle wasteNoAllocCSV
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
 -- | Parse the waste test CSV via a temp file
-parseWasteCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseWasteCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseWasteCSV = withSystemTempFile "waste-test.csv" $ \path handle -> do
     BS.hPut handle wasteTestCSV
+    hClose handle
+    parseSimaProCSV defaultUnitConfig path
+
+{- | Test CSV where one flow is both a producer's reference product (carrying
+the SimaPro "Category" column) and a later process's Materials/fuels input
+(no Category column). The producer block comes first, so a last-wins
+deduplication would clobber the category with the consumer's empty value.
+-}
+sharedFlowCategoryCSV :: BS.ByteString
+sharedFlowCategoryCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Tomato Recipe"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Tomato sauce;kg;1.0;100;not defined;Agricultural\\Food\\Recipes;"
+        , ""
+        , "End"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Tomato Packaging"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Tomato sauce packaged;kg;1.0;100;not defined;Agricultural\\Food\\Packaging;"
+        , ""
+        , "Materials/fuels"
+        , "Tomato sauce;kg;0.5;Undefined;0;0;0;packed ingredient"
+        , ""
+        , "End"
+        ]
+
+-- | Parse the shared-flow-category CSV via a temp file
+parseSharedFlowCategoryCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
+parseSharedFlowCategoryCSV = withSystemTempFile "shared-flow-cat-test.csv" $ \path handle -> do
+    BS.hPut handle sharedFlowCategoryCSV
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
@@ -234,7 +298,7 @@ paramTestCSV =
         , "End"
         ]
 
-parseParamCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
     BS.hPut handle paramTestCSV
     hClose handle
@@ -274,7 +338,7 @@ dbParamTestCSV =
         , "End"
         ]
 
-parseDbParamCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseDbParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseDbParamCSV = withSystemTempFile "dbparam-test.csv" $ \path handle -> do
     BS.hPut handle dbParamTestCSV
     hClose handle
@@ -318,7 +382,7 @@ yieldChainTestCSV =
         , "End"
         ]
 
-parseYieldChainCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseYieldChainCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     BS.hPut handle yieldChainTestCSV
     hClose handle
@@ -329,15 +393,15 @@ techInputAmounts :: Activity -> [Double]
 techInputAmounts act =
     [ techAmount e
     | e@TechnosphereExchange{} <- exchanges act
-    , techIsInput e
-    , not (techIsReference e)
+    , exchangeIsInput e
+    , not (exchangeIsReference e)
     ]
 
 -- Helper: get reference product amount
 refProductAmount :: Activity -> Maybe Double
 refProductAmount act = case [ techAmount e
                             | e@TechnosphereExchange{} <- exchanges act
-                            , techIsReference e
+                            , exchangeIsReference e
                             ] of
     (a : _) -> Just a
     _ -> Nothing
@@ -408,13 +472,13 @@ spec = do
 
     describe "SimaPro CSV parsing" $ do
         it "correctly extracts units from CSV with quoted fields" $ do
-            (_, _, unitDB) <- parseTestCSV
+            (_, _, _, unitDB) <- parseTestCSV
             let unitNames = map unitName $ M.elems unitDB
             -- Exactly these two units — no more, no less
             S.fromList unitNames `shouldBe` S.fromList ["kg", "foo_unit"]
 
         it "reports unknown units correctly" $ do
-            (_, _, unitDB) <- parseTestCSV
+            (_, _, _, unitDB) <- parseTestCSV
             let cfg = defaultUnitConfig
                 unknowns =
                     [ unitName u
@@ -425,37 +489,37 @@ spec = do
             unknowns `shouldNotContain` ["kg"]
 
         it "parses product names with embedded delimiters correctly" $ do
-            (activities, flowDB, _) <- parseTestCSV
+            (activities, techFlowDB, _, _) <- parseTestCSV
             -- activityName now reflects the SimaPro Process name (multi-product
-            -- friendly); the quoted product name lives on the reference flow.
+            -- friendly); the quoted product name lives on the reference (technosphere) flow.
             let names = map activityName activities
             names `shouldContain` ["Irradiated Food"]
-            let flowNames = map flowName (M.elems flowDB)
+            let flowNames = map tfName (M.elems techFlowDB)
             flowNames `shouldContain` ["Food product (irradiated ; with treatment)"]
 
     describe "SimaPro classification parsing" $ do
         it "parses Category type from metadata" $ do
-            (activities, _, _) <- parseTestCSV
+            (activities, _, _, _) <- parseTestCSV
             let cls = activityClassification (head activities)
             M.lookup "Category type" cls `shouldBe` Just "material"
 
         it "parses Category from product line" $ do
-            (activities, _, _) <- parseTestCSV
+            (activities, _, _, _) <- parseTestCSV
             let cls = activityClassification (head activities)
             M.lookup "Category" cls `shouldBe` Just "material"
 
     describe "SimaPro waste treatment parsing" $ do
         it "parses waste treatment processes (Waste treatment section)" $ do
-            (activities, _, _) <- parseWasteCSV
+            (activities, _, _, _) <- parseWasteCSV
             length activities `shouldSatisfy` (>= 2)
 
         it "uses Process name as activity name (waste treatment block)" $ do
-            (activities, _, _) <- parseWasteCSV
+            (activities, _, _, _) <- parseWasteCSV
             let names = map activityName activities
             names `shouldContain` ["Incineration process"]
 
         it "parses 6-field waste treatment rows without allocation" $ do
-            (activities, _, _) <- parseWasteNoAllocCSV
+            (activities, _, _, _) <- parseWasteNoAllocCSV
             length activities `shouldBe` 1
             let a = head activities
             activityName a `shouldBe` "treatment of non-sulfidic overburden"
@@ -463,19 +527,19 @@ spec = do
             M.lookup "Category" cls `shouldBe` Just "Others\\Copied from Ecoinvent cut-off S"
 
         it "marks Waste to treatment exchanges as inputs" $ do
-            (activities, _, _) <- parseWasteCSV
+            (activities, _, _, _) <- parseWasteCSV
             let producer = head [a | a <- activities, activityName a == "Widget production"]
                 wasteExchanges =
                     [ e
                     | e@TechnosphereExchange{} <- exchanges producer
-                    , not (techIsReference e)
-                    , techIsInput e
+                    , not (exchangeIsReference e)
+                    , exchangeIsInput e
                     ]
             length wasteExchanges `shouldSatisfy` (>= 1)
 
     describe "SimaPro parameterized amounts" $ do
         it "resolves simple variable references (Qm=20.53 for cow milk, scaled by allocation)" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
                 -- allocButter = (1*0.82/(1*0.82+20.53*0.118))*100 ≈ 25.285
                 -- Cow milk amount = 20.53 * allocButter/100 ≈ 5.19
@@ -484,12 +548,12 @@ spec = do
             head milkAmounts `shouldSatisfy` (\x -> abs (x - 5.19) < 0.01)
 
         it "resolves parameterized product amount (Qb=1)" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
             refProductAmount butter `shouldBe` Just 1.0
 
         it "resolves calculated parameter in allocation (allocButter formula)" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
             -- Product allocation uses allocButter = (Qb*DMb/(Qb*DMb+Qm*DMm))*100
             -- = (1*0.82/(1*0.82+20.53*0.118))*100 ≈ 25.3%
@@ -497,32 +561,32 @@ spec = do
             -- (we check that the activity was created = params didn't break parsing)
             length (exchanges butter) `shouldSatisfy` (>= 3) -- product + milk + CO2
         it "stores resolved parameter values in activity" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
             M.lookup "Qm" (activityParams butter) `shouldBe` Just 20.53
             M.lookup "Qb" (activityParams butter) `shouldBe` Just 1.0
             M.lookup "DMb" (activityParams butter) `shouldBe` Just 0.82
 
         it "stores raw expressions for re-evaluation" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
             M.lookup "allocButter" (activityParamExprs butter)
                 `shouldBe` Just "(Qb*DMb/(Qb*DMb+Qm*DMm))*100"
 
         it "does not drop exchanges with parameterized amounts" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
                 techInputs =
                     [ e
                     | e@TechnosphereExchange{} <- exchanges butter
-                    , techIsInput e
-                    , not (techIsReference e)
+                    , exchangeIsInput e
+                    , not (exchangeIsReference e)
                     ]
             -- Cow milk should NOT be dropped (was the original bug)
             length techInputs `shouldBe` 1
 
         it "scales biosphere exchanges by allocation fraction" $ do
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
                 bioExchanges = [e | e@BiosphereExchange{} <- exchanges butter]
             length bioExchanges `shouldBe` 1
@@ -531,14 +595,14 @@ spec = do
 
     describe "SimaPro database-level parameters" $ do
         it "resolves database input params in exchange amounts" $ do
-            (activities, _, _) <- parseDbParamCSV
+            (activities, _, _, _) <- parseDbParamCSV
             let act = head activities
             -- Raw material amount should be lbtokg = 0.453592
             techInputAmounts act `shouldContain` [0.453592]
 
     describe "SimaPro yield chain formulas" $ do
         it "resolves chained division (weight_g/1000/yield1/yield2)" $ do
-            (activities, _, _) <- parseYieldChainCSV
+            (activities, _, _, _) <- parseYieldChainCSV
             let act = head activities
                 amounts = techInputAmounts act
             -- corrected = 250/1000/0.95/0.90 ≈ 0.2924
@@ -650,7 +714,7 @@ spec = do
 
     describe "per-exchange comments" $ do
         it "surfaces the trailing free-text comment on a Materials/fuels row" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Materials/fuels"
                     , "Soybean meal BR;kg;6506.5;Lognormal;1.533;0;0;Soybean, meal 46 BR, crushing in Brazil, at french port, average, FR"
@@ -660,14 +724,14 @@ spec = do
                     | act <- activities
                     , ex <- exchanges act
                     , case ex of
-                        TechnosphereExchange{techIsInput = True} -> True
+                        TechnosphereExchange{techRole = Input} -> True
                         _ -> False
                     ]
             map exchangeComment inputs
                 `shouldBe` [Just "Soybean, meal 46 BR, crushing in Brazil, at french port, average, FR"]
 
         it "returns Nothing for a comment-less row" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Materials/fuels"
                     , "Plain {FR} U;kg;1.0;Undefined;;;;;;"
@@ -677,13 +741,13 @@ spec = do
                     | act <- activities
                     , ex <- exchanges act
                     , case ex of
-                        TechnosphereExchange{techIsInput = True} -> True
+                        TechnosphereExchange{techRole = Input} -> True
                         _ -> False
                     ]
             map exchangeComment inputs `shouldBe` [Nothing]
 
         it "surfaces a per-emission comment on a biosphere row" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Emissions to air"
                     , "Carbon dioxide, fossil;high. pop.;kg;0.5;Undefined;;;;;;tail-pipe combustion"
@@ -734,7 +798,7 @@ spec = do
 
     describe "pedigree wired through to Exchange" $ do
         it "populates techPedigree and strips the prefix from the comment" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Materials/fuels"
                     , "Soybean meal BR;kg;6506.5;Lognormal;1.533;0;0;(3,3,2,1,2),. Brazilian port average"
@@ -744,14 +808,14 @@ spec = do
                     | act <- activities
                     , ex <- exchanges act
                     , case ex of
-                        TechnosphereExchange{techIsInput = True} -> True
+                        TechnosphereExchange{techRole = Input} -> True
                         _ -> False
                     ]
             map exchangeComment inputs `shouldBe` [Just "Brazilian port average"]
             map exchangePedigree inputs `shouldBe` [Just (Pedigree 3 3 2 1 2)]
 
         it "populates bioPedigree for emission rows that carry only pedigree" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Emissions to air"
                     , "Carbon dioxide, fossil;high. pop.;kg;0.5;Undefined;;;;;;(2,2,1,1,1),"
@@ -838,17 +902,17 @@ spec = do
 
     describe "SimaPro uncovered sections" $ do
         it "parses Electricity/heat exchanges" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Electricity/heat"
                     , "Electricity, medium voltage;kWh;0.3;Undefined;;;;;;"
                     ]
             let act = head activities
-                techIn = [e | e@TechnosphereExchange{} <- exchanges act, techIsInput e, not (techIsReference e)]
+                techIn = [e | e@TechnosphereExchange{} <- exchanges act, exchangeIsInput e, not (exchangeIsReference e)]
             length techIn `shouldBe` 1
 
         it "parses Resources (biosphere inputs)" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Resources"
                     , "Water, river;in water;m3;0.1;Undefined;;;;;;"
@@ -857,7 +921,7 @@ spec = do
             length bio `shouldBe` 1
 
         it "parses Emissions to water" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Emissions to water"
                     , "Phosphate;river;kg;0.01;Undefined;;;;;;"
@@ -866,7 +930,7 @@ spec = do
             length bio `shouldBe` 1
 
         it "parses Emissions to soil" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Emissions to soil"
                     , "Zinc;agricultural;kg;0.001;Undefined;;;;;;"
@@ -875,7 +939,7 @@ spec = do
             length bio `shouldBe` 1
 
         it "parses Final waste flows" $ do
-            (activities, _, _) <-
+            (activities, _, _, _) <-
                 parseSectionCSV
                     [ "Final waste flows"
                     , "Inert waste, for final disposal;kg;0.5;Undefined;;;;;;"
@@ -884,21 +948,21 @@ spec = do
             length bio `shouldBe` 1
 
         it "parses location from process name {XX} pattern" $ do
-            (activities, _, _) <- parseNamedCSV "Widget {FR} U" []
+            (activities, _, _, _) <- parseNamedCSV "Widget {FR} U" []
             activityLocation (head activities) `shouldBe` "FR"
 
         it "parses location from process name //[XX] pattern (ecoinvent 3.9.1 SimaPro export)" $ do
-            (activities, _, _) <- parseNamedCSV "mango//[BR] mango production" []
+            (activities, _, _, _) <- parseNamedCSV "mango//[BR] mango production" []
             activityLocation (head activities) `shouldBe` "BR"
 
         it "parses location from Geography metadata" $ do
-            (activities, _, _) <- parseTestCSV
+            (activities, _, _, _) <- parseTestCSV
             let a = head activities
             activityLocation a `shouldBe` "GLO"
 
     describe "SimaPro comma CSV separator" $ do
         it "parses comma-separated CSV" $ do
-            (activities, _, _) <- parseCommaCSV
+            (activities, _, _, _) <- parseCommaCSV
             length activities `shouldBe` 1
             activityName (head activities) `shouldBe` "Comma Product"
 
@@ -909,14 +973,14 @@ spec = do
         -- technosphere column normalization divides by 1 instead of 1000 and every
         -- impact score for that activity comes back 1000× too large.
         it "converts a 1-ton reference to 1000 kg at ingest (canonical base)" $ do
-            (activities, _, _) <- parseTonRefCSV
+            (activities, _, _, _) <- parseTonRefCSV
             length activities `shouldBe` 1
             let act = head activities
                 refExs =
                     [ ex
                     | ex <- exchanges act
-                    , techIsReference ex
-                    , not (techIsInput ex)
+                    , exchangeIsReference ex
+                    , not (exchangeIsInput ex)
                     ]
             length refExs `shouldBe` 1
             let ex = head refExs
@@ -924,9 +988,9 @@ spec = do
             activityUnit act `shouldBe` "kg"
 
         it "leaves an already-canonical kg reference unchanged" $ do
-            (activities, _, _) <- parseTestCSV
+            (activities, _, _, _) <- parseTestCSV
             let steel = head [a | a <- activities, activityName a == "Steel Production"]
-                refExs = [ex | ex <- exchanges steel, techIsReference ex, not (techIsInput ex)]
+                refExs = [ex | ex <- exchanges steel, exchangeIsReference ex, not (exchangeIsInput ex)]
             techAmount (head refExs) `shouldBe` 1.0
             activityUnit steel `shouldBe` "kg"
 
@@ -936,19 +1000,19 @@ spec = do
         -- dbActivityProductsIndex can group them) and each must carry its own
         -- allocation percentage.
         it "shares one activityUUID across all 5 coproducts" $ do
-            (activities, _, _) <- parseMultiCoproductCSV
+            (activities, _, _, _) <- parseMultiCoproductCSV
             length activities `shouldBe` 5
             let uuids = S.fromList (map generateActivityUUID activities)
             S.size uuids `shouldBe` 1
 
         it "uses the Process name as activityName for every coproduct" $ do
-            (activities, _, _) <- parseMultiCoproductCSV
+            (activities, _, _, _) <- parseMultiCoproductCSV
             let names = S.fromList (map activityName activities)
             S.size names `shouldBe` 1
             S.member "Multi-coproduct refinery" names `shouldBe` True
 
         it "stores allocation percentage on each coproduct Activity" $ do
-            (activities, _, _) <- parseMultiCoproductCSV
+            (activities, _, _, _) <- parseMultiCoproductCSV
             -- Order-agnostic: the 5 allocation percentages must match the
             -- declared shares (50/20/15/10/5) as a multiset.
             let percents = [p | a <- activities, Just p <- [activityAllocationPercent a]]
@@ -960,19 +1024,19 @@ spec = do
 
         it "preserves the raw allocation formula when non-numeric" $ do
             -- paramTestCSV (butter) uses an expression "allocButter" for allocation
-            (activities, _, _) <- parseParamCSV
+            (activities, _, _, _) <- parseParamCSV
             let butter = head activities
             activityAllocationFormula butter `shouldBe` Just "allocButter"
 
         it "leaves allocation formula populated for formula-based allocations" $ do
-            (activities, _, _) <- parseMultiCoproductCSV
+            (activities, _, _, _) <- parseMultiCoproductCSV
             -- Multi-coproduct allocations are of the form 'Sx /(...)*100',
             -- so the formula field should be populated for each coproduct.
             let formulas = [activityAllocationFormula a | a <- activities]
             all (/= Nothing) formulas `shouldBe` True
 
         it "scales shared exchanges by the per-coproduct allocation fraction" $ do
-            (activities, _, _) <- parseMultiCoproductCSV
+            (activities, _, _, _) <- parseMultiCoproductCSV
             -- A shared 1 kg upstream input is allocated across the 5 coproducts:
             -- Alpha 0.5 kg, Beta 0.2 kg, Gamma 0.15 kg, Delta 0.1 kg, Epsilon
             -- 0.05 kg. The sum across all coproduct columns restores 1 kg.
@@ -980,8 +1044,8 @@ spec = do
                     [ techAmount e
                     | a <- activities
                     , e@TechnosphereExchange{} <- exchanges a
-                    , techIsInput e
-                    , not (techIsReference e)
+                    , exchangeIsInput e
+                    , not (exchangeIsReference e)
                     ]
             length perActivity `shouldBe` 5
             let total = sum perActivity
@@ -989,7 +1053,7 @@ spec = do
 
     describe "SimaPro Process name fallback" $ do
         it "falls back to product name when Process name field is empty" $ do
-            (activities, _, _) <- parseNoProcessNameCSV
+            (activities, _, _, _) <- parseNoProcessNameCSV
             length activities `shouldBe` 1
             -- With an empty 'Process name', the product name is used as
             -- activityName (preserves legacy behaviour for mono-product CSVs
@@ -1005,7 +1069,7 @@ spec = do
     -- here, silently turning every substitution into extra consumption.
     describe "SimaPro substitutions (negative Materials/fuels)" $ do
         it "preserves the negative sign on Materials/fuels exchanges" $ do
-            (activities, _, _) <- parseSectionCSV
+            (activities, _, _, _) <- parseSectionCSV
                 [ "Materials/fuels"
                 , "Avoided diesel;kg;-1.5;Undefined;;;;;;"
                 ]
@@ -1013,7 +1077,7 @@ spec = do
             techInputAmounts (head activities) `shouldBe` [-1.5]
 
         it "keeps positive and negative rows side by side with their own signs" $ do
-            (activities, _, _) <- parseSectionCSV
+            (activities, _, _, _) <- parseSectionCSV
                 [ "Materials/fuels"
                 , "Fertilizer input;kg;231.84;Undefined;;;;;;"
                 , "Avoided diesel;kg;-1568.16;Undefined;;;;;;"
@@ -1028,11 +1092,11 @@ spec = do
 -- ---------------------------------------------------------------------------
 
 -- | Build a minimal process CSV with extra section lines inserted
-parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseSectionCSV sectionLines =
     parseNamedCSV "Test process" sectionLines
 
-parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseNamedCSV procName sectionLines =
     withSystemTempFile "section-test.csv" $ \path handle -> do
         let content =
@@ -1090,7 +1154,7 @@ commaCSV =
         , "End"
         ]
 
-parseCommaCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseCommaCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     BS.hPut handle commaCSV
     hClose handle
@@ -1135,7 +1199,7 @@ tonRefCSV =
         , "End"
         ]
 
-parseTonRefCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseTonRefCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
     BS.hPut handle tonRefCSV
     hClose handle
@@ -1195,7 +1259,7 @@ multiCoproductCSV =
         , "End"
         ]
 
-parseMultiCoproductCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
     hClose handle
@@ -1233,7 +1297,7 @@ noProcessNameCSV =
         , "End"
         ]
 
-parseNoProcessNameCSV :: IO ([Activity], M.Map UUID Flow, M.Map UUID Unit)
+parseNoProcessNameCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID Unit)
 parseNoProcessNameCSV = withSystemTempFile "no-process-name.csv" $ \path handle -> do
     BS.hPut handle noProcessNameCSV
     hClose handle

@@ -21,18 +21,15 @@ flowUUID1 = read "aaaaaaaa-0000-0000-0000-000000000001"
 flowUUID2 = read "bbbbbbbb-0000-0000-0000-000000000002"
 actUUID1 = read "cccccccc-0000-0000-0000-000000000001"
 
-minimalFlow :: UUID.UUID -> Text -> Flow
+minimalFlow :: UUID.UUID -> Text -> TechnosphereFlow
 minimalFlow fid name =
-    Flow
-        { flowId = fid
-        , flowName = name
-        , flowCategory = ""
-        , flowSubcompartment = Nothing
-        , flowUnitId = UUID.nil
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    TechnosphereFlow
+        { tfId = fid
+        , tfName = name
+        , tfUnitId = UUID.nil
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
         }
 
 minimalActivity :: Text -> Text -> [Exchange] -> Activity
@@ -57,8 +54,7 @@ refExchange fid =
         { techFlowId = fid
         , techAmount = 1.0
         , techUnitId = UUID.nil
-        , techIsInput = False
-        , techIsReference = True
+        , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = "GLO"
@@ -72,8 +68,7 @@ inputExchange fid loc =
         { techFlowId = fid
         , techAmount = 0.5
         , techUnitId = UUID.nil
-        , techIsInput = True
-        , techIsReference = False
+        , techRole = Input
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
         , techLocation = loc
@@ -99,19 +94,19 @@ spec = do
             normalizeText "" `shouldBe` ""
 
     -- -----------------------------------------------------------------------
-    -- mergeFlows
+    -- mergeTechFlows
     -- -----------------------------------------------------------------------
-    describe "mergeFlows" $ do
+    describe "mergeTechFlows" $ do
         it "unions synonyms from both flows" $ do
-            let a = (minimalFlow flowUUID1 "CO2"){flowSynonyms = M.singleton "en" (S.fromList ["carbon dioxide"])}
-                b = (minimalFlow flowUUID1 "CO2"){flowSynonyms = M.singleton "en" (S.fromList ["CO2"])}
-                merged = mergeFlows a b
-            M.lookup "en" (flowSynonyms merged) `shouldBe` Just (S.fromList ["carbon dioxide", "CO2"])
+            let a = (minimalFlow flowUUID1 "CO2"){tfSynonyms = M.singleton "en" (S.fromList ["carbon dioxide"])}
+                b = (minimalFlow flowUUID1 "CO2"){tfSynonyms = M.singleton "en" (S.fromList ["CO2"])}
+                merged = mergeTechFlows a b
+            M.lookup "en" (tfSynonyms merged) `shouldBe` Just (S.fromList ["carbon dioxide", "CO2"])
 
         it "keeps all other fields from the first flow" $ do
             let a = minimalFlow flowUUID1 "flow-a"
                 b = minimalFlow flowUUID2 "flow-b"
-            flowName (mergeFlows a b) `shouldBe` "flow-a"
+            tfName (mergeTechFlows a b) `shouldBe` "flow-a"
 
     -- -----------------------------------------------------------------------
     -- generateActivityUUIDFromActivity

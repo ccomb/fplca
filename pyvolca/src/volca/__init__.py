@@ -14,6 +14,7 @@ from .types import (
     AggregateResult,
     BiosphereExchange,
     ClassificationFilter,
+    Compartment,
     ConsumerResult,
     ConsumersResponse,
     DatabaseInfo,
@@ -27,6 +28,7 @@ from .types import (
     SupplyChain,
     SupplyChainEdge,
     SupplyChainEntry,
+    TechRole,
     TechnosphereExchange,
 )
 
@@ -40,6 +42,7 @@ __all__ = [
     "BiosphereExchange",
     "Client",
     "ClassificationFilter",
+    "Compartment",
     "ConsumerResult",
     "ConsumersResponse",
     "DatabaseInfo",
@@ -56,6 +59,7 @@ __all__ = [
     "SupplyChain",
     "SupplyChainEdge",
     "SupplyChainEntry",
+    "TechRole",
     "TechnosphereExchange",
     "VoLCAError",
     "compare_activities",

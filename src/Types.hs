@@ -54,9 +54,28 @@ Based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
 -}
 type ProcessId = Int32
 
--- | Flow type: Technosphere (exchange between activities) or Biosphere (exchange with the environment)
-data FlowType = Technosphere | Biosphere
-    deriving (Eq, Ord, Show, Generic, NFData, Store)
+{- | Biosphere compartment — the natural medium a biosphere flow exchanges
+with. Present only on `BiosphereFlow`; technosphere flows have no
+compartment (their taxonomy, when meaningful, lives on the producing
+activity's `activityClassification`).
+-}
+data Compartment = Compartment
+    { compartmentName :: !Text -- air | water | soil | natural resource
+    , compartmentSub :: !(Maybe Text) -- "high. pop.", "river water", …
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+
+{- | Role of a technosphere exchange within its host activity. Names the four
+valid combinations of (input?, reference?). `ReferenceInput` is the
+treatment-process case where the activity is defined by the waste flow it
+consumes (see `activityNormFactor`).
+-}
+data TechRole
+    = ReferenceProduct -- main output of a production process
+    | Coproduct -- secondary output (by-product, avoided product)
+    | ReferenceInput -- main input of a treatment process
+    | Input -- ordinary technosphere input
+    deriving (Eq, Show, Generic, NFData, Store)
 
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -79,17 +98,31 @@ data Substance = Substance
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
--- | Flow representation (material, energy, emission, etc.)
-data Flow = Flow
-    { flowId :: !UUID -- Flow identifier
-    , flowName :: !Text -- Human-readable name
-    , flowCategory :: !Text -- Category/compartment (e.g. air, water, soil, resource)
-    , flowSubcompartment :: !(Maybe Text) -- Sub-compartment (e.g. "urban air", "river water")
-    , flowUnitId :: !UUID -- Reference to default unit in UnitDB
-    , flowType :: !FlowType -- Flow type
-    , flowSynonyms :: !(M.Map Text (S.Set Text)) -- Synonyms by language (e.g. "en" -> {"BaP", "benzo[a]pyrene"})
-    , flowCAS :: !(Maybe Text) -- CAS number for substance identification
-    , flowSubstanceId :: !(Maybe Int) -- Link to Substance in FlowMappingData
+{- | A technosphere flow — an intermediate product that activities produce and
+consume. Carries no compartment and no taxonomy: the product classification
+(when meaningful) lives on the producing activity's `activityClassification`.
+-}
+data TechnosphereFlow = TechnosphereFlow
+    { tfId :: !UUID
+    , tfName :: !Text
+    , tfUnitId :: !UUID
+    , tfSynonyms :: !(M.Map Text (S.Set Text))
+    , tfCAS :: !(Maybe Text)
+    , tfSubstanceId :: !(Maybe Int)
+    }
+    deriving (Generic, NFData, Store)
+
+{- | A biosphere flow — an environmental exchange (resource extraction or
+emission). Always carries a `Compartment` identifying the medium.
+-}
+data BiosphereFlow = BiosphereFlow
+    { bfId :: !UUID
+    , bfName :: !Text
+    , bfUnitId :: !UUID
+    , bfSynonyms :: !(M.Map Text (S.Set Text))
+    , bfCAS :: !(Maybe Text)
+    , bfSubstanceId :: !(Maybe Int)
+    , bfCompartment :: !Compartment
     }
     deriving (Generic, NFData, Store)
 
@@ -123,8 +156,7 @@ data Exchange
         { techFlowId :: !UUID -- Flow being exchanged
         , techAmount :: !Double -- Quantity exchanged
         , techUnitId :: !UUID -- Unit of measurement
-        , techIsInput :: !Bool -- True if input
-        , techIsReference :: !Bool -- True if reference product (main output)
+        , techRole :: !TechRole -- Role within the activity (Input | Coproduct | ReferenceProduct | ReferenceInput)
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
@@ -156,11 +188,19 @@ exchangeUnitId TechnosphereExchange{techUnitId = uid} = uid
 exchangeUnitId BiosphereExchange{bioUnitId = uid} = uid
 
 exchangeIsInput :: Exchange -> Bool
-exchangeIsInput TechnosphereExchange{techIsInput = isInp} = isInp
+exchangeIsInput TechnosphereExchange{techRole = role} = case role of
+    Input -> True
+    ReferenceInput -> True
+    ReferenceProduct -> False
+    Coproduct -> False
 exchangeIsInput BiosphereExchange{bioIsInput = isInp} = isInp
 
 exchangeIsReference :: Exchange -> Bool
-exchangeIsReference TechnosphereExchange{techIsReference = isRef} = isRef
+exchangeIsReference TechnosphereExchange{techRole = role} = case role of
+    ReferenceProduct -> True
+    ReferenceInput -> True
+    Input -> False
+    Coproduct -> False
 exchangeIsReference BiosphereExchange{} = False -- Biosphere exchanges are never reference products
 
 -- | Get activity link ID (backward compatibility)
@@ -249,14 +289,23 @@ getUnitNameForExchange :: UnitDB -> Exchange -> Text
 getUnitNameForExchange unitDB exchange =
     maybe "unknown" unitName (getUnitForExchange unitDB exchange)
 
--- | Get unit information for a flow
-getUnitForFlow :: UnitDB -> Flow -> Maybe Unit
-getUnitForFlow unitDB flow = M.lookup (flowUnitId flow) unitDB
+-- | Get unit information for a technosphere flow
+getUnitForTechFlow :: UnitDB -> TechnosphereFlow -> Maybe Unit
+getUnitForTechFlow unitDB f = M.lookup (tfUnitId f) unitDB
 
--- | Get unit name for a flow (fallback to "unknown" if not found)
-getUnitNameForFlow :: UnitDB -> Flow -> Text
-getUnitNameForFlow unitDB flow =
-    maybe "unknown" unitName (getUnitForFlow unitDB flow)
+-- | Get unit name for a technosphere flow (fallback to "unknown" if not found)
+getUnitNameForTechFlow :: UnitDB -> TechnosphereFlow -> Text
+getUnitNameForTechFlow unitDB f =
+    maybe "unknown" unitName (getUnitForTechFlow unitDB f)
+
+-- | Get unit information for a biosphere flow
+getUnitForBioFlow :: UnitDB -> BiosphereFlow -> Maybe Unit
+getUnitForBioFlow unitDB f = M.lookup (bfUnitId f) unitDB
+
+-- | Get unit name for a biosphere flow (fallback to "unknown" if not found)
+getUnitNameForBioFlow :: UnitDB -> BiosphereFlow -> Text
+getUnitNameForBioFlow unitDB f =
+    maybe "unknown" unitName (getUnitForBioFlow unitDB f)
 
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
@@ -284,11 +333,14 @@ data ActivityTree
 -- | Loop-aware tree for SVG export
 data LoopAwareTree
     = TreeLeaf !Activity
-    | TreeNode !Activity ![(Double, Flow, LoopAwareTree)] -- Activity + (quantity, flow, subtree)
+    | TreeNode !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Activity + (quantity, child product flow, subtree)
     | TreeLoop !UUID !Text !Int -- Loop reference: UUID + ActivityName + Depth
 
--- | Flow database (deduplicated)
-type FlowDB = M.Map UUID Flow
+-- | Technosphere flow database (deduplicated by UUID)
+type TechFlowDB = M.Map UUID TechnosphereFlow
+
+-- | Biosphere flow database (deduplicated by UUID)
+type BioFlowDB = M.Map UUID BiosphereFlow
 
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
@@ -313,11 +365,8 @@ type LocationIndex = M.Map Text [UUID] -- Location -> [ActivityUUID]
 -- | Index by flow - find activities that use a given flow
 type FlowIndex = M.Map UUID [UUID] -- FlowID -> [ActivityUUID]
 
--- | Index by flow category - search by flow type
-type FlowCategoryIndex = M.Map Text [UUID] -- Category -> [FlowUUID]
-
--- | Index by flow type - separates Technosphere/Biosphere
-type FlowTypeIndex = M.Map FlowType [UUID] -- FlowType -> [FlowUUID]
+-- | Index by biosphere compartment - search biosphere flows by compartment name
+type CompartmentIndex = M.Map Text [UUID] -- Compartment name -> [BiosphereFlow UUID]
 
 -- | Index of exchanges by flow - find all exchanges using a flow
 type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]
@@ -348,9 +397,8 @@ data Indexes = Indexes
     , idxByLocation :: !LocationIndex -- Search activities by location
     , idxByFlow :: !FlowIndex -- Search activities using a flow
     , idxByUnit :: !ActivityUnitIndex -- Search activities by reference unit
-    -- Flow-level indexes
-    , idxFlowByCategory :: !FlowCategoryIndex -- Search flows by category
-    , idxFlowByType :: !FlowTypeIndex -- Search flows by type
+    -- Biosphere flow index by compartment (technosphere flows carry no taxonomy)
+    , idxBioByCompartment :: !CompartmentIndex
     -- Note: Exchange-level indexes removed - exchanges can be accessed directly from Activity.exchanges
     }
     deriving (Generic, NFData, Store)
@@ -458,14 +506,15 @@ data Database = Database
     , dbActivityProductsIndex :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
     , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
-    , dbFlows :: !FlowDB
+    , dbTechFlows :: !TechFlowDB -- Technosphere flows by UUID
+    , dbBioFlows :: !BioFlowDB -- Biosphere flows by UUID
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     , -- Pre-computed sparse matrices for efficient LCA calculations (unboxed for memory efficiency)
       dbTechnosphereTriples :: !(VU.Vector SparseTriple) -- A matrix: activities × activities (sparse, unboxed)
     , dbBiosphereTriples :: !(VU.Vector SparseTriple) -- B matrix: biosphere flows × activities (sparse, unboxed)
     , dbActivityIndex :: !(V.Vector Int32) -- ProcessId → matrix index mapping (direct vector indexing)
-    , dbBiosphereFlows :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs (source of truth for indexing, strict for memory efficiency)
+    , dbBiosphereOrder :: !(V.Vector UUID) -- Ordered vector of biosphere flow UUIDs — B-matrix row order
     , dbActivityCount :: !Int32 -- Number of activities (matrix dimension)
     , dbBiosphereCount :: !Int32 -- Number of biosphere flows (matrix dimension)
     -- Cross-database linking (serialized to cache)
@@ -475,8 +524,8 @@ data Database = Database
     , dbLinkingStats :: !CrossDBLinkingStats -- Cross-DB linking statistics (completeness, fallbacks, etc.)
     -- Runtime-only fields (not serialized to cache)
     , dbSynonymDB :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
-    , dbFlowsByName :: !(M.Map Text [Flow]) -- Biosphere flow name index for LCIA matching
-    , dbFlowsByCAS :: !(M.Map Text [Flow]) -- CAS → biosphere flows for LCIA matching
+    , dbFlowsByName :: !(M.Map Text [BiosphereFlow]) -- Biosphere flow name index for LCIA matching
+    , dbFlowsByCAS :: !(M.Map Text [BiosphereFlow]) -- CAS → biosphere flows for LCIA matching
     -- Product name search index: word token → ProcessId set (built at runtime)
     , dbProductSearchIndex :: !(M.Map Text IS.IntSet)
     , -- BM25 ranking index (built at runtime, not serialized)
@@ -495,13 +544,14 @@ instance Store Database where
             + getSize (dbActivityProductsIndex db)
             + getSize (dbProductIndex db)
             + getSize (dbActivities db)
-            + getSize (dbFlows db)
+            + getSize (dbTechFlows db)
+            + getSize (dbBioFlows db)
             + getSize (dbUnits db)
             + getSize (dbIndexes db)
             + getSize (dbTechnosphereTriples db)
             + getSize (dbBiosphereTriples db)
             + getSize (dbActivityIndex db)
-            + getSize (dbBiosphereFlows db)
+            + getSize (dbBiosphereOrder db)
             + getSize (dbActivityCount db)
             + getSize (dbBiosphereCount db)
             + getSize (dbCrossDBLinks db)
@@ -515,13 +565,14 @@ instance Store Database where
         poke (dbActivityProductsIndex db)
         poke (dbProductIndex db)
         poke (dbActivities db)
-        poke (dbFlows db)
+        poke (dbTechFlows db)
+        poke (dbBioFlows db)
         poke (dbUnits db)
         poke (dbIndexes db)
         poke (dbTechnosphereTriples db)
         poke (dbBiosphereTriples db)
         poke (dbActivityIndex db)
-        poke (dbBiosphereFlows db)
+        poke (dbBiosphereOrder db)
         poke (dbActivityCount db)
         poke (dbBiosphereCount db)
         -- Cross-database linking fields
@@ -538,13 +589,14 @@ instance Store Database where
         activityProductsIndex <- peek
         productIndex <- peek
         activities <- peek
-        flows <- peek
+        techFlows <- peek
+        bioFlows <- peek
         units <- peek
         indexes <- peek
         techTriples <- peek
         bioTriples <- peek
         activityIndex <- peek
-        biosphereFlows <- peek
+        biosphereOrder <- peek
         activityCount <- peek
         biosphereCount <- peek
         crossDBLinks <- peek
@@ -558,13 +610,14 @@ instance Store Database where
                 , dbActivityProductsIndex = activityProductsIndex
                 , dbProductIndex = productIndex
                 , dbActivities = activities
-                , dbFlows = flows
+                , dbTechFlows = techFlows
+                , dbBioFlows = bioFlows
                 , dbUnits = units
                 , dbIndexes = indexes
                 , dbTechnosphereTriples = techTriples
                 , dbBiosphereTriples = bioTriples
                 , dbActivityIndex = activityIndex
-                , dbBiosphereFlows = biosphereFlows
+                , dbBiosphereOrder = biosphereOrder
                 , dbActivityCount = activityCount
                 , dbBiosphereCount = biosphereCount
                 , -- Cross-database linking fields
@@ -661,50 +714,47 @@ parseProcessId db filename = case T.splitOn "_" filename of
 addSynonymDBToDatabase :: Database -> SynonymDB -> Database
 addSynonymDBToDatabase db synDB = db{dbSynonymDB = Just synDB}
 
-{- | Build the flow name index from biosphere flows only.
-Groups flows by their normalized names for efficient LCIA lookup.
+{- | Build the biosphere flow name index. Groups flows by normalized name
+(primary + synonyms) for efficient LCIA lookup.
 -}
-buildFlowNameIndex :: FlowDB -> S.Set UUID -> M.Map Text [Flow]
-buildFlowNameIndex flowDB bioUUIDs =
-    M.fromListWith (++) $ concatMap flowEntries bioFlows
+buildFlowNameIndex :: BioFlowDB -> M.Map Text [BiosphereFlow]
+buildFlowNameIndex bioDB =
+    M.fromListWith (++) $ concatMap flowEntries (M.elems bioDB)
   where
-    bioFlows = filter (\f -> S.member (flowId f) bioUUIDs) (M.elems flowDB)
     flowEntries f =
-        let primary = normalizeName (flowName f)
+        let primary = normalizeName (bfName f)
             synKeys =
                 [ normalizeName syn
-                | syns <- M.elems (flowSynonyms f)
+                | syns <- M.elems (bfSynonyms f)
                 , syn <- S.toList syns
                 ]
          in [(k, [f]) | k <- nub (primary : synKeys)]
 
 -- | Build CAS index from biosphere flows
-buildFlowCASIndex :: FlowDB -> S.Set UUID -> M.Map Text [Flow]
-buildFlowCASIndex flowDB bioUUIDs =
+buildFlowCASIndex :: BioFlowDB -> M.Map Text [BiosphereFlow]
+buildFlowCASIndex bioDB =
     M.fromListWith
         (++)
         [ (cas, [f])
-        | f <- M.elems flowDB
-        , S.member (flowId f) bioUUIDs
-        , Just cas <- [flowCAS f]
+        | f <- M.elems bioDB
+        , Just cas <- [bfCAS f]
         , not (T.null cas)
         ]
 
 -- | Add biosphere flow indexes (name + CAS) and search index to a Database
 addFlowNameIndexToDatabase :: Database -> Database
 addFlowNameIndexToDatabase db =
-    let bioUUIDs = S.fromList (V.toList (dbBiosphereFlows db))
-     in db
-            { dbFlowsByName = buildFlowNameIndex (dbFlows db) bioUUIDs
-            , dbFlowsByCAS = buildFlowCASIndex (dbFlows db) bioUUIDs
-            , dbProductSearchIndex = buildProductSearchIndex (dbActivities db) (dbFlows db)
-            }
+    db
+        { dbFlowsByName = buildFlowNameIndex (dbBioFlows db)
+        , dbFlowsByCAS = buildFlowCASIndex (dbBioFlows db)
+        , dbProductSearchIndex = buildProductSearchIndex (dbActivities db) (dbTechFlows db)
+        }
 
 {- | Build word-token product search index: lowercased word → IntSet of ProcessIds
 Tokenizes reference product flow names so product search can use index intersection.
 -}
-buildProductSearchIndex :: V.Vector Activity -> M.Map UUID Flow -> M.Map Text IS.IntSet
-buildProductSearchIndex activities flowDb =
+buildProductSearchIndex :: V.Vector Activity -> TechFlowDB -> M.Map Text IS.IntSet
+buildProductSearchIndex activities techDB =
     V.ifoldl' addActivity M.empty activities
   where
     addActivity !acc i a =
@@ -714,11 +764,19 @@ buildProductSearchIndex activities flowDb =
                 | ex <- exchanges a
                 , exchangeIsReference ex
                 , not (exchangeIsInput ex)
-                , Just flow <- [M.lookup (exchangeFlowId ex) flowDb]
-                , w <- T.words (T.toLower (flowName flow))
+                , Just flow <- [M.lookup (exchangeFlowId ex) techDB]
+                , w <- T.words (T.toLower (tfName flow))
                 , not (T.null w)
                 ]
          in foldl' (\m w -> MS.insertWith IS.union w (IS.singleton pid) m) acc productWords
+
+-- | Lookup a technosphere flow by UUID
+lookupTechFlow :: Database -> UUID -> Maybe TechnosphereFlow
+lookupTechFlow db uuid = M.lookup uuid (dbTechFlows db)
+
+-- | Lookup a biosphere flow by UUID
+lookupBioFlow :: Database -> UUID -> Maybe BiosphereFlow
+lookupBioFlow db uuid = M.lookup uuid (dbBioFlows db)
 
 {- | Add both SynonymDB and flow name index to a Database
 Convenience function for post-load initialization
@@ -733,7 +791,8 @@ Used during database loading, before conversion to final Vector structure
 -}
 data SimpleDatabase = SimpleDatabase
     { sdbActivities :: !ActivityMap -- Temporary Map structure
-    , sdbFlows :: !FlowDB
+    , sdbTechFlows :: !TechFlowDB
+    , sdbBioFlows :: !BioFlowDB
     , sdbUnits :: !UnitDB
     }
     deriving (Generic, Store)
@@ -745,7 +804,8 @@ toSimpleDatabase :: Database -> SimpleDatabase
 toSimpleDatabase db =
     SimpleDatabase
         { sdbActivities = M.fromList $ V.toList $ V.zipWith (,) (dbProcessIdTable db) (dbActivities db)
-        , sdbFlows = dbFlows db
+        , sdbTechFlows = dbTechFlows db
+        , sdbBioFlows = dbBioFlows db
         , sdbUnits = dbUnits db
         }
 
@@ -869,7 +929,27 @@ instance FromJSON Pedigree where
 instance ToJSON Exchange where
     toJSON = genericToJSON stripLowerPrefix
     toEncoding = genericToEncoding stripLowerPrefix
-instance ToJSON FlowType
 
 instance FromJSON Exchange where
+    parseJSON = genericParseJSON stripLowerPrefix
+
+instance ToJSON TechRole
+instance FromJSON TechRole
+
+instance ToJSON Compartment where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
+instance FromJSON Compartment where
+    parseJSON = genericParseJSON stripLowerPrefix
+
+instance ToJSON TechnosphereFlow where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
+instance FromJSON TechnosphereFlow where
+    parseJSON = genericParseJSON stripLowerPrefix
+
+instance ToJSON BiosphereFlow where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
+instance FromJSON BiosphereFlow where
     parseJSON = genericParseJSON stripLowerPrefix

@@ -23,11 +23,11 @@ import Method.Types (
     FlowDirection (..),
     MethodCF (..),
  )
+import qualified Types as VT
 import Types (
     Activity (..),
+    BiosphereFlow (..),
     Database (..),
-    Flow (..),
-    FlowType (..),
     Indexes (..),
     SparseTriple (..),
     Unit (..),
@@ -65,18 +65,16 @@ kgUnitConfig =
         , ucOriginalKeys = M.fromList [("kg", "kg")]
         }
 
-testFlow :: Flow
+testFlow :: BiosphereFlow
 testFlow =
-    Flow
-        { flowId = flowUUID
-        , flowName = "Carbon dioxide"
-        , flowCategory = "air"
-        , flowSubcompartment = Nothing
-        , flowUnitId = unitId kgUnit
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    BiosphereFlow
+        { bfId = flowUUID
+        , bfName = "Carbon dioxide"
+        , bfUnitId = unitId kgUnit
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = VT.Compartment "air" Nothing
         }
 
 mkActivity :: Text -> Activity
@@ -106,7 +104,7 @@ mkDB locsAndEmissions =
         activities = V.fromList [mkActivity loc | (loc, _) <- locsAndEmissions]
         actIdx = V.fromList [fromIntegral i :: Int32 | i <- [0 .. n - 1]]
         triples = mkTriples [(i, v) | (i, (_, v)) <- zip [0 ..] locsAndEmissions]
-        emptyIdx = Indexes M.empty M.empty M.empty M.empty M.empty M.empty
+        emptyIdx = Indexes M.empty M.empty M.empty M.empty M.empty
      in Database
             { dbProcessIdTable = V.fromList [(actUUID i, mkUUID 0) | i <- [0 .. n - 1]]
             , dbProcessIdLookup = M.empty
@@ -114,13 +112,14 @@ mkDB locsAndEmissions =
             , dbActivityProductsIndex = M.empty
             , dbProductIndex = emptyProductIndex
             , dbActivities = activities
-            , dbFlows = M.singleton flowUUID testFlow
+            , dbTechFlows = M.empty
+            , dbBioFlows = M.singleton flowUUID testFlow
             , dbUnits = M.singleton (unitId kgUnit) kgUnit
             , dbIndexes = emptyIdx
             , dbTechnosphereTriples = U.empty
             , dbBiosphereTriples = triples
             , dbActivityIndex = actIdx
-            , dbBiosphereFlows = V.singleton flowUUID
+            , dbBiosphereOrder = V.singleton flowUUID
             , dbActivityCount = fromIntegral n
             , dbBiosphereCount = 1
             , dbCrossDBLinks = []
@@ -138,7 +137,7 @@ mkDB locsAndEmissions =
 -- EF method CFs (whose UUIDs differ from the database flow UUIDs) get
 -- resolved in production: regional cells fill 'mtRegionalizedCF', but the
 -- universal broadcast for F remains empty unless a non-regional CF is added.
-regionalMappings :: [(Text, Double)] -> [(MethodCF, Maybe (Flow, MatchStrategy))]
+regionalMappings :: [(Text, Double)] -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 regionalMappings = map (\(loc, v) -> (cf loc v, Just (testFlow, ByName)))
   where
     cf loc v =
@@ -156,16 +155,16 @@ regionalMappings = map (\(loc, v) -> (cf loc v, Just (testFlow, ByName)))
 buildTables ::
     Database ->
     M.Map Text [Text] ->
-    [(MethodCF, Maybe (Flow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
     MethodTables
 buildTables db hier mappings =
     let raw = buildMethodTables M.empty mappings
         withBroadcast =
-            fillBroadcastVector kgUnitConfig (dbUnits db) (dbFlows db) raw
+            fillBroadcastVector kgUnitConfig (dbUnits db) (dbBioFlows db) raw
      in fillRegionalActivityWeights
             kgUnitConfig
             (dbUnits db)
-            (dbFlows db)
+            (dbBioFlows db)
             db
             hier
             withBroadcast
@@ -183,7 +182,7 @@ oracleWeights db hier tables = U.generate (fromIntegral (dbActivityCount db)) wF
     regional = mtRegionalizedCF tables
     activities = dbActivities db
     actIdx = dbActivityIndex db
-    bioFlows = dbBiosphereFlows db
+    bioFlows = dbBiosphereOrder db
     colToLoc =
         M.fromList
             [ (fromIntegral (actIdx V.! pid), activityLocation (activities V.! pid))
@@ -258,7 +257,7 @@ spec = do
             computeRegionalizedLCIAScore
                 kgUnitConfig
                 (dbUnits db)
-                (dbFlows db)
+                (dbBioFlows db)
                 db
                 scaling
                 M.empty
@@ -278,7 +277,7 @@ spec = do
             computeRegionalizedLCIAScore
                 kgUnitConfig
                 (dbUnits db)
-                (dbFlows db)
+                (dbBioFlows db)
                 db
                 scaling
                 M.empty
@@ -296,7 +295,7 @@ spec = do
             computeRegionalizedLCIAScore
                 kgUnitConfig
                 (dbUnits db)
-                (dbFlows db)
+                (dbBioFlows db)
                 db
                 scaling
                 M.empty

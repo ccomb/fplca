@@ -137,8 +137,7 @@ spec = do
                         { techFlowId = prodUUID
                         , techAmount = normFactor
                         , techUnitId = jUnitId
-                        , techIsInput = False
-                        , techIsReference = True
+                        , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
                         , techLocation = ""
@@ -170,24 +169,15 @@ spec = do
                         , activityAllocationFormula = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
-                flowDB =
-                    M.fromList
-                        [
-                            ( prodUUID
-                            , Flow prodUUID "energy product" "energy" Nothing jUnitId Technosphere M.empty Nothing Nothing
-                            )
-                        ,
-                            ( bioFlowUUID
-                            , Flow bioFlowUUID "trace pollutant" "air" Nothing kgUnitId Biosphere M.empty Nothing Nothing
-                            )
-                        ]
+                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Compartment "air" Nothing))
                 unitDB =
                     M.fromList
                         [ (jUnitId, Unit jUnitId "j" "j" "")
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap flowDB unitDB
+            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db -> do
@@ -217,8 +207,7 @@ spec = do
                         { techFlowId = prodUUID
                         , techAmount = 1.0
                         , techUnitId = jUnitId
-                        , techIsInput = False
-                        , techIsReference = True
+                        , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
                         , techLocation = ""
@@ -250,24 +239,15 @@ spec = do
                         , activityAllocationFormula = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
-                flowDB =
-                    M.fromList
-                        [
-                            ( prodUUID
-                            , Flow prodUUID "energy product" "energy" Nothing jUnitId Technosphere M.empty Nothing Nothing
-                            )
-                        ,
-                            ( bioFlowUUID
-                            , Flow bioFlowUUID "trace pollutant" "air" Nothing kgUnitId Biosphere M.empty Nothing Nothing
-                            )
-                        ]
+                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Compartment "air" Nothing))
                 unitDB =
                     M.fromList
                         [ (jUnitId, Unit jUnitId "j" "j" "")
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap flowDB unitDB
+            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db ->

@@ -28,6 +28,7 @@ import Service (
  )
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
+import qualified Types as VT
 import Types
 
 spec :: Spec
@@ -137,20 +138,17 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "isResourceExtraction" $ do
         it "detects natural resource category" $ do
-            let flow = mkBioFlow "natural resource/in ground"
-            isResourceExtraction flow 1.0 `shouldBe` True
+            let flow = mkBioFlow "natural resource"
+            isResourceExtraction flow `shouldBe` True
 
         it "detects resource category prefix" $ do
-            let flow = mkBioFlow "resource/in water"
-            isResourceExtraction flow 1.0 `shouldBe` True
+            let flow = mkBioFlow "resource"
+            isResourceExtraction flow `shouldBe` True
 
         it "returns False for air emission" $ do
-            let flow = mkBioFlow "air/urban air"
-            isResourceExtraction flow 1.0 `shouldBe` False
-
-        it "returns False for Technosphere flow" $ do
-            let flow = mkTechFlow "technosphere"
-            isResourceExtraction flow 1.0 `shouldBe` False
+            let flow = mkBioFlow "air"
+            isResourceExtraction flow `shouldBe` False
+        -- Technosphere flows can't reach this function under the new type system.
 
     -- -----------------------------------------------------------------------
     -- extractCompartment
@@ -249,32 +247,27 @@ spec = do
 -- Helpers
 -- ---------------------------------------------------------------------------
 
-mkBioFlow :: Text -> Flow
+mkBioFlow :: Text -> BiosphereFlow
 mkBioFlow cat =
-    Flow
-        { flowId = nil
-        , flowName = "test"
-        , flowCategory = cat
-        , flowSubcompartment = Nothing
-        , flowUnitId = nil
-        , flowType = Biosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+    BiosphereFlow
+        { bfId = nil
+        , bfName = "test"
+        , bfUnitId = nil
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = VT.Compartment cat Nothing
         }
 
-mkTechFlow :: Text -> Flow
-mkTechFlow cat =
-    Flow
-        { flowId = nil
-        , flowName = "test"
-        , flowCategory = cat
-        , flowSubcompartment = Nothing
-        , flowUnitId = nil
-        , flowType = Technosphere
-        , flowSynonyms = M.empty
-        , flowCAS = Nothing
-        , flowSubstanceId = Nothing
+mkTechFlow :: Text -> TechnosphereFlow
+mkTechFlow _cat =
+    TechnosphereFlow
+        { tfId = nil
+        , tfName = "test"
+        , tfUnitId = nil
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
         }
 
 -- | Build a minimal TreeExport from a list of (id, parentId, name) and edges (from,to)

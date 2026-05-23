@@ -3,7 +3,7 @@
 import dataclasses
 import re
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Union
+from typing import Any, ClassVar, Literal, Union
 
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
@@ -331,19 +331,41 @@ def _exchange_comment(ewu: dict | None, inner: dict) -> str | None:
 
 
 @dataclass
-class TechnosphereExchange:
-    """An exchange with another activity (input or output of an intermediate product).
+class Compartment:
+    """Biosphere compartment (medium + optional subcompartment)."""
 
-    Built from an `ExchangeWithUnit` envelope: outer fields like flowName/unitName
-    live next to an inner `exchange` object (the discriminated `Exchange` sum).
+    name: str
+    sub: str | None = None
+
+    @classmethod
+    def from_json(cls, c: dict | None) -> "Compartment | None":
+        if c is None:
+            return None
+        return cls(name=c.get("name", ""), sub=c.get("sub"))
+
+
+# Roles a technosphere exchange can play within its host activity.
+TechRole = Literal["ReferenceProduct", "Coproduct", "ReferenceInput", "Input"]
+
+
+def _role_is_input(role: TechRole) -> bool:
+    return role in ("Input", "ReferenceInput")
+
+
+def _role_is_reference(role: TechRole) -> bool:
+    return role in ("ReferenceProduct", "ReferenceInput")
+
+
+@dataclass
+class TechnosphereExchange:
+    """An exchange with another activity. Carries no compartment — the
+    producing activity's classifications describe the product taxonomy.
     """
 
     flow_name: str
-    flow_category: str
     amount: float
     unit: str
-    is_input: bool
-    is_reference: bool
+    role: TechRole
     target_activity: str | None
     target_location: str | None
     target_process_id: str | None
@@ -351,16 +373,22 @@ class TechnosphereExchange:
 
     is_biosphere: bool = False  # discriminator for callers using duck typing
 
+    @property
+    def is_input(self) -> bool:
+        return _role_is_input(self.role)
+
+    @property
+    def is_reference(self) -> bool:
+        return _role_is_reference(self.role)
+
     @classmethod
     def from_json(cls, ewu: dict) -> "TechnosphereExchange":
         inner = ewu["exchange"]
         return cls(
             flow_name=ewu["flowName"],
-            flow_category=ewu["flowCategory"],
             amount=inner["amount"],
             unit=ewu["unitName"],
-            is_input=inner["isInput"],
-            is_reference=inner["isReference"],
+            role=inner["role"],
             target_activity=ewu.get("targetActivity"),
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
@@ -373,7 +401,7 @@ class BiosphereExchange:
     """An exchange with the environment (resource extraction or emission)."""
 
     flow_name: str
-    flow_category: str
+    compartment: Compartment | None
     amount: float
     unit: str
     is_input: bool  # True = resource extraction, False = emission
@@ -386,7 +414,7 @@ class BiosphereExchange:
         inner = ewu["exchange"]
         return cls(
             flow_name=ewu["flowName"],
-            flow_category=ewu["flowCategory"],
+            compartment=Compartment.from_json(ewu.get("compartment")),
             amount=inner["amount"],
             unit=ewu["unitName"],
             is_input=inner["isInput"],
@@ -413,28 +441,25 @@ def parse_exchange(ewu: dict) -> Exchange:
 
 
 def parse_exchange_detail(ed: dict) -> Exchange:
-    """Parse an `ExchangeDetail` JSON dict (returned by GET /activity/{pid}/inputs|outputs).
+    """Parse an ``ExchangeDetail`` JSON dict (returned by GET /activity/{pid}/inputs|outputs).
 
-    The richer ExchangeDetail shape carries full Flow / Unit / ActivitySummary
-    objects. This parser projects it onto the lean Exchange representation; if a
-    caller needs the richer shape it should hit the REST endpoint directly.
+    The flow is a tagged sum: ``{"Left": <techFlow>}`` or
+    ``{"Right": <bioFlow>}``. Compartment lives on biosphere flows only.
     """
     inner = ed["exchange"]
-    flow = ed.get("flow", {})
-    flow_name = flow.get("name", "")
-    flow_category = flow.get("category", "")
+    flow_outer = ed.get("flow", {})
+    tech_flow = flow_outer.get("Left") or {}
+    bio_flow = flow_outer.get("Right") or {}
     unit = ed.get("exchangeUnitName", "")
     comment = _exchange_comment(ed, inner)
     tag = inner.get("tag")
     if tag == "TechnosphereExchange":
         target = ed.get("targetActivity") or {}
         return TechnosphereExchange(
-            flow_name=flow_name,
-            flow_category=flow_category or "technosphere",
+            flow_name=tech_flow.get("name", ""),
             amount=inner["amount"],
             unit=unit,
-            is_input=inner["isInput"],
-            is_reference=inner["isReference"],
+            role=inner["role"],
             target_activity=target.get("name"),
             target_location=target.get("location"),
             target_process_id=target.get("processId"),
@@ -442,8 +467,8 @@ def parse_exchange_detail(ed: dict) -> Exchange:
         )
     if tag == "BiosphereExchange":
         return BiosphereExchange(
-            flow_name=flow_name,
-            flow_category=flow_category,
+            flow_name=bio_flow.get("name", ""),
+            compartment=Compartment.from_json(bio_flow.get("compartment")),
             amount=inner["amount"],
             unit=unit,
             is_input=inner["isInput"],

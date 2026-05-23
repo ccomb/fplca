@@ -49,7 +49,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), Database (..), Flow, FlowDB, FlowType (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, flowCategory, flowId, flowName, flowSubcompartment, getUnitNameForFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Compartment (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -567,8 +567,8 @@ callGetActivity rid args (db, _) =
             && isNothing isInputFilter
     matchExchange ewu = matchType ewu && matchFlow ewu && matchIsInput ewu
     matchType ewu = case exchangeType of
-        Just "biosphere" -> ewuFlowCategory ewu /= "technosphere"
-        Just "technosphere" -> ewuFlowCategory ewu == "technosphere"
+        Just "biosphere" -> not (isTechnosphereExchange (ewuExchange ewu))
+        Just "technosphere" -> isTechnosphereExchange (ewuExchange ewu)
         _ -> True
     matchFlow ewu = case flowFilter of
         Nothing -> True
@@ -672,8 +672,8 @@ callAggregate dbManager rid args (db, solver) =
                                         mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
                                     , Agg.apFilterTargetName = textArg "filter_target_name" args
                                     , Agg.apFilterExchangeType = case textArg "filter_exchange_type" args of
-                                        Just "technosphere" -> Just Technosphere
-                                        Just "biosphere" -> Just Biosphere
+                                        Just "technosphere" -> Just Agg.KindTechnosphere
+                                        Just "biosphere" -> Just Agg.KindBiosphere
                                         _ -> Nothing
                                     , Agg.apFilterIsReference = boolArg "filter_is_reference" args
                                     , Agg.apGroupBy = textArg "group_by" args
@@ -800,12 +800,12 @@ callGetInventory dbManager rid args =
                     flows = ieFlows inv
                     filtered = case nameFilter of
                         Nothing -> flows
-                        Just q -> filter (T.isInfixOf (T.toLower q) . T.toLower . flowName . ifdFlow) flows
+                        Just q -> filter (T.isInfixOf (T.toLower q) . T.toLower . bfName . ifdFlow) flows
                     sorted = L.sortBy (\a b -> compare (abs $ ifdQuantity b) (abs $ ifdQuantity a)) filtered
                     topN = take limit sorted
                     slim f =
                         object
-                            [ "flow" .= flowName (ifdFlow f)
+                            [ "flow" .= bfName (ifdFlow f)
                             , "quantity" .= ifdQuantity f
                             , "unit" .= ifdUnitName f
                             , "category" .= ifdCategory f
@@ -861,7 +861,7 @@ to drift from this one.
 data ImpactsResult = ImpactsResult
     { irOutcome :: !LCIAOutcome
     , irMappingStats :: !MappingStats
-    , irContribs :: ![(Flow, Double, Double)]
+    , irContribs :: ![(BiosphereFlow, Double, Double)]
     -- ^ Sorted descending by absolute contribution.
     , irUnknownUuids :: ![UUID.UUID]
     , irRefProductName :: !Text
@@ -910,7 +910,7 @@ runImpactsRequest dbManager args req = do
         baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
         (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
         contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo mFlows mUnits (raActivity ra)
+        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits (raActivity ra)
     -- Diagnostics path: opt-in via include_diagnostics. Skips the suggester
     -- work entirely when not requested, so the hot path stays bit-identical
     -- to runs without the flag.
@@ -1003,14 +1003,14 @@ callGetImpacts dbManager baseUrl rid args =
                             , "web_url" .= webUrl
                             , "top_flows"
                                 .= [ object
-                                        [ "flow_name" .= flowName f
+                                        [ "flow_name" .= bfName f
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                        , "flow_id" .= UUID.toText (flowId f)
-                                        , "category" .= flowCategory f
-                                        , "compartment" .= flowSubcompartment f
+                                        , "flow_id" .= UUID.toText (bfId f)
+                                        , "category" .= compartmentName (bfCompartment f)
+                                        , "compartment" .= compartmentSub (bfCompartment f)
                                         , "cf_value" .= cfVal
-                                        , "flow_unit" .= getUnitNameForFlow mUnits f
+                                        , "flow_unit" .= getUnitNameForBioFlow mUnits f
                                         ]
                                    | (f, cfVal, c) <- topFlows
                                    ]
@@ -1138,9 +1138,9 @@ callCompareImpacts dbManager rid args =
                     bMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irB]
                     common =
                         [ object
-                            [ "flow_name" .= flowName f
-                            , "category" .= flowCategory f
-                            , "compartment" .= flowSubcompartment f
+                            [ "flow_name" .= bfName f
+                            , "category" .= compartmentName (bfCompartment f)
+                            , "compartment" .= compartmentSub (bfCompartment f)
                             , "a_contrib" .= cA
                             , "b_contrib" .= cB
                             , "delta" .= (cA - cB)
@@ -1191,19 +1191,19 @@ callCompareImpacts dbManager rid args =
                 ]
     encodeContrib f c =
         object
-            [ "flow_name" .= flowName f
-            , "category" .= flowCategory f
-            , "compartment" .= flowSubcompartment f
+            [ "flow_name" .= bfName f
+            , "category" .= compartmentName (bfCompartment f)
+            , "compartment" .= compartmentSub (bfCompartment f)
             , "contribution" .= c
             ]
 
     -- Align flows across databases by (normalized name, medium, subcompartment).
     -- UUIDs differ across DBs by construction — see Method/Mapping comments.
-    flowKey :: Flow -> (Text, Text, Text)
+    flowKey :: BiosphereFlow -> (Text, Text, Text)
     flowKey f =
-        ( T.toLower (T.strip (flowName f))
-        , T.toLower (flowCategory f)
-        , maybe "" T.toLower (flowSubcompartment f)
+        ( T.toLower (T.strip (bfName f))
+        , T.toLower (compartmentName (bfCompartment f))
+        , maybe "" T.toLower (compartmentSub (bfCompartment f))
         )
 
 {- | Pull side-specific args (suffixed @_a@ / @_b@) up to the standard names
@@ -1385,7 +1385,7 @@ callGetCharacterization dbManager rid args =
                             let matched =
                                     [ (cf, f, strat)
                                     | (cf, Just (f, strat)) <- mappings
-                                    , matchQuery queryLower (mcfFlowName cf) (flowName f)
+                                    , matchQuery queryLower (mcfFlowName cf) (bfName f)
                                     ]
                                 sorted = L.sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
                                 top = take lim sorted
@@ -1395,11 +1395,11 @@ callGetCharacterization dbManager rid args =
                                         , "cf_value" .= mcfValue cf
                                         , "cf_unit" .= mcfUnit cf
                                         , "direction" .= (case mcfDirection cf of Input -> "Input" :: Text; Output -> "Output")
-                                        , "db_flow_name" .= flowName f
-                                        , "flow_id" .= UUID.toText (flowId f)
-                                        , "flow_unit" .= getUnitNameForFlow (dbUnits db) f
-                                        , "category" .= flowCategory f
-                                        , "compartment" .= flowSubcompartment f
+                                        , "db_flow_name" .= bfName f
+                                        , "flow_id" .= UUID.toText (bfId f)
+                                        , "flow_unit" .= getUnitNameForBioFlow (dbUnits db) f
+                                        , "category" .= compartmentName (bfCompartment f)
+                                        , "compartment" .= compartmentSub (bfCompartment f)
                                         , "match_strategy" .= show strat
                                         ]
                             return $
@@ -1429,7 +1429,7 @@ mkMcpCrossDBEntry ::
     Text ->
     -- | method UUID text
     Text ->
-    FlowDB ->
+    BioFlowDB ->
     UnitDB ->
     -- | total score (for share %)
     Double ->
@@ -1445,7 +1445,8 @@ mkMcpCrossDBEntry dbManager rootDbName baseUrl colName methodIdText flowDB unitD
                         if depDbName == rootDbName
                             then processIdToText d pid
                             else depDbName <> "::" <> processIdToText d pid
-                    (pn, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo flowDB unitDB) mAct
+                    -- Reference products are technosphere; pull the supplier's tech flow map.
+                    (pn, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
                  in (maybe "" activityName mAct, maybe "" activityLocation mAct, pn, txt)
             Nothing ->
                 ("", "", "", depDbName <> "::<unloaded>")
@@ -1630,12 +1631,12 @@ callGetContributingFlows dbManager baseUrl rid args =
                             , "web_url" .= webUrl
                             , "top_flows"
                                 .= [ object
-                                        [ "flow_name" .= flowName f
+                                        [ "flow_name" .= bfName f
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                        , "flow_id" .= UUID.toText (flowId f)
-                                        , "category" .= flowCategory f
-                                        , "compartment" .= flowSubcompartment f
+                                        , "flow_id" .= UUID.toText (bfId f)
+                                        , "category" .= compartmentName (bfCompartment f)
+                                        , "compartment" .= compartmentSub (bfCompartment f)
                                         , "cf_value" .= cfVal
                                         ]
                                    | (f, cfVal, c) <- top
