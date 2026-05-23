@@ -39,7 +39,6 @@ activityWithRefExchange fid =
                 , techAmount = 1.0
                 , techUnitId = UUID.nil
                 , techRole = ReferenceProduct
-                
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""
@@ -71,7 +70,6 @@ activityWithInputExchange fid =
                 , techAmount = 0.5
                 , techUnitId = UUID.nil
                 , techRole = Input
-                
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , techLocation = ""

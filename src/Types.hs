@@ -201,7 +201,7 @@ exchangeIsReference TechnosphereExchange{techRole = role} = case role of
     ReferenceInput -> True
     Input -> False
     Coproduct -> False
-exchangeIsReference BiosphereExchange{} = False -- Biosphere exchanges are never reference products
+exchangeIsReference BiosphereExchange{} = False
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID

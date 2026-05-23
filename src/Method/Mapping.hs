@@ -611,8 +611,8 @@ buildMethodTables cmap mappings =
     -- that rewrites a subcomp can't desynchronise the filter from the sibling
     -- 'mtExactCF' / 'mtFallbackCF' tables or the 'lookupCascadeCF' read path.
     -- Flow subcomp resolution mirrors 'lookupCascadeCF': prefer the explicit
-    -- 'flowSubcompartment' field, fall back to the tail of "<medium>/<sub>"
-    -- parsed from 'flowCategory'.
+    -- 'compartmentSub' field, fall back to the tail of "<medium>/<sub>"
+    -- parsed from the compartment name.
     cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
         Nothing -> True
         Just comp ->
