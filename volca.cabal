@@ -218,6 +218,7 @@ test-suite lca-tests
                      , EcoSpold2Spec
                      , MCPSchemaSpec
                      , BatchImpactsSpec
+                     , MCPEnrichSpec
                      , NormalizeSpec
                      , BM25Spec
                      , FuzzySpec

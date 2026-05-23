@@ -29,6 +29,7 @@ import qualified ILCDParserSpec
 import qualified InventorySpec
 import qualified LicensesSpec
 import qualified LoaderSpec
+import qualified MCPEnrichSpec
 import qualified MCPSchemaSpec
 import qualified MappingSpec
 import qualified MatrixConstructionSpec
@@ -98,6 +99,7 @@ main = hspec $ do
         describe "Method upload pipeline (JSON-LD)" MethodUploadSpec.spec
         describe "MCP Tool Schemas" MCPSchemaSpec.spec
         describe "API.BatchImpacts" BatchImpactsSpec.spec
+        describe "API.MCP.Enrich" MCPEnrichSpec.spec
         describe "Search.Normalize" NormalizeSpec.spec
         describe "Search.BM25" BM25Spec.spec
         describe "Search.Fuzzy" FuzzySpec.spec
