@@ -1861,16 +1861,13 @@ buildSetupResult manager dbName = do
                 else return $ Right info
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded ->
-                let info = buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded)
-                    selected = dbDependsOn (ldDatabase loaded)
-                    dependencies = buildDependencyChoices dbName selected availableDbs indexedDbs
+                let info = buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded) availableDbs indexedDbs
                     nUnresolved = unresolvedCount (dbLinkingStats (ldDatabase loaded))
                  in return $
                         Right
                             info
                                 { dsiIsLoaded = False
                                 , dsiIsReady = nUnresolved == 0
-                                , dsiDependencies = dependencies
                                 }
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
@@ -1931,8 +1928,8 @@ buildStagedSetupInfo staged configs indexedDbs =
 {- | Build setup info from a loaded database (already finalized)
 Uses dbLinkingStats for real completeness/fallback data
 -}
-buildLoadedSetupInfo :: DatabaseConfig -> Database -> DatabaseSetupInfo
-buildLoadedSetupInfo config db =
+buildLoadedSetupInfo :: DatabaseConfig -> Database -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
+buildLoadedSetupInfo config db configs indexedDbs =
     let stats = dbLinkingStats db
         totalInputs = cdlTotalInputs stats
         nCrossDBLinks = length (dbCrossDBLinks db)
@@ -1960,15 +1957,7 @@ buildLoadedSetupInfo config db =
             , dsiCrossDBLinks = nCrossDBLinks
             , dsiUnresolvedLinks = nUnresolved
             , dsiMissingSuppliers = missingSuppliers
-            , dsiDependencies =
-                [ DependencyChoice
-                    { dchStatus = SelectedDep
-                    , dchDatabaseName = name
-                    , dchDisplayName = name
-                    , dchMatchCount = 0
-                    }
-                | name <- dbDependsOn db
-                ]
+            , dsiDependencies = buildDependencyChoices (dcName config) (dbDependsOn db) configs indexedDbs
             , dsiIsReady = True
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
