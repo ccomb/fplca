@@ -59,6 +59,7 @@ library
                      , API.DatabaseHandlers
                      , API.Auth
                      , API.MCP
+                     , API.MCP.Enrich
                      , API.OpenApi
                      , API.Resources
                      , API.Licenses

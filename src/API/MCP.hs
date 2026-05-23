@@ -10,7 +10,6 @@ module API.MCP (mcpApp, toolDefinitions) where
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
 import Data.Aeson.Key (fromText)
-import qualified Data.Aeson.Key as Key
 import Data.Aeson.KeyMap (KeyMap)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
@@ -23,7 +22,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Network.HTTP.Types (hContentType, status200, status202, status405)
-import Network.URI (escapeURIString, isUnreserved)
 import Network.Wai (Application, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.Random (randomIO)
 
@@ -36,10 +34,10 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
+import API.MCP.Enrich (addWebUrl, encodeSegment, enrichBatchResults, enrichResultsWithWebUrl, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
-import qualified Data.Vector as V
 import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
 import qualified Method.Mapping as Mapping
@@ -115,10 +113,6 @@ toolSuccessJson rid val =
 newtype McpState = McpState
     { mcpSessionId :: Text
     }
-
--- | Percent-encode a Text value for use as a URL path segment.
-encodeSegment :: Text -> Text
-encodeSegment = T.pack . escapeURIString isUnreserved . T.unpack
 
 mcpApp :: DatabaseManager -> [ClassificationPreset] -> IO Application
 mcpApp dbManager presets = do
@@ -1743,89 +1737,20 @@ batchErrorMsg err = case err of
     BI.LinkingIncomplete msg -> msg
     BI.OtherBatchError code msg -> "HTTP " <> T.pack (show code) <> ": " <> msg
 
-{- | Add a 'web_url' field to a JSON object at the top level. No-op for
-non-Object values (defensive — the serialized 'LCIABatchResult' /
-'BatchImpactsResponse' shapes are always objects).
+{- | Look up the configured scoring-set names on a loaded method collection.
+Returns the empty list when the collection is not loaded; in that case
+the batch runner has already returned 'BI.CollectionNotLoaded' and the
+filter is never consulted, so the empty result here is harmless. We
+read 'mcScoringSets' directly — not the keys of @scoringResults@ — so
+that a set whose evaluation produced no scores still counts as
+"configured" for the @scoring_sets@ filter.
 -}
-addWebUrl :: Text -> Value -> Value
-addWebUrl url v = case v of
-    Object km -> Object (KM.insert (fromText "web_url") (String url) km)
-    other -> other
-
-{- | Enrich the @results@ array of a serialized 'LCIABatchResult' with a
-per-method 'web_url' built from the per-method @method_id@.
--}
-enrichResultsWithWebUrl :: Text -> Value -> Value
-enrichResultsWithWebUrl baseUrlForCategory v = case v of
-    Object km ->
-        let resultsKey = fromText "results"
-            -- The JSON shape comes from strippedToJSON on LCIAResult, which
-            -- drops the 'lr' prefix and keeps camelCase ('methodId', not
-            -- 'method_id'). Stay aligned with the wire format.
-            enrichOne (Object km') = case KM.lookup (fromText "methodId") km' of
-                Just (String mid) ->
-                    Object
-                        ( KM.insert
-                            (fromText "web_url")
-                            (String (baseUrlForCategory <> "/" <> mid))
-                            km'
-                        )
-                _ -> Object km'
-            enrichOne other = other
-            enrichArray (Array rs) = Array (V.map enrichOne rs)
-            enrichArray other = other
-            updated = case KM.lookup resultsKey km of
-                Just rs -> KM.insert resultsKey (enrichArray rs) km
-                Nothing -> km
-         in Object updated
-    other -> other
-
-{- | If 'requested' is non-empty, restrict the scoring-related maps on a
-serialized 'LCIABatchResult' (or a per-entry @impacts@ subtree) to those
-scoring set names. Errors with the list of configured set names when any
-requested name is unknown — silently dropping a typo'd name would leave
-the caller with a smaller-than-expected payload and no signal.
--}
-filterScoringSets :: [Text] -> Value -> Either Text Value
-filterScoringSets [] v = Right v
-filterScoringSets requested v = case v of
-    Object km ->
-        let srKey = fromText "scoringResults"
-            suKey = fromText "scoringUnits"
-            siKey = fromText "scoringIndicators"
-            available = case KM.lookup srKey km of
-                Just (Object o) -> map Key.toText (KM.keys o)
-                _ -> []
-            requestedSet = requested
-            missing = [r | r <- requestedSet, r `notElem` available]
-            keep k _ = Key.toText k `elem` requestedSet
-            restrict (Object o) = Object (KM.filterWithKey keep o)
-            restrict other = other
-            restrictAt k m = case KM.lookup k m of
-                Just inner -> KM.insert k (restrict inner) m
-                Nothing -> m
-            applied = restrictAt siKey . restrictAt suKey . restrictAt srKey $ km
-         in if not (null missing)
-                then
-                    Left
-                        ( "Unknown scoring set(s): "
-                            <> T.intercalate ", " missing
-                            <> ". Configured on this collection: "
-                            <> T.intercalate ", " available
-                        )
-                else Right (Object applied)
-    _ -> Right v
-
--- | Activity-level impacts page URL (the LCIA batch view in the web UI).
-scoreActivityWebUrl :: Text -> Text -> Text -> Text -> Text
-scoreActivityWebUrl baseUrl dbName pidText coll =
-    baseUrl
-        <> "/db/"
-        <> dbName
-        <> "/activity/"
-        <> pidText
-        <> "/impacts/"
-        <> encodeSegment coll
+configuredScoringSetNames :: DatabaseManager -> Text -> IO [Text]
+configuredScoringSetNames dbm collName = do
+    loaded <- readTVarIO (dmLoadedMethods dbm)
+    pure $ case M.lookup collName loaded of
+        Just mc -> map ssName (mcScoringSets mc)
+        Nothing -> []
 
 {- | Handler for the 'score_activity' MCP tool.
 
@@ -1838,7 +1763,8 @@ enriched with a top-level 'web_url' for the panel view and a per-method
 callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callScoreActivity dbManager baseUrl rid args =
     either (toolError rid) id
-        <$> ( runExceptT $ do
+        <$> runExceptT
+            ( do
                 dbName <- ExceptT $ pure (requireText "database" args)
                 pidText <- ExceptT $ pure (requireText "process_id" args)
                 coll <- ExceptT $ pure (requireText "collection" args)
@@ -1848,27 +1774,31 @@ callScoreActivity dbManager baseUrl rid args =
                 res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
-                    Right lbr ->
+                    Right lbr -> do
+                        configured <- liftIO $ configuredScoringSetNames dbManager coll
                         let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
                             enriched =
                                 addWebUrl
                                     topUrl
                                     (enrichResultsWithWebUrl topUrl (toJSON lbr))
-                         in ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets wantedSets enriched)
+                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
 
 {- | Handler for the 'score_activities' MCP tool.
 
 Scores N activities against every method in a collection in one
 multi-RHS MUMPS solve plus parallel characterization. Each successful
-entry's @impacts@ subtree is enriched with a 'web_url' to its impacts
-page in the web UI. Unresolved process IDs land in @not_found@ /
-@invalid@ of the response, not as a 'BatchError'.
+entry carries a top-level @web_url@ (the activity-level impacts page)
+and the same URL is replicated inside its @impacts@ subtree alongside
+per-method @web_url@s, so clients reading either shape land on the
+right link. Unresolved process IDs land in @not_found@ / @invalid@ of
+the response, not as a 'BatchError'.
 -}
 callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callScoreActivities dbManager baseUrl rid args =
     either (toolError rid) id
-        <$> ( runExceptT $ do
+        <$> runExceptT
+            ( do
                 dbName <- ExceptT $ pure (requireText "database" args)
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
@@ -1877,67 +1807,11 @@ callScoreActivities dbManager baseUrl rid args =
                 res <- liftIO $ BI.runBatchImpacts dbManager dbName coll topFlows pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
-                    Right bir ->
+                    Right bir -> do
+                        configured <- liftIO $ configuredScoringSetNames dbManager coll
                         let enriched = enrichBatchResults baseUrl dbName coll (toJSON bir)
-                         in ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch wantedSets enriched)
+                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets enriched)
             )
-
-{- | Apply 'filterScoringSets' to every @impacts@ subtree of a serialized
-'BatchImpactsResponse'. Fails fast on the first entry that references an
-unknown scoring set name — the configuration is collection-wide, so a
-bad name fails identically for every entry.
--}
-filterScoringSetsBatch :: [Text] -> Value -> Either Text Value
-filterScoringSetsBatch [] v = Right v
-filterScoringSetsBatch wanted v = case v of
-    Object km ->
-        let resultsKey = fromText "results"
-            impactsKey = fromText "impacts"
-            filterEntry (Object entryKM) = case KM.lookup impactsKey entryKM of
-                Just impactsValue -> do
-                    filteredImpacts <- filterScoringSets wanted impactsValue
-                    pure (Object (KM.insert impactsKey filteredImpacts entryKM))
-                Nothing -> Right (Object entryKM)
-            filterEntry other = Right other
-            filterArray (Array rs) = Array <$> traverse filterEntry rs
-            filterArray other = Right other
-         in case KM.lookup resultsKey km of
-                Just rs -> do
-                    rs' <- filterArray rs
-                    Right (Object (KM.insert resultsKey rs' km))
-                Nothing -> Right v
-    _ -> Right v
-
-{- | Enrich each entry of a serialized 'BatchImpactsResponse' with a
-@web_url@ pointing at the activity-level impacts page. Per-method
-@web_url@s inside each entry's @impacts.results@ are also added by
-reusing 'enrichResultsWithWebUrl'.
--}
-enrichBatchResults :: Text -> Text -> Text -> Value -> Value
-enrichBatchResults baseUrl dbName coll v = case v of
-    Object km ->
-        let resultsKey = fromText "results"
-            impactsKey = fromText "impacts"
-            -- strippedToJSON on BatchImpactsEntry drops 'bie' prefix and
-            -- keeps camelCase: the field is 'processId', not 'process_id'.
-            processIdKey = fromText "processId"
-            enrichEntry (Object km') = case KM.lookup processIdKey km' of
-                Just (String pidText) ->
-                    let url = scoreActivityWebUrl baseUrl dbName pidText coll
-                        enrichedImpacts = case KM.lookup impactsKey km' of
-                            Just impactsValue ->
-                                addWebUrl url (enrichResultsWithWebUrl url impactsValue)
-                            Nothing -> Object KM.empty
-                     in Object (KM.insert impactsKey enrichedImpacts km')
-                _ -> Object km'
-            enrichEntry other = other
-            enrichArray (Array rs) = Array (V.map enrichEntry rs)
-            enrichArray other = other
-            updated = case KM.lookup resultsKey km of
-                Just rs -> KM.insert resultsKey (enrichArray rs) km
-                Nothing -> km
-         in Object updated
-    other -> other
 
 {- | Handler for the 'list_scoring_sets' MCP tool.
 
