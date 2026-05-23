@@ -42,7 +42,7 @@ import qualified Data.Vector as V
 import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
 import qualified Method.Mapping as Mapping
-import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
+import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
 import Plugin.Types ()
@@ -355,6 +355,7 @@ callTool dbManager presets baseUrl rid name args = case name of
     "compare_impacts" -> callCompareImpacts dbManager rid args
     "score_activity" -> callScoreActivity dbManager baseUrl rid args
     "score_activities" -> callScoreActivities dbManager baseUrl rid args
+    "list_scoring_sets" -> callListScoringSets dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1867,3 +1868,59 @@ enrichBatchResults baseUrl dbName coll v = case v of
                 Nothing -> km
          in Object updated
     other -> other
+
+{- | Handler for the 'list_scoring_sets' MCP tool.
+
+Returns the formula-based scoring sets configured on every loaded
+'MethodCollection'. Pure read from the live TVar; no HTTP equivalent.
+When 'collection' is supplied, filters to that one and errors if it is
+not loaded (listing the loaded names in the message).
+
+The projection is explicit (rather than @toJSON ss@) so the wire format
+stays in snake_case and is not silently affected by a future field
+addition to 'ScoringSet'.
+-}
+callListScoringSets :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callListScoringSets dbManager rid args = do
+    loaded <- readTVarIO (dmLoadedMethods dbManager)
+    let mCollection = case requireText "collection" args of
+            Right t -> Just t
+            Left _ -> Nothing
+    case mCollection of
+        Nothing -> return $ toolSuccessJson rid (encodeAll loaded)
+        Just collName -> case M.lookup collName loaded of
+            Nothing ->
+                return $
+                    toolError
+                        rid
+                        ( "Collection not loaded: "
+                            <> collName
+                            <> ". Available collections: "
+                            <> T.intercalate ", " (M.keys loaded)
+                        )
+            Just mc -> return $ toolSuccessJson rid (encodeAll (M.singleton collName mc))
+  where
+    encodeAll :: M.Map Text MethodCollection -> Value
+    encodeAll loaded =
+        object
+            [ "collections"
+                .= [ object
+                        [ "collection" .= cName
+                        , "scoring_sets" .= map encodeScoringSet (mcScoringSets mc)
+                        ]
+                   | (cName, mc) <- M.toList loaded
+                   ]
+            ]
+
+    encodeScoringSet :: ScoringSet -> Value
+    encodeScoringSet ss =
+        object
+            [ "name" .= ssName ss
+            , "unit" .= ssUnit ss
+            , "variables" .= ssVariables ss
+            , "computed" .= ssComputed ss
+            , "normalization" .= ssNormalization ss
+            , "weighting" .= ssWeighting ss
+            , "scores" .= ssScores ss
+            , "display_multiplier" .= ssDisplayMultiplier ss
+            ]

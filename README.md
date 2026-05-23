@@ -284,6 +284,7 @@ Available tools (auto-derived from a single resource registry shared with the RE
 | `get_impacts` | LCIA score for an activity and method (accepts substitutions) |
 | `score_activity` | Full LCIA panel + every configured scoring set for one activity (replaces N×get_impacts calls) |
 | `score_activities` | Same shape as score_activity, batched over N activities in one multi-RHS solve |
+| `list_scoring_sets` | List formula-based scoring sets configured on every loaded method collection |
 | `get_contributing_flows` | Top biosphere flows contributing to an LCIA score |
 | `get_contributing_activities` | Top upstream activities contributing to an LCIA score |
 | `get_flow_mapping` | CF-to-flow mapping coverage for a method |
