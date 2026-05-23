@@ -26,7 +26,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 
 import Search.BM25.Types (BM25Index (..))
 import Search.Normalize (tokenize)
-import Types (Activity, Database (..), TechFlowDB, activityName, exchangeFlowId, exchangeIsInput, exchangeIsReference, exchanges, tfName)
+import Types (Activity, Database (..), TechFlowDB, activityName, exchangeFlowId, exchangeIsReference, exchanges, tfName)
 
 {- | Populate the BM25 index field on a Database. Called after
 initializeRuntimeFields during database load. Idempotent.
@@ -118,9 +118,11 @@ documentTokens flowDb a =
     tokenize (activityName a)
         ++ concatMap productTokens (exchanges a)
   where
+    -- Index both ReferenceProduct (regular output) and ReferenceInput
+    -- (treatment-process input) — both are the activity's product for
+    -- BM25 search purposes.
     productTokens ex
         | exchangeIsReference ex
-        , not (exchangeIsInput ex)
         , Just flow <- M.lookup (exchangeFlowId ex) flowDb =
             tokenize (tfName flow)
         | otherwise = []

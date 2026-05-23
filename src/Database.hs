@@ -404,11 +404,14 @@ applyStructuredFilters db geoParam productParam classFilters exactMatch candidat
                     let geoLower = T.toLower geo
                      in [(pid, a) | (pid, a) <- candidates, T.isInfixOf geoLower (T.toLower (activityLocation a))]
 
+        -- exchangeIsReference covers both ReferenceProduct (output) and
+        -- ReferenceInput (treatment-process input). Both are the activity's
+        -- reference product for search purposes; excluding ReferenceInput
+        -- here used to hide waste-treatment activities from product filters.
         getProductNames a' =
             [ tfName flow
             | ex <- exchanges a'
             , exchangeIsReference ex
-            , not (exchangeIsInput ex)
             , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
             ]
 
