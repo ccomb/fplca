@@ -547,28 +547,40 @@ callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) =
     case textArg "process_id" args of
         Nothing -> return $ toolError rid "Missing required parameter: process_id"
-        Just pid ->
-            case Service.getActivityInfo defaultUnitConfig db pid of
-                Left err -> return $ toolError rid (T.pack $ show err)
-                Right val
-                    | noFilters -> return $ toolSuccessJson rid val
-                    | otherwise -> case fromJSON val of
-                        Error _ -> return $ toolSuccessJson rid val
-                        Success ai ->
-                            let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
-                             in return $ toolSuccessJson rid (toJSON filtered)
+        Just pid -> case validatedExchangeType of
+            Left err -> return $ toolError rid err
+            Right _ ->
+                case Service.getActivityInfo defaultUnitConfig db pid of
+                    Left err -> return $ toolError rid (T.pack $ show err)
+                    Right val
+                        | noFilters -> return $ toolSuccessJson rid val
+                        | otherwise -> case fromJSON val of
+                            Error _ -> return $ toolSuccessJson rid val
+                            Success ai ->
+                                let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
+                                 in return $ toolSuccessJson rid (toJSON filtered)
   where
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
     isInputFilter = boolArg "is_input" args
+    -- Mirror /api/aggregate's strictness: silently swallowing typos like
+    -- `exchange_type=tecnosphere` would yield "all exchanges" with no signal
+    -- to the caller that the filter was ignored.
+    validatedExchangeType = case exchangeType of
+        Nothing -> Right Nothing
+        Just "all" -> Right Nothing
+        Just "technosphere" -> Right (Just True)
+        Just "biosphere" -> Right (Just False)
+        Just other ->
+            Left $ "exchange_type must be one of: all | technosphere | biosphere (got " <> other <> ")"
     noFilters =
         exchangeType `elem` [Nothing, Just "all"]
             && isNothing flowFilter
             && isNothing isInputFilter
     matchExchange ewu = matchType ewu && matchFlow ewu && matchIsInput ewu
-    matchType ewu = case exchangeType of
-        Just "biosphere" -> not (isTechnosphereExchange (ewuExchange ewu))
-        Just "technosphere" -> isTechnosphereExchange (ewuExchange ewu)
+    matchType ewu = case validatedExchangeType of
+        Right (Just True) -> isTechnosphereExchange (ewuExchange ewu)
+        Right (Just False) -> not (isTechnosphereExchange (ewuExchange ewu))
         _ -> True
     matchFlow ewu = case flowFilter of
         Nothing -> True
