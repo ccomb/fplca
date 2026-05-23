@@ -26,6 +26,9 @@ module API.MCP.Enrich (
     enrichResultsWithWebUrl,
     enrichBatchResults,
 
+    -- * payload slimming
+    slimLCIAPanel,
+
     -- * scoring_sets filter
     filterScoringSets,
     filterScoringSetsBatch,
@@ -121,7 +124,7 @@ scoreActivityWebUrl baseUrl dbName pidText coll =
 -- web_url enrichment
 -- ---------------------------------------------------------------------------
 
-webUrlKey, resultsKey, impactsKey, processIdKey, methodIdKey :: Key.Key
+webUrlKey, resultsKey, impactsKey, processIdKey, methodIdKey, functionalUnitKey :: Key.Key
 webUrlKey = fromText "web_url"
 resultsKey = fromText "results"
 impactsKey = fromText "impacts"
@@ -130,6 +133,7 @@ impactsKey = fromText "impacts"
 -- actually serialize to ('methodId', not 'method_id').
 processIdKey = fromText "processId"
 methodIdKey = fromText "methodId"
+functionalUnitKey = fromText "functionalUnit"
 
 -- | Add a 'web_url' field to a JSON object at the top level.
 addWebUrl :: Text -> Value -> Value
@@ -185,6 +189,41 @@ enrichBatchEntry baseUrl dbName coll =
                         Nothing -> km
                  in KM.insert webUrlKey (String url) withImpacts
             Nothing -> km
+
+-- ---------------------------------------------------------------------------
+-- payload slimming
+-- ---------------------------------------------------------------------------
+
+{- | Slim down a serialized 'LCIABatchResult' for MCP transport. Two
+edits, both purely about wire weight (no information lost):
+
+  * Hoist @functionalUnit@ from @results[0]@ to the top level. Every
+    entry in @results@ shares the same value (one panel = one activity
+    = one functional unit), so repeating it 27 times is pure bloat.
+    The lifted copy lives next to @results@ and the per-entry copies
+    are removed.
+  * Drop @web_url@ from every entry. The panel-level @web_url@ added
+    by 'addWebUrl' already lands on the page that lists every method;
+    a deep link per method would be redundant.
+
+Defensive on the shape: missing @results@, empty @results@, or entries
+without a @functionalUnit@ are all passed through cleanly.
+-}
+slimLCIAPanel :: Value -> Value
+slimLCIAPanel = overObject $ \km ->
+    let fnUnit = case KM.lookup resultsKey km of
+            Just (Array rs) -> firstFunctionalUnit rs
+            _ -> Nothing
+        slimmedResults = adjustKey resultsKey (overArray stripEntry) km
+        stripEntry = overObject (KM.delete functionalUnitKey . KM.delete webUrlKey)
+     in case fnUnit of
+            Just fu -> KM.insert functionalUnitKey fu slimmedResults
+            Nothing -> slimmedResults
+
+firstFunctionalUnit :: V.Vector Value -> Maybe Value
+firstFunctionalUnit rs = case V.toList rs of
+    Object km : _ -> KM.lookup functionalUnitKey km
+    _ -> Nothing
 
 -- ---------------------------------------------------------------------------
 -- scoring_sets filter

@@ -19,6 +19,7 @@ import API.MCP.Enrich (
     filterScoringSets,
     filterScoringSetsBatch,
     scoreActivityWebUrl,
+    slimLCIAPanel,
  )
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key (fromText)
@@ -124,6 +125,61 @@ spec = do
             addWebUrl "https://x" (Number 42) `shouldBe` Number 42
             addWebUrl "https://x" (Bool True) `shouldBe` Bool True
             addWebUrl "https://x" Null `shouldBe` Null
+
+    describe "slimLCIAPanel" $ do
+        let panelWithFnUnit =
+                object
+                    [ "results"
+                        .= [ object
+                                [ "methodId" .= ("uuid-method-1" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "web_url" .= ("https://x/should-be-dropped" :: Text)
+                                , "score" .= (1.0 :: Double)
+                                ]
+                           , object
+                                [ "methodId" .= ("uuid-method-2" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "web_url" .= ("https://x/should-be-dropped-too" :: Text)
+                                , "score" .= (2.0 :: Double)
+                                ]
+                           ]
+                    , "scoringResults" .= object []
+                    ]
+
+        it "hoists functionalUnit from results[0] to the top level" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+            KM.lookup (fromText "functionalUnit") km
+                `shouldBe` Just (String "1.0 kg of butter")
+
+        it "drops functionalUnit from every entry in results" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+                Just (Array rs) = KM.lookup (fromText "results") km
+            flip mapM_ (V.toList rs) $ \(Object e) ->
+                KM.lookup (fromText "functionalUnit") e `shouldBe` Nothing
+
+        it "drops web_url from every entry in results" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+                Just (Array rs) = KM.lookup (fromText "results") km
+            flip mapM_ (V.toList rs) $ \(Object e) ->
+                KM.lookup (fromText "web_url") e `shouldBe` Nothing
+
+        it "preserves the other top-level fields (scoringResults, etc.)" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+            KM.lookup (fromText "scoringResults") km `shouldBe` Just (object [])
+
+        it "is a no-op on a panel without results" $
+            slimLCIAPanel (object ["scoringResults" .= object []])
+                `shouldBe` object ["scoringResults" .= object []]
+
+        it "handles a panel with an empty results array (no fn unit to lift)" $ do
+            let v = object ["results" .= ([] :: [Value]), "scoringResults" .= object []]
+                Object km = slimLCIAPanel v
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
+
+        it "leaves entries without a functionalUnit untouched apart from web_url" $ do
+            let v = object ["results" .= [object ["score" .= (1 :: Int)]]]
+                Object km = slimLCIAPanel v
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
 
     describe "enrichResultsWithWebUrl" $ do
         it "appends /<methodId> as web_url on each results entry with a methodId" $ do

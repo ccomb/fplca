@@ -34,7 +34,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.MCP.Enrich (addWebUrl, encodeSegment, enrichBatchResults, enrichResultsWithWebUrl, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl)
+import API.MCP.Enrich (addWebUrl, encodeSegment, enrichBatchResults, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl, slimLCIAPanel)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
@@ -1797,8 +1797,11 @@ configuredScoringSetNames dbm collName = do
 
 Returns the full LCIABatchResult shape (per-method scores, per-scoring-set
 aggregate scores, per-indicator breakdown, units) for a single activity,
-enriched with a top-level 'web_url' for the panel view and a per-method
-'web_url' in each @results@ entry. Replaces the @N@ round-trips of
+enriched with a top-level 'web_url' pointing at the impacts panel page
+(which already lists every method). The per-entry @functionalUnit@ is
+hoisted to the top level — it is constant across the panel — and
+per-method @web_url@s are not emitted: the panel link covers the same
+ground at a fraction of the bytes. Replaces the @N@ round-trips of
 'get_impacts' a comparative study used to need.
 -}
 callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
@@ -1821,7 +1824,7 @@ callScoreActivity dbManager baseUrl rid args =
                             enriched =
                                 addWebUrl
                                     topUrl
-                                    (enrichResultsWithWebUrl topUrl (toJSON lbr))
+                                    (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
 
