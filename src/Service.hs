@@ -1285,17 +1285,16 @@ getFlowInfo db flowIdText = do
                             Right $ toJSON $ FlowDetail (Right flow) (getUnitNameForBioFlow (dbUnits db) flow) usageCount
                         Nothing -> Left $ FlowNotFound flowIdText
 
--- | Get activities that use a specific flow as JSON (for CLI)
+-- | Get activities that use a specific flow as JSON (for CLI). Resolves
+-- against either flow side so biosphere flow IDs work too.
 getFlowActivities :: Database -> Text -> Either ServiceError Value
 getFlowActivities db flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
-        Just fId ->
-            case M.lookup fId (dbTechFlows db) of
-                Nothing -> Left $ FlowNotFound flowIdText
-                Just _ ->
-                    let activities = getActivitiesUsingFlow db fId
-                     in Right $ toJSON activities
+        Just fId
+            | M.member fId (dbTechFlows db) || M.member fId (dbBioFlows db) ->
+                Right $ toJSON (getActivitiesUsingFlow db fId)
+            | otherwise -> Left $ FlowNotFound flowIdText
 
 {- | Compute the supply chain for an activity using the scaling vector.
 Returns all upstream activities with their scaling factors and subgraph edges.
