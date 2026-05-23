@@ -399,6 +399,27 @@ requireText :: Text -> KeyMap Value -> Either Text Text
 requireText key args =
     maybe (Left ("Missing required parameter: " <> key)) Right (textArg key args)
 
+{- | Optional text argument. Distinguishes three cases that 'requireText'
+silently collapses:
+
+  * key absent (or explicitly @null@) — 'Right Nothing'
+  * present as a string — 'Right (Just ...)'
+  * present but the wrong JSON type — 'Left' with a message naming the
+    actual type, so a typo like @{"collection": 42}@ surfaces instead of
+    being treated as "omitted".
+-}
+optionalText :: Text -> KeyMap Value -> Either Text (Maybe Text)
+optionalText key args = case KM.lookup (fromText key) args of
+    Nothing -> Right Nothing
+    Just Null -> Right Nothing
+    Just (String t) -> Right (Just t)
+    Just (Object _) -> wrongType "object"
+    Just (Array _) -> wrongType "array"
+    Just (Number _) -> wrongType "number"
+    Just (Bool _) -> wrongType "boolean"
+  where
+    wrongType ty = Left ("Parameter '" <> key <> "' must be a string, got " <> ty)
+
 -- | Read an argument that may be either a JSON array of strings or a single string.
 textArrayArg :: Text -> KeyMap Value -> [Text]
 textArrayArg key args = case KM.lookup (fromText key) args of
@@ -1827,12 +1848,10 @@ addition to 'ScoringSet'.
 callListScoringSets :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callListScoringSets dbManager rid args = do
     loaded <- readTVarIO (dmLoadedMethods dbManager)
-    let mCollection = case requireText "collection" args of
-            Right t -> Just t
-            Left _ -> Nothing
-    case mCollection of
-        Nothing -> return $ toolSuccessJson rid (encodeAll loaded)
-        Just collName -> case M.lookup collName loaded of
+    case optionalText "collection" args of
+        Left err -> return $ toolError rid err
+        Right Nothing -> return $ toolSuccessJson rid (encodeAll loaded)
+        Right (Just collName) -> case M.lookup collName loaded of
             Nothing ->
                 return $
                     toolError
