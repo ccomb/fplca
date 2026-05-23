@@ -97,6 +97,27 @@ waitForReady mgr remaining = do
     alive <- isAlive mgr
     if alive then return True else waitForReady mgr (remaining - 1)
 
+{- | Poll 'getProcessExitCode' until the process exits or budget runs out.
+Returns the exit code if it exited within budget, 'Nothing' otherwise.
+Budget is in 200ms ticks.
+
+Why: shutdown is asynchronous — the endpoint returns immediately and the
+RTS finishes teardown some hundreds of ms later. A fixed sleep is racy
+on slow CI runners; polling lets the test pass as soon as the process
+actually exits and bounds the worst case at a clear upper limit.
+
+How to apply: probe the process, NOT the HTTP socket. Hitting @isAlive@
+in a tight loop would count as activity and reset the idle timer the
+@idle-timeout@ test depends on.
+-}
+waitForExit :: ProcessHandle -> Int -> IO (Maybe ExitCode)
+waitForExit _ 0 = pure Nothing
+waitForExit ph remaining = do
+    mCode <- getProcessExitCode ph
+    case mCode of
+        Just _ -> pure mCode
+        Nothing -> threadDelay 200000 >> waitForExit ph (remaining - 1)
+
 -- | Check if server is reachable
 isAlive :: Manager -> IO Bool
 isAlive mgr = do
@@ -135,34 +156,30 @@ serverSpecs = do
         it "POST /api/v1/shutdown stops the server" $ do
             withMinimalConfig $ \cfgPath ->
                 withServer cfgPath $ \ph mgr -> do
-                    -- Server should be alive
                     isAlive mgr `shouldReturn` True
-                    -- Send shutdown
                     code <- postEndpoint mgr "/api/v1/shutdown"
                     code `shouldBe` 200
-                    -- Wait for server to die
-                    threadDelay 1000000 -- 1s
-                    isAlive mgr `shouldReturn` False
-                    -- Process should have exited
-                    mCode <- getProcessExitCode ph
+                    -- Poll for process exit, up to 5s (25 * 200ms).
+                    mCode <- waitForExit ph 25
                     mCode `shouldBe` Just ExitSuccess
+                    isAlive mgr `shouldReturn` False
 
     describe "Server idle timeout" $ do
         it "POST /api/v1/idle-timeout/N shuts down after N seconds" $ do
             withMinimalConfig $ \cfgPath ->
                 withServer cfgPath $ \ph mgr -> do
-                    -- Server should be alive
                     isAlive mgr `shouldReturn` True
-                    -- Activate 2-second idle timeout
                     code <- postEndpoint mgr "/api/v1/idle-timeout/2"
                     code `shouldBe` 200
-                    -- Still alive immediately
+                    -- The idle timer resets on each HTTP hit, so the next
+                    -- check is the last activity before the quiet window.
                     isAlive mgr `shouldReturn` True
-                    -- Wait for timeout + buffer
-                    threadDelay 3500000 -- 3.5s
-                    -- Should be dead
-                    isAlive mgr `shouldReturn` False
-                    mCode <- getProcessExitCode ph
+                    -- Then stay quiet for the full timer + a small grace,
+                    -- then poll the *process* (not the socket) for exit.
+                    -- Budget: 6s of polling after a 2s quiet window covers
+                    -- generous CI scheduling slop.
+                    threadDelay 2200000 -- 2.2s — let the 2s timer fire
+                    mCode <- waitForExit ph 30
                     mCode `shouldBe` Just ExitSuccess
 
         it "POST /api/v1/idle-timeout/0 cancels timeout" $ do
