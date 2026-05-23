@@ -15,7 +15,8 @@ module Database.Manager (
     DatabaseSetupInfo (..),
     SetupError (..),
     MissingSupplier (..),
-    DependencySuggestion (..),
+    DependencyChoice (..),
+    DependencyStatus (..),
     MethodCollectionStatus (..),
     RefDataStatus (..),
 
@@ -231,21 +232,30 @@ instance ToJSON MissingSupplier where
             , "detail" .= msDetail
             ]
 
--- | Suggestion for a dependency database
-data DependencySuggestion = DependencySuggestion
-    { dsgDatabaseName :: !Text
-    , dsgDisplayName :: !Text
-    , dsgMatchCount :: !Int
-    -- ^ How many missing suppliers it can provide
+-- | Whether a candidate dependency is currently selected or merely available
+data DependencyStatus = SelectedDep | AvailableDep
+    deriving (Show, Eq, Generic)
+
+instance ToJSON DependencyStatus where
+    toJSON SelectedDep = A.String "selected"
+    toJSON AvailableDep = A.String "available"
+
+-- | A candidate dependency database in either selected or available state
+data DependencyChoice = DependencyChoice
+    { dchStatus :: !DependencyStatus
+    , dchDatabaseName :: !Text
+    , dchDisplayName :: !Text
+    , dchMatchCount :: !Int
     }
     deriving (Show, Eq, Generic)
 
-instance ToJSON DependencySuggestion where
-    toJSON DependencySuggestion{..} =
+instance ToJSON DependencyChoice where
+    toJSON DependencyChoice{..} =
         A.object
-            [ "databaseName" .= dsgDatabaseName
-            , "displayName" .= dsgDisplayName
-            , "matchCount" .= dsgMatchCount
+            [ "status" .= dchStatus
+            , "databaseName" .= dchDatabaseName
+            , "displayName" .= dchDisplayName
+            , "matchCount" .= dchMatchCount
             ]
 
 -- | Setup info for a database (for the setup page)
@@ -265,10 +275,8 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -- ^ Still unresolved
     , dsiMissingSuppliers :: ![MissingSupplier]
     -- ^ Top missing suppliers
-    , dsiSelectedDeps :: ![Text]
-    -- ^ Currently selected dependencies
-    , dsiSuggestions :: ![DependencySuggestion]
-    -- ^ Suggested dependencies
+    , dsiDependencies :: ![DependencyChoice]
+    -- ^ Candidate dependencies (selected + available) in one alpha-sorted list
     , dsiIsReady :: !Bool
     -- ^ True if can be finalized
     , dsiUnknownUnits :: ![Text]
@@ -296,8 +304,7 @@ instance ToJSON DatabaseSetupInfo where
             , "crossDBLinks" .= dsiCrossDBLinks
             , "unresolvedLinks" .= dsiUnresolvedLinks
             , "missingSuppliers" .= dsiMissingSuppliers
-            , "selectedDependencies" .= dsiSelectedDeps
-            , "suggestions" .= dsiSuggestions
+            , "dependencies" .= dsiDependencies
             , "isReady" .= dsiIsReady
             , "unknownUnits" .= dsiUnknownUnits
             , "locationFallbacks" .= map encodeFallback dsiLocationFallbacks
@@ -1855,14 +1862,15 @@ buildSetupResult manager dbName = do
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded ->
                 let info = buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded)
-                    suggestions = buildDependencySuggestions' availableDbs indexedDbs
+                    selected = dbDependsOn (ldDatabase loaded)
+                    dependencies = buildDependencyChoices dbName selected availableDbs indexedDbs
                     nUnresolved = unresolvedCount (dbLinkingStats (ldDatabase loaded))
                  in return $
                         Right
                             info
                                 { dsiIsLoaded = False
                                 , dsiIsReady = nUnresolved == 0
-                                , dsiSuggestions = suggestions
+                                , dsiDependencies = dependencies
                                 }
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
@@ -1891,8 +1899,13 @@ buildStagedSetupInfo staged configs indexedDbs =
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
              in MissingSupplier name cnt Nothing reason detail
-        -- Build suggestions from available databases
-        suggestions = buildDependencySuggestions staged configs indexedDbs
+        -- Combined dependencies list (selected + available, alpha sorted)
+        dependencies =
+            buildDependencyChoices
+                (dcName (sdConfig staged))
+                (sdSelectedDeps staged)
+                configs
+                indexedDbs
         -- Database is ready only when it has activities and all inputs are resolved
         activityCount = M.size (sdbActivities (sdSimpleDB staged))
         isReady = activityCount > 0 && unresolvedLinks == 0
@@ -1906,8 +1919,7 @@ buildStagedSetupInfo staged configs indexedDbs =
             , dsiCrossDBLinks = crossDBLinks
             , dsiUnresolvedLinks = unresolvedLinks
             , dsiMissingSuppliers = missingSuppliers
-            , dsiSelectedDeps = sdSelectedDeps staged
-            , dsiSuggestions = suggestions
+            , dsiDependencies = dependencies
             , dsiIsReady = isReady
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
@@ -1948,8 +1960,15 @@ buildLoadedSetupInfo config db =
             , dsiCrossDBLinks = nCrossDBLinks
             , dsiUnresolvedLinks = nUnresolved
             , dsiMissingSuppliers = missingSuppliers
-            , dsiSelectedDeps = dbDependsOn db
-            , dsiSuggestions = [] -- No suggestions for loaded databases
+            , dsiDependencies =
+                [ DependencyChoice
+                    { dchStatus = SelectedDep
+                    , dchDatabaseName = name
+                    , dchDisplayName = name
+                    , dchMatchCount = 0
+                    }
+                | name <- dbDependsOn db
+                ]
             , dsiIsReady = True
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
@@ -2040,20 +2059,36 @@ setDataPath manager dbName newRelPath = do
                             Left err -> return $ Left $ setupErrorMessage err
                             Right info -> return $ Right info
 
--- | Build dependency suggestions from available indexed databases
-buildDependencySuggestions' :: Map Text DatabaseConfig -> Map Text IndexedDatabase -> [DependencySuggestion]
-buildDependencySuggestions' configs indexedDbs =
-    [ DependencySuggestion
-        { dsgDatabaseName = name
-        , dsgDisplayName = maybe name dcDisplayName (M.lookup name configs)
-        , dsgMatchCount = M.size (Database.CrossLinking.idbByProductName idx)
-        }
-    | (name, idx) <- M.toList indexedDbs
-    ]
-
--- | Build dependency suggestions for a staged database
-buildDependencySuggestions :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> [DependencySuggestion]
-buildDependencySuggestions _staged = buildDependencySuggestions'
+{- | Build the combined list of dependency choices.
+Excludes the current database, tags entries as Selected/Available based on
+the selected set, and sorts the result alphabetically by database name.
+-}
+buildDependencyChoices ::
+    -- | Current database name (excluded from the result)
+    Text ->
+    -- | Names currently selected as dependencies
+    [Text] ->
+    Map Text DatabaseConfig ->
+    Map Text IndexedDatabase ->
+    [DependencyChoice]
+buildDependencyChoices currentName selected configs indexedDbs =
+    let selectedSet = S.fromList selected
+        mkChoice (name, idx) =
+            DependencyChoice
+                { dchStatus =
+                    if S.member name selectedSet
+                        then SelectedDep
+                        else AvailableDep
+                , dchDatabaseName = name
+                , dchDisplayName = maybe name dcDisplayName (M.lookup name configs)
+                , dchMatchCount = M.size (Database.CrossLinking.idbByProductName idx)
+                }
+     in sortOn
+            dchDatabaseName
+            [ mkChoice (name, idx)
+            | (name, idx) <- M.toList indexedDbs
+            , name /= currentName
+            ]
 
 {- | Re-stage a loaded database for dependency editing
 Moves from dmLoadedDbs → dmStagedDbs, cleans up solver
@@ -2579,9 +2614,10 @@ regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
 getLocationHierarchy :: DatabaseManager -> IO (M.Map Text [Text])
 getLocationHierarchy manager = pure (M.map snd (dmGeographies manager))
 
--- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
--- flows are not merged here because characterization (the only consumer of
--- this cache) targets biosphere flows exclusively.
+{- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
+flows are not merged here because characterization (the only consumer of
+this cache) targets biosphere flows exclusively.
+-}
 getMergedFlowMetadata :: DatabaseManager -> IO (BioFlowDB, UnitDB)
 getMergedFlowMetadata manager = do
     cached <- readTVarIO (dmMergedFlowMetadataCache manager)
