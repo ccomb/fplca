@@ -71,7 +71,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
         dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
 
         -- Build indexes (now using Vector)
-        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable bioFlowDB
+        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable
 
         -- Build supplier reference unit lookup: ProcessId -> unit name of reference product
         -- Used to convert exchange amounts to the supplier's unit for correct A-matrix coefficients
@@ -258,18 +258,16 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
                         , dbBM25Index = Nothing
                         }
 
--- | Build indexes with ProcessIds. Biosphere flows feed the compartment index;
--- technosphere flows carry no taxonomy and are not indexed here.
-buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> BioFlowDB -> Indexes
-buildIndexesWithProcessIds activityVec processIdTable bioFlowDB =
+-- | Build activity-level indexes (name / location / flow / unit). Flow-side
+-- taxonomy lives on activities or biosphere compartments and is queried via
+-- the flow databases directly, so no separate flow index is built here.
+buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> Indexes
+buildIndexesWithProcessIds activityVec processIdTable =
     let
-        -- Convert Vector to temporary Map for index building
-        -- We use the ProcessId-to-UUID mapping for lookups
         activityUUIDs = [actUUID | (actUUID, _) <- V.toList processIdTable]
         activities = V.toList activityVec
         activityPairs = zip activityUUIDs activities
 
-        -- Build indexes using activity UUIDs
         nameIdx =
             M.fromListWith
                 (++)
@@ -290,18 +288,12 @@ buildIndexesWithProcessIds activityVec processIdTable bioFlowDB =
             M.fromListWith
                 (++)
                 [(activityUnit activity, [uuid]) | (uuid, activity) <- activityPairs]
-
-        bioCompartmentIdx =
-            M.fromListWith
-                (++)
-                [(compartmentName (bfCompartment flow), [bfId flow]) | flow <- M.elems bioFlowDB]
      in
         Indexes
             { idxByName = nameIdx
             , idxByLocation = locationIdx
             , idxByFlow = flowIdx
             , idxByUnit = unitIdx
-            , idxBioByCompartment = bioCompartmentIdx
             }
 
 {- | Build ProductIndex for product-based lookups

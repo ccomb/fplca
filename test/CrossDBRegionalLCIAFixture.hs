@@ -112,7 +112,7 @@ mkActivity _ loc =
         }
 
 emptyIndexes :: Indexes
-emptyIndexes = Indexes M.empty M.empty M.empty M.empty M.empty
+emptyIndexes = Indexes M.empty M.empty M.empty M.empty
 
 {- | Build a synthetic single-DB fixture parameterized by:
 * @offset@: starting index for activity UUIDs (so root and dep don't collide)

@@ -365,9 +365,6 @@ type LocationIndex = M.Map Text [UUID] -- Location -> [ActivityUUID]
 -- | Index by flow - find activities that use a given flow
 type FlowIndex = M.Map UUID [UUID] -- FlowID -> [ActivityUUID]
 
--- | Index by biosphere compartment - search biosphere flows by compartment name
-type CompartmentIndex = M.Map Text [UUID] -- Compartment name -> [BiosphereFlow UUID]
-
 -- | Index of exchanges by flow - find all exchanges using a flow
 type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]
 
@@ -397,8 +394,6 @@ data Indexes = Indexes
     , idxByLocation :: !LocationIndex -- Search activities by location
     , idxByFlow :: !FlowIndex -- Search activities using a flow
     , idxByUnit :: !ActivityUnitIndex -- Search activities by reference unit
-    -- Biosphere flow index by compartment (technosphere flows carry no taxonomy)
-    , idxBioByCompartment :: !CompartmentIndex
     -- Note: Exchange-level indexes removed - exchanges can be accessed directly from Activity.exchanges
     }
     deriving (Generic, NFData, Store)

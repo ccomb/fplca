@@ -104,7 +104,7 @@ mkDB locsAndEmissions =
         activities = V.fromList [mkActivity loc | (loc, _) <- locsAndEmissions]
         actIdx = V.fromList [fromIntegral i :: Int32 | i <- [0 .. n - 1]]
         triples = mkTriples [(i, v) | (i, (_, v)) <- zip [0 ..] locsAndEmissions]
-        emptyIdx = Indexes M.empty M.empty M.empty M.empty M.empty
+        emptyIdx = Indexes M.empty M.empty M.empty M.empty
      in Database
             { dbProcessIdTable = V.fromList [(actUUID i, mkUUID 0) | i <- [0 .. n - 1]]
             , dbProcessIdLookup = M.empty
