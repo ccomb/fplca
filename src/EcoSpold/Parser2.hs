@@ -359,25 +359,28 @@ parseWithXeno xmlContent processId =
                     -- Use pending group values if attribute values are empty
                     let finalInputGroup = if T.null (edInputGroup edata) then psPendingInputGroup state else edInputGroup edata
                         finalOutputGroup = if T.null (edOutputGroup edata) then psPendingOutputGroup state else edOutputGroup edata
-                        -- Empty compartment when missing: same sentinel as ILCD so
-                        -- the LCIA cascade keys converge on identical lookups
-                        -- regardless of source format.
-                        compName = case edCompartments edata of
-                            (c : _) -> c
-                            [] -> ""
+                        -- A missing compartment becomes 'Nothing', not an empty
+                        -- 'Compartment ""' sentinel — the latter used to silently
+                        -- collide with method-side empty mediums.
+                        mCompName = case edCompartments edata of
+                            (c : _) | not (T.null c) -> Just c
+                            _ -> Nothing
                         subCompartment = case edSubcompartments edata of
                             (s : _) | not (T.null s) -> Just s
                             _ -> Nothing
-                        compartment = Compartment compName subCompartment
-                        -- Determine if exchange is input (resource extraction)
-                        -- Primary: use inputGroup/outputGroup if present
-                        -- Fallback: use compartment heuristic (natural resource = input, others = output)
-                        isInput
-                            | not (T.null finalInputGroup) = True
-                            | not (T.null finalOutputGroup) = False
+                        compartment = case (mCompName, subCompartment) of
+                            (Nothing, Nothing) -> Nothing
+                            (Just c, sc) -> Just (Compartment c sc)
+                            (Nothing, Just _) -> Nothing -- sub without medium is meaningless; drop
+                        -- Determine the biosphere direction.
+                        -- Primary: use inputGroup/outputGroup if present.
+                        -- Fallback: compartment heuristic — natural-resource flows are extractions.
+                        direction
+                            | not (T.null finalInputGroup) = Resource
+                            | not (T.null finalOutputGroup) = Emission
                             | otherwise = case edCompartments edata of
-                                (comp : _) | T.toLower comp == "natural resource" -> True
-                                _ -> False
+                                (comp : _) | T.toLower comp == "natural resource" -> Resource
+                                _ -> Emission
                         -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
@@ -387,7 +390,7 @@ parseWithXeno xmlContent processId =
                                 { bioFlowId = flowUUID
                                 , bioAmount = edAmount edata
                                 , bioUnitId = unitUUID
-                                , bioIsInput = isInput
+                                , bioDirection = direction
                                 , bioLocation = "" -- EcoSpold2: no per-exchange location
                                 , bioComment = snd <$> edComment edata
                                 , bioPedigree = Nothing

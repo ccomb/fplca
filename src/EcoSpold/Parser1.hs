@@ -28,7 +28,7 @@ import Control.Monad (forM_)
 import qualified Data.ByteString as BS
 import Data.Either (lefts, rights)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -360,14 +360,17 @@ parseWithXeno xmlContent =
          in if isBiosphere
                 then
                     let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                        compartment = Compartment (exCategory edata) subCat
+                        compartment =
+                            if T.null (exCategory edata) && isNothing subCat
+                                then Nothing
+                                else Just (Compartment (exCategory edata) subCat)
                         bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
                         ex =
                             BiosphereExchange
                                 { bioFlowId = flowId
                                 , bioAmount = exMeanValue edata
                                 , bioUnitId = unitId
-                                , bioIsInput = inputGroup == "4"
+                                , bioDirection = if inputGroup == "4" then Resource else Emission
                                 , bioLocation = exchangeLocation
                                 , bioComment = nonEmptyText (exComment edata)
                                 , bioPedigree = Nothing
@@ -680,14 +683,17 @@ parseAllWithXeno xmlContent =
          in if isBiosphere
                 then
                     let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                        compartment = Compartment (exCategory edata) subCat
+                        compartment =
+                            if T.null (exCategory edata) && isNothing subCat
+                                then Nothing
+                                else Just (Compartment (exCategory edata) subCat)
                         bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
                         ex =
                             BiosphereExchange
                                 { bioFlowId = flowId
                                 , bioAmount = exMeanValue edata
                                 , bioUnitId = unitId
-                                , bioIsInput = inputGroup == "4"
+                                , bioDirection = if inputGroup == "4" then Resource else Emission
                                 , bioLocation = exchangeLocation
                                 , bioComment = nonEmptyText (exComment edata)
                                 , bioPedigree = Nothing

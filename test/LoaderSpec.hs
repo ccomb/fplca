@@ -262,7 +262,7 @@ spec = do
                         { bioFlowId = flowUUID1
                         , bioAmount = 1.0
                         , bioUnitId = UUID.nil
-                        , bioIsInput = False
+                        , bioDirection = Emission
                         , bioLocation = ""
                         , bioComment = Nothing
                         , bioPedigree = Nothing
@@ -335,3 +335,12 @@ spec = do
                 refOut = withRole ReferenceProduct 1.0 prodUUID
                 act = minimalActivity "self-looper" "GLO" [refOut, selfInput]
             activityNormFactor act (actUUID, prodUUID) `shouldBe` 0.8
+
+        it "ignores Coproduct exchanges when computing the norm" $ do
+            -- Coproducts are outputs but don't contribute to the activity's
+            -- reference-output sum. An activity with only Coproducts (no
+            -- ReferenceProduct, no ReferenceInput) hits the 1.0 fallback,
+            -- not "sum of all outputs".
+            let coproduct = withRole Coproduct 7.0 wasteUUID
+                act = minimalActivity "coproduct-only" "GLO" [coproduct]
+            activityNormFactor act (actUUID, prodUUID) `shouldBe` 1.0

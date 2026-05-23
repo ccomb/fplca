@@ -981,5 +981,5 @@ mkTestFlow uuid name =
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
         , bfSynonyms = M.empty
-        , bfCompartment = VT.Compartment "air" Nothing
+        , bfCompartment = Just (VT.Compartment "air" Nothing)
         }

@@ -158,7 +158,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Compartment (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), TechFlowDB, TechnosphereFlow (..), UUID, Unit (..), UnitDB, crossDBBySource, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), UUID, Unit (..), UnitDB, bfCompartmentName, bfCompartmentSub, crossDBBySource, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
 import qualified UnitConversion
 
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -2612,7 +2612,7 @@ getMergedFlowMetadata manager = do
             atomically $ writeTVar (dmMergedFlowMetadataCache manager) (Just snap)
             pure snap
   where
-    bioFingerprint f = (bfName f, compartmentName (bfCompartment f), compartmentSub (bfCompartment f))
+    bioFingerprint f = (bfName f, bfCompartmentName f, bfCompartmentSub f)
     unitFingerprint = unitName
 
     collisions :: (Ord fp) => (v -> fp) -> [Map UUID v] -> [UUID]

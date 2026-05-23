@@ -275,9 +275,9 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, allUnits)
             , bfCompartment = toCompartment (ilcdCompartment info)
             }
 
-    toCompartment Nothing = Compartment "" Nothing
+    toCompartment Nothing = Nothing
     toCompartment (Just (MT.Compartment m sc _)) =
-        Compartment m (if T.null sc then Nothing else Just sc)
+        Just $ Compartment m (if T.null sc then Nothing else Just sc)
 
     resolveUnit info =
         Data.Maybe.fromMaybe UUID.nil $
@@ -560,7 +560,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p =
                         { bioFlowId = flowUUID
                         , bioAmount = ierAmount raw
                         , bioUnitId = fUnitId
-                        , bioIsInput = isInput
+                        , bioDirection = if isInput then Resource else Emission
                         , bioLocation = ierLocation raw
                         , bioComment = ierComment raw
                         , bioPedigree = Nothing

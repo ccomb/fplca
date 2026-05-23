@@ -41,6 +41,7 @@ import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
 import Data.List (dropWhileEnd)
 import qualified Data.Map.Strict as M
+import Data.Maybe (isNothing)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -1052,7 +1053,7 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 { bioFlowId = flowUUID
                 , bioAmount = amount
                 , bioUnitId = unitUUID
-                , bioIsInput = isInput
+                , bioDirection = if isInput then Resource else Emission
                 , bioLocation = ""
                 , bioComment = cleanedComment
                 , bioPedigree = pedigree
@@ -1065,7 +1066,14 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                 , bfSynonyms = M.empty
                 , bfCAS = Nothing
                 , bfSubstanceId = Nothing
-                , bfCompartment = Compartment compartment subcomp
+                , -- SimaPro section header always supplies a non-empty
+                  -- medium ("air", "water", "raw", …); guard against an
+                  -- accidentally-empty value so the wire shape never
+                  -- carries a bogus 'Compartment "" Nothing'.
+                  bfCompartment =
+                    if T.null compartment && isNothing subcomp
+                        then Nothing
+                        else Just (Compartment compartment subcomp)
                 }
         unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
      in (exchange, flow, unit)

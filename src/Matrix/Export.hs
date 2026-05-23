@@ -21,6 +21,7 @@ import Types
 import Data.Int (Int32)
 import qualified Data.List as L
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -272,9 +273,8 @@ exportEEIndex filePath db = do
                 ( \flowUuid idx ->
                     case M.lookup flowUuid bioFlows of
                         Just flow ->
-                            let comp = bfCompartment flow
-                                compartment = compartmentName comp
-                                subcompartment = maybe "" id (compartmentSub comp)
+                            let compartment = bfCompartmentName flow
+                                subcompartment = fromMaybe "" (bfCompartmentSub flow)
                                 unit = getUnitNameForBioFlow (dbUnits db) flow
                              in escapeCsvField (bfName flow)
                                     <> ";"

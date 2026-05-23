@@ -50,7 +50,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Compartment (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -1047,8 +1047,8 @@ callGetImpacts dbManager baseUrl rid args =
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
                                         , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "cf_value" .= cfVal
                                         , "flow_unit" .= getUnitNameForBioFlow mUnits f
                                         ]
@@ -1179,8 +1179,8 @@ callCompareImpacts dbManager rid args =
                     common =
                         [ object
                             [ "flow_name" .= bfName f
-                            , "category" .= compartmentName (bfCompartment f)
-                            , "compartment" .= compartmentSub (bfCompartment f)
+                            , "category" .= bfCompartmentName f
+                            , "compartment" .= bfCompartmentSub f
                             , "a_contrib" .= cA
                             , "b_contrib" .= cB
                             , "delta" .= (cA - cB)
@@ -1232,8 +1232,8 @@ callCompareImpacts dbManager rid args =
     encodeContrib f c =
         object
             [ "flow_name" .= bfName f
-            , "category" .= compartmentName (bfCompartment f)
-            , "compartment" .= compartmentSub (bfCompartment f)
+            , "category" .= bfCompartmentName f
+            , "compartment" .= bfCompartmentSub f
             , "contribution" .= c
             ]
 
@@ -1242,8 +1242,8 @@ callCompareImpacts dbManager rid args =
     flowKey :: BiosphereFlow -> (Text, Text, Text)
     flowKey f =
         ( T.toLower (T.strip (bfName f))
-        , T.toLower (compartmentName (bfCompartment f))
-        , maybe "" T.toLower (compartmentSub (bfCompartment f))
+        , T.toLower (bfCompartmentName f)
+        , maybe "" T.toLower (bfCompartmentSub f)
         )
 
 {- | Pull side-specific args (suffixed @_a@ / @_b@) up to the standard names
@@ -1438,8 +1438,8 @@ callGetCharacterization dbManager rid args =
                                         , "db_flow_name" .= bfName f
                                         , "flow_id" .= UUID.toText (bfId f)
                                         , "flow_unit" .= getUnitNameForBioFlow (dbUnits db) f
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "match_strategy" .= show strat
                                         ]
                             return $
@@ -1675,8 +1675,8 @@ callGetContributingFlows dbManager baseUrl rid args =
                                         , "contribution" .= c
                                         , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
                                         , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= compartmentName (bfCompartment f)
-                                        , "compartment" .= compartmentSub (bfCompartment f)
+                                        , "category" .= bfCompartmentName f
+                                        , "compartment" .= bfCompartmentSub f
                                         , "cf_value" .= cfVal
                                         ]
                                    | (f, cfVal, c) <- top

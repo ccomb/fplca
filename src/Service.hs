@@ -211,10 +211,10 @@ getActivityInfo unitCfg db queryText = do
 {- | Core inventory calculation logic using matrix-based LCA calculations
 | Convert raw inventory to structured export format.
 
-The 'FlowDB'/'UnitDB' arguments are independent of the root DB so that
+The 'BioFlowDB'/'UnitDB' arguments are independent of the root DB so that
 cross-DB-merged inventories (whose flow UUIDs can originate in any loaded
 dep DB) can be decoded against a merged metadata snapshot. For single-DB
-callers, pass @dbFlows db@ / @dbUnits db@ directly.
+callers, pass @dbBioFlows db@ / @dbUnits db@ directly.
 -}
 convertToInventoryExport :: Database -> BioFlowDB -> UnitDB -> ProcessId -> Activity -> Inventory -> InventoryExport
 convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
@@ -229,7 +229,7 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
             , Just flow <- [M.lookup flowUUID bioFlowDB]
             , let !uName = getUnitNameForBioFlow unitDB flow
                   !isEmission = not (isResourceExtraction flow)
-                  !category = compartmentName (bfCompartment flow)
+                  !category = bfCompartmentName flow
             ]
 
         !emissionFlows = length [f | f <- flowDetails, ifdIsEmission f]
@@ -279,7 +279,7 @@ this code path at compile time.
 -}
 isResourceExtraction :: BiosphereFlow -> Bool
 isResourceExtraction flow =
-    let cat = T.toLower (compartmentName (bfCompartment flow))
+    let cat = T.toLower (bfCompartmentName flow)
      in "natural resource" `T.isPrefixOf` cat || "resource" `T.isPrefixOf` cat
 
 -- | Get activity inventory as rich InventoryExport (same as API)
@@ -472,7 +472,7 @@ extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAc
                     let flowIdText = UUID.toText (bfId flow)
                         isEmission = not (exchangeIsInput ex) -- False = emission, True = resource
                         nodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
-                        compartmentTxt = compartmentName (bfCompartment flow)
+                        compartmentTxt = bfCompartmentName flow
                         biosphereNode =
                             ExportNode
                                 { enId = flowIdText
@@ -828,7 +828,7 @@ searchFlows db FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offs
         idOf = either tfId bfId
         unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
         synonymsOf = either tfSynonyms bfSynonyms
-        categoryOf = either (const "") (compartmentName . bfCompartment)
+        categoryOf = either (const "") bfCompartmentName
         flowCmp = case sortParam of
             Just "category" -> \a b -> compare (categoryOf a) (categoryOf b)
             Just "unit" -> \a b -> compare (unitOf a) (unitOf b)
@@ -1077,7 +1077,7 @@ convertActivityForAPI unitCfg db processId activity =
                 (Just tf, _) -> tfName tf
                 (_, Just bf) -> bfName bf
                 _ -> "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
-            compartment = bfCompartment <$> bioFlowInfo
+            compartment = bfCompartment =<< bioFlowInfo
          in ExchangeWithUnit
                 { ewuExchange = exchange
                 , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange

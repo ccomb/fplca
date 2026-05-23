@@ -54,7 +54,7 @@ spec = do
 
             -- Biosphere flows now carry a structured compartment; technosphere flows have none.
             let bios = M.elems (dbBioFlows db)
-            let compartmentsNotEmpty = filter (\f -> not (T.null (compartmentName (bfCompartment f)))) bios
+            let compartmentsNotEmpty = filter (\f -> not (T.null (bfCompartmentName f))) bios
             length compartmentsNotEmpty `shouldSatisfy` (>= 0)
 
     describe "EcoSpold Parser - SAMPLE.min (Self-Loops)" $ do

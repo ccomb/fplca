@@ -256,7 +256,7 @@ mkBioFlow cat =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = VT.Compartment cat Nothing
+        , bfCompartment = Just (VT.Compartment cat Nothing)
         }
 
 mkTechFlow :: Text -> TechnosphereFlow

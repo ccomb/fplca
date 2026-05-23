@@ -633,8 +633,8 @@ computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore
                 , fcoContribution = c
                 , fcoSharePct = if score /= 0 then c / score * 100 else 0
                 , fcoFlowId = UUID.toText (bfId f)
-                , fcoCategory = compartmentName (bfCompartment f)
-                , fcoCompartment = compartmentSub (bfCompartment f)
+                , fcoCategory = bfCompartmentName f
+                , fcoCompartment = bfCompartmentSub f
                 , fcoCfValue = cfVal
                 }
             | (f, cfVal, c) <- topContribs
@@ -741,8 +741,8 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
                             , fcoContribution = c
                             , fcoSharePct = if score /= 0 then c / score * 100 else 0
                             , fcoFlowId = UUID.toText (bfId f)
-                            , fcoCategory = compartmentName (bfCompartment f)
-                            , fcoCompartment = compartmentSub (bfCompartment f)
+                            , fcoCategory = bfCompartmentName f
+                            , fcoCompartment = bfCompartmentSub f
                             , fcoCfValue = cfVal
                             }
                         | (f, cfVal, c) <- top
@@ -1564,8 +1564,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         , fcoContribution = c
                         , fcoSharePct = if score /= 0 then c / score * 100 else 0
                         , fcoFlowId = UUID.toText (bfId f)
-                        , fcoCategory = compartmentName (bfCompartment f)
-                        , fcoCompartment = compartmentSub (bfCompartment f)
+                        , fcoCategory = bfCompartmentName f
+                        , fcoCompartment = bfCompartmentSub f
                         , fcoCfValue = cfVal
                         }
                     | (f, cfVal, c) <- take lim contribs
@@ -1761,7 +1761,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
          in FlowCFEntry
                 { fceFlowId = uuid
                 , fceFlowName = maybe "" bfName mFlow
-                , fceFlowCategory = maybe "" (compartmentName . bfCompartment) mFlow
+                , fceFlowCategory = maybe "" bfCompartmentName mFlow
                 , fceCfValue = fmap (mcfValue . fst) mMatch
                 , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
                 , fceMatchStrategy = fmap (strategyToText . snd) mMatch
@@ -1801,8 +1801,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     , cheDbFlowName = bfName f
                     , cheFlowId = UUID.toText (bfId f)
                     , cheFlowUnit = getUnitNameForBioFlow (dbUnits db) f
-                    , cheCategory = compartmentName (bfCompartment f)
-                    , cheCompartment = compartmentSub (bfCompartment f)
+                    , cheCategory = bfCompartmentName f
+                    , cheCompartment = bfCompartmentSub f
                     , cheMatchStrategy = strategyToText strat
                     }
         return
@@ -2015,7 +2015,7 @@ searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLim
         idOf = either tfId bfId
         unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
         synonymsOf = either tfSynonyms bfSynonyms
-        categoryOf = either (const "") (compartmentName . bfCompartment)
+        categoryOf = either (const "") bfCompartmentName
         allResults = [FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)) | flow <- flows]
         isDesc = orderParam == Just "desc"
         fsCmp = case sortParam of

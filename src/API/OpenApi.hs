@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (BiosphereFlow, Compartment, Exchange, Pedigree, TechRole, TechnosphereFlow, Unit)
+import Types (BioDirection, BiosphereFlow, Compartment, Exchange, Pedigree, TechRole, TechnosphereFlow, Unit)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -42,6 +42,7 @@ instance ToSchema Value where
 
 -- Domain types
 instance ToSchema TechRole
+instance ToSchema BioDirection
 instance ToSchema Compartment where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema Unit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema TechnosphereFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
