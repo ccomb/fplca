@@ -263,7 +263,7 @@ test-suite lca-tests
                      , base64-bytestring
                      , optparse-applicative
                      , QuickCheck
-                     , hspec-core
+                     , network
   build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010
