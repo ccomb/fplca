@@ -9,6 +9,7 @@
 module ConfigWriterSpec (spec) where
 
 import qualified Data.Map.Strict as M
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (getTemporaryDirectory)
 import System.FilePath ((</>))
@@ -48,8 +49,8 @@ seedConfigWithDb =
 mkDbConfig :: String -> DatabaseConfig
 mkDbConfig name =
     DatabaseConfig
-        { dcName = (read . show) name -- shorthand for "name as Text"
-        , dcDisplayName = "Display: " <> (read . show) name
+        { dcName = T.pack name
+        , dcDisplayName = "Display: " <> T.pack name
         , dcPath = "/data/" <> name
         , dcDescription = Just "test description"
         , dcLoad = True
@@ -102,6 +103,16 @@ spec = do
             case res of
                 Left msg -> show msg `shouldContain` "not found"
                 Right () -> expectationFailure "expected Left for missing file"
+
+        it "returns Left (does NOT crash) when the parent directory is missing" $ do
+            -- Regression: the lock file lives next to the config, so creating
+            -- it requires the parent dir to exist. A nonexistent parent must
+            -- surface as Left, not an uncaught IOException.
+            let p = "/definitely/no/such/dir/exists/anywhere/volca.toml"
+            res <- addDatabaseToConfig p (mkDbConfig "x")
+            case res of
+                Left _ -> pure ()
+                Right () -> expectationFailure "expected Left for missing parent dir"
 
         it "preserves the operator-written comment after appending" $ do
             withTempConfig seedConfig $ \p -> do
