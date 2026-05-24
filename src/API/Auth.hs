@@ -87,8 +87,9 @@ checkBasic expectedPassword req =
         Nothing -> False
 
 {- | Parse HTTP Basic Auth header
-Format: "Basic base64(username:password)"
-We ignore the username and only check the password
+Format: "Basic base64(username:password)" (RFC 7617)
+We ignore the username and only check the password.
+A payload without a colon is malformed and rejected.
 -}
 parseBasicAuth :: ByteString -> Maybe ByteString
 parseBasicAuth header =
@@ -96,9 +97,8 @@ parseBasicAuth header =
         Just encoded ->
             case B64.decode encoded of
                 Right decoded ->
-                    -- Format is "username:password", we take everything after the colon
                     case C8.elemIndex ':' decoded of
                         Just idx -> Just $ BS.drop (idx + 1) decoded
-                        Nothing -> Just decoded -- No colon, treat whole thing as password
+                        Nothing -> Nothing
                 Left _ -> Nothing
         Nothing -> Nothing

@@ -136,12 +136,13 @@ spec = do
             called `shouldBe` False
             code `shouldBe` 401
 
-        it "accepts when there is no colon (whole decoded payload treated as password)" $ do
-            -- Documents the current contract of parseBasicAuth's no-colon fallback.
+        it "rejects when the Base64 payload has no colon (RFC 7617 requires user:pass)" $ do
+            -- A payload without a colon is not a valid RFC 7617 Basic credential.
+            -- We reject it rather than treating the whole payload as a password.
             let encoded = B64.encode password
             (called, code) <- runAuth "GET" "/api/v1/db" [(hAuthorization, "Basic " <> encoded)]
-            called `shouldBe` True
-            code `shouldBe` 200
+            called `shouldBe` False
+            code `shouldBe` 401
 
     describe "Cookie auth" $ do
         it "accepts the correct volca_session cookie" $ do
