@@ -1317,7 +1317,8 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                         ]
                                     LocationUnavailable req ->
                                         [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
-                                    _ -> []
+                                    NoNameMatch -> []
+                                    UnitIncompatible _ _ -> []
                              in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
     | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
