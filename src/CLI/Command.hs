@@ -387,6 +387,7 @@ executeDbUpload registry fmt manager args = do
                         , dcFormat = Just (urFormat uploadResult)
                         , dcIsUploaded = True
                         , dcDeletable = True
+                        , dcGeographyPolicy = Types.GeoGlobal
                         }
             addDatabase manager dbConfig
             reportProgress Info $ "Database uploaded: " ++ T.unpack slug

@@ -43,7 +43,8 @@ import Plugin.Config (PluginConfig)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (takeFileName)
-import TOML (DecodeTOML (..), decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith)
+import TOML (DecodeTOML (..), Decoder, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith)
+import Types (GeographyPolicy (..))
 
 -- | A single classification filter entry (system + value)
 data ClassificationEntry = ClassificationEntry
@@ -109,6 +110,7 @@ data DatabaseConfig = DatabaseConfig
     , dcFormat :: !(Maybe DatabaseFormat) -- Detected format (EcoSpold2, EcoSpold1, SimaProCSV)
     , dcIsUploaded :: !Bool -- True for uploaded databases (vs. configured in TOML)
     , dcDeletable :: !Bool -- May the UI delete this entry? Defaults to dcIsUploaded.
+    , dcGeographyPolicy :: !GeographyPolicy -- How aggressively to widen geography when linking suppliers
     }
     deriving (Show, Eq, Generic)
 
@@ -213,7 +215,17 @@ instance DecodeTOML DatabaseConfig where
         let dcFormat = Nothing -- Format is detected at runtime, not stored in config
         let dcIsUploaded = False -- Databases from TOML are not uploaded
         dcDeletable <- fromMaybe dcIsUploaded <$> getFieldOpt "deletable"
+        dcGeographyPolicy <- fromMaybe GeoGlobal <$> getFieldOptWith geographyPolicyDecoder "geography_policy"
         pure DatabaseConfig{..}
+
+geographyPolicyDecoder :: Decoder GeographyPolicy
+geographyPolicyDecoder = do
+    raw <- tomlDecoder :: Decoder Text
+    case T.toLower raw of
+        "exact" -> pure GeoExact
+        "parent" -> pure GeoParent
+        "global" -> pure GeoGlobal
+        other -> fail $ "geography_policy: expected one of exact|parent|global, got: " <> T.unpack other
 
 instance DecodeTOML MethodConfig where
     tomlDecoder = do

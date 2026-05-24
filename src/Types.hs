@@ -850,6 +850,61 @@ data LinkBlocker
       UnitIncompatible !Text !Text
     | -- | requestedLoc (no fallback found above threshold)
       LocationUnavailable !Text
+    | {- | requestedLoc, bestCandidateLoc, bestCandidateKind — match existed but the database's
+      geography_policy rejected it
+      -}
+      LocationRejectedByPolicy !Text !Text !LocationKind
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | Per-database knob controlling how aggressively geography may be widened when
+linking an exchange to a supplier. Maps to TOML field @geography_policy@.
+
+* 'GeoExact'  — only accept candidates with the exact same location code.
+* 'GeoParent' — also accept any ancestor that names a real region in
+                @locationHierarchy@ (e.g. @Europe@, @RER@). Excludes @GLO@,
+                @RoW@, @Unspecified@ and unrelated locations.
+* 'GeoGlobal' — accept any candidate the linker can match (current behaviour).
+-}
+data GeographyPolicy
+    = GeoExact
+    | GeoParent
+    | GeoGlobal
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | Classification of how a candidate's location relates to the requested one.
+Produced by 'Database.CrossLinking.acceptableLocation' and surfaced alongside
+fallback warnings so the UI can distinguish gentle widening (parent region)
+from hard widening (global / unrelated).
+-}
+data LocationKind
+    = -- | Exact code match
+      ExactLoc
+    | -- | Ancestor region in the hierarchy (e.g. FR → Europe / RER)
+      ParentLoc
+    | -- | @GLO@, @RoW@ or @Unspecified@
+      GlobalLoc
+    | -- | Different but not in the hierarchy (e.g. SimaPro "Mixed data")
+      UnrelatedLoc
+    deriving (Show, Eq, Generic, NFData, Store)
+
+-- | A product whose supplier was found at a wider geography than requested.
+data LocationFallback = LocationFallback
+    { lfProduct :: !Text
+    , lfRequested :: !Text
+    , lfActual :: !Text
+    , lfKind :: !LocationKind
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | A product whose supplier could not be linked — either because no candidate
+matched the name/unit, or because every geographic candidate was rejected by
+the database's 'GeographyPolicy'.
+-}
+data LocationUnresolved = LocationUnresolved
+    { luProduct :: !Text
+    , luRequested :: !Text
+    , luReason :: !Text
+    }
     deriving (Show, Eq, Generic, NFData, Store)
 
 {- | Statistics from cross-database linking
@@ -862,8 +917,10 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     -- ^ Product name -> (count, reason)
     , cdlUnknownUnits :: !(S.Set Text)
     -- ^ Unknown units from sdbUnits
-    , cdlLocationFallbacks :: ![(Text, Text, Text)]
-    -- ^ (product, requestedLoc, actualLoc)
+    , cdlLocationFallbacks :: ![LocationFallback]
+    -- ^ Accepted links with widened geography, tagged with 'LocationKind'
+    , cdlLocationUnresolved :: ![LocationUnresolved]
+    -- ^ Inputs rejected by policy or with no candidate
     , cdlTotalInputs :: !Int
     -- ^ Total technosphere inputs at time of linking
     }
@@ -871,7 +928,7 @@ data CrossDBLinkingStats = CrossDBLinkingStats
 
 -- | Empty stats
 emptyCrossDBLinkingStats :: CrossDBLinkingStats
-emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] 0
+emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] [] 0
 
 -- | Merge two CrossDBLinkingStats
 mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
@@ -881,18 +938,27 @@ mergeCrossDBStats s1 s2 =
         , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
         , cdlUnknownUnits = S.union (cdlUnknownUnits s1) (cdlUnknownUnits s2)
         , cdlLocationFallbacks = cdlLocationFallbacks s1 ++ cdlLocationFallbacks s2
+        , cdlLocationUnresolved = cdlLocationUnresolved s1 ++ cdlLocationUnresolved s2
         , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
         }
   where
     mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
-deduplicateFallbacks :: [(Text, Text, Text)] -> [(Text, Text, Text)]
+deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]
 deduplicateFallbacks =
-    map (\((p, r), a) -> (p, r, a))
+    map snd
         . M.toList
         . M.fromListWith (\_ b -> b)
-        . map (\(p, r, a) -> ((p, r), a))
+        . map (\f -> ((lfProduct f, lfRequested f), f))
+
+-- | Deduplicate unresolved entries by (product, requestedLoc)
+deduplicateUnresolved :: [LocationUnresolved] -> [LocationUnresolved]
+deduplicateUnresolved =
+    map snd
+        . M.toList
+        . M.fromListWith (\_ b -> b)
+        . map (\u -> ((luProduct u, luRequested u), u))
 
 -- | Number of resolved cross-DB links
 crossDBLinksCount :: CrossDBLinkingStats -> Int

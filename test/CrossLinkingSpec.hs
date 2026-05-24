@@ -2,6 +2,8 @@
 
 module CrossLinkingSpec (spec) where
 
+import Control.Monad (forM_)
+import qualified Data.Text as T
 import Database.CrossLinking
 import Database.Loader (loadDatabase)
 import SynonymDB (buildFromPairs, emptySynonymDB)
@@ -227,6 +229,7 @@ spec = do
                         , lcUnitConfig = defaultUnitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
+                        , lcGeographyPolicy = GeoGlobal
                         }
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "kg" of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
@@ -241,6 +244,7 @@ spec = do
                         , lcUnitConfig = defaultUnitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
+                        , lcGeographyPolicy = GeoGlobal
                         }
             case findSupplierInIndexedDBs ctx "no such product" "GLO" "kg" of
                 CrossDBNotLinked _ -> return ()
@@ -255,6 +259,7 @@ spec = do
                         , lcUnitConfig = defaultUnitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
+                        , lcGeographyPolicy = GeoGlobal
                         }
             -- "product Y" exists in kg; asking for m3 should fail unit check
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "m3" of
@@ -273,6 +278,7 @@ spec = do
                         , lcUnitConfig = defaultUnitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
+                        , lcGeographyPolicy = GeoGlobal
                         }
             -- Synonym lookup: "producto y" → group containing "product y" → supplier
             case findSupplierInIndexedDBs ctx "producto y" "GLO" "kg" of
@@ -288,12 +294,40 @@ spec = do
                         , lcUnitConfig = defaultUnitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
+                        , lcGeographyPolicy = GeoGlobal
                         }
             -- "product Y {GLO}" compound name with empty location arg
             -- extractBracketedLocation will find "GLO"
             case findSupplierInIndexedDBs ctx "product Y {GLO}" "" "kg" of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked _ -> pendingWith "Compound name location extraction may not match"
+
+    -- -----------------------------------------------------------------------
+    -- acceptableLocation — table-driven, one case per (policy, kind) cell
+    -- -----------------------------------------------------------------------
+    describe "acceptableLocation" $ do
+        let hier = locationHierarchy
+            -- Each row: (description, requested, candidate, expected for each policy)
+            cases :: [(String, T.Text, T.Text, Maybe LocationKind, Maybe LocationKind, Maybe LocationKind)]
+            cases =
+                --   description                     requested   candidate           exact            parent              global
+                [ ("exact match preserved", "FR", "FR", Just ExactLoc, Just ExactLoc, Just ExactLoc)
+                , ("parent region (FR→Europe)", "FR", "Europe", Nothing, Just ParentLoc, Just ParentLoc)
+                , ("parent region (FR→RER)", "FR", "RER", Nothing, Just ParentLoc, Just ParentLoc)
+                , ("FR→GLO classified as global", "FR", "GLO", Nothing, Nothing, Just GlobalLoc)
+                , ("FR→RoW classified as global", "FR", "RoW", Nothing, Nothing, Just GlobalLoc)
+                , ("FR→Unspecified is global", "FR", "Unspecified", Nothing, Nothing, Just GlobalLoc)
+                , ("FR→Mixed data is unrelated", "FR", "Mixed data", Nothing, Nothing, Just UnrelatedLoc)
+                , ("FR→South America is unrelated", "FR", "South America", Nothing, Nothing, Just UnrelatedLoc)
+                , ("narrowing GLO→FR always rejected", "GLO", "FR", Nothing, Nothing, Nothing)
+                , ("BR→South America is parent", "BR", "South America", Nothing, Just ParentLoc, Just ParentLoc)
+                , ("BR→Latin America is parent", "BR", "Latin America", Nothing, Just ParentLoc, Just ParentLoc)
+                , ("BR→GLO is global", "BR", "GLO", Nothing, Nothing, Just GlobalLoc)
+                ]
+        forM_ cases $ \(label, req, cand, expExact, expParent, expGlobal) -> do
+            it (label ++ " — exact") $ acceptableLocation GeoExact hier req cand `shouldBe` expExact
+            it (label ++ " — parent") $ acceptableLocation GeoParent hier req cand `shouldBe` expParent
+            it (label ++ " — global") $ acceptableLocation GeoGlobal hier req cand `shouldBe` expGlobal
 
 -- ---------------------------------------------------------------------------
 -- Helper: load SAMPLE.min3 as IndexedDatabase

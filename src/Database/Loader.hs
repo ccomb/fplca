@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -1068,10 +1069,12 @@ loadDatabaseWithCrossDBLinking ::
     UC.UnitConfig ->
     -- | Location hierarchy (empty = use built-in)
     M.Map T.Text [T.Text] ->
+    -- | Geography policy for this database
+    GeographyPolicy ->
     -- | Path to load from
     FilePath ->
     IO (Either T.Text (SimpleDatabase, CrossDBLinkingStats))
-loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier path = do
+loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier policy path = do
     result <- loadDatabaseWithLocationAliases unitConfig locationAliases path
     case result of
         Left err -> return $ Left err
@@ -1107,6 +1110,7 @@ loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig
                             synonymDB
                             unitConfig
                             locationHier
+                            policy
                             simpleDb
                     return $ Right (linkedDb, stats{cdlUnknownUnits = unknownUnits})
 
@@ -1134,10 +1138,12 @@ fixActivityLinksWithCrossDB ::
     UC.UnitConfig ->
     -- | Location hierarchy (code → parent codes)
     M.Map T.Text [T.Text] ->
+    -- | Geography policy for this database
+    GeographyPolicy ->
     -- | Database to fix
     SimpleDatabase ->
     IO (SimpleDatabase, CrossDBLinkingStats)
-fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier db = do
+fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy db = do
     -- Count unlinked exchanges before
     let unlinkedBefore = countUnlinkedExchanges db
         !totalInputs = countTotalTechInputs db
@@ -1170,6 +1176,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier db = do
                         , lcUnitConfig = unitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = if M.null locationHier then locationHierarchy else locationHier
+                        , lcGeographyPolicy = policy
                         }
 
             -- Process all activities to find cross-DB links
@@ -1292,10 +1299,27 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                         , cdlSourceDatabase = cdlrDatabaseName result
                                         , cdlTiedAlternatives = cdlrTiedDatabases result
                                         }
-                                fallbacks = [(cdlrProductName result, req, actLoc) | UpperLocationUsed req actLoc <- cdlrWarnings result]
-                             in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks 0
+                                fallbacks =
+                                    [ LocationFallback (cdlrProductName result) req actLoc kind
+                                    | UpperLocationUsed req actLoc kind <- cdlrWarnings result
+                                    ]
+                             in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks [] 0
                         CrossDBNotLinked blocker ->
-                            CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] 0
+                            let unresolved = case blocker of
+                                    LocationRejectedByPolicy req actLoc kind ->
+                                        [ LocationUnresolved
+                                            (tfName flow)
+                                            req
+                                            ( "policy rejected "
+                                                <> T.pack (show kind)
+                                                <> " candidate "
+                                                <> actLoc
+                                            )
+                                        ]
+                                    LocationUnavailable req ->
+                                        [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
+                                    _ -> []
+                             in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
     | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
 
@@ -1354,11 +1378,32 @@ reportCrossDBLinkingStats nActivities stats = do
     when (nFallbacks > 0) $ do
         reportProgress Info $
             printf "Location fallbacks: %d unique products matched with different location" nFallbacks
-        forM_ uniqueFallbacks $ \(prod, requested, actual) ->
+        forM_ uniqueFallbacks $ \LocationFallback{lfProduct, lfRequested, lfActual, lfKind} ->
             reportProgress Info $
-                printf "  - %s: %s → %s" (T.unpack prod) (T.unpack requested) (T.unpack actual)
+                printf
+                    "  - %s: %s → %s (%s)"
+                    (T.unpack lfProduct)
+                    (T.unpack lfRequested)
+                    (T.unpack lfActual)
+                    (show lfKind)
+
+    -- Inputs rejected by geography_policy (deduplicated)
+    let !uniqueUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
+        !nUnresolved' = length uniqueUnresolved
+    when (nUnresolved' > 0) $ do
+        reportProgress Warning $
+            printf "Location unresolved: %d unique products with no acceptable supplier" nUnresolved'
+        forM_ uniqueUnresolved $ \LocationUnresolved{luProduct, luRequested, luReason} ->
+            reportProgress Warning $
+                printf
+                    "  - %s [%s] — %s"
+                    (T.unpack luProduct)
+                    (T.unpack luRequested)
+                    (T.unpack luReason)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"
 showBlocker (UnitIncompatible q s) = printf "Unit: %s vs %s" (T.unpack q) (T.unpack s)
 showBlocker (LocationUnavailable loc) = printf "Location: %s" (T.unpack loc)
+showBlocker (LocationRejectedByPolicy req act kind) =
+    printf "Rejected by policy: %s → %s (%s)" (T.unpack req) (T.unpack act) (show kind)

@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -25,6 +26,8 @@ module Database.CrossLinking (
     CrossDBLinkResult (..),
     LinkWarning (..),
     LinkBlocker (..),
+    GeographyPolicy (..),
+    LocationKind (..),
     IndexedDatabase (..),
     SupplierEntry (..),
 
@@ -42,6 +45,7 @@ module Database.CrossLinking (
     -- * Scoring Functions
     matchProductName,
     matchLocation,
+    acceptableLocation,
 
     -- * Location Hierarchy
     isSubregionOf,
@@ -61,7 +65,7 @@ module Database.CrossLinking (
 import Data.Char (isAlpha, isUpper)
 import Data.List (maximumBy)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -69,7 +73,19 @@ import Data.UUID (UUID)
 
 import qualified Data.Vector as V
 import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
-import Types (Activity (..), Database (..), LinkBlocker (..), SimpleDatabase (..), TechnosphereFlow (..), exchangeFlowId, exchangeIsReference, exchanges, getActivity)
+import Types (
+    Activity (..),
+    Database (..),
+    GeographyPolicy (..),
+    LinkBlocker (..),
+    LocationKind (..),
+    SimpleDatabase (..),
+    TechnosphereFlow (..),
+    exchangeFlowId,
+    exchangeIsReference,
+    exchanges,
+    getActivity,
+ )
 import qualified UnitConversion as UC
 
 {- | Pre-indexed database for fast cross-DB supplier lookup
@@ -101,9 +117,14 @@ data LinkingContext = LinkingContext
     , lcUnitConfig :: !UC.UnitConfig
     -- ^ For unit compatibility
     , lcThreshold :: !Int
-    -- ^ Minimum score to auto-link (default: 60)
+    {- ^ Minimum score to auto-link (default: 55). Acts as a sanity floor on
+    name+location scoring; geographic acceptability is enforced separately
+    by 'lcGeographyPolicy' via 'acceptableLocation'.
+    -}
     , lcLocationHierarchy :: !(M.Map Text [Text])
     -- ^ Location hierarchy (code → parent codes)
+    , lcGeographyPolicy :: !GeographyPolicy
+    -- ^ How aggressively to widen geography when no exact match is found
     }
 
 -- | A candidate supplier from another database
@@ -141,8 +162,8 @@ data CrossDBLinkResult
 
 -- | Non-blocking warning: link succeeded but with caveats
 data LinkWarning
-    = -- | requestedLoc, actualLoc (e.g. FR → RER)
-      UpperLocationUsed !Text !Text
+    = -- | requestedLoc, actualLoc, kind (e.g. FR → RER, ParentLoc)
+      UpperLocationUsed !Text !Text !LocationKind
     deriving (Show, Eq)
 
 -- | LinkBlocker is defined in Types and re-exported here
@@ -407,36 +428,50 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                             -- All candidates failed unit check — report the first supplier's unit
                             CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
                         else
-                            -- Score by effective location
-                            let scoredCandidates = map (scoreEntry effectiveLocation) unitCompatible
-                                !best = maximumBy (comparing cdbScore) scoredCandidates
-                                -- Other databases whose best candidate matches the winner's score.
-                                -- Dedup by DB name to avoid counting multiple intra-DB ties.
-                                tied =
-                                    let winnerDB = cdbDatabaseName best
-                                        winnerScore = cdbScore best
-                                        sameScoreDBs =
-                                            [ cdbDatabaseName c
-                                            | c <- scoredCandidates
-                                            , cdbScore c == winnerScore
-                                            , cdbDatabaseName c /= winnerDB
-                                            ]
-                                     in M.keys (M.fromList [(d, ()) | d <- sameScoreDBs])
-                             in if cdbScore best >= lcThreshold
-                                    then
-                                        -- Build warnings (only when original location was explicit)
-                                        let warnings = if T.null location then [] else buildWarnings effectiveLocation (cdbLocation best)
-                                         in CrossDBLinked
-                                                { cdlrActivityUUID = cdbActivityUUID best
-                                                , cdlrProductUUID = cdbProductUUID best
-                                                , cdlrDatabaseName = cdbDatabaseName best
-                                                , cdlrScore = cdbScore best
-                                                , cdlrProductName = cdbProductName best
-                                                , cdlrLocation = cdbLocation best
-                                                , cdlrWarnings = warnings
-                                                , cdlrTiedDatabases = tied
-                                                }
-                                    else CrossDBNotLinked (LocationUnavailable effectiveLocation)
+                            -- Filter candidates geographically via policy, then rank survivors
+                            let accepted = mapMaybe (classifyEntry effectiveLocation) unitCompatible
+                             in case accepted of
+                                    [] ->
+                                        -- Candidates existed but every one was rejected.
+                                        -- Distinguish "no plausible location" (narrowing only / hierarchy miss)
+                                        -- from "policy rejected an otherwise valid match".
+                                        case rejectionReason effectiveLocation unitCompatible of
+                                            Just (bestLoc, bestKind) ->
+                                                CrossDBNotLinked (LocationRejectedByPolicy effectiveLocation bestLoc bestKind)
+                                            Nothing ->
+                                                CrossDBNotLinked (LocationUnavailable effectiveLocation)
+                                    _ ->
+                                        let scored = map (\(entry, kind) -> (scoreEntry effectiveLocation entry, kind)) accepted
+                                            !(bestCand, bestKind) = maximumBy (comparing (cdbScore . fst)) scored
+                                            -- Other databases whose surviving best candidate ties the
+                                            -- winner's score. Dedup by DB name to ignore intra-DB ties.
+                                            tied =
+                                                let winnerDB = cdbDatabaseName bestCand
+                                                    winnerScore = cdbScore bestCand
+                                                    sameScoreDBs =
+                                                        [ cdbDatabaseName c
+                                                        | (c, _) <- scored
+                                                        , cdbScore c == winnerScore
+                                                        , cdbDatabaseName c /= winnerDB
+                                                        ]
+                                                 in M.keys (M.fromList [(d, ()) | d <- sameScoreDBs])
+                                         in if cdbScore bestCand >= lcThreshold
+                                                then
+                                                    let warnings =
+                                                            if T.null location || bestKind == ExactLoc
+                                                                then []
+                                                                else [UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind]
+                                                     in CrossDBLinked
+                                                            { cdlrActivityUUID = cdbActivityUUID bestCand
+                                                            , cdlrProductUUID = cdbProductUUID bestCand
+                                                            , cdlrDatabaseName = cdbDatabaseName bestCand
+                                                            , cdlrScore = cdbScore bestCand
+                                                            , cdlrProductName = cdbProductName bestCand
+                                                            , cdlrLocation = cdbLocation bestCand
+                                                            , cdlrWarnings = warnings
+                                                            , cdlrTiedDatabases = tied
+                                                            }
+                                                else CrossDBNotLinked (LocationUnavailable effectiveLocation)
   where
     lookupExact :: Text -> IndexedDatabase -> [(Text, SupplierEntry)]
     lookupExact name idb =
@@ -461,6 +496,33 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                         Nothing -> tryPrefixes ps
                 else candidates
 
+    classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
+    classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =
+        case acceptableLocation lcGeographyPolicy lcLocationHierarchy queryLoc seLocation of
+            Just kind -> Just (entry, kind)
+            Nothing -> Nothing
+
+    -- For the rejected-by-policy case, find the best candidate that *would*
+    -- have been accepted under 'GeoGlobal' but is rejected here, so we can
+    -- report it to the user. Returns Nothing if even GeoGlobal would reject
+    -- (e.g. narrowing only) — caller falls back to LocationUnavailable.
+    rejectionReason :: Text -> [(Text, SupplierEntry)] -> Maybe (Text, LocationKind)
+    rejectionReason queryLoc candidates =
+        let permissive =
+                mapMaybe
+                    ( \(_, SupplierEntry{seLocation}) ->
+                        (\k -> (seLocation, k))
+                            <$> acceptableLocation GeoGlobal lcLocationHierarchy queryLoc seLocation
+                    )
+                    candidates
+            kindOrder ExactLoc = 4 :: Int
+            kindOrder ParentLoc = 3
+            kindOrder GlobalLoc = 2
+            kindOrder UnrelatedLoc = 1
+         in case permissive of
+                [] -> Nothing
+                _ -> Just $ maximumBy (comparing (kindOrder . snd)) permissive
+
     scoreEntry :: Text -> (Text, SupplierEntry) -> CrossDBCandidate
     scoreEntry queryLoc (dbName, SupplierEntry{..}) =
         let locScore = matchLocation lcLocationHierarchy queryLoc seLocation
@@ -474,11 +536,6 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 , cdbLocation = seLocation
                 , cdbProductName = seProductName
                 }
-
-    buildWarnings :: Text -> Text -> [LinkWarning]
-    buildWarnings queryLoc actualLoc
-        | queryLoc == actualLoc = []
-        | otherwise = [UpperLocationUsed queryLoc actualLoc]
 
 -- | Legacy function for backward compatibility (slower, builds indexes on the fly)
 findSupplierAcrossDatabases ::
@@ -525,6 +582,53 @@ matchLocation hier queryLoc candidateLoc
     | candidateLoc `elem` ["GLO", "RoW", "Unspecified"] = 10 -- Global fallback
     | isSubregionOf hier candidateLoc queryLoc = 0 -- Narrowing (GLO→FR) — blocked
     | otherwise = 5 -- Unrelated
+
+{- | Classify a candidate location relative to the requested one. Pure
+description, ignoring any policy. Used by 'acceptableLocation' and to label
+fallback warnings.
+
+'GlobalLoc' takes precedence over 'ParentLoc' even when GLO/RoW appears in
+the requested location's parent chain (every country has GLO/RoW listed in
+'locationHierarchy'), because semantically a global fallback is a stronger
+caveat than an honest geographic widening.
+-}
+describeLocation :: M.Map Text [Text] -> Text -> Text -> LocationKind
+describeLocation hier queryLoc candidateLoc
+    | queryLoc == candidateLoc = ExactLoc
+    | candidateLoc `elem` ["GLO", "RoW", "Unspecified"] = GlobalLoc
+    | isSubregionOf hier queryLoc candidateLoc = ParentLoc
+    | otherwise = UnrelatedLoc
+
+{- | Decide whether a candidate location is acceptable for the given policy.
+
+Narrowing (candidate strictly more specific than requested) is always
+rejected: it would invent precision the source dataset does not have.
+-}
+acceptableLocation ::
+    GeographyPolicy ->
+    M.Map Text [Text] ->
+    -- | requested location
+    Text ->
+    -- | candidate location
+    Text ->
+    Maybe LocationKind
+acceptableLocation policy hier queryLoc candidateLoc
+    | isNarrowing = Nothing
+    | otherwise = case (describeLocation hier queryLoc candidateLoc, policy) of
+        (ExactLoc, _) -> Just ExactLoc
+        (ParentLoc, GeoExact) -> Nothing
+        (ParentLoc, _) -> Just ParentLoc
+        (GlobalLoc, GeoGlobal) -> Just GlobalLoc
+        (GlobalLoc, _) -> Nothing
+        (UnrelatedLoc, GeoGlobal) -> Just UnrelatedLoc
+        (UnrelatedLoc, _) -> Nothing
+  where
+    -- candidate is more specific than query, but not when candidate is a
+    -- placeless code (GLO/RoW/Unspecified) — those are wider, not narrower
+    isNarrowing =
+        queryLoc /= candidateLoc
+            && candidateLoc `notElem` ["GLO", "RoW", "Unspecified"]
+            && isSubregionOf hier candidateLoc queryLoc
 
 -- | Check if one location is a subregion of another
 isSubregionOf :: M.Map Text [Text] -> Text -> Text -> Bool

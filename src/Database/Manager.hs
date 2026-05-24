@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -162,7 +163,36 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), CrossDBLink (..), CrossDBLinkingStats (..), Database (..), LinkBlocker (..), SimpleDatabase (..), SparseTriple (..), UUID, Unit (..), UnitDB, bfCompartmentName, bfCompartmentSub, computeMinimalSelectedDeps, crossDBBySource, crossDBRedundantSources, deduplicateFallbacks, exchangeFlowId, exchangeIsReference, initializeRuntimeFields, toSimpleDatabase, unresolvedCount)
+import Types (
+    Activity (..),
+    BioFlowDB,
+    BiosphereFlow (..),
+    CrossDBLink (..),
+    CrossDBLinkingStats (..),
+    Database (..),
+    GeographyPolicy (..),
+    LinkBlocker (..),
+    LocationFallback (..),
+    LocationKind (..),
+    LocationUnresolved (..),
+    SimpleDatabase (..),
+    SparseTriple (..),
+    UUID,
+    Unit (..),
+    UnitDB,
+    bfCompartmentName,
+    bfCompartmentSub,
+    computeMinimalSelectedDeps,
+    crossDBBySource,
+    crossDBRedundantSources,
+    deduplicateFallbacks,
+    deduplicateUnresolved,
+    exchangeFlowId,
+    exchangeIsReference,
+    initializeRuntimeFields,
+    toSimpleDatabase,
+    unresolvedCount,
+ )
 import qualified UnitConversion
 
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
@@ -290,8 +320,12 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -- ^ True if can be finalized
     , dsiUnknownUnits :: ![Text]
     -- ^ Unknown units from sdbUnits
-    , dsiLocationFallbacks :: ![(Text, Text, Text)]
-    -- ^ (product, requestedLoc, actualLoc)
+    , dsiLocationFallbacks :: ![LocationFallback]
+    -- ^ Accepted links with widened geography, tagged with 'LocationKind'
+    , dsiLocationUnresolved :: ![LocationUnresolved]
+    {- ^ Inputs that could not be linked because the database's
+    'GeographyPolicy' rejected every candidate (or no candidate existed)
+    -}
     , dsiDataPath :: !Text
     -- ^ Current selected data path (relative)
     , dsiAvailablePaths :: ![(Text, Text, Int)]
@@ -317,14 +351,30 @@ instance ToJSON DatabaseSetupInfo where
             , "isReady" .= dsiIsReady
             , "unknownUnits" .= dsiUnknownUnits
             , "locationFallbacks" .= map encodeFallback dsiLocationFallbacks
+            , "locationUnresolved" .= map encodeUnresolved dsiLocationUnresolved
             , "dataPath" .= dsiDataPath
             , "availablePaths" .= map encodeCandidate dsiAvailablePaths
             , "isLoaded" .= dsiIsLoaded
             ]
       where
-        encodeFallback (prod, req, act) =
+        encodeFallback LocationFallback{lfProduct, lfRequested, lfActual, lfKind} =
             A.object
-                ["product" .= prod, "requested" .= req, "actual" .= act]
+                [ "product" .= lfProduct
+                , "requested" .= lfRequested
+                , "actual" .= lfActual
+                , "kind" .= encodeKind lfKind
+                ]
+        encodeUnresolved LocationUnresolved{luProduct, luRequested, luReason} =
+            A.object
+                [ "product" .= luProduct
+                , "requested" .= luRequested
+                , "reason" .= luReason
+                ]
+        encodeKind :: LocationKind -> Text
+        encodeKind ExactLoc = "exact"
+        encodeKind ParentLoc = "parent"
+        encodeKind GlobalLoc = "global"
+        encodeKind UnrelatedLoc = "unrelated"
         encodeCandidate (path, fmt, cnt) =
             A.object
                 ["path" .= path, "format" .= fmt, "fileCount" .= cnt]
@@ -928,6 +978,7 @@ uploadMetaToConfig slug dirPath meta =
         , dcFormat = Just (UploadedDB.umFormat meta)
         , dcIsUploaded = True -- Discovered from uploads/ directory
         , dcDeletable = True
+        , dcGeographyPolicy = GeoGlobal -- Uploads can't yet express policy; default to permissive
         }
 
 {- | Discover uploaded methods from uploads/methods/ directory
@@ -1090,7 +1141,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
     reportProgress Info $ "Loading database from: " <> sourcePath
-    dbResult <- loadDatabaseRawWithCrossDB (dcName dbConfig) locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier
+    dbResult <- loadDatabaseRawWithCrossDB (dcName dbConfig) locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier (dcGeographyPolicy dbConfig)
 
     case dbResult of
         Left err -> return $ Left err
@@ -1218,12 +1269,14 @@ loadDatabaseRawWithCrossDB ::
     [IndexedDatabase] ->
     -- | Location hierarchy (empty = use built-in)
     M.Map T.Text [T.Text] ->
+    -- | Geography policy for this database
+    GeographyPolicy ->
     {- | (Database, fromCache): True iff the result came from the matrix cache
     as-is, i.e. cross-DB linking was NOT freshly run against 'otherIndexes'.
     Callers use this to decide whether a self-relink is needed.
     -}
     IO (Either Text (Database, Bool))
-loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier = do
+loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier policy = do
     mCachedDb <-
         if noCache
             then return Nothing
@@ -1295,6 +1348,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                 synonymDB
                 unitConfig
                 locationHier
+                policy
                 path
         case loadResult of
             Left err -> return $ Left err
@@ -1463,6 +1517,7 @@ relinkDatabase manager dbName = do
                         , lcUnitConfig = unitConfig
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = M.map snd (dmGeographies manager)
+                        , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
                         }
                 !totalInputs = Loader.countTotalTechInputs (toSimpleDatabase db)
                 rawStats =
@@ -1659,6 +1714,7 @@ stageUploadedDatabase manager dbConfig = do
                     synonymDB
                     unitConfig
                     (M.map snd (dmGeographies manager))
+                    (dcGeographyPolicy dbConfig)
                     loadPath
 
             case loadResult of
@@ -1689,6 +1745,7 @@ stageUploadedDatabase manager dbConfig = do
                                         synonymDB
                                         unitConfig
                                         (M.map snd (dmGeographies manager))
+                                        (dcGeographyPolicy dbConfig)
                                         simpleDb
                                 return (stats', simpleDb')
 
@@ -1930,6 +1987,8 @@ buildStagedSetupInfo staged configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
+                    LocationRejectedByPolicy req act _ ->
+                        ("location_rejected", Just (req <> " ↛ " <> act))
              in MissingSupplier name cnt Nothing reason detail
         -- Combined dependencies list (selected + redundant + available, alpha sorted)
         dependencies =
@@ -1956,6 +2015,7 @@ buildStagedSetupInfo staged configs indexedDbs =
             , dsiIsReady = isReady
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
+            , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
             , dsiDataPath = T.pack (dcPath (sdConfig staged))
             , dsiAvailablePaths = [] -- Filled in by buildSetupResult (requires IO)
             , dsiIsLoaded = False
@@ -1982,6 +2042,8 @@ buildLoadedSetupInfo config db configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
+                    LocationRejectedByPolicy req act _ ->
+                        ("location_rejected", Just (req <> " ↛ " <> act))
              in MissingSupplier name cnt Nothing reason detail
      in DatabaseSetupInfo
             { dsiName = dcName config
@@ -1997,6 +2059,7 @@ buildLoadedSetupInfo config db configs indexedDbs =
             , dsiIsReady = True
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
+            , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
             , dsiDataPath = T.pack (dcPath config)
             , dsiAvailablePaths = [] -- No picker for loaded/configured databases
             , dsiIsLoaded = True
@@ -2187,6 +2250,7 @@ addDependencyToStaged manager dbName depName = do
                         synonymDB
                         unitConfig
                         (M.map snd (dmGeographies manager))
+                        (dcGeographyPolicy (sdConfig staged))
                         (sdSimpleDB staged)
 
                 -- Update staged database with new stats and dependency
@@ -2225,6 +2289,7 @@ removeDependencyFromStaged manager dbName depName = do
                     synonymDB
                     unitConfig
                     (M.map snd (dmGeographies manager))
+                    (dcGeographyPolicy (sdConfig staged))
                     (sdSimpleDB staged)
 
             -- Update staged database

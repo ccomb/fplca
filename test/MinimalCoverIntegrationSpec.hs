@@ -28,6 +28,7 @@ import Types (
     CrossDBLink (..),
     CrossDBLinkingStats (..),
     Exchange (..),
+    GeographyPolicy (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -54,6 +55,7 @@ spec = describe "minimal-cover staging integration" $ do
                 emptySynonymDB
                 defaultUnitConfig
                 locationHierarchy
+                GeoGlobal
                 consumer
 
         -- Both supplier DBs tie on every link: each link records the
@@ -74,6 +76,7 @@ spec = describe "minimal-cover staging integration" $ do
                 emptySynonymDB
                 defaultUnitConfig
                 locationHierarchy
+                GeoGlobal
                 consumer
 
         -- Invariant: every resolved link's source is in the minimal cover.
