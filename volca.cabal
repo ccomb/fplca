@@ -184,7 +184,6 @@ test-suite lca-tests
                      , AutoRelinkSpec
                      , MatrixConstructionSpec
                      , InventorySpec
-                     , ParserSpec
                      , MatrixExportSpec
                      , MethodSpec
                      , SimaProParserSpec
@@ -234,6 +233,13 @@ test-suite lca-tests
                      , LicensesSpec
                      , GeographiesSpec
                      , MethodUploadSpec
+                     , AuthSpec
+                     , CLISpec
+                     , RoutesSpec
+                     , NumericEdgesSpec
+                     , AggregateSpec
+                     , ConfigWriterSpec
+                     , PropertiesSpec
   build-depends:       base >=4.14 && <5
                      , volca
                      , hspec
@@ -256,6 +262,11 @@ test-suite lca-tests
                      , wai
                      , servant-server
                      , network-uri
+                     , base64-bytestring
+                     , optparse-applicative
+                     , QuickCheck
+                     , network
+  build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010
 

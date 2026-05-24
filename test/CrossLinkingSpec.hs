@@ -350,7 +350,7 @@ spec = do
         it "GeoGlobal accepts FR query against a GLO candidate" $ do
             idb <- loadMin3IndexedDB
             case findSupplierInIndexedDBs (mkCtx GeoGlobal idb) "product Y" "FR" "kg" of
-                CrossDBLinked _ _ _ _ _ loc _ -> loc `shouldBe` "GLO"
+                CrossDBLinked{cdlrLocation = loc} -> loc `shouldBe` "GLO"
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected link under GeoGlobal but got: " ++ show reason
 

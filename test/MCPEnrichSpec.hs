@@ -314,3 +314,54 @@ spec = do
                     _ -> expectationFailure "expected results array"
                 Left e -> expectationFailure ("unexpected Left: " <> show e)
                 _ -> expectationFailure "expected an object"
+
+    -- ----------------------------------------------------------------------
+    -- Regression: PR #79 edge cases the original suite didn't cover.
+    -- ----------------------------------------------------------------------
+    describe "PR #79 — slimLCIAPanel / summarizeBatchResults edge cases" $ do
+        let panelWithNaNScore =
+                object
+                    [ "results"
+                        .= [ object
+                                [ "methodId" .= ("m-nan" :: Text)
+                                , "functionalUnit" .= ("1.0 kg" :: Text)
+                                , "score" .= (0 / 0 :: Double)
+                                , "web_url" .= ("https://x/drop" :: Text)
+                                ]
+                           ]
+                    , "scoringResults" .= object []
+                    ]
+
+        it "slimLCIAPanel leaves a NaN score alone (only drops web_url + hoists fnUnit)" $ do
+            let Object km = slimLCIAPanel panelWithNaNScore
+            -- top-level functionalUnit lifted, entry has no web_url anymore.
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Just (String "1.0 kg")
+            case KM.lookup (fromText "results") km of
+                Just (Array rs) -> case V.toList rs of
+                    [Object e] -> do
+                        KM.lookup (fromText "web_url") e `shouldBe` Nothing
+                        KM.lookup (fromText "functionalUnit") e `shouldBe` Nothing
+                        -- score remains a JSON value (Aeson encodes NaN as Null).
+                        KM.member (fromText "score") e `shouldBe` True
+                    _ -> expectationFailure "expected one entry"
+                _ -> expectationFailure "expected results array"
+
+        it "summarizeBatchResults is a no-op on an empty results array" $ do
+            let emptyBatch = object ["results" .= ([] :: [Value])]
+                Object km = summarizeBatchResults "https://x" "db" "EF31" emptyBatch
+            KM.lookup (fromText "results") km `shouldBe` Just (Array (V.fromList []))
+
+        it "summarizeBatchResults pads an entry whose processId is missing (passes it through unchanged)" $ do
+            -- A defensive shape that BatchImpactsEntry should never produce in
+            -- practice, but the projection MUST NOT crash on it.
+            let weirdBatch =
+                    object
+                        [ "results"
+                            .= [ object ["unrelated" .= ("x" :: Text)]
+                               ]
+                        ]
+                Object km = summarizeBatchResults "https://x" "db" "EF31" weirdBatch
+                Just (Array rs) = KM.lookup (fromText "results") km
+                [Object e] = V.toList rs
+            KM.lookup (fromText "web_url") e `shouldBe` Nothing
+            KM.lookup (fromText "unrelated") e `shouldBe` Just (String "x")

@@ -22,11 +22,19 @@ import System.FilePath ((<.>))
 
 import Config (Config (..), DatabaseConfig (..), loadConfigFile)
 
--- | Execute an action while holding an exclusive lock on the config file
-withConfigLock :: FilePath -> IO a -> IO a
+{- | Execute an action while holding an exclusive lock on the config file.
+Lock-acquisition failures (e.g. the config's parent directory does not
+exist, so the .lock file can't be created) are surfaced as 'Left' rather
+than crashing the caller.
+-}
+withConfigLock :: FilePath -> IO (Either Text a) -> IO (Either Text a)
 withConfigLock configPath action = do
     let lockPath = configPath <.> "lock"
-    withFileLock lockPath Exclusive $ \_ -> action
+    result <- try (withFileLock lockPath Exclusive (const action))
+    case result of
+        Left (e :: SomeException) ->
+            return $ Left $ "Failed to acquire config lock: " <> T.pack (show e)
+        Right inner -> return inner
 
 {- | Add a new database to the config file
 Appends a new [[databases]] section at the end of the file
