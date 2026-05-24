@@ -329,6 +329,51 @@ spec = do
             it (label ++ " — parent") $ acceptableLocation GeoParent hier req cand `shouldBe` expParent
             it (label ++ " — global") $ acceptableLocation GeoGlobal hier req cand `shouldBe` expGlobal
 
+    -- -----------------------------------------------------------------------
+    -- findSupplierInIndexedDBs — geography_policy enforcement
+    -- The SAMPLE.min3 fixture has "product Y" at GLO. Querying for FR
+    -- exercises each (policy, candidate-kind) decision: GLO accepts only
+    -- under GeoGlobal, and the rejection path must surface as
+    -- LocationRejectedByPolicy carrying the actual kind.
+    -- -----------------------------------------------------------------------
+    describe "findSupplierInIndexedDBs (geography policy)" $ do
+        let mkCtx policy idb =
+                LinkingContext
+                    { lcIndexedDatabases = [idb]
+                    , lcSynonymDB = emptySynonymDB
+                    , lcUnitConfig = defaultUnitConfig
+                    , lcThreshold = defaultLinkingThreshold
+                    , lcLocationHierarchy = locationHierarchy
+                    , lcGeographyPolicy = policy
+                    }
+
+        it "GeoGlobal accepts FR query against a GLO candidate" $ do
+            idb <- loadMin3IndexedDB
+            case findSupplierInIndexedDBs (mkCtx GeoGlobal idb) "product Y" "FR" "kg" of
+                CrossDBLinked _ _ _ _ _ loc _ -> loc `shouldBe` "GLO"
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected link under GeoGlobal but got: " ++ show reason
+
+        it "GeoExact rejects FR query against a GLO candidate with kind=GlobalLoc" $ do
+            idb <- loadMin3IndexedDB
+            case findSupplierInIndexedDBs (mkCtx GeoExact idb) "product Y" "FR" "kg" of
+                CrossDBNotLinked (LocationRejectedByPolicy req actLoc kind) -> do
+                    req `shouldBe` "FR"
+                    actLoc `shouldBe` "GLO"
+                    kind `shouldBe` GlobalLoc
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected LocationRejectedByPolicy but got: " ++ show reason
+                CrossDBLinked{} -> expectationFailure "Expected rejection under GeoExact"
+
+        it "GeoParent also rejects a GLO candidate (parent-only does not include global)" $ do
+            idb <- loadMin3IndexedDB
+            case findSupplierInIndexedDBs (mkCtx GeoParent idb) "product Y" "FR" "kg" of
+                CrossDBNotLinked (LocationRejectedByPolicy _ _ kind) ->
+                    kind `shouldBe` GlobalLoc
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected LocationRejectedByPolicy GlobalLoc but got: " ++ show reason
+                CrossDBLinked{} -> expectationFailure "Expected rejection under GeoParent"
+
 -- ---------------------------------------------------------------------------
 -- Helper: load SAMPLE.min3 as IndexedDatabase
 -- ---------------------------------------------------------------------------
