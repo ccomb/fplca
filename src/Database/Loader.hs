@@ -1285,22 +1285,23 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
             Just flow ->
                 let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
                  in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
-                        CrossDBLinked supplierActUUID supplierProdUUID dbName _score prodName supplierLoc warnings ->
+                        result@CrossDBLinked{} ->
                             let !crossLink =
                                     CrossDBLink
                                         { cdlConsumerActUUID = consumerActUUID
                                         , cdlConsumerProdUUID = consumerProdUUID
-                                        , cdlSupplierActUUID = supplierActUUID
-                                        , cdlSupplierProdUUID = supplierProdUUID
+                                        , cdlSupplierActUUID = cdlrActivityUUID result
+                                        , cdlSupplierProdUUID = cdlrProductUUID result
                                         , cdlCoefficient = amt
                                         , cdlExchangeUnit = flowUnitName
-                                        , cdlFlowName = prodName
-                                        , cdlLocation = supplierLoc
-                                        , cdlSourceDatabase = dbName
+                                        , cdlFlowName = cdlrProductName result
+                                        , cdlLocation = cdlrLocation result
+                                        , cdlSourceDatabase = cdlrDatabaseName result
+                                        , cdlTiedAlternatives = cdlrTiedDatabases result
                                         }
                                 fallbacks =
-                                    [ LocationFallback prodName req actLoc kind
-                                    | UpperLocationUsed req actLoc kind <- warnings
+                                    [ LocationFallback (cdlrProductName result) req actLoc kind
+                                    | UpperLocationUsed req actLoc kind <- cdlrWarnings result
                                     ]
                              in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks [] 0
                         CrossDBNotLinked blocker ->

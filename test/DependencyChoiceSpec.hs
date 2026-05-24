@@ -66,42 +66,52 @@ spec :: Spec
 spec = do
     describe "buildDependencyChoices" $ do
         it "excludes the current database from the result" $ do
-            let result = buildDependencyChoices "agribalyse" [] configs indexed
+            let result = buildDependencyChoices "agribalyse" [] [] configs indexed
             map dchDatabaseName result `shouldBe` ["ecoinvent", "wfldb"]
 
         it "sorts results alphabetically by database name" $ do
-            let result = buildDependencyChoices "wfldb" [] configs indexed
+            let result = buildDependencyChoices "wfldb" [] [] configs indexed
             map dchDatabaseName result `shouldBe` ["agribalyse", "ecoinvent"]
 
         it "tags entries selected vs available based on the selected set" $ do
-            let result = buildDependencyChoices "agribalyse" ["ecoinvent"] configs indexed
+            let result = buildDependencyChoices "agribalyse" ["ecoinvent"] [] configs indexed
             [(dchDatabaseName d, dchStatus d) | d <- result]
                 `shouldBe` [("ecoinvent", SelectedDep), ("wfldb", AvailableDep)]
 
+        it "tags entries in the redundant set as RedundantDep" $ do
+            let result = buildDependencyChoices "agribalyse" ["ecoinvent"] ["wfldb"] configs indexed
+            [(dchDatabaseName d, dchStatus d) | d <- result]
+                `shouldBe` [("ecoinvent", SelectedDep), ("wfldb", RedundantDep)]
+
+        it "selected wins over redundant when a name appears in both sets" $ do
+            let result = buildDependencyChoices "agribalyse" ["wfldb"] ["wfldb"] configs indexed
+            [(dchDatabaseName d, dchStatus d) | d <- result]
+                `shouldBe` [("ecoinvent", AvailableDep), ("wfldb", SelectedDep)]
+
         it "flips status in place without changing order when an entry is toggled" $ do
-            let before = buildDependencyChoices "agribalyse" [] configs indexed
-                after = buildDependencyChoices "agribalyse" ["wfldb"] configs indexed
+            let before = buildDependencyChoices "agribalyse" [] [] configs indexed
+                after = buildDependencyChoices "agribalyse" ["wfldb"] [] configs indexed
             map dchDatabaseName before `shouldBe` map dchDatabaseName after
             map dchStatus after `shouldBe` [AvailableDep, SelectedDep]
 
         it "populates matchCount from idbByProductName size" $ do
-            let result = buildDependencyChoices "agribalyse" [] configs indexed
+            let result = buildDependencyChoices "agribalyse" [] [] configs indexed
                 byName = M.fromList [(dchDatabaseName d, dchMatchCount d) | d <- result]
             M.lookup "ecoinvent" byName `shouldBe` Just 7
             M.lookup "wfldb" byName `shouldBe` Just 2
 
         it "falls back to the database name when no config is present" $ do
-            let result = buildDependencyChoices "agribalyse" [] M.empty indexed
+            let result = buildDependencyChoices "agribalyse" [] [] M.empty indexed
                 byName = M.fromList [(dchDatabaseName d, dchDisplayName d) | d <- result]
             M.lookup "ecoinvent" byName `shouldBe` Just "ecoinvent"
             M.lookup "wfldb" byName `shouldBe` Just "wfldb"
 
         it "uses dcDisplayName from the config when available" $ do
-            let result = buildDependencyChoices "agribalyse" [] configs indexed
+            let result = buildDependencyChoices "agribalyse" [] [] configs indexed
                 byName = M.fromList [(dchDatabaseName d, dchDisplayName d) | d <- result]
             M.lookup "ecoinvent" byName `shouldBe` Just "Ecoinvent 3.9"
             M.lookup "wfldb" byName `shouldBe` Just "WFLDB"
 
         it "ignores selected names that are not in the indexed set" $ do
-            let result = buildDependencyChoices "agribalyse" ["ghost-db"] configs indexed
+            let result = buildDependencyChoices "agribalyse" ["ghost-db"] [] configs indexed
             map dchStatus result `shouldBe` [AvailableDep, AvailableDep]

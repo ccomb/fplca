@@ -53,8 +53,8 @@ import qualified Data.Vector.Unboxed as U
 
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, fillBroadcastVector, fillRegionalActivityWeights)
 import Method.Types (FlowDirection (..), MethodCF (..))
-import qualified Types as VT
 import Types
+import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..))
 
 -- | One biosphere flow shared by both DBs (cross-DB merging keys on UUID).
@@ -187,6 +187,7 @@ linkAt consumerDb supplierDb supplierName supIdx coeff =
                 , cdlFlowName = "x-link"
                 , cdlLocation = activityLocation (dbActivities supplierDb V.! supIdx)
                 , cdlSourceDatabase = supplierName
+                , cdlTiedAlternatives = []
                 }
      in consumerDb{dbCrossDBLinks = link : dbCrossDBLinks consumerDb}
 

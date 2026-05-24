@@ -232,7 +232,7 @@ spec = do
                         , lcGeographyPolicy = GeoGlobal
                         }
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "kg" of
-                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked reason -> expectationFailure $ "Expected link but got: " ++ show reason
 
         it "returns NoNameMatch for an unknown product" $ do
@@ -282,7 +282,7 @@ spec = do
                         }
             -- Synonym lookup: "producto y" → group containing "product y" → supplier
             case findSupplierInIndexedDBs ctx "producto y" "GLO" "kg" of
-                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked _ -> pendingWith "synonym linking requires index to be built with synDB"
 
         it "uses empty location from compound name when location arg is empty" $ do
@@ -299,7 +299,7 @@ spec = do
             -- "product Y {GLO}" compound name with empty location arg
             -- extractBracketedLocation will find "GLO"
             case findSupplierInIndexedDBs ctx "product Y {GLO}" "" "kg" of
-                CrossDBLinked _ _ _ score _ _ _ -> score `shouldSatisfy` (>= defaultLinkingThreshold)
+                CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked _ -> pendingWith "Compound name location extraction may not match"
 
     -- -----------------------------------------------------------------------
