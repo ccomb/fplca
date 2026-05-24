@@ -26,7 +26,7 @@ import qualified Data.OpenApi.Lens as OA
 import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Manager (DatabaseSetupInfo, DependencySuggestion, MissingSupplier)
+import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
 import Types (BioDirection, BiosphereFlow, Compartment, Exchange, Pedigree, TechRole, TechnosphereFlow, Unit)
 
@@ -52,7 +52,8 @@ instance ToSchema Exchange where declareNamedSchema = genericDeclareNamedSchema 
 
 -- Database.Manager types
 instance ToSchema MissingSupplier
-instance ToSchema DependencySuggestion
+instance ToSchema DependencyStatus
+instance ToSchema DependencyChoice
 instance ToSchema DatabaseSetupInfo
 
 -- API.Types — every record type uses strippedSchemaOptions so the generated
