@@ -23,8 +23,11 @@ module API.MCP.Enrich (
 
     -- * web_url enrichment
     addWebUrl,
-    enrichResultsWithWebUrl,
-    enrichBatchResults,
+    summarizeBatchResults,
+
+    -- * payload slimming
+    slimLCIAPanel,
+    summarizeLCIAPanel,
 
     -- * scoring_sets filter
     filterScoringSets,
@@ -121,57 +124,60 @@ scoreActivityWebUrl baseUrl dbName pidText coll =
 -- web_url enrichment
 -- ---------------------------------------------------------------------------
 
-webUrlKey, resultsKey, impactsKey, processIdKey, methodIdKey :: Key.Key
+webUrlKey, resultsKey, impactsKey, processIdKey, functionalUnitKey :: Key.Key
 webUrlKey = fromText "web_url"
 resultsKey = fromText "results"
 impactsKey = fromText "impacts"
 -- 'strippedToJSON' on the API record drops the field prefix and keeps
 -- camelCase; stay aligned with what 'LCIABatchResult' / 'BatchImpactsEntry'
--- actually serialize to ('methodId', not 'method_id').
+-- actually serialize to ('processId', not 'process_id').
 processIdKey = fromText "processId"
-methodIdKey = fromText "methodId"
+functionalUnitKey = fromText "functionalUnit"
 
 -- | Add a 'web_url' field to a JSON object at the top level.
 addWebUrl :: Text -> Value -> Value
 addWebUrl url = overObject (KM.insert webUrlKey (String url))
 
-{- | Enrich the @results@ array of a serialized 'LCIABatchResult' with a
-per-method 'web_url' built from each entry's @methodId@. Entries
-without a string @methodId@ are passed through unchanged.
+{- | Reduce a serialized 'LCIABatchResult' to its aggregates for bulk
+transport: hoist @functionalUnit@ to the top level (same value on
+every entry anyway) and drop the per-method @results@ array entirely.
+What stays: @singleScore@, @scoringResults@, @scoringIndicators@,
+@scoringUnits@, @availableNWsets@, @normWeightSetName@.
+
+A ranking caller has everything it needs in those aggregates. A caller
+that wants per-method drill-down on a specific activity calls
+@score_activity@ on that one process_id.
 -}
-enrichResultsWithWebUrl :: Text -> Value -> Value
-enrichResultsWithWebUrl baseUrlForCategory =
-    overObject (adjustKey resultsKey (overArray (enrichResultEntry baseUrlForCategory)))
+summarizeLCIAPanel :: Value -> Value
+summarizeLCIAPanel = overObject (KM.delete resultsKey . hoistFunctionalUnit)
 
-enrichResultEntry :: Text -> Value -> Value
-enrichResultEntry baseUrlForCategory =
-    overObject $ \km ->
-        case KM.lookup methodIdKey km >>= valueText of
-            Just mid ->
-                KM.insert webUrlKey (String (baseUrlForCategory <> "/" <> mid)) km
-            Nothing -> km
+{- | Summarize each entry of a serialized 'BatchImpactsResponse'.
 
-{- | Enrich each entry of a serialized 'BatchImpactsResponse' with a
-@web_url@ pointing at the activity-level impacts page.
+For every entry:
 
-The URL is attached at two levels of each entry:
+  * Reduce its @impacts@ subtree via 'summarizeLCIAPanel' (drops the
+    @results@ array, hoists @functionalUnit@) — the bulk endpoint
+    returns aggregates only.
+  * Attach a @web_url@ to the activity-level impacts page at two
+    locations:
 
-  * @results[i].web_url@ — promised by the @score_activities@ resource
-    description; a client reading the entry shape directly lands on it.
-  * @results[i].impacts.web_url@ (plus per-method @web_url@s under
-    @impacts.results@) — same shape as a standalone @score_activity@
-    response.
+      - @results[i].web_url@ — what the @score_activities@ resource
+        description promises; a client reading the entry shape directly
+        lands on it.
+      - @results[i].impacts.web_url@ — same shape as a standalone
+        @score_activity@ response, so clients reading either shape land
+        on the same link.
 
-An entry that lacks an @impacts@ subtree (defensive — the
-'BatchImpactsEntry' record guarantees one) is left untouched in that
-subtree, rather than gaining an empty placeholder.
+An entry without an @impacts@ subtree (defensive — the
+'BatchImpactsEntry' record guarantees one) still gains the top-level
+@web_url@, but no empty @impacts@ placeholder is materialized.
 -}
-enrichBatchResults :: Text -> Text -> Text -> Value -> Value
-enrichBatchResults baseUrl dbName coll =
-    overObject (adjustKey resultsKey (overArray (enrichBatchEntry baseUrl dbName coll)))
+summarizeBatchResults :: Text -> Text -> Text -> Value -> Value
+summarizeBatchResults baseUrl dbName coll =
+    overObject (adjustKey resultsKey (overArray (summarizeBatchEntry baseUrl dbName coll)))
 
-enrichBatchEntry :: Text -> Text -> Text -> Value -> Value
-enrichBatchEntry baseUrl dbName coll =
+summarizeBatchEntry :: Text -> Text -> Text -> Value -> Value
+summarizeBatchEntry baseUrl dbName coll =
     overObject $ \km ->
         case KM.lookup processIdKey km >>= valueText of
             Just pidText ->
@@ -180,11 +186,57 @@ enrichBatchEntry baseUrl dbName coll =
                         Just impactsValue ->
                             KM.insert
                                 impactsKey
-                                (addWebUrl url (enrichResultsWithWebUrl url impactsValue))
+                                (addWebUrl url (summarizeLCIAPanel impactsValue))
                                 km
                         Nothing -> km
                  in KM.insert webUrlKey (String url) withImpacts
             Nothing -> km
+
+-- ---------------------------------------------------------------------------
+-- payload slimming
+-- ---------------------------------------------------------------------------
+
+{- | Slim down a serialized 'LCIABatchResult' for MCP transport. Two
+edits, both purely about wire weight (no information lost):
+
+  * Hoist @functionalUnit@ from @results[0]@ to the top level. Every
+    entry in @results@ shares the same value (one panel = one activity
+    = one functional unit), so repeating it 27 times is pure bloat.
+    The lifted copy lives next to @results@ and the per-entry copies
+    are removed.
+  * Drop @web_url@ from every entry. The panel-level @web_url@ added
+    by 'addWebUrl' already lands on the page that lists every method;
+    a deep link per method would be redundant.
+
+Defensive on the shape: missing @results@, empty @results@, or entries
+without a @functionalUnit@ are all passed through cleanly.
+-}
+slimLCIAPanel :: Value -> Value
+slimLCIAPanel = overObject (stripWebUrlFromEntries . hoistFunctionalUnit)
+  where
+    stripWebUrlFromEntries = adjustKey resultsKey (overArray (overObject (KM.delete webUrlKey)))
+
+{- | Copy @results[0].functionalUnit@ to the top level of the panel and
+remove it from every entry. The value is constant across @results@ by
+construction (one panel = one activity = one functional unit), so the
+lifted copy carries the same information at a fraction of the bytes.
+
+A missing @results@, an empty @results@, or a first entry without a
+@functionalUnit@ all pass through cleanly — nothing is invented.
+-}
+hoistFunctionalUnit :: KeyMap Value -> KeyMap Value
+hoistFunctionalUnit km = case firstFunctionalUnit km of
+    Just fu -> KM.insert functionalUnitKey fu (stripFromEntries km)
+    Nothing -> km
+  where
+    stripFromEntries = adjustKey resultsKey (overArray (overObject (KM.delete functionalUnitKey)))
+
+firstFunctionalUnit :: KeyMap Value -> Maybe Value
+firstFunctionalUnit km = case KM.lookup resultsKey km of
+    Just (Array rs) -> case V.toList rs of
+        Object e : _ -> KM.lookup functionalUnitKey e
+        _ -> Nothing
+    _ -> Nothing
 
 -- ---------------------------------------------------------------------------
 -- scoring_sets filter

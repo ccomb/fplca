@@ -14,12 +14,14 @@ module MCPEnrichSpec (spec) where
 import API.MCP.Enrich (
     addWebUrl,
     encodeSegment,
-    enrichBatchResults,
-    enrichResultsWithWebUrl,
     filterScoringSets,
     filterScoringSetsBatch,
     scoreActivityWebUrl,
+    slimLCIAPanel,
+    summarizeBatchResults,
+    summarizeLCIAPanel,
  )
+import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key (fromText)
 import qualified Data.Aeson.KeyMap as KM
@@ -69,7 +71,7 @@ sampleLBR =
         ]
 
 {- | Minimal BatchImpactsResponse-shaped Value: two entries with
-impacts, one entry without impacts (defensive — see enrichBatchResults).
+impacts, one entry without impacts (defensive — see summarizeBatchResults).
 -}
 sampleBatch :: Value
 sampleBatch =
@@ -125,48 +127,130 @@ spec = do
             addWebUrl "https://x" (Bool True) `shouldBe` Bool True
             addWebUrl "https://x" Null `shouldBe` Null
 
-    describe "enrichResultsWithWebUrl" $ do
-        it "appends /<methodId> as web_url on each results entry with a methodId" $ do
-            let enriched = enrichResultsWithWebUrl "https://x/impacts/EF31" sampleLBR
-            case enriched of
-                Object km -> case KM.lookup (fromText "results") km of
-                    Just (Array rs) -> case V.toList rs of
-                        [Object entry] ->
-                            KM.lookup (fromText "web_url") entry
-                                `shouldBe` Just (String "https://x/impacts/EF31/uuid-method-1")
-                        _ -> expectationFailure "expected a single result entry"
-                    _ -> expectationFailure "expected results to be an array"
-                _ -> expectationFailure "expected an object"
+    describe "slimLCIAPanel" $ do
+        let panelWithFnUnit =
+                object
+                    [ "results"
+                        .= [ object
+                                [ "methodId" .= ("uuid-method-1" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "web_url" .= ("https://x/should-be-dropped" :: Text)
+                                , "score" .= (1.0 :: Double)
+                                ]
+                           , object
+                                [ "methodId" .= ("uuid-method-2" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "web_url" .= ("https://x/should-be-dropped-too" :: Text)
+                                , "score" .= (2.0 :: Double)
+                                ]
+                           ]
+                    , "scoringResults" .= object []
+                    ]
 
-        it "leaves entries without a methodId untouched" $ do
-            let v = object ["results" .= [object ["score" .= (1 :: Int)]]]
-                Object km = enrichResultsWithWebUrl "https://x" v
+        it "hoists functionalUnit from results[0] to the top level" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+            KM.lookup (fromText "functionalUnit") km
+                `shouldBe` Just (String "1.0 kg of butter")
+
+        it "drops functionalUnit from every entry in results" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
                 Just (Array rs) = KM.lookup (fromText "results") km
-                [Object entry] = V.toList rs
-            KM.lookup (fromText "web_url") entry `shouldBe` Nothing
+            forM_ (V.toList rs) $ \(Object e) ->
+                KM.lookup (fromText "functionalUnit") e `shouldBe` Nothing
 
-        it "leaves the object unchanged when there is no results key" $ do
-            let v = object ["other" .= (1 :: Int)]
-            enrichResultsWithWebUrl "https://x" v `shouldBe` v
+        it "drops web_url from every entry in results" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+                Just (Array rs) = KM.lookup (fromText "results") km
+            forM_ (V.toList rs) $ \(Object e) ->
+                KM.lookup (fromText "web_url") e `shouldBe` Nothing
 
-    describe "enrichBatchResults" $ do
+        it "preserves the other top-level fields (scoringResults, etc.)" $ do
+            let Object km = slimLCIAPanel panelWithFnUnit
+            KM.lookup (fromText "scoringResults") km `shouldBe` Just (object [])
+
+        it "is a no-op on a panel without results" $
+            slimLCIAPanel (object ["scoringResults" .= object []])
+                `shouldBe` object ["scoringResults" .= object []]
+
+        it "handles a panel with an empty results array (no fn unit to lift)" $ do
+            let v = object ["results" .= ([] :: [Value]), "scoringResults" .= object []]
+                Object km = slimLCIAPanel v
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
+
+        it "leaves entries without a functionalUnit untouched apart from web_url" $ do
+            let v = object ["results" .= [object ["score" .= (1 :: Int)]]]
+                Object km = slimLCIAPanel v
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
+
+    describe "summarizeLCIAPanel" $ do
+        let panel =
+                object
+                    [ "results"
+                        .= [ object
+                                [ "methodId" .= ("m1" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "score" .= (1.0 :: Double)
+                                ]
+                           , object
+                                [ "methodId" .= ("m2" :: Text)
+                                , "functionalUnit" .= ("1.0 kg of butter" :: Text)
+                                , "score" .= (2.0 :: Double)
+                                ]
+                           ]
+                    , "scoringResults" .= object ["PEF" .= object ["score" .= (3.0 :: Double)]]
+                    , "scoringIndicators" .= object []
+                    ]
+
+        it "drops the results array entirely" $ do
+            let Object km = summarizeLCIAPanel panel
+            KM.lookup (fromText "results") km `shouldBe` Nothing
+
+        it "hoists functionalUnit from results[0] to the top level" $ do
+            let Object km = summarizeLCIAPanel panel
+            KM.lookup (fromText "functionalUnit") km
+                `shouldBe` Just (String "1.0 kg of butter")
+
+        it "preserves scoringResults and scoringIndicators" $ do
+            let Object km = summarizeLCIAPanel panel
+            KM.lookup (fromText "scoringResults") km
+                `shouldBe` Just (object ["PEF" .= object ["score" .= (3.0 :: Double)]])
+            KM.lookup (fromText "scoringIndicators") km
+                `shouldBe` Just (object [])
+
+        it "handles an empty results array (no fn unit to hoist)" $ do
+            let v = object ["results" .= ([] :: [Value]), "scoringResults" .= object []]
+                Object km = summarizeLCIAPanel v
+            KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
+            KM.lookup (fromText "results") km `shouldBe` Nothing
+
+    describe "summarizeBatchResults" $ do
         it "adds web_url at the entry level (the documented shape)" $ do
-            let Object km = enrichBatchResults "https://x" "agribalyse" "EF31" sampleBatch
+            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
                 Just (Array rs) = KM.lookup (fromText "results") km
                 [Object e0, _, _] = V.toList rs
             KM.lookup (fromText "web_url") e0
                 `shouldBe` Just (String "https://x/db/agribalyse/activity/pidA/impacts/EF31")
 
         it "also adds web_url inside the entry's impacts subtree" $ do
-            let Object km = enrichBatchResults "https://x" "agribalyse" "EF31" sampleBatch
+            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
                 Just (Array rs) = KM.lookup (fromText "results") km
                 [Object e0, _, _] = V.toList rs
                 Just (Object impacts) = KM.lookup (fromText "impacts") e0
             KM.lookup (fromText "web_url") impacts
                 `shouldBe` Just (String "https://x/db/agribalyse/activity/pidA/impacts/EF31")
 
+        it "drops impacts.results from every entry (summary, not drill-down)" $ do
+            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
+                Just (Array rs) = KM.lookup (fromText "results") km
+                [Object e0, Object e1, _] = V.toList rs
+            forM_ [e0, e1] $ \entry -> case KM.lookup (fromText "impacts") entry of
+                Just (Object impacts) ->
+                    KM.lookup (fromText "results") impacts `shouldBe` Nothing
+                other ->
+                    expectationFailure ("expected an impacts object, got " <> show other)
+
         it "does NOT materialise an empty impacts object for entries that lack one" $ do
-            let Object km = enrichBatchResults "https://x" "agribalyse" "EF31" sampleBatch
+            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
                 Just (Array rs) = KM.lookup (fromText "results") km
                 [_, _, Object e2] = V.toList rs
             -- Entry without impacts should still gain web_url but not a fake impacts: {}
