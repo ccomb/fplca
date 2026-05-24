@@ -173,7 +173,6 @@ import Types (
     GeographyPolicy (..),
     LinkBlocker (..),
     LocationFallback (..),
-    LocationKind (..),
     LocationUnresolved (..),
     SimpleDatabase (..),
     SparseTriple (..),
@@ -188,6 +187,7 @@ import Types (
     exchangeFlowId,
     exchangeIsReference,
     initializeRuntimeFields,
+    locationKindCode,
     toSimpleDatabase,
     unresolvedCount,
  )
@@ -354,7 +354,7 @@ instance ToJSON DatabaseSetupInfo where
                 [ "product" .= lfProduct
                 , "requested" .= lfRequested
                 , "actual" .= lfActual
-                , "kind" .= encodeKind lfKind
+                , "kind" .= locationKindCode lfKind
                 ]
         encodeUnresolved LocationUnresolved{luProduct, luRequested, luReason} =
             A.object
@@ -362,11 +362,6 @@ instance ToJSON DatabaseSetupInfo where
                 , "requested" .= luRequested
                 , "reason" .= luReason
                 ]
-        encodeKind :: LocationKind -> Text
-        encodeKind ExactLoc = "exact"
-        encodeKind ParentLoc = "parent"
-        encodeKind GlobalLoc = "global"
-        encodeKind UnrelatedLoc = "unrelated"
         encodeCandidate (path, fmt, cnt) =
             A.object
                 ["path" .= path, "format" .= fmt, "fileCount" .= cnt]
@@ -1952,8 +1947,8 @@ buildStagedSetupInfo staged configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act _ ->
-                        ("location_rejected", Just (req <> " ↛ " <> act))
+                    LocationRejectedByPolicy req act kind ->
+                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
              in MissingSupplier name cnt Nothing reason detail
         -- Combined dependencies list (selected + available, alpha sorted)
         dependencies =
@@ -2006,8 +2001,8 @@ buildLoadedSetupInfo config db configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act _ ->
-                        ("location_rejected", Just (req <> " ↛ " <> act))
+                    LocationRejectedByPolicy req act kind ->
+                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
              in MissingSupplier name cnt Nothing reason detail
      in DatabaseSetupInfo
             { dsiName = dcName config

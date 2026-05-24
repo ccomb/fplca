@@ -887,6 +887,16 @@ data LocationKind
       UnrelatedLoc
     deriving (Show, Eq, Generic, NFData, Store)
 
+{- | Stable lowercase wire code for a 'LocationKind'. Single source of truth
+shared by the JSON encoder and the human-readable rejection reason, so the UI
+never sees raw Haskell constructor names like @"ParentLoc"@.
+-}
+locationKindCode :: LocationKind -> Text
+locationKindCode ExactLoc = "exact"
+locationKindCode ParentLoc = "parent"
+locationKindCode GlobalLoc = "global"
+locationKindCode UnrelatedLoc = "unrelated"
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text

@@ -1310,14 +1310,15 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                             (tfName flow)
                                             req
                                             ( "policy rejected "
-                                                <> T.pack (show kind)
+                                                <> locationKindCode kind
                                                 <> " candidate "
                                                 <> actLoc
                                             )
                                         ]
                                     LocationUnavailable req ->
                                         [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
-                                    _ -> []
+                                    NoNameMatch -> []
+                                    UnitIncompatible _ _ -> []
                              in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
     | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
@@ -1384,7 +1385,7 @@ reportCrossDBLinkingStats nActivities stats = do
                     (T.unpack lfProduct)
                     (T.unpack lfRequested)
                     (T.unpack lfActual)
-                    (show lfKind)
+                    (T.unpack (locationKindCode lfKind))
 
     -- Inputs rejected by geography_policy (deduplicated)
     let !uniqueUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
@@ -1405,4 +1406,4 @@ showBlocker NoNameMatch = "Not found"
 showBlocker (UnitIncompatible q s) = printf "Unit: %s vs %s" (T.unpack q) (T.unpack s)
 showBlocker (LocationUnavailable loc) = printf "Location: %s" (T.unpack loc)
 showBlocker (LocationRejectedByPolicy req act kind) =
-    printf "Rejected by policy: %s → %s (%s)" (T.unpack req) (T.unpack act) (show kind)
+    printf "Rejected by policy: %s → %s (%s)" (T.unpack req) (T.unpack act) (T.unpack (locationKindCode kind))
