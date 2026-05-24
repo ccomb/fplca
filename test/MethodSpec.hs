@@ -201,40 +201,25 @@ spec = do
     -- Method.FlowResolver: parseCompartment
     -- -----------------------------------------------------------------------
     describe "parseCompartment" $ do
-        it "returns Nothing for empty list" $
-            parseCompartment [] `shouldBe` Nothing
-
-        it "parses 'Emissions to air' at level 1 → medium=air" $
-            parseCompartment ["Emissions", "Emissions to air"]
-                `shouldBe` Just (Compartment "air" "" "")
-
-        it "parses 'Emissions to water' at level 1 → medium=water" $
-            parseCompartment ["Emissions", "Emissions to water"]
-                `shouldBe` Just (Compartment "water" "" "")
-
-        it "parses 'Emissions to soil' → medium=soil" $
-            parseCompartment ["Emissions", "Emissions to soil"]
-                `shouldBe` Just (Compartment "soil" "" "")
-
-        it "parses 'Resources' → medium=natural resource" $
-            parseCompartment ["Resources", "Resources from ground"]
-                `shouldBe` Just (Compartment "natural resource" "" "")
-
-        it "parses 'Emissions to fresh water' → medium=water" $
-            parseCompartment ["Emissions", "Emissions to fresh water"]
-                `shouldBe` Just (Compartment "water" "" "")
-
-        it "parses 'Emissions to sea water' → medium=water" $
-            parseCompartment ["Emissions", "Emissions to sea water"]
-                `shouldBe` Just (Compartment "water" "" "")
-
-        it "parses subcompartment from level 2" $
-            parseCompartment ["Emissions", "Emissions to air", "Emissions to air, urban air close to ground"]
-                `shouldBe` Just (Compartment "air" "urban air close to ground" "")
-
-        it "parses water subcompartment from level 2" $
-            parseCompartment ["Emissions", "Emissions to water", "Emissions to water, river"]
-                `shouldBe` Just (Compartment "water" "river" "")
+        let cases =
+                -- (label, input categories, expected medium, expected subcompartment)
+                [ ("empty list → Nothing", [], Nothing)
+                , ("'Emissions to air' (level 1) → medium=air", ["Emissions", "Emissions to air"], Just ("air", ""))
+                , ("'Emissions to water' (level 1) → medium=water", ["Emissions", "Emissions to water"], Just ("water", ""))
+                , ("'Emissions to soil' → medium=soil", ["Emissions", "Emissions to soil"], Just ("soil", ""))
+                , ("'Resources' → medium=natural resource", ["Resources", "Resources from ground"], Just ("natural resource", ""))
+                , ("'Emissions to fresh water' → medium=water", ["Emissions", "Emissions to fresh water"], Just ("water", ""))
+                , ("'Emissions to sea water' → medium=water", ["Emissions", "Emissions to sea water"], Just ("water", ""))
+                , ("level 2 air subcompartment", ["Emissions", "Emissions to air", "Emissions to air, urban air close to ground"], Just ("air", "urban air close to ground"))
+                , ("level 2 water subcompartment", ["Emissions", "Emissions to water", "Emissions to water, river"], Just ("water", "river"))
+                ]
+        mapM_
+            ( \(label, input, expected) ->
+                it ("parses " <> label) $
+                    parseCompartment input
+                        `shouldBe` fmap (\(m, s) -> Compartment m s "") expected
+            )
+            cases
 
         it "falls back to lowercased category when medium is unrecognized" $
             case parseCompartment ["Some unknown category"] of
