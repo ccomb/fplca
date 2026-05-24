@@ -34,7 +34,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.MCP.Enrich (addWebUrl, encodeSegment, enrichBatchResults, enrichResultsWithWebUrl, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl)
+import API.MCP.Enrich (addWebUrl, encodeSegment, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl, slimLCIAPanel, summarizeBatchResults)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
@@ -1797,8 +1797,11 @@ configuredScoringSetNames dbm collName = do
 
 Returns the full LCIABatchResult shape (per-method scores, per-scoring-set
 aggregate scores, per-indicator breakdown, units) for a single activity,
-enriched with a top-level 'web_url' for the panel view and a per-method
-'web_url' in each @results@ entry. Replaces the @N@ round-trips of
+enriched with a top-level 'web_url' pointing at the impacts panel page
+(which already lists every method). The per-entry @functionalUnit@ is
+hoisted to the top level — it is constant across the panel — and
+per-method @web_url@s are not emitted: the panel link covers the same
+ground at a fraction of the bytes. Replaces the @N@ round-trips of
 'get_impacts' a comparative study used to need.
 -}
 callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
@@ -1821,19 +1824,22 @@ callScoreActivity dbManager baseUrl rid args =
                             enriched =
                                 addWebUrl
                                     topUrl
-                                    (enrichResultsWithWebUrl topUrl (toJSON lbr))
+                                    (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
 
 {- | Handler for the 'score_activities' MCP tool.
 
-Scores N activities against every method in a collection in one
-multi-RHS MUMPS solve plus parallel characterization. Each successful
-entry carries a top-level @web_url@ (the activity-level impacts page)
-and the same URL is replicated inside its @impacts@ subtree alongside
-per-method @web_url@s, so clients reading either shape land on the
-right link. Unresolved process IDs land in @not_found@ / @invalid@ of
-the response, not as a 'BatchError'.
+Ranks N activities against every method in a collection in one
+multi-RHS MUMPS solve plus parallel characterization, then strips each
+entry's @impacts@ subtree to its aggregates (single score,
+@scoringResults@, @scoringIndicators@, @scoringUnits@, hoisted
+@functionalUnit@). The per-method @results@ array is not emitted —
+callers needing per-method drill-down call 'score_activity' on a
+specific process_id. Each successful entry carries a top-level
+@web_url@ to its impacts page; the same URL is replicated inside the
+@impacts@ subtree. Unresolved process IDs land in @not_found@ /
+@invalid@ of the response, not as a 'BatchError'.
 -}
 callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callScoreActivities dbManager baseUrl rid args =
@@ -1844,14 +1850,13 @@ callScoreActivities dbManager baseUrl rid args =
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
                 wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
-                let topFlows = intArg "top_flows" args
-                res <- liftIO $ BI.runBatchImpacts dbManager dbName coll topFlows pids
+                res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right bir -> do
                         configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        let enriched = enrichBatchResults baseUrl dbName coll (toJSON bir)
-                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets enriched)
+                        let summarized = summarizeBatchResults baseUrl dbName coll (toJSON bir)
+                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets summarized)
             )
 
 {- | Handler for the 'list_scoring_sets' MCP tool.

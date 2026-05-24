@@ -364,15 +364,14 @@ description r = case r of
         \replaces N round-trips with one batched solve. Discover available \
         \scoring sets with list_scoring_sets."
     ScoreActivities ->
-        "LCA / ACV — score N activities against every method in a collection \
-        \in one call. Returns one entry per activity with the full LCIA \
-        \panel and all configured scoring sets (same shape as \
-        \score_activity), each entry carrying a web_url to its impacts \
-        \page. Unresolved process IDs land in not_found / invalid. \
-        \Replaces N × M round-trips of get_impacts with one MUMPS \
-        \multi-RHS solve plus parallel characterization. Set top_flows>0 \
-        \only when you need per-method drill-downs; the default skips \
-        \them for bulk callers."
+        "LCA / ACV — rank N activities against every method in a collection \
+        \in one call. Returns one entry per activity with the scoring-set \
+        \aggregates (single score, per-indicator breakdown, units), the \
+        \functional unit, and a web_url to its impacts page. Per-method \
+        \scores are NOT included — call score_activity on a specific \
+        \process_id when you need the per-method drill-down. Unresolved \
+        \process IDs land in not_found / invalid. One MUMPS multi-RHS \
+        \solve plus parallel characterization, then summarized for transport."
     ListScoringSets ->
         "LCA / ACV — list formula-based scoring sets defined in loaded \
         \method collections. A scoring set is a configured aggregation of \
@@ -605,7 +604,6 @@ params r = case r of
         [ pDatabase
         , Param "collection" "string" Required "Method collection name"
         , Param "process_ids" "array" Required "Process IDs to score (activityUUID_productUUID). All resolved in one multi-RHS solve."
-        , Param "top_flows" "integer" Optional "Per-(activity, method) top contributors to include (default 0 — bulk-friendly, skips the per-method contribution walk)."
         , pScoringSetsFilter
         ]
     ListScoringSets ->

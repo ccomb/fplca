@@ -229,6 +229,7 @@ test-suite lca-tests
                      , SensitivitySpec
                      , CrossDBSubstitutionSpec
                      , DatabaseStatusSpec
+                     , DependencyChoiceSpec
                      , OlcaSchemaSpec
                      , LicensesSpec
                      , GeographiesSpec

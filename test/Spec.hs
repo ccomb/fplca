@@ -19,6 +19,7 @@ import qualified CrossDBRegionalLCIASubsSpec
 import qualified CrossDBSubstitutionSpec
 import qualified CrossLinkingSpec
 import qualified DatabaseStatusSpec
+import qualified DependencyChoiceSpec
 import qualified EcoSpold1Spec
 import qualified EcoSpold2Spec
 import qualified FlowResolverSpec
@@ -109,6 +110,7 @@ main = hspec $ do
         describe "Search.Fuzzy" FuzzySpec.spec
         describe "Nested Substitutions" NestedSubstitutionSpec.spec
         describe "Database Status (depends_on)" DatabaseStatusSpec.spec
+        describe "DependencyChoice builder" DependencyChoiceSpec.spec
         describe "Licenses Endpoint" LicensesSpec.spec
         describe "Geographies cascade" GeographiesSpec.spec
         describe "Auto-relink on Load (cache hit)" AutoRelinkSpec.spec
