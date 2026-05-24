@@ -302,6 +302,18 @@ spec = do
                 Left _ -> return ()
                 Right _ -> expectationFailure "Expected Left for invalid XML"
 
+        it "returns Left on an empty input" $
+            case parseWithXeno "" of
+                Left _ -> return ()
+                Right _ -> expectationFailure "Expected Left for empty input"
+
+        it "returns Left on well-formed XML that is not an EcoSpold1 dataset" $
+            -- A reasonable XML doc that doesn't carry the EcoSpold structure
+            -- must surface as a parse error, not silently produce an empty Activity.
+            case parseWithXeno "<?xml version=\"1.0\"?><root><child>hello</child></root>" of
+                Left _ -> return ()
+                Right _ -> expectationFailure "Expected Left for non-EcoSpold XML"
+
         it "parses activity name from referenceFunction" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
