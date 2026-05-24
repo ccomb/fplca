@@ -1947,8 +1947,8 @@ buildStagedSetupInfo staged configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act _ ->
-                        ("location_rejected", Just (req <> " ↛ " <> act))
+                    LocationRejectedByPolicy req act kind ->
+                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
              in MissingSupplier name cnt Nothing reason detail
         -- Combined dependencies list (selected + available, alpha sorted)
         dependencies =
@@ -2001,8 +2001,8 @@ buildLoadedSetupInfo config db configs indexedDbs =
                     NoNameMatch -> ("no_name_match", Nothing)
                     UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
                     LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act _ ->
-                        ("location_rejected", Just (req <> " ↛ " <> act))
+                    LocationRejectedByPolicy req act kind ->
+                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
              in MissingSupplier name cnt Nothing reason detail
      in DatabaseSetupInfo
             { dsiName = dcName config
