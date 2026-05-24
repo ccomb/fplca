@@ -184,7 +184,6 @@ test-suite lca-tests
                      , AutoRelinkSpec
                      , MatrixConstructionSpec
                      , InventorySpec
-                     , ParserSpec
                      , MatrixExportSpec
                      , MethodSpec
                      , SimaProParserSpec
@@ -254,6 +253,7 @@ test-suite lca-tests
                      , wai
                      , servant-server
                      , network-uri
+  build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010
 

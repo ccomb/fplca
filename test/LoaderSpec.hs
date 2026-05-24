@@ -6,6 +6,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
 import Test.Hspec
 
 import Database.Loader
@@ -344,3 +345,38 @@ spec = do
             let coproduct = withRole Coproduct 7.0 wasteUUID
                 act = minimalActivity "coproduct-only" "GLO" [coproduct]
             activityNormFactor act (actUUID, prodUUID) `shouldBe` 1.0
+
+    describe "activity classifications (full-load integration)" $ do
+        it "EcoSpold2 SAMPLE.min3: every activity carries a non-empty classification map" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let activities = V.toList $ dbActivities db
+            any (M.null . activityClassification) activities `shouldBe` False
+
+        it "EcoSpold2 SAMPLE.min3: surfaces ISIC rev.4 ecoinvent values" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let activities = V.toList $ dbActivities db
+                isicValues =
+                    [ v
+                    | a <- activities
+                    , Just v <- [M.lookup "ISIC rev.4 ecoinvent" (activityClassification a)]
+                    ]
+            isicValues `shouldContain` ["2394:Manufacture of cement"]
+            isicValues `shouldContain` ["0810:Quarrying of stone, sand and clay"]
+
+        it "EcoSpold2 SAMPLE.min3: surfaces CPC values" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let activities = V.toList $ dbActivities db
+                cpcValues =
+                    [ v
+                    | a <- activities
+                    , Just v <- [M.lookup "CPC" (activityClassification a)]
+                    ]
+            cpcValues `shouldBe` ["3744:Cement"]
+
+        it "EcoSpold1 SAMPLE.ecospold1: category and subCategory promoted to classifications" $ do
+            db <- loadSampleDatabase "SAMPLE.ecospold1"
+            let activities = V.toList $ dbActivities db
+            length activities `shouldSatisfy` (>= 1)
+            let cls = activityClassification (head activities)
+            M.lookup "Category" cls `shouldBe` Just "Energy"
+            M.lookup "SubCategory" cls `shouldBe` Just "Electricity"
