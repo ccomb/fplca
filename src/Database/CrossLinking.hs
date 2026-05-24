@@ -145,10 +145,20 @@ data CrossDBCandidate = CrossDBCandidate
 
 -- | Result of cross-database linking attempt
 data CrossDBLinkResult
-    = -- | Success: actUUID, prodUUID, dbName, score, productName, location, warnings
-      CrossDBLinked !UUID !UUID !Text !Int !Text !Text ![LinkWarning]
-    | -- | Failed: reason for failure
-      CrossDBNotLinked !LinkBlocker
+    = CrossDBLinked
+        { cdlrActivityUUID :: !UUID
+        , cdlrProductUUID :: !UUID
+        , cdlrDatabaseName :: !Text
+        , cdlrScore :: !Int
+        , cdlrProductName :: !Text
+        , cdlrLocation :: !Text
+        , cdlrWarnings :: ![LinkWarning]
+        , cdlrTiedDatabases :: ![Text]
+        {- ^ Other databases whose best candidate ties the winner's score.
+        Used to detect redundant dependencies at staging time.
+        -}
+        }
+    | CrossDBNotLinked !LinkBlocker
 
 -- | Non-blocking warning: link succeeded but with caveats
 data LinkWarning
@@ -433,6 +443,18 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                     _ ->
                                         let scored = map (\(entry, kind) -> (scoreEntry effectiveLocation entry, kind)) accepted
                                             !(bestCand, bestKind) = maximumBy (comparing (cdbScore . fst)) scored
+                                            -- Other databases whose surviving best candidate ties the
+                                            -- winner's score. Dedup by DB name to ignore intra-DB ties.
+                                            tied =
+                                                let winnerDB = cdbDatabaseName bestCand
+                                                    winnerScore = cdbScore bestCand
+                                                    sameScoreDBs =
+                                                        [ cdbDatabaseName c
+                                                        | (c, _) <- scored
+                                                        , cdbScore c == winnerScore
+                                                        , cdbDatabaseName c /= winnerDB
+                                                        ]
+                                                 in M.keys (M.fromList [(d, ()) | d <- sameScoreDBs])
                                          in if cdbScore bestCand >= lcThreshold
                                                 then
                                                     let warnings =
@@ -440,13 +462,15 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                                                 then []
                                                                 else [UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind]
                                                      in CrossDBLinked
-                                                            (cdbActivityUUID bestCand)
-                                                            (cdbProductUUID bestCand)
-                                                            (cdbDatabaseName bestCand)
-                                                            (cdbScore bestCand)
-                                                            (cdbProductName bestCand)
-                                                            (cdbLocation bestCand)
-                                                            warnings
+                                                            { cdlrActivityUUID = cdbActivityUUID bestCand
+                                                            , cdlrProductUUID = cdbProductUUID bestCand
+                                                            , cdlrDatabaseName = cdbDatabaseName bestCand
+                                                            , cdlrScore = cdbScore bestCand
+                                                            , cdlrProductName = cdbProductName bestCand
+                                                            , cdlrLocation = cdbLocation bestCand
+                                                            , cdlrWarnings = warnings
+                                                            , cdlrTiedDatabases = tied
+                                                            }
                                                 else CrossDBNotLinked (LocationUnavailable effectiveLocation)
   where
     lookupExact :: Text -> IndexedDatabase -> [(Text, SupplierEntry)]

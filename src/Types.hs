@@ -887,6 +887,16 @@ data LocationKind
       UnrelatedLoc
     deriving (Show, Eq, Generic, NFData, Store)
 
+{- | Stable lowercase wire code for a 'LocationKind'. Single source of truth
+shared by the JSON encoder and the human-readable rejection reason, so the UI
+never sees raw Haskell constructor names like @"ParentLoc"@.
+-}
+locationKindCode :: LocationKind -> Text
+locationKindCode ExactLoc = "exact"
+locationKindCode ParentLoc = "parent"
+locationKindCode GlobalLoc = "global"
+locationKindCode UnrelatedLoc = "unrelated"
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text
@@ -972,6 +982,39 @@ unresolvedCount = sum . map fst . M.elems . cdlUnresolvedProducts
 crossDBBySource :: CrossDBLinkingStats -> M.Map Text Int
 crossDBBySource = M.fromListWith (+) . map (\l -> (cdlSourceDatabase l, 1)) . cdlLinks
 
+{- | Minimal set of source databases needed to preserve every link's best
+supplier choice. A DB is included iff at least one link cannot be supplied
+by any already-included DB at the same score (its tied set is disjoint
+from the running selection). Ties between equally-valid DBs are broken
+alphabetically for determinism.
+
+This is the canonical pre-selection rule: any DB that wins links only
+"by tie-break" against an already-needed DB is dropped as redundant.
+-}
+computeMinimalSelectedDeps :: [CrossDBLink] -> [Text]
+computeMinimalSelectedDeps links =
+    let tiedSets = [S.insert (cdlSourceDatabase l) (S.fromList (cdlTiedAlternatives l)) | l <- links]
+        essential = S.unions [s | s <- tiedSets, S.size s == 1]
+        uncovered = filter (S.null . S.intersection essential) tiedSets
+     in S.toAscList (greedyCover essential uncovered)
+  where
+    greedyCover :: S.Set Text -> [S.Set Text] -> S.Set Text
+    greedyCover covered [] = covered
+    greedyCover covered uncov =
+        let pick = S.findMin (S.unions uncov)
+            covered' = S.insert pick covered
+            uncov' = filter (S.notMember pick) uncov
+         in greedyCover covered' uncov'
+
+{- | Databases that contributed at least one resolved link but are redundant
+under 'computeMinimalSelectedDeps'. Useful to surface in the setup UI as
+"available but not needed".
+-}
+crossDBRedundantSources :: [CrossDBLink] -> [Text] -> [Text]
+crossDBRedundantSources links selected =
+    let winners = S.fromList (map cdlSourceDatabase links)
+     in S.toAscList (winners `S.difference` S.fromList selected)
+
 {- | Cross-database link: records that an exchange in this database
 sources from a supplier in another database.
 
@@ -1001,6 +1044,11 @@ data CrossDBLink = CrossDBLink
     -- ^ Supplier location (for display)
     , cdlSourceDatabase :: !Text
     -- ^ Source database name
+    , cdlTiedAlternatives :: ![Text]
+    {- ^ Other source databases whose best candidate matched the winner's score.
+    A non-empty list means this link could equivalently be supplied from
+    another database — used to compute the minimal dependency pre-selection.
+    -}
     }
     deriving (Generic, NFData, Store, Show, Eq)
 

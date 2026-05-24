@@ -196,6 +196,8 @@ test-suite lca-tests
                      , TreeSpec
                      , ServiceSpec
                      , CrossLinkingSpec
+                     , MinimalCoverSpec
+                     , MinimalCoverIntegrationSpec
                      , CrossDBInventorySpec
                      , CrossDBRegionalLCIASpec
                      , CrossDBRegionalLCIAFixture
