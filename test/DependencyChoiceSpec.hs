@@ -14,6 +14,7 @@ import Database.Manager (
     DependencyStatus (..),
     buildDependencyChoices,
  )
+import Types (GeographyPolicy (..))
 
 cfg :: Text -> Text -> DatabaseConfig
 cfg name display =
@@ -29,6 +30,7 @@ cfg name display =
         , dcFormat = Nothing
         , dcIsUploaded = False
         , dcDeletable = False
+        , dcGeographyPolicy = GeoGlobal
         }
 
 -- IndexedDatabase whose idbByProductName has 'n' distinct dummy keys, so

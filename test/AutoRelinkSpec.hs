@@ -33,19 +33,22 @@ import Test.Hspec
 
 import Database.Manager (loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
+import Types (GeographyPolicy (..))
 import UnitConversion (defaultUnitConfig)
 
--- | Copy regular files from one directory into another (non-recursive,
--- which is all the EcoSpold v2 fixtures here need).
+{- | Copy regular files from one directory into another (non-recursive,
+which is all the EcoSpold v2 fixtures here need).
+-}
 copyDirContents :: FilePath -> FilePath -> IO ()
 copyDirContents src dst = do
     createDirectoryIfMissing True dst
     files <- listDirectory src
     forM_ files $ \f -> copyFile (src </> f) (dst </> f)
 
--- | Drive 'loadDatabaseRawWithCrossDB' with the inert defaults that this
--- test cares about. Cross-DB linking is not exercised; we only need the
--- cache-hit detection.
+{- | Drive 'loadDatabaseRawWithCrossDB' with the inert defaults that this
+test cares about. Cross-DB linking is not exercised; we only need the
+cache-hit detection.
+-}
 runRaw :: FilePath -> IO (Either T.Text Bool)
 runRaw dstDir = do
     result <-
@@ -58,6 +61,7 @@ runRaw dstDir = do
             defaultUnitConfig
             []
             M.empty
+            GeoGlobal
     return (fmap snd result)
 
 spec :: Spec
