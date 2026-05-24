@@ -149,14 +149,7 @@ that wants per-method drill-down on a specific activity calls
 @score_activity@ on that one process_id.
 -}
 summarizeLCIAPanel :: Value -> Value
-summarizeLCIAPanel = overObject $ \km ->
-    let fnUnit = case KM.lookup resultsKey km of
-            Just (Array rs) -> firstFunctionalUnit rs
-            _ -> Nothing
-        withoutResults = KM.delete resultsKey km
-     in case fnUnit of
-            Just fu -> KM.insert functionalUnitKey fu withoutResults
-            Nothing -> withoutResults
+summarizeLCIAPanel = overObject (KM.delete resultsKey . hoistFunctionalUnit)
 
 {- | Summarize each entry of a serialized 'BatchImpactsResponse'.
 
@@ -219,19 +212,30 @@ Defensive on the shape: missing @results@, empty @results@, or entries
 without a @functionalUnit@ are all passed through cleanly.
 -}
 slimLCIAPanel :: Value -> Value
-slimLCIAPanel = overObject $ \km ->
-    let fnUnit = case KM.lookup resultsKey km of
-            Just (Array rs) -> firstFunctionalUnit rs
-            _ -> Nothing
-        slimmedResults = adjustKey resultsKey (overArray stripEntry) km
-        stripEntry = overObject (KM.delete functionalUnitKey . KM.delete webUrlKey)
-     in case fnUnit of
-            Just fu -> KM.insert functionalUnitKey fu slimmedResults
-            Nothing -> slimmedResults
+slimLCIAPanel = overObject (stripWebUrlFromEntries . hoistFunctionalUnit)
+  where
+    stripWebUrlFromEntries = adjustKey resultsKey (overArray (overObject (KM.delete webUrlKey)))
 
-firstFunctionalUnit :: V.Vector Value -> Maybe Value
-firstFunctionalUnit rs = case V.toList rs of
-    Object km : _ -> KM.lookup functionalUnitKey km
+{- | Copy @results[0].functionalUnit@ to the top level of the panel and
+remove it from every entry. The value is constant across @results@ by
+construction (one panel = one activity = one functional unit), so the
+lifted copy carries the same information at a fraction of the bytes.
+
+A missing @results@, an empty @results@, or a first entry without a
+@functionalUnit@ all pass through cleanly — nothing is invented.
+-}
+hoistFunctionalUnit :: KeyMap Value -> KeyMap Value
+hoistFunctionalUnit km = case firstFunctionalUnit km of
+    Just fu -> KM.insert functionalUnitKey fu (stripFromEntries km)
+    Nothing -> km
+  where
+    stripFromEntries = adjustKey resultsKey (overArray (overObject (KM.delete functionalUnitKey)))
+
+firstFunctionalUnit :: KeyMap Value -> Maybe Value
+firstFunctionalUnit km = case KM.lookup resultsKey km of
+    Just (Array rs) -> case V.toList rs of
+        Object e : _ -> KM.lookup functionalUnitKey e
+        _ -> Nothing
     _ -> Nothing
 
 -- ---------------------------------------------------------------------------

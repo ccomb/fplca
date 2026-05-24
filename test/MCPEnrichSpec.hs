@@ -71,7 +71,7 @@ sampleLBR =
         ]
 
 {- | Minimal BatchImpactsResponse-shaped Value: two entries with
-impacts, one entry without impacts (defensive — see enrichBatchResults).
+impacts, one entry without impacts (defensive — see summarizeBatchResults).
 -}
 sampleBatch :: Value
 sampleBatch =
