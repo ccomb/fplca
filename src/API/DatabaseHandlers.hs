@@ -130,7 +130,7 @@ import Database.Upload (
     handleUpload,
  )
 import qualified Database.UploadedDatabase as UploadedDB
-import Types (Database (..), unresolvedCount)
+import Types (Database (..), GeographyPolicy (..), unresolvedCount)
 
 -- | List all databases
 getDatabases :: DatabaseManager -> Handler DatabaseListResponse
@@ -229,6 +229,7 @@ uploadDatabaseHandler dbManager req = do
                                 , dcFormat = Just (urFormat uploadResult)
                                 , dcIsUploaded = True -- Freshly uploaded database
                                 , dcDeletable = True
+                                , dcGeographyPolicy = GeoGlobal
                                 }
 
                     -- Add to manager

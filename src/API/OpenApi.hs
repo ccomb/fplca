@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (BioDirection, BiosphereFlow, Compartment, Exchange, Pedigree, TechRole, TechnosphereFlow, Unit)
+import Types (BioDirection, BiosphereFlow, Compartment, Exchange, LocationFallback, LocationKind, LocationUnresolved, Pedigree, TechRole, TechnosphereFlow, Unit)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -54,6 +54,9 @@ instance ToSchema Exchange where declareNamedSchema = genericDeclareNamedSchema 
 instance ToSchema MissingSupplier
 instance ToSchema DependencyStatus
 instance ToSchema DependencyChoice
+instance ToSchema LocationKind
+instance ToSchema LocationFallback where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+instance ToSchema LocationUnresolved where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema DatabaseSetupInfo
 
 -- API.Types — every record type uses strippedSchemaOptions so the generated
