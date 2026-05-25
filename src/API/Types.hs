@@ -788,7 +788,8 @@ data ActivityInfo = ActivityInfo
 data ActivityMetadata = ActivityMetadata
     { pmTotalFlows :: Int -- Number of unique flows used
     , pmTechnosphereInputs :: Int -- Count of technosphere inputs
-    , pmBiosphereExchanges :: Int -- Count of biosphere exchanges
+    , pmBiosphereExchanges :: Int -- Count of biosphere exchanges (strict: excludes waste)
+    , pmWasteExchanges :: Int -- Count of waste exchanges (third flow kind)
     , pmHasReferenceProduct :: Bool -- Whether activity has reference product
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     }

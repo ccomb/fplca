@@ -984,6 +984,7 @@ calculateActivityMetadata _db activity =
         uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
         techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
         bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
+        wasteExchanges = length [ex | ex <- allExchanges, isWasteExchange ex]
         refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
             [] -> Nothing
             (ex : _) -> Just (exchangeFlowId ex)
@@ -991,6 +992,7 @@ calculateActivityMetadata _db activity =
             { pmTotalFlows = uniqueFlows
             , pmTechnosphereInputs = techInputs
             , pmBiosphereExchanges = bioExchanges
+            , pmWasteExchanges = wasteExchanges
             , pmHasReferenceProduct = refProduct /= Nothing
             , pmReferenceProductFlow = refProduct
             }
