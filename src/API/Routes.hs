@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -20,6 +21,7 @@ import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import Data.List (find, intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Validation as V
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.OpenApi (OpenApi, ToSchema)
@@ -1293,29 +1295,38 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         groupByParam
         aggregateParam = do
             (db, sharedSolver) <- requireDatabaseByName dbManager dbName
-            scope <- case scopeParam of
-                Just "direct" -> return Agg.ScopeDirect
-                Just "supply_chain" -> return Agg.ScopeSupplyChain
-                Just "biosphere" -> return Agg.ScopeBiosphere
-                _ -> throwError err400{errBody = "scope must be one of: direct | supply_chain | biosphere"}
-            exchangeType <- case fexchangeTypeParam of
-                Nothing -> return Nothing
-                Just "technosphere" -> return (Just Agg.KindTechnosphere)
-                Just "biosphere" -> return (Just Agg.KindBiosphere)
-                Just "waste" -> return (Just Agg.KindWaste)
-                Just _ -> throwError err400{errBody = "filter_exchange_type must be one of: technosphere | biosphere | waste"}
+            -- Field-level validation via the Validation Applicative (accumulating).
+            -- A request with both an invalid `scope` and an invalid `aggregate`
+            -- now reports both errors at once, instead of just the first.
+            let parseScope = \case
+                    Just "direct" -> V.Success Agg.ScopeDirect
+                    Just "supply_chain" -> V.Success Agg.ScopeSupplyChain
+                    Just "biosphere" -> V.Success Agg.ScopeBiosphere
+                    _ -> V.failure "scope must be one of: direct | supply_chain | biosphere"
+                parseExType = \case
+                    Nothing -> V.Success Nothing
+                    Just "technosphere" -> V.Success (Just Agg.KindTechnosphere)
+                    Just "biosphere" -> V.Success (Just Agg.KindBiosphere)
+                    Just "waste" -> V.Success (Just Agg.KindWaste)
+                    Just _ -> V.failure "filter_exchange_type must be one of: technosphere | biosphere | waste"
+                parseAgg = \case
+                    Nothing -> V.Success Agg.AggSum
+                    Just "sum_quantity" -> V.Success Agg.AggSum
+                    Just "count" -> V.Success Agg.AggCount
+                    Just "share" -> V.Success Agg.AggShare
+                    Just other -> V.failure ("aggregate must be one of: sum_quantity | count | share (got " <> other <> ")")
+            (scope, exchangeType, aggFn) <-
+                case V.toEither $ (,,) <$> parseScope scopeParam <*> parseExType fexchangeTypeParam <*> parseAgg aggregateParam of
+                    Left errs -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 (T.intercalate "; " (NE.toList errs)))}
+                    Right v -> pure v
+            -- Cross-check requires the parsed scope value, so it runs after the
+            -- Applicative phase. Validation is not a Monad, by design.
             case (exchangeType, scope) of
                 (Just _, Agg.ScopeBiosphere) ->
                     throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}
                 (Just _, Agg.ScopeSupplyChain) ->
                     throwError err400{errBody = "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"}
                 _ -> return ()
-            aggFn <- case aggregateParam of
-                Nothing -> return Agg.AggSum
-                Just "sum_quantity" -> return Agg.AggSum
-                Just "count" -> return Agg.AggCount
-                Just "share" -> return Agg.AggShare
-                Just other -> throwError err400{errBody = "aggregate must be one of: sum_quantity | count | share (got " <> BSL.fromStrict (T.encodeUtf8 other) <> ")"}
             let presetFilters = expandPreset classificationPresets presetParam
                 explicitFilters = mapMaybe parseClassFilter fclassParams
                 params =
