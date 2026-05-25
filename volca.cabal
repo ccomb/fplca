@@ -23,6 +23,7 @@ library
   import:              warnings
   hs-source-dirs:      src
   exposed-modules:     Types
+                     , App.Env
                      , Data.Validation
                      , Progress
                      , UnitConversion
