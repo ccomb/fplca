@@ -10,6 +10,48 @@ import Options.Applicative
 import qualified Options.Applicative as OA
 import Version (buildTarget, gitHash, gitTag, version)
 
+-- ---------------------------------------------------------------------------
+-- Option-builder helpers
+--
+-- optparse-applicative is the textbook /Free Applicative/ over a primitive
+-- @Parser@: composition with @\<*\>@ keeps the static structure exposed
+-- (which is why @--help@ generation works), and the helpers below factor
+-- the four shapes that dominated this file before — Text option, Int
+-- option, switch, positional Text arg — into one line each.
+-- ---------------------------------------------------------------------------
+
+-- | @strOption@ with @long/metavar/help@, optionally a short alias.
+strOpt :: String -> Maybe Char -> String -> String -> Parser String
+strOpt l ms m h = strOption (long l <> maybe mempty short ms <> metavar m <> help h)
+
+-- | @optional strOpt@ — most of the global / command parsers use this.
+optStrOpt :: String -> Maybe Char -> String -> String -> Parser (Maybe String)
+optStrOpt l ms m h = optional (strOpt l ms m h)
+
+-- | Text variant: read as String then pack.
+textOpt :: String -> Maybe Char -> String -> String -> Parser Text
+textOpt l ms m h = T.pack <$> strOpt l ms m h
+
+-- | @optional textOpt@.
+optTextOpt :: String -> Maybe Char -> String -> String -> Parser (Maybe Text)
+optTextOpt l ms m h = optional (textOpt l ms m h)
+
+-- | @option auto@ for Int-shaped options (limit, offset, port, depth…).
+intOpt :: String -> Maybe Char -> String -> String -> Parser Int
+intOpt l ms m h = option auto (long l <> maybe mempty short ms <> metavar m <> help h)
+
+-- | @optional intOpt@.
+optIntOpt :: String -> Maybe Char -> String -> String -> Parser (Maybe Int)
+optIntOpt l ms m h = optional (intOpt l ms m h)
+
+-- | Positional @Text@ argument with metavar + help.
+textArg :: String -> String -> Parser Text
+textArg m h = T.pack <$> argument str (metavar m <> help h)
+
+-- | Positional @String@ argument with metavar + help (for filenames).
+strArg :: String -> String -> Parser String
+strArg m h = argument str (metavar m <> help h)
+
 {- | Main CLI parser combining global options and optional command
 If no command is given, just load database and exit (useful for cache generation)
 -}
@@ -19,74 +61,18 @@ cliParser = CLIConfig <$> globalOptionsParser <*> optional commandParser
 -- | Global options parser (applied before commands)
 globalOptionsParser :: Parser GlobalOptions
 globalOptionsParser = do
-    configFile <-
-        optional $
-            strOption
-                ( long "config"
-                    <> short 'c'
-                    <> metavar "FILE"
-                    <> help "TOML config file (required)"
-                )
-
-    dbName <-
-        optional $
-            ( T.pack
-                <$> strOption
-                    ( long "db"
-                        <> metavar "NAME"
-                        <> help "Database name to query (from config file)"
-                    )
-            )
-
-    methodsDir <-
-        optional $
-            strOption
-                ( long "methods"
-                    <> metavar "PATH"
-                    <> help "Directory containing ILCD method XML files for LCIA"
-                )
-
+    configFile <- optStrOpt "config" (Just 'c') "FILE" "TOML config file (required)"
+    dbName <- optTextOpt "db" Nothing "NAME" "Database name to query (from config file)"
+    methodsDir <- optStrOpt "methods" Nothing "PATH" "Directory containing ILCD method XML files for LCIA"
     format <-
         optional $
             option
                 outputFormatReader
-                ( long "format"
-                    <> metavar "FORMAT"
-                    <> help "Output format: json|csv|table|pretty (default depends on command)"
-                )
-
-    jsonPath <-
-        optional $
-            ( T.pack
-                <$> strOption
-                    ( long "jsonpath"
-                        <> metavar "PATH"
-                        <> help "JSONPath for CSV extraction (required with --format csv). Examples: 'results', 'activity.exchanges'"
-                    )
-            )
-
-    noCache <-
-        switch
-            ( long "no-cache"
-                <> help "Disable caching for testing and development"
-            )
-
-    serverUrl <-
-        optional $
-            strOption
-                ( long "url"
-                    <> metavar "URL"
-                    <> help "Server URL for HTTP client mode (or set VOLCA_URL env var)"
-                )
-
-    serverPassword <-
-        optional $
-            strOption
-                ( long "password"
-                    <> metavar "PASSWORD"
-                    <> help "Password for authentication (or set VOLCA_PASSWORD env var)"
-                )
-
+                (long "format" <> metavar "FORMAT" <> help "Output format: json|csv|table|pretty (default depends on command)")
+    jsonPath <- optTextOpt "jsonpath" Nothing "PATH" "JSONPath for CSV extraction (required with --format csv). Examples: 'results', 'activity.exchanges'"
+    noCache <- switch (long "no-cache" <> help "Disable caching for testing and development")
+    serverUrl <- optStrOpt "url" Nothing "URL" "Server URL for HTTP client mode (or set VOLCA_URL env var)"
+    serverPassword <- optStrOpt "password" Nothing "PASSWORD" "Password for authentication (or set VOLCA_PASSWORD env var)"
     pure GlobalOptions{..}
 
 -- | Output format reader for optparse-applicative
@@ -162,28 +148,14 @@ pluginParser =
 -- | Shared upload arguments parser (positional FILE, --name, --description)
 uploadArgsParser :: Parser UploadArgs
 uploadArgsParser = do
-    uaFile <- argument str (metavar "FILE" <> help "Archive or data file to upload (ZIP, 7z, tar.gz, tar.xz, XML, CSV)")
-    uaName <-
-        T.pack
-            <$> strOption
-                ( long "name"
-                    <> short 'n'
-                    <> metavar "NAME"
-                    <> help "Display name (required)"
-                )
-    uaDescription <-
-        optional $
-            T.pack
-                <$> strOption
-                    ( long "description"
-                        <> metavar "TEXT"
-                        <> help "Optional description"
-                    )
+    uaFile <- strArg "FILE" "Archive or data file to upload (ZIP, 7z, tar.gz, tar.xz, XML, CSV)"
+    uaName <- textOpt "name" (Just 'n') "NAME" "Display name (required)"
+    uaDescription <- optTextOpt "description" Nothing "TEXT" "Optional description"
     pure UploadArgs{..}
 
 -- | Delete name parser (positional NAME)
 deleteNameParser :: Parser Text
-deleteNameParser = T.pack <$> argument str (metavar "NAME" <> help "Name of the resource to delete")
+deleteNameParser = textArg "NAME" "Name of the resource to delete"
 
 -- | Server command parser
 serverParser :: Parser Command
@@ -191,51 +163,14 @@ serverParser = Server <$> serverOptionsParser
 
 serverOptionsParser :: Parser ServerOptions
 serverOptionsParser = do
-    serverPort <-
-        optional $
-            option
-                auto
-                ( long "port"
-                    <> short 'p'
-                    <> metavar "PORT"
-                    <> help "Server port (overrides [server].port from config; default: 8080)"
-                )
+    serverPort <- optIntOpt "port" (Just 'p') "PORT" "Server port (overrides [server].port from config; default: 8080)"
     serverLoadDbs <-
         optional $
-            option
-                dbListReader
-                ( long "load"
-                    <> metavar "DB1,DB2,..."
-                    <> help "Comma-separated list of databases to load at startup (overrides config load=true)"
-                )
-    serverDesktopMode <-
-        switch
-            ( long "desktop"
-                <> help "Desktop mode: print VOLCA_PORT=N on startup for launcher integration"
-            )
-    serverStaticDir <-
-        optional $
-            strOption
-                ( long "static-dir"
-                    <> metavar "PATH"
-                    <> help "Override default static file directory (default: web/dist)"
-                )
-    serverIdleTimeout <-
-        option
-            auto
-            ( long "idle-timeout"
-                <> value 0
-                <> metavar "SECONDS"
-                <> help "Shutdown after N seconds of inactivity (0=disabled, default: 0)"
-            )
-    serverTreeDepth <-
-        option
-            auto
-            ( long "tree-depth"
-                <> value 2
-                <> metavar "DEPTH"
-                <> help "Default max depth for the /tree endpoint (default: 2)"
-            )
+            option dbListReader (long "load" <> metavar "DB1,DB2,..." <> help "Comma-separated list of databases to load at startup (overrides config load=true)")
+    serverDesktopMode <- switch (long "desktop" <> help "Desktop mode: print VOLCA_PORT=N on startup for launcher integration")
+    serverStaticDir <- optStrOpt "static-dir" Nothing "PATH" "Override default static file directory (default: web/dist)"
+    serverIdleTimeout <- option auto (long "idle-timeout" <> value 0 <> metavar "SECONDS" <> help "Shutdown after N seconds of inactivity (0=disabled, default: 0)")
+    serverTreeDepth <- option auto (long "tree-depth" <> value 2 <> metavar "DEPTH" <> help "Default max depth for the /tree endpoint (default: 2)")
     pure ServerOptions{..}
 
 -- | Reader for comma-separated list of database names
@@ -270,88 +205,20 @@ flowSubCommandParser =
 -- | Search activities parser (now top-level)
 searchActivitiesParser :: Parser Command
 searchActivitiesParser = do
-    searchName <-
-        optional $
-            strOption
-                ( long "name"
-                    <> metavar "TERM"
-                    <> help "Search by activity name"
-                )
-
-    searchGeo <-
-        optional $
-            strOption
-                ( long "geo"
-                    <> metavar "LOCATION"
-                    <> help "Filter by geography (exact match)"
-                )
-
-    searchProduct <-
-        optional $
-            strOption
-                ( long "product"
-                    <> metavar "PRODUCT"
-                    <> help "Filter by reference product"
-                )
-
-    searchLimit <-
-        optional $
-            option
-                auto
-                ( long "limit"
-                    <> metavar "N"
-                    <> help "Limit number of results (max 1000, default 50)"
-                )
-
-    searchOffset <-
-        optional $
-            option
-                auto
-                ( long "offset"
-                    <> metavar "N"
-                    <> help "Offset for pagination (default 0)"
-                )
-
+    searchName <- optTextOpt "name" Nothing "TERM" "Search by activity name"
+    searchGeo <- optTextOpt "geo" Nothing "LOCATION" "Filter by geography (exact match)"
+    searchProduct <- optTextOpt "product" Nothing "PRODUCT" "Filter by reference product"
+    searchLimit <- optIntOpt "limit" Nothing "N" "Limit number of results (max 1000, default 50)"
+    searchOffset <- optIntOpt "offset" Nothing "N" "Offset for pagination (default 0)"
     pure $ SearchActivities SearchActivitiesOptions{..}
 
 -- | Search flows parser (now top-level)
 searchFlowsParser :: Parser Command
 searchFlowsParser = do
-    searchQuery <-
-        optional $
-            strOption
-                ( long "query"
-                    <> short 'q'
-                    <> metavar "TERM"
-                    <> help "Search term for flow names and synonyms"
-                )
-
-    searchLang <-
-        optional $
-            strOption
-                ( long "lang"
-                    <> metavar "LANG"
-                    <> help "Language for synonym search"
-                )
-
-    searchFlowsLimit <-
-        optional $
-            option
-                auto
-                ( long "limit"
-                    <> metavar "N"
-                    <> help "Limit number of results"
-                )
-
-    searchFlowsOffset <-
-        optional $
-            option
-                auto
-                ( long "offset"
-                    <> metavar "N"
-                    <> help "Offset for pagination"
-                )
-
+    searchQuery <- optTextOpt "query" (Just 'q') "TERM" "Search term for flow names and synonyms"
+    searchLang <- optTextOpt "lang" Nothing "LANG" "Language for synonym search"
+    searchFlowsLimit <- optIntOpt "limit" Nothing "N" "Limit number of results"
+    searchFlowsOffset <- optIntOpt "offset" Nothing "N" "Offset for pagination"
     pure $ SearchFlows SearchFlowsOptions{..}
 
 -- | Impacts (LCIA) command parser
@@ -364,32 +231,9 @@ impactsParser = do
 -- | LCIA options parser
 lciaOptionsParser :: Parser LCIAOptions
 lciaOptionsParser = do
-    lciaMethodId <-
-        T.pack
-            <$> strOption
-                ( long "method"
-                    <> short 'm'
-                    <> metavar "METHOD_UUID"
-                    <> help "Method UUID (method must be loaded on the server)"
-                )
-
-    lciaOutput <-
-        optional $
-            strOption
-                ( long "output"
-                    <> short 'o'
-                    <> metavar "FILE"
-                    <> help "Export results to XML ILCD format"
-                )
-
-    lciaCSV <-
-        optional $
-            strOption
-                ( long "csv"
-                    <> metavar "FILE"
-                    <> help "Export results to CSV format"
-                )
-
+    lciaMethodId <- textOpt "method" (Just 'm') "METHOD_UUID" "Method UUID (method must be loaded on the server)"
+    lciaOutput <- optStrOpt "output" (Just 'o') "FILE" "Export results to XML ILCD format"
+    lciaCSV <- optStrOpt "csv" Nothing "FILE" "Export results to CSV format"
     pure LCIAOptions{..}
 
 -- | Debug matrices command parser
@@ -402,29 +246,13 @@ debugMatricesParser = do
 -- | Debug matrices options parser
 debugMatricesOptionsParser :: Parser DebugMatricesOptions
 debugMatricesOptionsParser = do
-    debugOutput <-
-        strOption
-            ( long "output"
-                <> short 'o'
-                <> metavar "FILE"
-                <> help "Base filename for debug output (will generate _supply_chain.csv and _biosphere_matrix.csv)"
-            )
-
-    debugFlowFilter <-
-        optional $
-            strOption
-                ( long "flow-filter"
-                    <> metavar "FLOW"
-                    <> help "Filter to specific biosphere flow (e.g., 'Sulphur dioxide')"
-                )
-
+    debugOutput <- strOpt "output" (Just 'o') "FILE" "Base filename for debug output (will generate _supply_chain.csv and _biosphere_matrix.csv)"
+    debugFlowFilter <- optTextOpt "flow-filter" Nothing "FLOW" "Filter to specific biosphere flow (e.g., 'Sulphur dioxide')"
     pure DebugMatricesOptions{..}
 
 -- | Export matrices parser
 exportMatricesParser :: Parser Command
-exportMatricesParser = do
-    outputDir <- argument str (metavar "OUTPUT_DIR" <> help "Output directory for matrix export")
-    pure $ ExportMatrices outputDir
+exportMatricesParser = ExportMatrices <$> strArg "OUTPUT_DIR" "Output directory for matrix export"
 
 {- | Flow mapping command parser (renamed from 'mapping' to disambiguate
 from compartment-mapping and similar resources).
