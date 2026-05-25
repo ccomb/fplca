@@ -54,7 +54,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
-import Servant (Handler, Header, Headers, addHeader, err400, err404, err500, errBody, throwError)
+import Servant (Header, Headers, addHeader, err400, err404, err500, errBody, throwError)
 import qualified System.Directory
 import System.FilePath ((</>))
 
