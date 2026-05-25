@@ -421,9 +421,9 @@ parseWithXeno xmlContent processId =
                                 (comp : _) | T.toLower comp == "natural resource" -> Resource
                                 _ -> Emission
                         -- Pattern A: elementaryExchange with compartment="inventory indicator"
-                        -- subcompartment="waste". These are bw2io-style "Final waste flows"
-                        -- surfaced through the elementary axis but semantically technosphere
-                        -- waste — route them to WasteExchange instead of BiosphereExchange.
+                        -- subcompartment="waste". Waste outputs surfaced through the
+                        -- elementary axis but semantically technosphere waste — route them
+                        -- to WasteExchange instead of BiosphereExchange.
                         isInventoryIndicatorWaste = case (mCompName, subCompartment) of
                             (Just c, Just s) ->
                                 T.toLower (T.strip c) == "inventory indicator"

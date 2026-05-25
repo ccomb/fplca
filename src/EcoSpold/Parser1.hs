@@ -339,11 +339,12 @@ parseWithXeno xmlContent =
             isBiosphere = inputGroup == "4" || outputGroup == "4"
             isInput = not (T.null inputGroup)
             isReferenceProduct = outputGroup == "0"
-            -- SimaPro's third flow class ('Final waste flows'). bw2io flattens
-            -- it onto inputGroup=5 to fit Brightway's 4-type model, but the
-            -- category attribute survives. Route to WasteExchange so it
-            -- bypasses cross-DB technosphere linking (an orphan output, not a
-            -- demand) and lands in the dedicated waste-side surfaces.
+            -- SimaPro's third flow class ('Final waste flows'). EcoSpold1
+            -- exports surface them on inputGroup=5 to fit the 4-type
+            -- input/output model, but the category attribute survives.
+            -- Route to WasteExchange so they bypass cross-DB technosphere
+            -- linking (orphan outputs, not demands) and land in the
+            -- dedicated waste-side surfaces.
             isWasteFlow = exCategory edata == "Final waste flows"
 
             -- Exchange location: use exchange's own location
@@ -375,7 +376,7 @@ parseWithXeno xmlContent =
                                 { waFlowId = flowId
                                 , waAmount = exMeanValue edata
                                 , waUnitId = unitId
-                                , -- bw2io exports Final waste flows on inputGroup=5
+                                , -- Final waste flows surface on inputGroup=5
                                   -- (consumer's POV: input from a hypothetical
                                   -- treatment service). Preserve that semantic
                                   -- by mirroring isInput here.

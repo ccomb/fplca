@@ -117,7 +117,7 @@ withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> 
 
 {- | Synthetic fixture exercising both EcoSpold2 waste patterns:
   - Pattern A: elementary exchange with compartment "inventory indicator"
-    / "waste" (bw2io-style waste output surfaced through the elementary axis)
+    / "waste" (waste output surfaced through the elementary axis)
   - Pattern B: intermediate exchange tagged via classification
     (System="By-product classification", Value="Waste")
 Plus one genuine biosphere emission and the mandatory reference output.
