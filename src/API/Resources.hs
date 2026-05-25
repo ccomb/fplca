@@ -382,15 +382,18 @@ description r = case r of
         \clickable markdown link when presenting results to a human."
     ScoreActivities ->
         "LCA / ACV — rank N activities against one scoring set in one call. \
-        \Returns a columnar JSON shape: {scoringSet, scoringUnit, \
-        \functionalUnit, columns, rows, notFound, invalid}. 'columns' is the \
-        \header (['name', 'processId', 'web_url', 'total', <indicator keys...>]) \
+        \Returns a columnar JSON shape: {scoring_set, scoring_unit, \
+        \functional_unit?, columns, rows, not_found, invalid}. 'columns' is the \
+        \header (['name', 'process_id', 'web_url', 'total', <indicator keys...>]) \
         \and 'rows' is a 2D array of scalars — one row per resolved activity. \
         \Hoisting the constant metadata once and packing each activity as a flat \
         \array of scalars makes this shape ~6× smaller than a row-shaped JSON \
-        \for batches of 24+ activities. Per-method scores are NOT included — \
-        \call score_activity on a specific process_id for that drill-down. \
-        \Unresolved process IDs land in notFound / invalid. \
+        \for batches of 24+ activities. The top-level 'functional_unit' is only \
+        \emitted when every resolved row shares the same one; otherwise it is \
+        \dropped and 'functional_unit' appears as a per-row column instead (the \
+        \'columns' header reflects which shape was emitted). Per-method scores \
+        \are NOT included — call score_activity on a specific process_id for \
+        \that drill-down. Unresolved process IDs land in not_found / invalid. \
         \\n\n\
         \The chosen scoring set must be unambiguous: pass scoring_sets: \
         \[\"<one>\"] when the collection has more than one scoring set \
@@ -478,7 +481,7 @@ pScoringSetsFilter =
         \list_scoring_sets to discover the configured names. An unknown \
         \name fails the call with the list of available names."
 
--- | Opt-in summary mode for 'score_activities' (Block D).
+-- | Opt-in summary mode for 'score_activities'.
 pSummaryOnly :: Param
 pSummaryOnly =
     Param
@@ -486,10 +489,11 @@ pSummaryOnly =
         "boolean"
         Optional
         "When true, score_activities replaces the per-indicator columns with \
-        \a single 'dominantIndicator' column shaped \"key:share_pct\" (e.g. \
-        \\"ldu:82.3\") — the indicator with the largest absolute share of \
-        \each activity's total. Use this when ranking large batches before \
-        \drilling into a single PID with score_activity. Default false."
+        \a single 'dominant_indicator' column whose cells are objects \
+        \{key, share_pct} (e.g. {\"key\": \"ldu\", \"share_pct\": 82.3}) — \
+        \the indicator with the largest absolute share of each activity's \
+        \total. Use this when ranking large batches before drilling into a \
+        \single PID with score_activity. Default false."
 
 -- | Parameters accepted by a resource operation.
 params :: Resource -> [Param]

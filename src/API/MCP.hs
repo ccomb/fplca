@@ -17,7 +17,6 @@ import qualified Data.ByteString.Lazy as BSL
 import Data.IORef
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
-import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -35,8 +34,9 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
+import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrl, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel)
-import API.Types (ActivityForAPI (..), ActivityInfo (..), BatchImpactsEntry (..), BatchImpactsResponse (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), LCIABatchResult (..), LCIAResult (..), Perturbation (..), ScoringIndicator (..), Substitution (..), SubstitutionRequest (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
@@ -1871,142 +1871,7 @@ defensive shape as 'configuredScoringSetNames'.
 configuredScoringSets :: DatabaseManager -> Text -> IO [ScoringSet]
 configuredScoringSets dbm collName = do
     loaded <- readTVarIO (dmLoadedMethods dbm)
-    pure $ case M.lookup collName loaded of
-        Just mc -> mcScoringSets mc
-        Nothing -> []
-
-{- | Pick the single 'ScoringSet' the columnar 'score_activities' response
-will project against. The columnar shape covers one set per call (one
-unit, one list of indicator columns), so:
-
-  * Caller passes one name in 'scoring_sets' → that one (validated).
-  * Caller passes none, exactly one set is configured → that one.
-  * Caller passes none, several sets are configured → error listing the
-    options. We don't pick arbitrarily to avoid silent ambiguity.
-  * Caller passes several names → error: only one is supported.
-  * No sets configured at all → error.
--}
-resolveSingleScoringSet :: [Text] -> [ScoringSet] -> Either Text ScoringSet
-resolveSingleScoringSet wantedNames configured = case wantedNames of
-    [] -> case configured of
-        [] -> Left "No scoring sets configured on this collection."
-        [s] -> Right s
-        ss ->
-            Left $
-                "Multiple scoring sets are configured ("
-                    <> T.intercalate ", " (map ssName ss)
-                    <> "); pass scoring_sets: [\"<one>\"] to pick one. score_activities returns a columnar shape that covers a single scoring set per call."
-    [w] -> case L.find (\s -> ssName s == w) configured of
-        Just s -> Right s
-        Nothing ->
-            Left $
-                "Unknown scoring set: "
-                    <> w
-                    <> ". Configured on this collection: "
-                    <> T.intercalate ", " (map ssName configured)
-    ws ->
-        Left $
-            "score_activities accepts at most one scoring set in 'scoring_sets'; got ["
-                <> T.intercalate ", " ws
-                <> "]. The columnar response shape covers a single scoring set per call."
-
-{- | Project a 'BatchImpactsResponse' against one chosen 'ScoringSet' into
-the columnar JSON shape:
-
-@
-{ "scoringSet":     "PEF"
-, "scoringUnit":    "µPts PEF"
-, "functionalUnit": "1.00 cubic meter of ..."
-, "columns": ["name","processId","web_url","total","acd","cch",...]
-, "rows":    [[...], [...], ...]
-, "notFound": [...]
-, "invalid":  [...]
-}
-@
-
-Once per batch the metadata (set name, unit, functional unit) is hoisted
-to the top; the 2D 'rows' array carries one scalar per cell. Saves the
-N×M repetition of JSON keys the previous row-shaped payload paid for.
-
-A row's @total@ cell is the @total@ score from @ssScores@ when present;
-otherwise null. An indicator cell is the @siValue@ of the matching entry
-in @lbrScoringIndicators[setName]@; missing keys land as null.
-
-With @summaryOnly = True@, the per-indicator columns collapse to a
-single @dominantIndicator@ column shaped @\"key:share_pct\"@ (e.g.
-@\"ldu:82.3\"@) — the variable with the largest absolute share of the
-total. Useful for ranking large batches before drilling into one PID
-with @score_activity@.
--}
-toColumnarBatch :: Bool -> Text -> Text -> Text -> ScoringSet -> BatchImpactsResponse -> Value
-toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
-    object
-        [ "scoringSet" .= ssName ss
-        , "scoringUnit" .= scoringUnit
-        , "functionalUnit" .= functionalUnit
-        , "columns" .= columns
-        , "rows" .= map entryRow (birResults bir)
-        , "notFound" .= birNotFound bir
-        , "invalid" .= birInvalid bir
-        ]
-  where
-    setName = ssName ss
-    fixedColumns :: [Text]
-    fixedColumns = ["name", "processId", "web_url", "total"]
-    -- Union of primitive and computed variables — same shape the
-    -- engine populates 'lbrScoringIndicators' with. Sorted so column
-    -- order is stable across calls.
-    indicatorKeys :: [Text]
-    indicatorKeys = L.sort (M.keys (ssVariables ss) <> M.keys (ssComputed ss))
-    columns :: [Text]
-    columns
-        | summaryOnly = fixedColumns ++ ["dominantIndicator"]
-        | otherwise = fixedColumns ++ indicatorKeys
-    scoringUnit = case birResults bir of
-        e : _ -> M.findWithDefault (ssUnit ss) setName (lbrScoringUnits (bieImpacts e))
-        [] -> ssUnit ss
-    functionalUnit = case birResults bir of
-        e : _ -> case lbrResults (bieImpacts e) of
-            r : _ -> lrFunctionalUnit r
-            [] -> ""
-        [] -> ""
-    entryRow :: BatchImpactsEntry -> Value
-    entryRow e =
-        let url = scoreActivityWebUrl baseUrl dbName (bieProcessId e) coll
-            lbr = bieImpacts e
-            scoreMap = M.findWithDefault M.empty setName (lbrScoringResults lbr)
-            indMap = M.findWithDefault M.empty setName (lbrScoringIndicators lbr)
-            totalRaw = M.lookup "total" scoreMap
-            total = maybe Null toJSON totalRaw
-            indVal k = maybe Null (toJSON . siValue) (M.lookup k indMap)
-            tail_ =
-                if summaryOnly
-                    then [dominantIndicatorCell totalRaw indMap]
-                    else map indVal indicatorKeys
-         in toJSON $
-                [ toJSON (bieActivityName e)
-                , toJSON (bieProcessId e)
-                , toJSON url
-                , total
-                ]
-                    ++ tail_
-
-{- | Format the dominant indicator of a row as @"key:share_pct"@. Returns
-'Null' when the row has no total, the total is zero (share is
-undefined), or the indicator map is empty.
--}
-dominantIndicatorCell :: Maybe Double -> M.Map Text ScoringIndicator -> Value
-dominantIndicatorCell mTotal indMap
-    | Just t <- mTotal
-    , t /= 0
-    , not (M.null indMap) =
-        let (k, ind) =
-                L.maximumBy
-                    (comparing (abs . siValue . snd))
-                    (M.toList indMap)
-            share = abs (siValue ind) / abs t * 100
-         in toJSON (k <> ":" <> T.pack (showFFloat (Just 1) share ""))
-    | otherwise = Null
+    pure $ maybe [] mcScoringSets (M.lookup collName loaded)
 
 {- | Handler for the 'score_activities' MCP tool.
 
