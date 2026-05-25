@@ -999,6 +999,23 @@ spec = do
             let a = head activities
             activityLocation a `shouldBe` "GLO"
 
+        -- WFLDB convention: the Process name carries the data-collection
+        -- country (/CH) while the Products row carries the geographic scope
+        -- of the product itself (/GLO U). The activity stays at CH (truthful
+        -- about provenance) but the reference exchange must preserve GLO so
+        -- the cross-DB supplier index can expose this product to consumers
+        -- requesting a global proxy.
+        it "preserves Products-row location on reference exchange when it differs from activity location" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Horticultural fleece, at plant (WFLDB)/m2/CH"
+                    "Horticultural fleece, at plant (WFLDB)/m2/GLO U;m2;1;100;not defined;material;"
+            length activities `shouldBe` 1
+            let act = head activities
+            activityLocation act `shouldBe` "CH"
+            let refExs = [techLocation e | e@TechnosphereExchange{} <- exchanges act, exchangeIsReference e]
+            refExs `shouldBe` ["GLO"]
+
     describe "SimaPro comma CSV separator" $ do
         it "parses comma-separated CSV" $ do
             (activities, _, _, _, _) <- parseCommaCSV
@@ -1136,6 +1153,36 @@ spec = do
 parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseSectionCSV sectionLines =
     parseNamedCSV "Test process" sectionLines
+
+-- | Build a minimal process CSV with a custom Process name and Products row.
+parseProductsCSV :: BS.ByteString -> BS.ByteString -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseProductsCSV procName productsRow =
+    withSystemTempFile "products-test.csv" $ \path handle -> do
+        let content =
+                BS.intercalate "\r\n" $
+                    [ "{SimaPro 9.6.0.1}"
+                    , "{CSV separator: semicolon}"
+                    , "{Decimal separator: .}"
+                    , ""
+                    , "Process"
+                    , ""
+                    , "Category type"
+                    , "material"
+                    , ""
+                    , "Process name"
+                    , procName
+                    , ""
+                    , "Type"
+                    , "Unit process"
+                    , ""
+                    , "Products"
+                    , productsRow
+                    , ""
+                    , "End"
+                    ]
+        BS.hPut handle content
+        hClose handle
+        parseSimaProCSV defaultUnitConfig path
 
 parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseNamedCSV procName sectionLines =

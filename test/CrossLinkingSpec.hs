@@ -3,11 +3,16 @@
 module CrossLinkingSpec (spec) where
 
 import Control.Monad (forM_)
+import Data.List (sort)
+import qualified Data.Map.Strict as M
+import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import Database.CrossLinking
 import Database.Loader (loadDatabase)
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Test.Hspec
+import Types
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
@@ -373,6 +378,96 @@ spec = do
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected LocationRejectedByPolicy GlobalLoc but got: " ++ show reason
                 CrossDBLinked{} -> expectationFailure "Expected rejection under GeoParent"
+
+    -- -----------------------------------------------------------------------
+    -- supplierLocations & buildSupplierEntries — split-location indexing.
+    -- Guards the WFLDB case where Process name @ /CH but Products row @ /GLO:
+    -- the supplier index must expose the product under both locations so a
+    -- consumer requesting it at GLO can still resolve it cross-DB.
+    -- -----------------------------------------------------------------------
+    describe "supplierLocations" $ do
+        it "returns one entry when the exchange has no location" $
+            supplierLocations (mkActivityAt "CH") (mkRefExchangeAt "") `shouldBe` ["CH"]
+
+        it "returns one entry when activity and exchange locations match" $
+            supplierLocations (mkActivityAt "CH") (mkRefExchangeAt "CH") `shouldBe` ["CH"]
+
+        it "returns both entries when activity and exchange locations differ" $
+            supplierLocations (mkActivityAt "CH") (mkRefExchangeAt "GLO") `shouldBe` ["CH", "GLO"]
+
+    describe "buildSupplierEntries (split-location)" $ do
+        it "indexes a product at both activity and exchange locations when they differ" $ do
+            let entries = buildSupplierEntries (mkSplitLocationDB "CH" "GLO")
+            sort [seLocation se | (_, se) <- entries] `shouldBe` ["CH", "GLO"]
+
+        it "indexes a product at the activity location only when the exchange location is empty" $ do
+            let entries = buildSupplierEntries (mkSplitLocationDB "CH" "")
+            [seLocation se | (_, se) <- entries] `shouldBe` ["CH"]
+
+        it "indexes a product once when activity and exchange locations match" $ do
+            let entries = buildSupplierEntries (mkSplitLocationDB "CH" "CH")
+            [seLocation se | (_, se) <- entries] `shouldBe` ["CH"]
+
+-- ---------------------------------------------------------------------------
+-- Fixtures for supplierLocations / buildSupplierEntries tests
+-- ---------------------------------------------------------------------------
+
+mkActivityAt :: Text -> Activity
+mkActivityAt loc =
+    Activity
+        { activityName = "test product"
+        , activityDescription = []
+        , activitySynonyms = M.empty
+        , activityClassification = M.empty
+        , activityLocation = loc
+        , activityUnit = "kg"
+        , exchanges = []
+        , activityParams = M.empty
+        , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
+        }
+
+mkRefExchangeAt :: Text -> Exchange
+mkRefExchangeAt loc =
+    TechnosphereExchange
+        { techFlowId = flowUUID
+        , techAmount = 1.0
+        , techUnitId = UUID.nil
+        , techRole = ReferenceProduct
+        , techActivityLinkId = UUID.nil
+        , techProcessLinkId = Nothing
+        , techLocation = loc
+        , techComment = Nothing
+        , techPedigree = Nothing
+        }
+  where
+    flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"
+
+-- | One-activity SimpleDatabase with a single reference exchange. The
+-- activity is anchored at @actLoc@; the reference exchange carries @exLoc@.
+mkSplitLocationDB :: Text -> Text -> SimpleDatabase
+mkSplitLocationDB actLoc exLoc =
+    let flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"
+        actUUID = read "cccccccc-0000-0000-0000-000000000001"
+        ex = (mkRefExchangeAt exLoc){techFlowId = flowUUID}
+        act = (mkActivityAt actLoc){exchanges = [ex]}
+        flow =
+            TechnosphereFlow
+                { tfId = flowUUID
+                , tfName = "test product"
+                , tfUnitId = UUID.nil
+                , tfSynonyms = M.empty
+                , tfCAS = Nothing
+                , tfSubstanceId = Nothing
+                }
+     in SimpleDatabase
+            { sdbActivities = M.singleton (actUUID, flowUUID) act
+            , sdbTechFlows = M.singleton flowUUID flow
+            , sdbBioFlows = M.empty
+            , sdbWasteFlows = M.empty
+            , sdbUnits = M.empty
+            }
 
 -- ---------------------------------------------------------------------------
 -- Helper: load SAMPLE.min3 as IndexedDatabase

@@ -37,6 +37,8 @@ module Database.CrossLinking (
     -- * Index Building
     buildIndexedDatabase,
     buildIndexedDatabaseFromDB,
+    buildSupplierEntries,
+    supplierLocations,
 
     -- * Main Functions
     findSupplierAcrossDatabases,
@@ -76,6 +78,7 @@ import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
 import Types (
     Activity (..),
     Database (..),
+    Exchange,
     GeographyPolicy (..),
     LinkBlocker (..),
     LocationKind (..),
@@ -83,6 +86,7 @@ import Types (
     TechnosphereFlow (..),
     exchangeFlowId,
     exchangeIsReference,
+    exchangeLocation,
     exchanges,
     getActivity,
  )
@@ -335,11 +339,12 @@ lives in `sdbTechFlows`.
 -}
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
     , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
+    , loc <- supplierLocations act ex
     ]
 
 {- | Build an indexed database from a full Database (used when loading from cache)
@@ -376,13 +381,32 @@ buildIndexedDatabaseFromDB dbName synDB db =
 -}
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
     , exchangeIsReference ex
     , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
+    , loc <- supplierLocations act ex
     ]
+
+{- | Locations under which an activity should be indexed as a supplier.
+
+Always includes 'activityLocation'. Adds the reference exchange's
+'techLocation' when it is non-empty and distinct — this surfaces SimaPro
+products whose Products row declares a wider geographic scope than the
+enclosing Process name (typically WFLDB: process @ /CH, product @ /GLO).
+
+Design note: the activity table stays at 'activityLocation' (honest about
+data-collection provenance); only the cross-DB lookup gets the alias.
+-}
+supplierLocations :: Activity -> Exchange -> [Text]
+supplierLocations act ex =
+    let actLoc = activityLocation act
+        exLoc = exchangeLocation ex
+     in if not (T.null exLoc) && exLoc /= actLoc
+            then [actLoc, exLoc]
+            else [actLoc]
 
 {- | Find a supplier across all loaded databases (using pre-built indexes)
 This is the fast O(1) lookup version

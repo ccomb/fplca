@@ -917,7 +917,7 @@ unknown-unit errors with a clear message).
 -}
 productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
 productToExchange unitCfg env isRef ProductRow{..} =
-    let cleanName = fst (extractLocation prName)
+    let (cleanName, prodRowLoc) = extractLocation prName
         rawAmount = resolveAmount env prAmountRaw prAmount
         (effUnitName, amount) =
             if isRef
@@ -935,7 +935,13 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 , techRole = if isRef then ReferenceProduct else Coproduct
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
-                , techLocation = ""
+                , -- Preserve the location encoded on the Products row (e.g.
+                  -- WFLDB writes "Product (WFLDB)/m2/GLO U" while the
+                  -- enclosing Process name may be "/CH"). The activity's
+                  -- own location is set independently in makeActivity; this
+                  -- field lets the cross-DB supplier index expose the
+                  -- product under its declared geographic scope as well.
+                  techLocation = prodRowLoc
                 , techComment = Nothing
                 , techPedigree = Nothing
                 }
