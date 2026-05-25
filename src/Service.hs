@@ -4,7 +4,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
@@ -16,7 +16,7 @@ import qualified Data.IntSet as IS
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Sequence (Seq (..), (|>))
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -973,14 +973,64 @@ getClassifications db =
         | (sys, vals) <- L.sortOn fst (M.toList bySystem)
         ]
 
--- | Calculate extended metadata for an activity
+{- | Consumer-side flow UUIDs on @activity@ that the load-time cross-DB linker
+has explicitly resolved via 'dbCrossDBLinks'. Used to distinguish a *true*
+cut-off / orphan from an exchange whose demand is routed to a supplier in
+another loaded database (and therefore contributes to the score via the
+matrix path). Empty when the activity has no entry in the process-id table.
+-}
+crossDBResolvedFlowIds :: Database -> Activity -> S.Set UUID
+crossDBResolvedFlowIds db activity =
+    case findProcessIdForActivity db activity >>= processIdToUUIDs db of
+        Nothing -> S.empty
+        Just (actUUID, _) ->
+            S.fromList
+                [ cdlConsumerFlowId link
+                | link <- dbCrossDBLinks db
+                , cdlConsumerActUUID link == actUUID
+                , cdlConsumerFlowId link /= UUID.nil
+                ]
+
+{- | Build the list of orphan waste exchanges on an activity — waste flows the
+dataset author left unmodelled (no in-database link to a treatment activity,
+and no explicit cross-DB match either). These contribute 0 to LCIA scores;
+surfacing them lets consumers see what is excluded rather than silently
+undercounting. Waste exchanges already routed to another database via
+'dbCrossDBLinks' are excluded — they do contribute to the score and are
+therefore not cut-offs.
+-}
+buildCutoffWaste :: Database -> Activity -> [CutoffWasteFlow]
+buildCutoffWaste db activity =
+    let resolved = crossDBResolvedFlowIds db activity
+     in [ CutoffWasteFlow
+            { cwfFlowId = fid
+            , cwfFlowName = maybe (unresolvedName fid) wfName mFlow
+            , cwfAmount = amt
+            , cwfUnit = maybe "" (lookupUnitName . wfUnitId) mFlow
+            }
+        | WasteExchange{waActivityLinkId = lid, waIsInput = False, waFlowId = fid, waAmount = amt} <- exchanges activity
+        , lid == UUID.nil
+        , not (S.member fid resolved)
+        , let mFlow = M.lookup fid (dbWasteFlows db)
+        ]
+  where
+    unresolvedName fid = "<unresolved waste " <> UUID.toText fid <> ">"
+    lookupUnitName uid = maybe "" unitName (M.lookup uid (dbUnits db))
+
+{- | Extended metadata for an activity. Cross-DB-resolved waste exchanges count
+as @pmWasteExchangesLinked@, not @pmWasteExchangesOrphan@, so the metric
+matches what the score actually consumes.
+-}
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
-calculateActivityMetadata _db activity =
+calculateActivityMetadata db activity =
     let allExchanges = exchanges activity
         uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
         techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
         bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
-        wasteExchanges = length [ex | ex <- allExchanges, isWasteExchange ex]
+        resolved = crossDBResolvedFlowIds db activity
+        wasteExchanges = [(fid, linkId) | WasteExchange{waFlowId = fid, waActivityLinkId = linkId} <- allExchanges]
+        wasteLinked = length [() | (fid, linkId) <- wasteExchanges, linkId /= UUID.nil || S.member fid resolved]
+        wasteOrphan = length wasteExchanges - wasteLinked
         refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
             [] -> Nothing
             (ex : _) -> Just (exchangeFlowId ex)
@@ -988,8 +1038,9 @@ calculateActivityMetadata _db activity =
             { pmTotalFlows = uniqueFlows
             , pmTechnosphereInputs = techInputs
             , pmBiosphereExchanges = bioExchanges
-            , pmWasteExchanges = wasteExchanges
-            , pmHasReferenceProduct = refProduct /= Nothing
+            , pmWasteExchangesLinked = wasteLinked
+            , pmWasteExchangesOrphan = wasteOrphan
+            , pmHasReferenceProduct = isJust refProduct
             , pmReferenceProductFlow = refProduct
             }
 
@@ -1037,13 +1088,17 @@ convertActivityForAPI unitCfg db processId activity =
             , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
             }
   where
-    -- Build cross-DB link lookup by normalized flow name for this consumer activity
+    -- Cross-DB link lookup keyed by 'cdlConsumerFlowId' (the consumer-side flow
+    -- UUID). UUIDs are unique across flow kinds, so a tech "X" link and a waste
+    -- "X" link on the same activity cannot collide here.
+    crossDBLinkMap :: M.Map UUID CrossDBLink
     crossDBLinkMap = case processIdToUUIDs db processId of
         Just (actUUID, _) ->
             M.fromList
-                [ (T.toLower (cdlFlowName link), link)
+                [ (cdlConsumerFlowId link, link)
                 | link <- dbCrossDBLinks db
                 , cdlConsumerActUUID link == actUUID
+                , cdlConsumerFlowId link /= UUID.nil
                 ]
         Nothing -> M.empty
 
@@ -1078,7 +1133,7 @@ convertActivityForAPI unitCfg db processId activity =
                                 | Just act <- getActivity db pid ->
                                     (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
                             _ ->
-                                case techFlowInfo >>= \flow -> M.lookup (T.toLower (tfName flow)) crossDBLinkMap of
+                                case M.lookup fId crossDBLinkMap of
                                     Just link ->
                                         let crossPid =
                                                 cdlSourceDatabase link
@@ -1092,8 +1147,9 @@ convertActivityForAPI unitCfg db processId activity =
                 BiosphereExchange{} -> (Nothing, Nothing, Nothing)
                 -- A waste exchange consumed by a treatment activity links the
                 -- generator to that treatment, same shape as a technosphere
-                -- Input. Orphan waste outputs (the bulk of Final waste flows)
-                -- have nil linkId and stay unresolved on this surface.
+                -- Input. Orphan waste outputs that the exact-match cross-DB
+                -- linker resolved show up via 'crossDBLinkMap' keyed on the
+                -- waste flow name. The remaining orphans stay unresolved.
                 WasteExchange{waActivityLinkId = linkId, waIsInput = True}
                     | linkId /= UUID.nil ->
                         case findActivityByActivityUUID db linkId of
@@ -1101,6 +1157,18 @@ convertActivityForAPI unitCfg db processId activity =
                                 let maybeProcessId = findProcessIdByActivityUUID db linkId
                                     processIdText = fmap (processIdToText db) maybeProcessId
                                  in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
+                            Nothing -> (Nothing, Nothing, Nothing)
+                WasteExchange{waActivityLinkId = linkId, waIsInput = False, waFlowId = fid}
+                    | linkId == UUID.nil ->
+                        case M.lookup fid crossDBLinkMap of
+                            Just link ->
+                                let crossPid =
+                                        cdlSourceDatabase link
+                                            <> "::"
+                                            <> UUID.toText (cdlSupplierActUUID link)
+                                            <> "_"
+                                            <> UUID.toText (cdlSupplierProdUUID link)
+                                 in (Just (cdlFlowName link), Just (cdlLocation link), Just crossPid)
                             Nothing -> (Nothing, Nothing, Nothing)
                 WasteExchange{} -> (Nothing, Nothing, Nothing)
             -- When the exchange's flow UUID resolves on none of the three sides
@@ -1250,7 +1318,7 @@ getActivityExchangeDetails db activity filterFn =
                             (getUnitNameForTechFlow (dbUnits db) flow)
                             unitForExchange
                             exUnitName
-                            (resolveTechTarget exchange flow)
+                            (resolveCrossDBTarget exchange)
                     Nothing -> unresolved (ApiUnresolvedFlow fid)
                 BiosphereExchange{} -> case M.lookup fid (dbBioFlows db) of
                     Just flow ->
@@ -1270,10 +1338,7 @@ getActivityExchangeDetails db activity filterFn =
                             (getUnitNameForWasteFlow (dbUnits db) flow)
                             unitForExchange
                             exUnitName
-                            -- Linked-treatment-activity resolution is deferred
-                            -- to the cross-DB linker; orphan waste outputs (the
-                            -- typical SimaPro Final waste flow) carry no target.
-                            Nothing
+                            (resolveCrossDBTarget exchange)
                     Nothing -> unresolved (ApiUnresolvedFlow fid)
 
     -- Sentinel returned only when the exchange's unit UUID itself failed
@@ -1282,25 +1347,33 @@ getActivityExchangeDetails db activity filterFn =
     -- in both the structured Unit and the exUnitName string.
     unresolvedUnit = Unit{unitId = UUID.nil, unitName = "<unresolved unit>", unitSymbol = "", unitComment = ""}
 
-    -- Cross-DB link lookup by consumer's flow name, built once per activity
-    -- for O(log n) per-exchange resolution.
-    crossLinkByFlow :: M.Map Text CrossDBLink
+    -- Cross-DB link lookup keyed by the consumer-side flow UUID
+    -- ('cdlConsumerFlowId'). Built once per activity; O(log n) per-exchange
+    -- resolution. Keying by UUID — rather than normalized flow name — avoids
+    -- the collision where a tech "X" link and a waste "X" link on the same
+    -- activity would overwrite each other in a name-keyed map.
+    crossLinkByFlow :: M.Map UUID CrossDBLink
     crossLinkByFlow = case findProcessIdForActivity db activity >>= processIdToUUIDs db of
         Just (actUUID, _) ->
             M.fromList
-                [ (T.toLower (cdlFlowName link), link)
+                [ (cdlConsumerFlowId link, link)
                 | link <- dbCrossDBLinks db
                 , cdlConsumerActUUID link == actUUID
+                , cdlConsumerFlowId link /= UUID.nil
                 ]
         Nothing -> M.empty
 
-    resolveTechTarget exchange flow =
+    -- Resolves a target activity for a technosphere or waste exchange. Orphan
+    -- waste outputs resolved by the exact-match cross-DB linker share the same
+    -- 'crossLinkByFlow' path as technosphere inputs; both are keyed on the
+    -- consumer-side flow UUID.
+    resolveCrossDBTarget exchange =
         case getTargetActivity db exchange of
             Just s -> Just s
-            Nothing -> crossDBTarget flow
+            Nothing -> crossDBTarget (exchangeFlowId exchange)
 
-    crossDBTarget flow =
-        case M.lookup (T.toLower (tfName flow)) crossLinkByFlow of
+    crossDBTarget consumerFlowId =
+        case M.lookup consumerFlowId crossLinkByFlow of
             Nothing -> Nothing
             Just link ->
                 let qualifiedPid =
@@ -2507,6 +2580,10 @@ mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
      in CrossDBLink
             { cdlConsumerActUUID = cActU
             , cdlConsumerProdUUID = cProdU
+            -- Substitution links never enter 'dbCrossDBLinks' and the API
+            -- surface only indexes load-time links by 'cdlConsumerFlowId',
+            -- so the discriminator is unused for synthetic links.
+            , cdlConsumerFlowId = UUID.nil
             , cdlSupplierActUUID = supActU
             , cdlSupplierProdUUID = supProdU
             , cdlCoefficient = coef

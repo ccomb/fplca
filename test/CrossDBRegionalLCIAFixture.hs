@@ -181,6 +181,7 @@ linkAt consumerDb supplierDb supplierName supIdx coeff =
             CrossDBLink
                 { cdlConsumerActUUID = consumerAct
                 , cdlConsumerProdUUID = consumerProd
+                , cdlConsumerFlowId = UUID.nil
                 , cdlSupplierActUUID = supplierAct
                 , cdlSupplierProdUUID = supplierProd
                 , cdlCoefficient = coeff

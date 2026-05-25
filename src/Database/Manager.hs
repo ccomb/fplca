@@ -1520,6 +1520,7 @@ relinkDatabase manager dbName = do
                     Loader.findAllCrossDBLinks
                         ctx
                         (dbTechFlows db)
+                        (dbWasteFlows db)
                         (dbUnits db)
                         activityMap
                 newStats = rawStats{cdlTotalInputs = totalInputs}
