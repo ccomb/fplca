@@ -34,7 +34,8 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.MCP.Enrich (addWebUrl, encodeSegment, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl, slimLCIAPanel, summarizeBatchResults)
+import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
+import API.MCP.Enrich (addWebUrl, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
@@ -231,6 +232,7 @@ handleInitialize req =
                         , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
                         , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
                         , "Use list_methods for available LCIA methods."
+                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field from each result as a clickable markdown link — never show bare process IDs as a final answer."
                         ]
                 ]
 
@@ -573,13 +575,28 @@ callGetActivity rid args (db, _) =
             Right _ ->
                 case Service.getActivityInfo defaultUnitConfig db pid of
                     Left err -> return $ toolError rid (T.pack $ show err)
-                    Right val
-                        | noFilters -> return $ toolSuccessJson rid val
-                        | otherwise -> case fromJSON val of
-                            Error _ -> return $ toolSuccessJson rid val
-                            Success ai ->
-                                let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
-                                 in return $ toolSuccessJson rid (toJSON filtered)
+                    Right val -> case fromJSON val of
+                        -- 'val' was built from an 'ActivityInfo' upstream, so a
+                        -- decode failure is genuinely defensive — pass it
+                        -- through unchanged, hint-less.
+                        Error _ -> return $ toolSuccessJson rid val
+                        Success ai ->
+                            -- Single resolve: take the activity name from the
+                            -- 'ActivityInfo' already in hand instead of asking
+                            -- the engine to resolve the PID again.
+                            let attach = attachMarketHintByName (pfaName (piActivity ai))
+                                payload
+                                    | noFilters = val
+                                    | otherwise =
+                                        toJSON
+                                            ai
+                                                { piActivity =
+                                                    (piActivity ai)
+                                                        { pfaExchanges =
+                                                            filter matchExchange (pfaExchanges (piActivity ai))
+                                                        }
+                                                }
+                             in return $ toolSuccessJson rid (attach payload)
   where
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
@@ -1034,30 +1051,31 @@ callGetImpacts dbManager baseUrl rid args =
                         ]
                 pure $
                     toolSuccessJson rid $
-                        object $
-                            [ "method" .= methodName method
-                            , "category" .= methodCategory method
-                            , "score" .= score
-                            , "unit" .= methodUnit method
-                            , "functional_unit" .= functionalUnit
-                            , "mapped_flows" .= (msTotal stats - msUnmatched stats)
-                            , "has_negative_contributions" .= hasNeg
-                            , "web_url" .= webUrl
-                            , "top_flows"
-                                .= [ object
-                                        [ "flow_name" .= bfName f
-                                        , "contribution" .= c
-                                        , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                        , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= bfCompartmentName f
-                                        , "compartment" .= bfCompartmentSub f
-                                        , "cf_value" .= cfVal
-                                        , "flow_unit" .= getUnitNameForBioFlow mUnits f
-                                        ]
-                                   | (f, cfVal, c) <- topFlows
-                                   ]
-                            ]
-                                ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
+                        attachMarketHintByName (activityName (raActivity ra)) $
+                            object $
+                                [ "method" .= methodName method
+                                , "category" .= methodCategory method
+                                , "score" .= score
+                                , "unit" .= methodUnit method
+                                , "functional_unit" .= functionalUnit
+                                , "mapped_flows" .= (msTotal stats - msUnmatched stats)
+                                , "has_negative_contributions" .= hasNeg
+                                , "web_url" .= webUrl
+                                , "top_flows"
+                                    .= [ object
+                                            [ "flow_name" .= bfName f
+                                            , "contribution" .= c
+                                            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+                                            , "flow_id" .= UUID.toText (bfId f)
+                                            , "category" .= bfCompartmentName f
+                                            , "compartment" .= bfCompartmentSub f
+                                            , "cf_value" .= cfVal
+                                            , "flow_unit" .= getUnitNameForBioFlow mUnits f
+                                            ]
+                                       | (f, cfVal, c) <- topFlows
+                                       ]
+                                ]
+                                    ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
             )
 
 {- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
@@ -1822,26 +1840,50 @@ callScoreActivity dbManager baseUrl rid args =
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right lbr -> do
                         configured <- liftIO $ configuredScoringSetNames dbManager coll
+                        mActName <- liftIO $ lookupActivityName dbManager dbName pidText
                         let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
                             enriched =
-                                addWebUrl
-                                    topUrl
-                                    (slimLCIAPanel (toJSON lbr))
+                                maybe id attachMarketHintByName mActName $
+                                    addWebUrl
+                                        topUrl
+                                        (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
+
+{- | Resolve the activity name for a (db, processId) pair. 'Nothing' when
+the database is not loaded or the PID does not resolve — callers fold
+this through 'maybe id attachMarketHintByName', so a missing name
+simply skips the hint without making up a default.
+-}
+lookupActivityName :: DatabaseManager -> Text -> Text -> IO (Maybe Text)
+lookupActivityName dbManager dbName pidText = do
+    mLd <- getDatabase dbManager dbName
+    pure $ case mLd of
+        Just ld -> case Service.resolveActivityAndProcessId (ldDatabase ld) pidText of
+            Right (_, act) -> Just (activityName act)
+            Left _ -> Nothing
+        Nothing -> Nothing
+
+{- | Return every 'ScoringSet' configured on a collection (full record, not
+just names). Empty list when the collection is not loaded — the same
+defensive shape as 'configuredScoringSetNames'.
+-}
+configuredScoringSets :: DatabaseManager -> Text -> IO [ScoringSet]
+configuredScoringSets dbm collName = do
+    loaded <- readTVarIO (dmLoadedMethods dbm)
+    pure $ maybe [] mcScoringSets (M.lookup collName loaded)
 
 {- | Handler for the 'score_activities' MCP tool.
 
 Ranks N activities against every method in a collection in one
-multi-RHS MUMPS solve plus parallel characterization, then strips each
-entry's @impacts@ subtree to its aggregates (single score,
-@scoringResults@, @scoringIndicators@, @scoringUnits@, hoisted
-@functionalUnit@). The per-method @results@ array is not emitted —
-callers needing per-method drill-down call 'score_activity' on a
-specific process_id. Each successful entry carries a top-level
-@web_url@ to its impacts page; the same URL is replicated inside the
-@impacts@ subtree. Unresolved process IDs land in @not_found@ /
-@invalid@ of the response, not as a 'BatchError'.
+multi-RHS MUMPS solve plus parallel characterization, then projects the
+result against a single 'ScoringSet' into a columnar JSON payload
+(@{scoringSet, scoringUnit, functionalUnit, columns, rows}@). The shape
+hoists the constant metadata once and packs each activity as a flat
+array of scalars — typically ~6× smaller than a row-shaped JSON for a
+batch of 24+ activities. Unresolved process IDs land in
+@notFound@ \/ @invalid@. The chosen scoring set is required to be
+unambiguous; see 'resolveSingleScoringSet' for the rules.
 -}
 callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callScoreActivities dbManager baseUrl rid args =
@@ -1852,13 +1894,13 @@ callScoreActivities dbManager baseUrl rid args =
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
                 wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
+                let summaryOnly = fromMaybe False (boolArg "summary_only" args)
+                configured <- liftIO $ configuredScoringSets dbManager coll
+                chosen <- ExceptT $ pure (resolveSingleScoringSet wantedSets configured)
                 res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
-                    Right bir -> do
-                        configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        let summarized = summarizeBatchResults baseUrl dbName coll (toJSON bir)
-                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets summarized)
+                    Right bir -> pure (toolSuccessJson rid (toColumnarBatch summaryOnly baseUrl dbName coll chosen bir))
             )
 
 {- | Handler for the 'list_scoring_sets' MCP tool.
