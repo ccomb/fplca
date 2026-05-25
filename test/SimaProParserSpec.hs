@@ -972,7 +972,7 @@ spec = do
             let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
             length bio `shouldBe` 1
 
-        it "parses Final waste flows as WasteExchange (third flow kind, à la OpenLCA)" $ do
+        it "parses Final waste flows as WasteExchange (third flow kind)" $ do
             (activities, _, _, _, _) <-
                 parseSectionCSV
                     [ "Final waste flows"

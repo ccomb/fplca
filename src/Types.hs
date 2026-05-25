@@ -157,10 +157,10 @@ data BiosphereFlow = BiosphereFlow
 
 {- | A waste flow — a residual output that a process generates and which a
 treatment activity may consume as its reference input. Sister type to
-'TechnosphereFlow' and 'BiosphereFlow'. Mirrors OpenLCA's @WASTE_FLOW@
-discriminator: distinct from product flows so the UI and import logic can
-surface them separately, but routed to the same technosphere matrix because
-the underlying calculation is identical to a product link.
+'TechnosphereFlow' and 'BiosphereFlow'. Distinct from product flows so the
+UI and import logic can surface them separately, but routed to the same
+technosphere matrix because the underlying calculation is identical to a
+product link.
 
 When no treatment activity is present in the loaded data, a waste output
 flow stays orphan and contributes zero impact — same cut-off semantics

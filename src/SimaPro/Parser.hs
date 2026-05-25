@@ -809,10 +809,10 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
         avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
         techTriples = map (techRowToExchange env) (pbMaterials ++ pbElectricity)
         treatmentTriples = map (techRowToExchange env) pbWasteToTreatment
-        -- SimaPro's 'Final waste flows' is the third flow class (per OpenLCA's
-        -- WASTE_FLOW). They are outputs the activity 'throws away' with no
-        -- modelled treatment in this dataset; route to WasteExchange so the
-        -- cross-DB linker doesn't tally them as missing suppliers.
+        -- SimaPro's 'Final waste flows' section: outputs the activity 'throws
+        -- away' with no modelled treatment in the dataset. Route to
+        -- WasteExchange so the cross-DB linker doesn't tally them as missing
+        -- suppliers (they're end-of-life markers, not demands).
         finalWasteTriples = map (wasteRowToExchange env) pbFinalWaste
         bioTriples =
             map (bioRowToExchange env True "resource") pbResources
