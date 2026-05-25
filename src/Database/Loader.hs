@@ -140,12 +140,12 @@ mergeTechFlows a b = a{tfSynonyms = M.unionWith S.union (tfSynonyms a) (tfSynony
 mergeBioFlows :: BiosphereFlow -> BiosphereFlow -> BiosphereFlow
 mergeBioFlows a b = a{bfSynonyms = M.unionWith S.union (bfSynonyms a) (bfSynonyms b)}
 
--- | 8-element unzip helper (Data.List ships 7-tuple as max).
-unzip8 :: [(a, b, c, d, e, f, g, h)] -> ([a], [b], [c], [d], [e], [f], [g], [h])
-unzip8 = foldr step ([], [], [], [], [], [], [], [])
+-- | 9-element unzip helper (Data.List ships 7-tuple as max).
+unzip9 :: [(a, b, c, d, e, f, g, h, i)] -> ([a], [b], [c], [d], [e], [f], [g], [h], [i])
+unzip9 = foldr step ([], [], [], [], [], [], [], [], [])
   where
-    step (a, b, c, d, e, f, g, h) (as, bs, cs, ds, es, fs, gs, hs) =
-        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs)
+    step (a, b, c, d, e, f, g, h, i) (as, bs, cs, ds, es, fs, gs, hs, is) =
+        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs, i : is)
 
 {- |
 Schema signature automatically derived from the Database type structure.
@@ -662,10 +662,11 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let successResults = [r | Right r <- results]
-                let (procMaps, techFlowMaps, bioFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip8 successResults
+                let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip9 successResults
                 let !finalProcMap = M.unions procMaps
                 let !finalTechFlowMap = M.unionsWith mergeTechFlows techFlowMaps
                 let !finalBioFlowMap = M.unionsWith mergeBioFlows bioFlowMaps
+                let !finalWasteFlowMap = M.unions wasteFlowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
                 let !finalSupplierLinks = M.unions supplierLinksLists
@@ -698,24 +699,26 @@ loadEcoSpoldDirectory locationAliases dir = do
                 reportMemoryUsage "Final parsing memory usage"
 
                 -- For EcoSpold1: fix activity links using supplier lookup table
-                let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap M.empty finalUnitMap
+                let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap finalWasteFlowMap finalUnitMap
                 if isEcoSpold1
                     then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex finalSupplierLinks simpleDb
                     else return $ Right simpleDb
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
     processWorker _startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
         -- Parse all files for this worker using appropriate parser.
         -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int).
-        -- For EcoSpold2: dataset number = 0, supplier links = empty, no waste flows (fields padded here).
+        -- For EcoSpold2: dataset number = 0, supplier links = empty. WasteFlows now flow
+        -- through (Pattern A: elementaryExchange compartment=inventory indicator/waste;
+        -- Pattern B: intermediateExchange classification=By-product:Waste).
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else fmap (fmap (\(a, ts, bs, us) -> (a, ts, bs, [], us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
+                    else fmap (fmap (\(a, ts, bs, ws, us) -> (a, ts, bs, ws, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired
@@ -731,11 +734,7 @@ loadEcoSpoldDirectory locationAliases dir = do
             supplierLinksList = [sl | (_, _, _, _, _, _, sl) <- okResults]
         let !allTechs = concat techLists
         let !allBios = concat bioLists
-        -- TODO: thread waste flows up to the directory-load Database. For now,
-        -- the directory loader path drops them; single-file EcoSpold1 path
-        -- (loadSingleEcoSpold1File) is what serves the Ecoplus / SimaPro-
-        -- exported workloads where Final waste flows actually occur.
-        let !_allWastes = concat wasteLists
+        let !allWastes = concat wasteLists
         let !allUnits = concat unitLists
 
         let procEntries = zipWith (buildProcEntry isEcoSpold1) okFiles procs
@@ -746,6 +745,7 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let !procMap = M.fromList [e | Right e <- procEntries]
                 let !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
                 let !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
+                let !wasteFlowMap = M.fromList [(wfId f, f) | f <- allWastes]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
                 let !dsIndex =
                         M.fromList
@@ -755,19 +755,20 @@ loadEcoSpoldDirectory locationAliases dir = do
                 workerEndTime <- getCurrentTime
                 let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
                 let filesPerSec = fromIntegral (length workerFiles) / workerDuration
-                let rawFlowCount = length allTechs + length allBios
+                let rawFlowCount = length allTechs + length allBios + length allWastes
                 let rawUnitCount = length allUnits
                 reportProgress Info $
                     printf
-                        "Worker %d completed: %d activities, %d tech + %d bio flows (%s, %.1f files/sec)"
+                        "Worker %d completed: %d activities, %d tech + %d bio + %d waste flows (%s, %.1f files/sec)"
                         workerNum
                         (M.size procMap)
                         (M.size techFlowMap)
                         (M.size bioFlowMap)
+                        (M.size wasteFlowMap)
                         (formatDuration workerDuration)
                         filesPerSec
 
-                return $ Right (procMap, techFlowMap, bioFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
+                return $ Right (procMap, techFlowMap, bioFlowMap, wasteFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)

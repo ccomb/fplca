@@ -90,6 +90,7 @@ data IntermediateData = IntermediateData
     , idActivityLinkId :: !Text
     , idSynonyms :: !(M.Map Text (S.Set Text))
     , idComment :: !(Maybe (Text, Text)) -- (xml:lang, comment text) — English wins
+    , idClassifications :: !(M.Map Text Text) -- per-exchange classifications (e.g. By-product classification → Waste)
     }
     deriving (Eq)
 
@@ -134,6 +135,7 @@ data ParseState = ParseState
     , psExchanges :: ![Exchange]
     , psTechFlows :: ![TechnosphereFlow]
     , psBioFlows :: ![BiosphereFlow]
+    , psWasteFlows :: ![WasteFlow]
     , psUnits :: ![Unit]
     , psPath :: ![BS.ByteString] -- Element path stack
     , psContext :: !ElementContext
@@ -157,6 +159,7 @@ initialParseState =
         , psExchanges = []
         , psTechFlows = []
         , psBioFlows = []
+        , psWasteFlows = []
         , psUnits = []
         , psPath = []
         , psContext = Other
@@ -170,7 +173,7 @@ initialParseState =
         }
 
 -- | Xeno SAX parser implementation
-parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [Unit]), [String])
+parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
 parseWithXeno xmlContent processId =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
@@ -191,7 +194,7 @@ parseWithXeno xmlContent processId =
                 | isElement tagName "activityName" = InActivityName
                 | isElement tagName "shortname" && any (isElement "geography") (psPath cleanState) = InGeographyShortname
                 | isElement tagName "intermediateExchange" =
-                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing)
+                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing M.empty)
                 | isElement tagName "elementaryExchange" =
                     InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing Nothing)
                 | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
@@ -291,6 +294,10 @@ parseWithXeno xmlContent processId =
                         -- Negative inputs (like wastewater discharge) should NOT be considered reference products
                         -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
+                        -- Pattern B: intermediateExchange tagged as Waste via classification
+                        -- (System='By-product classification', Value='Waste'). When set, the flow
+                        -- represents a waste output that consumers treat via a treatment activity.
+                        isWasteFlow = M.lookup "By-product classification" (idClassifications idata) == Just "Waste"
                         -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (idFlowId idata)
                         (unitUUID, unitWarn) = parseUUID (idUnitId idata)
@@ -303,7 +310,8 @@ parseWithXeno xmlContent processId =
                             | isReferenceProduct = ReferenceProduct
                             | isInput = Input
                             | otherwise = Coproduct
-                        exchange =
+                        resolvedFlowName = if T.null (idFlowName idata) then idFlowId idata else idFlowName idata
+                        techExchange =
                             TechnosphereExchange
                                 { techFlowId = flowUUID
                                 , techAmount = idAmount idata
@@ -315,10 +323,30 @@ parseWithXeno xmlContent processId =
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing
                                 }
-                        flow =
+                        techFlow =
                             TechnosphereFlow
                                 flowUUID
-                                (if T.null (idFlowName idata) then idFlowId idata else idFlowName idata)
+                                resolvedFlowName
+                                unitUUID
+                                (idSynonyms idata)
+                                Nothing -- CAS
+                                Nothing -- substanceId
+                        wasteExchange =
+                            WasteExchange
+                                { waFlowId = flowUUID
+                                , waAmount = idAmount idata
+                                , waUnitId = unitUUID
+                                , waIsInput = isInput
+                                , waActivityLinkId = linkUUID
+                                , waProcessLinkId = Nothing
+                                , waLocation = ""
+                                , waComment = snd <$> idComment idata
+                                , waPedigree = Nothing
+                                }
+                        wasteFlow =
+                            WasteFlow
+                                flowUUID
+                                resolvedFlowName
                                 unitUUID
                                 (idSynonyms idata)
                                 Nothing -- CAS
@@ -335,23 +363,34 @@ parseWithXeno xmlContent processId =
                                 (if T.null (idUnitName idata) then "UNKNOWN_UNIT" else idUnitName idata)
                                 (if T.null (idUnitName idata) then "?" else idUnitName idata)
                                 ""
-                        -- Set reference unit if this is the reference product
+                        -- Reference product unit: only meaningful when the flow stays in the technosphere
+                        -- (waste outputs are never the reference product of a producing process).
                         newRefUnit =
-                            if isReferenceProduct && not (T.null (idUnitName idata))
+                            if isReferenceProduct && not isWasteFlow && not (T.null (idUnitName idata))
                                 then Just (idUnitName idata)
                                 else psRefUnit state
-                     in state
-                            { psExchanges = exchange : psExchanges state
-                            , psTechFlows = flow : psTechFlows state
-                            , psUnits = unit : psUnits state
-                            , psContext = Other
-                            , psPath = drop 1 (psPath state)
-                            , psTextAccum = []
-                            , psPendingInputGroup = ""
-                            , psPendingOutputGroup = ""
-                            , psRefUnit = newRefUnit
-                            , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
-                            }
+                        baseState =
+                            state
+                                { psContext = Other
+                                , psPath = drop 1 (psPath state)
+                                , psTextAccum = []
+                                , psPendingInputGroup = ""
+                                , psPendingOutputGroup = ""
+                                , psRefUnit = newRefUnit
+                                , psUnits = unit : psUnits state
+                                , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
+                                }
+                     in if isWasteFlow
+                            then
+                                baseState
+                                    { psExchanges = wasteExchange : psExchanges state
+                                    , psWasteFlows = wasteFlow : psWasteFlows state
+                                    }
+                            else
+                                baseState
+                                    { psExchanges = techExchange : psExchanges state
+                                    , psTechFlows = techFlow : psTechFlows state
+                                    }
                 _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "elementaryExchange" =
             case psContext state of
@@ -381,11 +420,21 @@ parseWithXeno xmlContent processId =
                             | otherwise = case edCompartments edata of
                                 (comp : _) | T.toLower comp == "natural resource" -> Resource
                                 _ -> Emission
+                        -- Pattern A: elementaryExchange with compartment="inventory indicator"
+                        -- subcompartment="waste". These are bw2io-style "Final waste flows"
+                        -- surfaced through the elementary axis but semantically technosphere
+                        -- waste — route them to WasteExchange instead of BiosphereExchange.
+                        isInventoryIndicatorWaste = case (mCompName, subCompartment) of
+                            (Just c, Just s) ->
+                                T.toLower (T.strip c) == "inventory indicator"
+                                    && T.toLower (T.strip s) == "waste"
+                            _ -> False
                         -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
                         uuidWarnings = catMaybes [flowWarn, unitWarn]
-                        exchange =
+                        resolvedFlowName = if T.null (edFlowName edata) then edFlowId edata else edFlowName edata
+                        bioExchange =
                             BiosphereExchange
                                 { bioFlowId = flowUUID
                                 , bioAmount = edAmount edata
@@ -395,15 +444,35 @@ parseWithXeno xmlContent processId =
                                 , bioComment = snd <$> edComment edata
                                 , bioPedigree = Nothing
                                 }
-                        flow =
+                        bioFlow =
                             BiosphereFlow
                                 flowUUID
-                                (if T.null (edFlowName edata) then edFlowId edata else edFlowName edata)
+                                resolvedFlowName
                                 unitUUID
                                 (edSynonyms edata)
                                 (edCAS edata)
                                 Nothing -- substanceId - to be filled later
                                 compartment
+                        wasteExchange =
+                            WasteExchange
+                                { waFlowId = flowUUID
+                                , waAmount = edAmount edata
+                                , waUnitId = unitUUID
+                                , waIsInput = not (T.null finalInputGroup)
+                                , waActivityLinkId = UUID.nil
+                                , waProcessLinkId = Nothing
+                                , waLocation = ""
+                                , waComment = snd <$> edComment edata
+                                , waPedigree = Nothing
+                                }
+                        wasteFlow =
+                            WasteFlow
+                                flowUUID
+                                resolvedFlowName
+                                unitUUID
+                                (edSynonyms edata)
+                                (edCAS edata)
+                                Nothing -- substanceId
                         unitNameWarning =
                             [ "[WARNING] Missing unit name for elementary exchange with flow ID: "
                                 ++ T.unpack (edFlowId edata)
@@ -416,17 +485,27 @@ parseWithXeno xmlContent processId =
                                 (if T.null (edUnitName edata) then "UNKNOWN_UNIT" else edUnitName edata)
                                 (if T.null (edUnitName edata) then "?" else edUnitName edata)
                                 ""
-                     in state
-                            { psExchanges = exchange : psExchanges state
-                            , psBioFlows = flow : psBioFlows state
-                            , psUnits = unit : psUnits state
-                            , psContext = Other
-                            , psPath = drop 1 (psPath state)
-                            , psTextAccum = []
-                            , psPendingInputGroup = ""
-                            , psPendingOutputGroup = ""
-                            , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
-                            }
+                        baseState =
+                            state
+                                { psContext = Other
+                                , psPath = drop 1 (psPath state)
+                                , psTextAccum = []
+                                , psPendingInputGroup = ""
+                                , psPendingOutputGroup = ""
+                                , psUnits = unit : psUnits state
+                                , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
+                                }
+                     in if isInventoryIndicatorWaste
+                            then
+                                baseState
+                                    { psExchanges = wasteExchange : psExchanges state
+                                    , psWasteFlows = wasteFlow : psWasteFlows state
+                                    }
+                            else
+                                baseState
+                                    { psExchanges = bioExchange : psExchanges state
+                                    , psBioFlows = bioFlow : psBioFlows state
+                                    }
                 _ -> state{psPath = drop 1 (psPath state)}
         | isElement tagName "text" =
             case psContext state of
@@ -505,14 +584,26 @@ parseWithXeno xmlContent processId =
         | isElement tagName "classificationValue" =
             let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
                 sys = psPendingClassSystem state
-             in state
-                    { psClassifications =
-                        if T.null sys || T.null txt
-                            then psClassifications state
-                            else M.insert sys txt (psClassifications state)
-                    , psPath = drop 1 (psPath state)
-                    , psTextAccum = []
-                    }
+                emptyPair = T.null sys || T.null txt
+             in case psContext state of
+                    InIntermediateExchange idata
+                        | not emptyPair ->
+                            state
+                                { psContext =
+                                    InIntermediateExchange
+                                        idata{idClassifications = M.insert sys txt (idClassifications idata)}
+                                , psPath = drop 1 (psPath state)
+                                , psTextAccum = []
+                                }
+                    _ ->
+                        state
+                            { psClassifications =
+                                if emptyPair
+                                    then psClassifications state
+                                    else M.insert sys txt (psClassifications state)
+                            , psPath = drop 1 (psPath state)
+                            , psTextAccum = []
+                            }
         | otherwise =
             state{psPath = drop 1 (psPath state)}
 
@@ -520,7 +611,7 @@ parseWithXeno xmlContent processId =
     cdata = text
 
     -- Build final result from parse state
-    buildResult :: ParseState -> ProcessId -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit])
+    buildResult :: ParseState -> ProcessId -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
     buildResult st _pid =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
@@ -530,13 +621,14 @@ parseWithXeno xmlContent processId =
             activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
+            wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, units)
+                Right act -> Right (act, techs, bios, wastes, units)
                 Left err -> Left err
 
 -- | Parse EcoSpold file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit]))
+streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
 streamParseActivityAndFlowsFromFile path = do
     !xmlContent <- BS.readFile path
     let filenameBase = T.pack $ takeBaseName path
