@@ -1269,7 +1269,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         Maybe Text -> -- preset
         [Text] -> -- filter_classification (repeatable: "System=Value[:exact]")
         Maybe Text -> -- filter_target_name
-        Maybe Text -> -- filter_exchange_type ("technosphere" | "biosphere")
+        Maybe Text -> -- filter_exchange_type ("technosphere" | "biosphere" | "waste")
         Maybe Bool -> -- filter_is_reference
         Maybe Text -> -- group_by
         Maybe Text -> -- aggregate fn
@@ -1300,7 +1300,8 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 Nothing -> return Nothing
                 Just "technosphere" -> return (Just Agg.KindTechnosphere)
                 Just "biosphere" -> return (Just Agg.KindBiosphere)
-                Just _ -> throwError err400{errBody = "filter_exchange_type must be one of: technosphere | biosphere"}
+                Just "waste" -> return (Just Agg.KindWaste)
+                Just _ -> throwError err400{errBody = "filter_exchange_type must be one of: technosphere | biosphere | waste"}
             case (exchangeType, scope) of
                 (Just _, Agg.ScopeBiosphere) ->
                     throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}

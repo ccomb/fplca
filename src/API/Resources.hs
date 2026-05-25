@@ -466,7 +466,7 @@ params r = case r of
     GetActivity ->
         [ pDatabase
         , pProcessId
-        , Param "exchange_type" "string" Optional "Filter exchanges: \"biosphere\" (emissions/resources only), \"technosphere\" (inputs/outputs only), or \"all\" (default)"
+        , Param "exchange_type" "string" Optional "Filter exchanges by kind: \"technosphere\" (product/input flows), \"biosphere\" (emissions/resources), \"waste\" (third flow kind: residuals routed to treatment), or \"all\" (default)"
         , Param "is_input" "boolean" Optional "If true, return only inputs; if false, only outputs; omit for both. Combines with exchange_type."
         , Param "flow" "string" Optional "Filter exchanges by flow name (case-insensitive substring)"
         ]

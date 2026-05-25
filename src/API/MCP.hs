@@ -586,22 +586,23 @@ callGetActivity rid args (db, _) =
     isInputFilter = boolArg "is_input" args
     -- Mirror /api/aggregate's strictness: silently swallowing typos like
     -- `exchange_type=tecnosphere` would yield "all exchanges" with no signal
-    -- to the caller that the filter was ignored.
+    -- to the caller that the filter was ignored. Now four-valued:
+    -- waste is its own kind, distinct from biosphere.
     validatedExchangeType = case exchangeType of
         Nothing -> Right Nothing
         Just "all" -> Right Nothing
-        Just "technosphere" -> Right (Just True)
-        Just "biosphere" -> Right (Just False)
+        Just "technosphere" -> Right (Just Agg.KindTechnosphere)
+        Just "biosphere" -> Right (Just Agg.KindBiosphere)
+        Just "waste" -> Right (Just Agg.KindWaste)
         Just other ->
-            Left $ "exchange_type must be one of: all | technosphere | biosphere (got " <> other <> ")"
+            Left $ "exchange_type must be one of: all | technosphere | biosphere | waste (got " <> other <> ")"
     noFilters =
         exchangeType `elem` [Nothing, Just "all"]
             && isNothing flowFilter
             && isNothing isInputFilter
     matchExchange ewu = matchType ewu && matchFlow ewu && matchIsInput ewu
     matchType ewu = case validatedExchangeType of
-        Right (Just True) -> isTechnosphereExchange (ewuExchange ewu)
-        Right (Just False) -> not (isTechnosphereExchange (ewuExchange ewu))
+        Right (Just want) -> Agg.exchangeKindOf (ewuExchange ewu) == want
         _ -> True
     matchFlow ewu = case flowFilter of
         Nothing -> True
@@ -737,7 +738,8 @@ callAggregate dbManager rid args (db, solver) =
         Nothing -> Right Nothing
         Just "technosphere" -> Right (Just Agg.KindTechnosphere)
         Just "biosphere" -> Right (Just Agg.KindBiosphere)
-        Just other -> Left ("filter_exchange_type must be one of: technosphere | biosphere (got " <> other <> ")")
+        Just "waste" -> Right (Just Agg.KindWaste)
+        Just other -> Left ("filter_exchange_type must be one of: technosphere | biosphere | waste (got " <> other <> ")")
     parseClassFilter raw =
         let (sys, rest) = T.breakOn "=" raw
          in if T.null rest

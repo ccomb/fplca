@@ -14,6 +14,7 @@ module Service.Aggregate (
     AggScope (..),
     AggregateFn (..),
     ExchangeKind (..),
+    exchangeKindOf,
     emptyAggregateParams,
     aggregate,
 ) where
@@ -53,12 +54,12 @@ import Types (
     BioFlowDB,
     BiosphereFlow (..),
     Database (..),
+    Exchange (..),
     UnitDB,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsInput,
     exchangeIsReference,
-    isTechnosphereExchange,
  )
 import UnitConversion (UnitConfig)
 
@@ -69,11 +70,19 @@ import UnitConversion (UnitConfig)
 data AggScope = ScopeDirect | ScopeSupplyChain | ScopeBiosphere
     deriving (Eq, Show)
 
--- | Local discriminator for filtering by exchange variant. Replaces the
--- former 'FlowType' discriminator, which is gone now that 'Flow' is split
--- into 'TechnosphereFlow' and 'BiosphereFlow'.
-data ExchangeKind = KindTechnosphere | KindBiosphere
+{- | Local discriminator for filtering by exchange variant. Mirrors the
+three-way 'Exchange' sum (technosphere / biosphere / waste).
+-}
+data ExchangeKind = KindTechnosphere | KindBiosphere | KindWaste
     deriving (Eq, Show)
+
+{- | Project an 'Exchange' onto its 'ExchangeKind'. Total — every variant is
+covered, so a new constructor would surface as a compile error here.
+-}
+exchangeKindOf :: Exchange -> ExchangeKind
+exchangeKindOf TechnosphereExchange{} = KindTechnosphere
+exchangeKindOf BiosphereExchange{} = KindBiosphere
+exchangeKindOf WasteExchange{} = KindWaste
 
 data AggregateFn = AggSum | AggCount | AggShare
     deriving (Eq, Show)
@@ -213,7 +222,7 @@ rowsFromDirect db act =
             , rowIsReference = Just (exchangeIsReference ex)
             , rowTargetName = fmap prsName target
             , rowLocation = fmap prsLocation target
-            , rowExchangeType = Just (if isTechnosphereExchange ex then KindTechnosphere else KindBiosphere)
+            , rowExchangeType = Just (exchangeKindOf ex)
             , rowClassifications = M.empty
             }
 
