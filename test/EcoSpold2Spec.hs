@@ -80,6 +80,32 @@ spec = describe "per-exchange comments" $ do
                 length wasteInputs `shouldBe` 1
                 length wasteOutputs `shouldBe` 1
 
+    -- -----------------------------------------------------------------------
+    -- Robustness: malformed input should never crash; we expect a clean Left.
+    -- The byte-level fuzzing inputs are the ones the parser actually sees in
+    -- the wild when an upload is truncated or a file is mis-extended.
+    -- -----------------------------------------------------------------------
+    describe "malformed input — returns Left without crashing" $ do
+        let runOnBytes bytes = withSystemTempDirectory "es2-bad" $ \dir -> do
+                let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+                BS.writeFile path bytes
+                streamParseActivityAndFlowsFromFile path
+        let shouldBeLeft res = case res of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected a Left for malformed input"
+
+        it "returns Left on an empty file" $
+            runOnBytes "" >>= shouldBeLeft
+
+        it "returns Left on a stray non-XML byte sequence" $
+            runOnBytes "this is not xml at all" >>= shouldBeLeft
+
+        it "returns Left on truncated XML (unclosed tag)" $
+            runOnBytes "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\"><activityDataset>" >>= shouldBeLeft
+
+        it "returns Left on well-formed XML that is not an EcoSpold dataset" $
+            runOnBytes "<?xml version=\"1.0\"?><root><child>hello</child></root>" >>= shouldBeLeft
+
 withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"

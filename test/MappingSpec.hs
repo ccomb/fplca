@@ -361,26 +361,24 @@ spec = do
             map (\(_, _, c) -> c) contribs `shouldBe` [0.0]
 
     describe "convertForCharacterization" $ do
-        it "passes qty through when units match by name" $
-            convertForCharacterization defaultUnitConfig "kg" "kg" 5.0 `shouldBe` 5.0
-
-        it "passes qty through when cfUnit is empty (method without unit)" $
-            convertForCharacterization defaultUnitConfig "kg" "" 7.0 `shouldBe` 7.0
-
-        it "passes qty through when flowUnit is empty (no metadata)" $
-            convertForCharacterization defaultUnitConfig "" "kg" 9.0 `shouldBe` 9.0
-
-        it "passes qty through when cfUnit is an LCIA result expression unknown to UnitConfig" $
-            -- "kg CO2 eq" is not a physical unit; trust the CF author.
-            convertForCharacterization defaultUnitConfig "kg" "kg CO2 eq" 3.0 `shouldBe` 3.0
-
-        it "returns 0 when both units are known but dimensionally incompatible" $
-            -- m (length) → kg (mass): refuse to inject wrong-dimension data.
-            convertForCharacterization defaultUnitConfig "m" "kg" 100.0 `shouldBe` 0.0
-
-        it "applies the conversion factor when units differ but are compatible" $
-            -- 1000 g → 1.0 kg
-            convertForCharacterization gKgUnitConfig "g" "kg" 1000.0 `shouldBe` 1.0
+        -- Each row encodes a (flowUnit, cfUnit, qty) → expected mapping under a
+        -- specific UnitConfig. The semantic groups: pass-through (matching or
+        -- unknown units, trust the CF author), refuse cross-dimension injection
+        -- by returning 0, apply factor when compatible.
+        let cases =
+                [ ("units match by name", defaultUnitConfig, "kg", "kg", 5.0, 5.0)
+                , ("cfUnit empty (method without unit)", defaultUnitConfig, "kg", "", 7.0, 7.0)
+                , ("flowUnit empty (no metadata)", defaultUnitConfig, "", "kg", 9.0, 9.0)
+                , ("cfUnit is an LCIA expression unknown to UnitConfig", defaultUnitConfig, "kg", "kg CO2 eq", 3.0, 3.0)
+                , ("dimensionally incompatible → 0", defaultUnitConfig, "m", "kg", 100.0, 0.0)
+                , ("compatible units differ → apply factor (1000 g → 1.0 kg)", gKgUnitConfig, "g", "kg", 1000.0, 1.0)
+                ]
+        mapM_
+            ( \(label, cfg, flowU, cfU, qty, expected) ->
+                it label $
+                    convertForCharacterization cfg flowU cfU qty `shouldBe` expected
+            )
+            cases
 
     describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
         it "counts ByFuzzy matches" $ do
