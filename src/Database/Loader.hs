@@ -710,26 +710,32 @@ loadEcoSpoldDirectory locationAliases dir = do
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
         -- Parse all files for this worker using appropriate parser.
-        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int).
-        -- For EcoSpold2: dataset number = 0, supplier links = empty (fields padded here).
+        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int).
+        -- For EcoSpold2: dataset number = 0, supplier links = empty, no waste flows (fields padded here).
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else fmap (fmap (\(a, ts, bs, us) -> (a, ts, bs, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
+                    else fmap (fmap (\(a, ts, bs, us) -> (a, ts, bs, [], us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
         let (okFiles, okResults) = unzip oks
-        let procs = [a | (a, _, _, _, _, _) <- okResults]
-            techLists = [ts | (_, ts, _, _, _, _) <- okResults]
-            bioLists = [bs | (_, _, bs, _, _, _) <- okResults]
-            unitLists = [us | (_, _, _, us, _, _) <- okResults]
-            dsNums = [n | (_, _, _, _, n, _) <- okResults]
-            supplierLinksList = [sl | (_, _, _, _, _, sl) <- okResults]
+        let procs = [a | (a, _, _, _, _, _, _) <- okResults]
+            techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
+            bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
+            wasteLists = [ws | (_, _, _, ws, _, _, _) <- okResults]
+            unitLists = [us | (_, _, _, _, us, _, _) <- okResults]
+            dsNums = [n | (_, _, _, _, _, n, _) <- okResults]
+            supplierLinksList = [sl | (_, _, _, _, _, _, sl) <- okResults]
         let !allTechs = concat techLists
         let !allBios = concat bioLists
+        -- TODO: thread waste flows up to the directory-load Database. For now,
+        -- the directory loader path drops them; single-file EcoSpold1 path
+        -- (loadSingleEcoSpold1File) is what serves the Ecoplus / SimaPro-
+        -- exported workloads where Final waste flows actually occur.
+        let !_allWastes = concat wasteLists
         let !allUnits = concat unitLists
 
         let procEntries = zipWith (buildProcEntry isEcoSpold1) okFiles procs
@@ -792,26 +798,28 @@ loadSingleEcoSpold1File locationAliases filepath = do
     -- Build activity map from all parsed activities
     let expanded = map buildProcEntryFromResult results
         !procMap = M.fromList expanded
-        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _) <- results, f <- techs]
-        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _) <- results, f <- bios]
-        !unitMap = M.fromList [(unitId u, u) | (_, _, _, units, _, _) <- results, u <- units]
+        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
+        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
+        !wasteFlowMap = M.fromList [(wfId f, f) | (_, _, _, wastes, _, _, _) <- results, f <- wastes]
+        !unitMap = M.fromList [(unitId u, u) | (_, _, _, _, units, _, _) <- results, u <- units]
         !dsIndex =
             M.fromList
-                [(dsNum, key) | ((_, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
-        !supplierLinks = M.unions [sl | (_, _, _, _, _, sl) <- results]
-        simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap M.empty unitMap
+                [(dsNum, key) | ((_, _, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
+        !supplierLinks = M.unions [sl | (_, _, _, _, _, _, sl) <- results]
+        simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap wasteFlowMap unitMap
 
-    let totalTechs = sum [length techs | (_, techs, _, _, _, _) <- results]
-    let totalBios = sum [length bios | (_, _, bios, _, _, _) <- results]
-    let totalUnits = sum [length units | (_, _, _, units, _, _) <- results]
+    let totalTechs = sum [length techs | (_, techs, _, _, _, _, _) <- results]
+    let totalBios = sum [length bios | (_, _, bios, _, _, _, _) <- results]
+    let totalWastes = sum [length wastes | (_, _, _, wastes, _, _, _) <- results]
+    let totalUnits = sum [length units | (_, _, _, _, units, _, _) <- results]
     reportProgress Info $ printf "  Activities: %d processes" (M.size procMap)
-    reportProgress Info $ printf "  Flows: %d tech + %d bio (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (totalTechs + totalBios)
+    reportProgress Info $ printf "  Flows: %d tech + %d bio + %d waste (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (M.size wasteFlowMap) (totalTechs + totalBios + totalWastes)
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
     Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
-    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
-    buildProcEntryFromResult (activity, _, _, _, _, _) =
+    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult (activity, _, _, _, _, _, _) =
         let actUUID = generateActivityUUIDFromActivity activity
             prodUUID = getReferenceProductUUID activity
          in ((actUUID, prodUUID), activity)

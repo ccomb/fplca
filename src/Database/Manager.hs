@@ -1146,7 +1146,7 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
             dbRebuiltResult <-
                 if null transforms
                     then pure (Right dbRaw)
-                    else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbTechFlows transformed) (sdbBioFlows transformed) (sdbUnits transformed)
+                    else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbTechFlows transformed) (sdbBioFlows transformed) (sdbWasteFlows transformed) (sdbUnits transformed)
 
             case dbRebuiltResult of
                 Left err -> return $ Left err
@@ -1326,7 +1326,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                 reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                 let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB M.empty unitDB
                 linkedDb <- Loader.fixSimaProActivityLinks simpleDb
-                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB unitDB
+                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -1354,6 +1354,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                         (sdbActivities simpleDb)
                         (sdbTechFlows simpleDb)
                         (sdbBioFlows simpleDb)
+                        (sdbWasteFlows simpleDb)
                         (sdbUnits simpleDb)
                 case dbResult of
                     Left err -> return $ Left err
@@ -2349,6 +2350,7 @@ finalizeDatabase manager dbName = do
                                             (sdbActivities (sdSimpleDB staged))
                                             (sdbTechFlows (sdSimpleDB staged))
                                             (sdbBioFlows (sdSimpleDB staged))
+                                            (sdbWasteFlows (sdSimpleDB staged))
                                             (sdbUnits (sdSimpleDB staged))
                                     case dbResult of
                                         Left err -> return $ Left err

@@ -440,6 +440,17 @@ type BioFlowDB = M.Map UUID BiosphereFlow
 -- | Map from waste flow UUID to WasteFlow (Map for O(log n) lookups)
 type WasteFlowDB = M.Map UUID WasteFlow
 
+{- | A parsed flow tagged with its kind. Returned by parsers when an
+@Exchange@ carries its corresponding @*Flow@ catalog entry. Distinct from
+'ApiFlow' (which is wire-shape, with an 'ApiUnresolvedFlow' fallback) —
+parsers never produce unresolved entries.
+-}
+data ParsedFlow
+    = ParsedTech !TechnosphereFlow
+    | ParsedBio !BiosphereFlow
+    | ParsedWaste !WasteFlow
+    deriving (Generic, NFData)
+
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
 
