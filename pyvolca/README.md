@@ -482,7 +482,7 @@ An exchange with the environment (resource extraction or emission).
 | `compartment` | `Compartment \| None` | — |
 | `amount` | `float` | — |
 | `unit` | `str` | — |
-| `is_input` | `bool` | — |
+| `direction` | `Literal['Resource', 'Emission']` | — |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
 
@@ -503,6 +503,9 @@ Multiple filters are AND-combined by the server.
 ### `Compartment`
 
 Biosphere compartment (medium + optional subcompartment).
+
+Frozen so it's hashable and immutable — callers can use it as a dict key
+when grouping flows by compartment, and accidental mutation is rejected.
 
 | Field | Type | Default |
 |-------|------|---------|
