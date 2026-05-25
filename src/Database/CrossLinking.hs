@@ -37,6 +37,8 @@ module Database.CrossLinking (
     -- * Index Building
     buildIndexedDatabase,
     buildIndexedDatabaseFromDB,
+    buildSupplierEntries,
+    supplierLocations,
 
     -- * Main Functions
     findSupplierAcrossDatabases,
@@ -394,6 +396,9 @@ Always includes 'activityLocation'. Adds the reference exchange's
 'techLocation' when it is non-empty and distinct — this surfaces SimaPro
 products whose Products row declares a wider geographic scope than the
 enclosing Process name (typically WFLDB: process @ /CH, product @ /GLO).
+
+Design note: the activity table stays at 'activityLocation' (honest about
+data-collection provenance); only the cross-DB lookup gets the alias.
 -}
 supplierLocations :: Activity -> Exchange -> [Text]
 supplierLocations act ex =
