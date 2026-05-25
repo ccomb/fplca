@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -12,9 +13,9 @@ module Types (
     UUID,
 ) where
 
-import API.JsonOptions (stripLowerPrefix)
+import API.JsonOptions (Stripped (..))
 import Control.DeepSeq (NFData)
-import Data.Aeson (FromJSON (..), ToJSON (..), genericParseJSON, genericToEncoding, genericToJSON)
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
@@ -64,6 +65,7 @@ data Compartment = Compartment
     , compartmentSub :: !(Maybe Text) -- "high. pop.", "river water", …
     }
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped Compartment)
 
 {- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
 source dataset omitted the compartment. Use 'bfCompartment' directly when
@@ -135,6 +137,7 @@ data TechnosphereFlow = TechnosphereFlow
     , tfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped TechnosphereFlow)
 
 {- | A biosphere flow — an environmental exchange (resource extraction or
 emission). Always carries a `Compartment` identifying the medium.
@@ -154,6 +157,7 @@ data BiosphereFlow = BiosphereFlow
     -}
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped BiosphereFlow)
 
 {- | A waste flow — a residual output that a process generates and which a
 treatment activity may consume as its reference input. Sister type to
@@ -175,6 +179,7 @@ data WasteFlow = WasteFlow
     , wfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped WasteFlow)
 
 {- | Pedigree matrix (Weidema & Wesnæs 1996) — five LCA data-quality scores
 each in 1..5 (1 = best, 5 = worst). SimaPro CSV encodes it as a prefix in the
@@ -188,6 +193,7 @@ data Pedigree = Pedigree
     , pedTechnological :: !Int -- 1..5
     }
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped Pedigree)
 
 {- | Smart constructor: rejects out-of-range values (anything not in 1..5)
 by returning Nothing. Callers should treat Nothing as "no pedigree
@@ -237,6 +243,7 @@ data Exchange
         , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped Exchange)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
@@ -1195,46 +1202,11 @@ data CF = CF
     , cfFactor :: !Double -- Characterization factor
     }
 
--- JSON instances for API compatibility
--- Note: ProcessId is Int32, which already has ToJSON/FromJSON instances
-instance ToJSON Pedigree where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON Pedigree where
-    parseJSON = genericParseJSON stripLowerPrefix
-instance ToJSON Exchange where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-
-instance FromJSON Exchange where
-    parseJSON = genericParseJSON stripLowerPrefix
-
+-- ToJSON/FromJSON for the records above are produced via `deriving via (Stripped X)`
+-- attached to each `data` declaration. The two enums TechRole and BioDirection use
+-- the default Generic encoding (constructor name as JSON string).
 instance ToJSON TechRole
 instance FromJSON TechRole
 
 instance ToJSON BioDirection
 instance FromJSON BioDirection
-
-instance ToJSON Compartment where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON Compartment where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON TechnosphereFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON TechnosphereFlow where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON BiosphereFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON BiosphereFlow where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON WasteFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON WasteFlow where
-    parseJSON = genericParseJSON stripLowerPrefix
