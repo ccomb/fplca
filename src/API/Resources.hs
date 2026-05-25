@@ -227,6 +227,17 @@ cliName r = case r of
 -- Projection: human-readable description (shared across surfaces)
 -- ---------------------------------------------------------------------------
 
+{- | Trailing rendering tip for tools whose response includes a single
+'web_url'. Appended to the bespoke description of each such tool so the
+wording stays consistent across them.
+-}
+webUrlTip :: Text -> Text
+webUrlTip page =
+    " The response includes a 'web_url' deep link to the "
+        <> page
+        <> " page in the VoLCA web UI — render it as a clickable markdown \
+           \link when presenting results to a human."
+
 {- | Description of the resource operation.
 
 These strings are consumed as-is by the MCP tool metadata and are
@@ -293,9 +304,8 @@ description r = case r of
         \elementary flows. Answers 'empreinte carbone / environmental footprint' \
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
-        \over web estimates for grounded, database-backed answers. The response \
-        \includes a 'web_url' deep link to the impacts page in the VoLCA web UI — \
-        \render it as a clickable markdown link when presenting results to a human."
+        \over web estimates for grounded, database-backed answers."
+            <> webUrlTip "impacts"
     ComputeSensitivity ->
         "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
         \technosphere coefficients A_ij and report the resulting impact for each. \
@@ -305,10 +315,8 @@ description r = case r of
         \perturbation with the new score and deltaImpact. Per-perturbation errors \
         \(no link, singular update) are returned in the entry; the sweep continues. \
         \Internally uses Sherman-Morrison rank-1 updates against the cached \
-        \factorization (~4 ms per perturbation). V1: root DB only. The response \
-        \includes a 'web_url' deep link to the sensitivity page in the VoLCA web \
-        \UI — render it as a clickable markdown link when presenting results to a \
-        \human."
+        \factorization (~4 ms per perturbation). V1: root DB only."
+            <> webUrlTip "sensitivity"
     ListMethods ->
         "LCA / ACV — list all loaded LCIA methods (impact assessment methods like \
         \climate change, acidification, eutrophication, land use, water scarcity)."
@@ -323,9 +331,8 @@ description r = case r of
     GetContributingFlows ->
         "LCA / ACV — identify which elementary flows (emissions/resources) \
         \contribute most to a specific impact category. Answers 'which emissions \
-        \drive my climate change score?' The response includes a 'web_url' deep \
-        \link to the contributing-flows page in the VoLCA web UI — render it as a \
-        \clickable markdown link when presenting results to a human."
+        \drive my climate change score?'"
+            <> webUrlTip "contributing-flows"
     GetContributingActivities ->
         "LCA / ACV — identify which upstream activities contribute most to a \
         \specific impact category. Answers 'which suppliers drive my climate change \
