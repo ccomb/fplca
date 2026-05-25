@@ -68,8 +68,6 @@ module Database.Loader (
     generateActivityUUIDFromActivity,
     getReferenceProductUUID,
     UnlinkedSummary (..),
-    emptyUnlinkedSummary,
-    mergeUnlinkedSummaries,
     buildSupplierIndex,
     buildSupplierIndexByName,
     fixExchangeLinkByName,
@@ -234,7 +232,14 @@ data UnlinkedExchange = UnlinkedExchange
     }
     deriving (Eq, Ord, Show)
 
--- | Summary of unlinked exchanges grouped by consumer activity
+{- | Summary of unlinked exchanges grouped by consumer activity.
+
+Categorically the product of four monoids:
+'M.unionWith (++)' on the activity map, and addition on each 'Int'
+counter. We hand-write the instance because bare 'Int' has no canonical
+'Monoid' (Sum vs Product is ambiguous); wrapping the fields as 'Sum Int'
+would have leaked through every constructor and accessor.
+-}
 data UnlinkedSummary = UnlinkedSummary
     { usActivities :: !(M.Map T.Text [UnlinkedExchange]) -- consumer name → list of unlinked exchanges
     , usTotalLinks :: !Int
@@ -243,19 +248,12 @@ data UnlinkedSummary = UnlinkedSummary
     }
     deriving (Show)
 
--- | Empty unlinked summary
-emptyUnlinkedSummary :: UnlinkedSummary
-emptyUnlinkedSummary = UnlinkedSummary M.empty 0 0 0
+instance Semigroup UnlinkedSummary where
+    UnlinkedSummary a1 t1 f1 m1 <> UnlinkedSummary a2 t2 f2 m2 =
+        UnlinkedSummary (M.unionWith (++) a1 a2) (t1 + t2) (f1 + f2) (m1 + m2)
 
--- | Merge two unlinked summaries
-mergeUnlinkedSummaries :: UnlinkedSummary -> UnlinkedSummary -> UnlinkedSummary
-mergeUnlinkedSummaries s1 s2 =
-    UnlinkedSummary
-        { usActivities = M.unionWith (++) (usActivities s1) (usActivities s2)
-        , usTotalLinks = usTotalLinks s1 + usTotalLinks s2
-        , usFoundLinks = usFoundLinks s1 + usFoundLinks s2
-        , usMissingLinks = usMissingLinks s1 + usMissingLinks s2
-        }
+instance Monoid UnlinkedSummary where
+    mempty = UnlinkedSummary M.empty 0 0 0
 
 -- | Report grouped summary of unlinked exchanges
 reportUnlinkedSummary :: UnlinkedSummary -> IO ()
@@ -412,7 +410,7 @@ fixAllActivities :: ExchangeLinkContext -> ActivityMap -> (ActivityMap, Unlinked
 fixAllActivities ctx activities =
     let results = M.map (fixActivityExchanges ctx) activities
         summaries = map snd $ M.elems results
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
@@ -420,7 +418,7 @@ fixAllActivities ctx activities =
 fixActivityExchanges :: ExchangeLinkContext -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchanges ctx act =
     let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink ctx (activityName act)) (exchanges act)
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link by (flowName, location) match.
@@ -462,13 +460,13 @@ fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{tec
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
                     (ex, UnlinkedSummary M.empty 1 0 1)
-    | otherwise = (ex, emptyUnlinkedSummary)
-fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+    | otherwise = (ex, mempty)
+fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- A WasteExchange in input direction (consumed by treatment) would benefit
 -- from the same supplier-lookup logic as a technosphere Input, but at this
 -- stage we leave waste links to the cross-DB linker (see CrossLinking) and
 -- the downstream parsers. Pure pass-through here.
-fixExchangeLink _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
+fixExchangeLink _ _ ex@WasteExchange{} = (ex, mempty)
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -567,7 +565,7 @@ fixAllActivitiesByName :: NameOnlyIndex -> TechFlowDB -> ActivityMap -> (Activit
 fixAllActivitiesByName idx techFlowDb activities =
     let results = M.map (fixActivityExchangesByName idx techFlowDb) activities
         summaries = map snd $ M.elems results
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
@@ -575,7 +573,7 @@ fixAllActivitiesByName idx techFlowDb activities =
 fixActivityExchangesByName :: NameOnlyIndex -> TechFlowDB -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchangesByName idx techFlowDb act =
     let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx techFlowDb (activityName act)) (exchanges act)
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link using name-only matching.
@@ -608,10 +606,10 @@ fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFl
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)
-    | otherwise = (ex, emptyUnlinkedSummary) -- Reference products: nothing to relink
-fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+    | otherwise = (ex, mempty) -- Reference products: nothing to relink
+fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
-fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
+fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, mempty)
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
