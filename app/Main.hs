@@ -37,6 +37,7 @@ import Progress
 import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
+import App.Env (mkAppEnv)
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -284,7 +285,7 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
                 respond $ responseLBS status200 [(hContentType, "text/html; charset=utf-8")] swaggerHtml
             | path == "/api/v1/logs/stream" -> handleLogStream req respond
             | C8.pack "/api/" `BS.isPrefixOf` path ->
-                serve lcaAPI (lcaServer dbManager maxTreeDepth password hostingConfig filterPresets) req respond
+                serve lcaAPI (lcaServer (mkAppEnv dbManager maxTreeDepth password hostingConfig filterPresets)) req respond
             | C8.pack "/static/" `BS.isPrefixOf` path -> serveStripped
             | otherwise -> serveSpaIndex
 

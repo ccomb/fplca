@@ -55,6 +55,8 @@ import qualified SharedSolver
 import Tree (buildLoopAwareTree)
 import Types
 import qualified Version
+import App.Env (AppEnv (..), AppM, HasDatabaseManager (..), runApp)
+import Control.Monad.Reader (asks)
 
 -- | API type definition - RESTful design with focused endpoints
 type LCAAPI =
@@ -184,8 +186,9 @@ notLoadedBody :: Text -> Text -> BSL.ByteString
 notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
 
 -- | Get database by name, throw 404 if not loaded
-requireDatabaseByName :: DatabaseManager -> Text -> Handler (Database, SharedSolver)
-requireDatabaseByName dbManager dbName = do
+requireDatabaseByName :: Text -> AppM (Database, SharedSolver)
+requireDatabaseByName dbName = do
+    dbManager <- asks getDatabaseManager
     maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
@@ -195,7 +198,7 @@ requireDatabaseByName dbManager dbName = do
 the user to load the missing dep DBs (or POST /relink) rather than
 silently undercounting impacts.
 -}
-requireFullyLinked :: Text -> Database -> Handler ()
+requireFullyLinked :: Text -> Database -> AppM ()
 requireFullyLinked dbName db =
     let n = unresolvedCount (dbLinkingStats db)
      in when (n > 0) $
@@ -217,17 +220,18 @@ requireFullyLinked dbName db =
                     }
 
 -- | Inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
-inventoryWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Handler Inventory
-inventoryWithDeps dbManager dbName db solver pid =
-    SharedSolver.csInventory <$> solutionWithDeps dbManager dbName db solver pid
+inventoryWithDeps :: Text -> Database -> SharedSolver -> ProcessId -> AppM Inventory
+inventoryWithDeps dbName db solver pid =
+    SharedSolver.csInventory <$> solutionWithDeps dbName db solver pid
 
 {- | Cross-DB inventory + per-DB scaling vectors. The scalings are needed by
 the regionalized LCIA path (per-DB dot products summed across all DBs
 reached at request time); the inventory alone is enough for non-regional
 methods.
 -}
-solutionWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Handler SharedSolver.CrossDBSolution
-solutionWithDeps dbManager dbName db solver pid = do
+solutionWithDeps :: Text -> Database -> SharedSolver -> ProcessId -> AppM SharedSolver.CrossDBSolution
+solutionWithDeps dbName db solver pid = do
+    dbManager <- asks getDatabaseManager
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -244,13 +248,14 @@ solutionWithDeps dbManager dbName db solver pid = do
         Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
 
 -- | Batch inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
-inventoriesWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> [ProcessId] -> Handler [Inventory]
-inventoriesWithDeps dbManager dbName db solver pids =
-    map SharedSolver.csInventory <$> solutionsWithDeps dbManager dbName db solver pids
+inventoriesWithDeps :: Text -> Database -> SharedSolver -> [ProcessId] -> AppM [Inventory]
+inventoriesWithDeps dbName db solver pids =
+    map SharedSolver.csInventory <$> solutionsWithDeps dbName db solver pids
 
 -- | Batch variant of 'solutionWithDeps'.
-solutionsWithDeps :: DatabaseManager -> Text -> Database -> SharedSolver -> [ProcessId] -> Handler [SharedSolver.CrossDBSolution]
-solutionsWithDeps dbManager dbName db solver pids = do
+solutionsWithDeps :: Text -> Database -> SharedSolver -> [ProcessId] -> AppM [SharedSolver.CrossDBSolution]
+solutionsWithDeps dbName db solver pids = do
+    dbManager <- asks getDatabaseManager
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -327,7 +332,7 @@ mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c)
                 }
 
 -- | Helper function to validate ProcessId and lookup activity
-withValidatedActivity :: Database -> Text -> (Activity -> Handler a) -> Handler a
+withValidatedActivity :: Database -> Text -> (Activity -> AppM a) -> AppM a
 withValidatedActivity db processId action = do
     case Service.resolveActivityByProcessId db processId of
         Left (Service.InvalidProcessId errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
@@ -338,7 +343,7 @@ withValidatedActivity db processId action = do
 {- | Helper function to validate UUID and lookup flow. Returns a tagged sum
 so callers can dispatch on tech vs bio.
 -}
-withValidatedFlow :: Database -> Text -> (FlowKind -> Handler a) -> Handler a
+withValidatedFlow :: Database -> Text -> (FlowKind -> AppM a) -> AppM a
 withValidatedFlow db uuid action = do
     case Service.validateUUID uuid of
         Left (Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
@@ -396,7 +401,7 @@ expandPreset presets (Just pn) = case find (\p -> Config.cpName p == pn) presets
 -- ============================================================================
 -- Hoisted helpers — previously in lcaServer's `where`. Lifted to top level so
 -- non-Servant callers (notably src/API/BatchImpacts.hs and any client of the
--- LCIA batch pipeline outside the Servant Handler stack) can reuse them.
+-- LCIA batch pipeline outside the Servant AppM stack) can reuse them.
 --
 -- Behavior is byte-identical to the original where-bound versions.
 -- ============================================================================
@@ -474,7 +479,7 @@ logLCIAResult result method = do
 HTTP status. Validates the resolved ProcessId against the technosphere
 matrix index too — see Service.validateProcessIdInMatrixIndex.
 -}
-resolveOrThrow :: Database -> Text -> Handler (ProcessId, Activity)
+resolveOrThrow :: Database -> Text -> AppM (ProcessId, Activity)
 resolveOrThrow db processIdText =
     case Service.resolveActivityAndProcessId db processIdText of
         Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -487,13 +492,13 @@ resolveOrThrow db processIdText =
                 Left e -> internalError e
                 Right () -> return (pid, act)
   where
-    internalError :: Service.ServiceError -> Handler a
+    internalError :: Service.ServiceError -> AppM a
     internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
 
 {- | Translate a Service-level error into the HTTP status used across the
 cross-DB LCIA paths.
 -}
-throwServiceError :: Service.ServiceError -> Handler a
+throwServiceError :: Service.ServiceError -> AppM a
 throwServiceError (Service.ActivityNotFound _) = throwError err404{errBody = "Activity not found"}
 throwServiceError (Service.InvalidProcessId msg) = throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
 -- MatrixError covers singular Sherman-Morrison, missing technosphere links,
@@ -504,7 +509,7 @@ throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Interna
 throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
 
 -- | Load a method collection by name from the live DatabaseManager state.
-loadCollection :: DatabaseManager -> Text -> Handler ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
+loadCollection :: DatabaseManager -> Text -> AppM ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
 loadCollection dbManager collectionName = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
@@ -515,9 +520,9 @@ loadCollection dbManager collectionName = do
 no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
 'Just' applies the substitutions through the uncached path.
 -}
-crossDBSolutionFor :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> Handler SharedSolver.CrossDBSolution
+crossDBSolutionFor :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> AppM SharedSolver.CrossDBSolution
 crossDBSolutionFor dbManager dbName db solver pid mSub = case mSub of
-    Nothing -> solutionWithDeps dbManager dbName db solver pid
+    Nothing -> solutionWithDeps dbName db solver pid
     Just subReq -> do
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
@@ -772,18 +777,18 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
         computeAllScoringSets (mcScoringSets collection) rawScoreMap
     pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
 
-{- | Top-level LCIA batch entry point — Handler-returning. Used by the Servant
+{- | Top-level LCIA batch entry point — AppM-returning. Used by the Servant
 routes (via thin where-aliases) and by API.BatchImpacts.
 -}
 activityLCIABatchH ::
-    DatabaseManager ->
     Text ->
     Text ->
     Text ->
     Maybe SubstitutionRequest ->
-    Handler LCIABatchResult
-activityLCIABatchH dbManager dbName processIdText collectionName mSub = do
-    (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+    AppM LCIABatchResult
+activityLCIABatchH dbName processIdText collectionName mSub = do
+    dbManager <- asks getDatabaseManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
     (actProcessId, activity) <- resolveOrThrow db processIdText
     (methods, damageCats, nwSets, scoringSets) <- loadCollection dbManager collectionName
     let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
@@ -840,14 +845,14 @@ valid PIDs, parallel characterization. Used by the Servant POST route and
 by API.BatchImpacts.
 -}
 batchImpactsH ::
-    DatabaseManager ->
     Text ->
     Text ->
     Maybe Int ->
     BatchImpactsRequest ->
-    Handler BatchImpactsResponse
-batchImpactsH dbManager dbName collectionName topFlowsParam req = do
-    (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+    AppM BatchImpactsResponse
+batchImpactsH dbName collectionName topFlowsParam req = do
+    dbManager <- asks getDatabaseManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     collection <- case M.lookup collectionName loadedCollections of
         Just mc -> pure mc
@@ -861,7 +866,7 @@ batchImpactsH dbManager dbName collectionName topFlowsParam req = do
         invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
         validPidNums = [pidNum | (_, pidNum, _) <- valid]
     t0 <- liftIO getCurrentTime
-    sols <- solutionsWithDeps dbManager dbName db sharedSolver validPidNums
+    sols <- solutionsWithDeps dbName db sharedSolver validPidNums
     t1 <- liftIO getCurrentTime
     ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName db) (mcMethods collection)
     let topFlows = max 0 (fromMaybe 0 topFlowsParam)
@@ -906,12 +911,26 @@ batchImpactsH dbManager dbName collectionName topFlowsParam req = do
             , birInvalid = invalid
             }
 
-{- | API server implementation
-DatabaseManager is used to dynamically fetch current database on each request
+{- | API server implementation. Handlers live in 'AppM' (a 'ReaderT'
+'AppEnv' over Servant's 'Handler'); 'hoistServer' is the natural
+transformation that lifts the @ServerT LCAAPI AppM@ into a plain
+@Server LCAAPI@ Servant expects at the WAI boundary.
 -}
-lcaServer :: DatabaseManager -> Int -> Maybe String -> Maybe Config.HostingConfig -> [Config.ClassificationPreset] -> Server LCAAPI
-lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
-    getActivityInfo
+lcaServer :: AppEnv -> Server LCAAPI
+lcaServer env =
+    hoistServer lcaAPI (runApp env) handlers
+  where
+    -- Legacy closure access to env fields, kept so handler bodies (and
+    -- the helpers they call) don't all need an explicit `asks`. We could
+    -- replace this with capability-class projections at every call site,
+    -- but the let-binding is identical in LOC and easier to read.
+    dbManager = aeDbManager env
+    maxTreeDepth = aeMaxTreeDepth env
+    password = aePassword env
+    hostingConfig = aeHostingConfig env
+    classificationPresets = aeClassificationPresets env
+    handlers =
+        getActivityInfo
         :<|> getActivityFlows
         :<|> getActivityInputs
         :<|> getActivityOutputs
@@ -945,42 +964,42 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         :<|> searchActivitiesWithCount
         :<|> getClassifications
         :<|> postImpactsBatch
-        :<|> DBHandlers.getDatabases dbManager
-        :<|> DBHandlers.loadDatabaseHandler dbManager
-        :<|> DBHandlers.unloadDatabaseHandler dbManager
-        :<|> DBHandlers.relinkDatabaseHandler dbManager
-        :<|> DBHandlers.deleteDatabaseHandler dbManager
-        :<|> DBHandlers.uploadDatabaseHandler dbManager
-        :<|> DBHandlers.getDatabaseSetupHandler dbManager
-        :<|> DBHandlers.addDependencyHandler dbManager
-        :<|> DBHandlers.removeDependencyHandler dbManager
-        :<|> DBHandlers.setDataPathHandler dbManager
-        :<|> DBHandlers.finalizeDatabaseHandler dbManager
+        :<|> DBHandlers.getDatabases
+        :<|> DBHandlers.loadDatabaseHandler
+        :<|> DBHandlers.unloadDatabaseHandler
+        :<|> DBHandlers.relinkDatabaseHandler
+        :<|> DBHandlers.deleteDatabaseHandler
+        :<|> DBHandlers.uploadDatabaseHandler
+        :<|> DBHandlers.getDatabaseSetupHandler
+        :<|> DBHandlers.addDependencyHandler
+        :<|> DBHandlers.removeDependencyHandler
+        :<|> DBHandlers.setDataPathHandler
+        :<|> DBHandlers.finalizeDatabaseHandler
         :<|> getMethodCollections
         :<|> loadMethodCollectionHandler
         :<|> unloadMethodCollectionHandler
-        :<|> DBHandlers.deleteMethodHandler dbManager
-        :<|> DBHandlers.uploadMethodHandler dbManager
+        :<|> DBHandlers.deleteMethodHandler
+        :<|> DBHandlers.uploadMethodHandler
         -- Flow synonyms
-        :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms dbManager
-        :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms dbManager
-        :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms dbManager
-        :<|> DBHandlers.deleteRefData DBHandlers.FlowSynonyms dbManager
-        :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms dbManager
-        :<|> DBHandlers.getFlowSynonymGroupsHandler dbManager
-        :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms dbManager
+        :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms
+        :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms
+        :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms
+        :<|> DBHandlers.deleteRefData DBHandlers.FlowSynonyms
+        :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms
+        :<|> DBHandlers.getFlowSynonymGroupsHandler
+        :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms
         -- Compartment mappings
-        :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings dbManager
-        :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings dbManager
-        :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings dbManager
-        :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings dbManager
-        :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings dbManager
+        :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings
+        :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings
+        :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings
+        :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings
+        :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings
         -- Units
-        :<|> DBHandlers.listRefData DBHandlers.UnitDefs dbManager
-        :<|> DBHandlers.loadRefData DBHandlers.UnitDefs dbManager
-        :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs dbManager
-        :<|> DBHandlers.deleteRefData DBHandlers.UnitDefs dbManager
-        :<|> DBHandlers.uploadRefData DBHandlers.UnitDefs dbManager
+        :<|> DBHandlers.listRefData DBHandlers.UnitDefs
+        :<|> DBHandlers.loadRefData DBHandlers.UnitDefs
+        :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs
+        :<|> DBHandlers.deleteRefData DBHandlers.UnitDefs
+        :<|> DBHandlers.uploadRefData DBHandlers.UnitDefs
         :<|> getLogsHandler
         :<|> postAuth
         :<|> getVersion
@@ -988,11 +1007,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         :<|> getStats
         :<|> getClassificationPresets
         :<|> getOpenApiSpec
-  where
-    getOpenApiSpec :: Handler Value
+    getOpenApiSpec :: AppM Value
     getOpenApiSpec = return $ toJSON volcaOpenApi
 
-    getVersion :: Handler Value
+    getVersion :: AppM Value
     getVersion =
         return $
             object
@@ -1002,7 +1020,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , "buildTarget" .= Version.buildTarget
                 ]
 
-    getHosting :: Handler Value
+    getHosting :: AppM Value
     getHosting = return $ case hostingConfig of
         Just hc ->
             object
@@ -1023,7 +1041,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , "upgrade_vm_size" .= ("" :: Text)
                 ]
 
-    getStats :: Handler Value
+    getStats :: AppM Value
     getStats = liftIO $ do
         enabled <- GHC.Stats.getRTSStatsEnabled
         if enabled
@@ -1040,7 +1058,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     object
                         ["error" .= ("RTS stats not enabled. Run with +RTS -T to enable." :: Text)]
 
-    getClassificationPresets :: Handler [ClassificationPresetInfo]
+    getClassificationPresets :: AppM [ClassificationPresetInfo]
     getClassificationPresets = return $ map toInfo classificationPresets
       where
         toInfo p =
@@ -1051,7 +1069,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , cpiFilters = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e) (Config.ceMode e)) (Config.cpFilters p)
                 }
 
-    getLogsHandler :: Maybe Int -> Handler Value
+    getLogsHandler :: Maybe Int -> AppM Value
     getLogsHandler sinceMaybe = do
         let since = fromMaybe 0 sinceMaybe
         (nextIndex, logLines) <- liftIO $ getLogLines since
@@ -1061,7 +1079,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 , "nextIndex" .= nextIndex
                 ]
 
-    postAuth :: LoginRequest -> Handler (Headers '[Header "Set-Cookie" String] Value)
+    postAuth :: LoginRequest -> AppM (Headers '[Header "Set-Cookie" String] Value)
     postAuth loginReq =
         case password of
             Nothing ->
@@ -1076,9 +1094,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         throwError err401{errBody = "{\"error\":\"invalid code\"}"}
 
     -- Core activity endpoint - streamlined data
-    getActivityInfo :: Text -> Text -> Handler ActivityInfo
+    getActivityInfo :: Text -> Text -> AppM ActivityInfo
     getActivityInfo dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         case Service.getActivityInfo unitCfg db processId of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -1089,39 +1107,39 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
 
     -- Activity flows sub-resource
-    getActivityFlows :: Text -> Text -> Handler [FlowSummary]
+    getActivityFlows :: Text -> Text -> AppM [FlowSummary]
     getActivityFlows dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityFlowSummaries db activity
 
     -- Activity inputs sub-resource
-    getActivityInputs :: Text -> Text -> Handler [ExchangeDetail]
+    getActivityInputs :: Text -> Text -> AppM [ExchangeDetail]
     getActivityInputs dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityInputDetails db activity
 
     -- Activity outputs sub-resource
-    getActivityOutputs :: Text -> Text -> Handler [ExchangeDetail]
+    getActivityOutputs :: Text -> Text -> AppM [ExchangeDetail]
     getActivityOutputs dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedActivity db processId $ \activity ->
             return $ Service.getActivityOutputDetails db activity
 
     -- Activity reference product sub-resource
-    getActivityReferenceProduct :: Text -> Text -> Handler FlowDetail
+    getActivityReferenceProduct :: Text -> Text -> AppM FlowDetail
     getActivityReferenceProduct dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedActivity db processId $ \activity -> do
             case Service.getActivityReferenceProductDetail db activity of
                 Nothing -> throwError err404{errBody = "No reference product found"}
                 Just refProduct -> return refProduct
 
     -- Activity tree export for visualization (configurable depth)
-    getActivityTree :: Text -> Text -> Handler TreeExport
+    getActivityTree :: Text -> Text -> AppM TreeExport
     getActivityTree dbName processId = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedActivity db processId $ \_activity -> do
             -- Use CLI --tree-depth option for configurable depth
             -- Default depth limit prevents DOS attacks via deep tree requests
@@ -1140,21 +1158,21 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Goes through the cross-DB back-substitution path so inventories from
     -- dep DBs are merged into the returned flow map; metadata (flow names,
     -- units) comes from the merged FlowDB/UnitDB snapshot.
-    activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> Handler InventoryExport
+    activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> AppM InventoryExport
     activityInventoryCore dbName processIdText mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         (processId, activity) <- resolveOrThrow db processIdText
         sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
 
-    getActivityInventory :: Text -> Text -> Handler InventoryExport
+    getActivityInventory :: Text -> Text -> AppM InventoryExport
     getActivityInventory dbName processIdText = activityInventoryCore dbName processIdText Nothing
 
     -- Activity graph endpoint for network visualization
-    getActivityGraph :: Text -> Text -> Maybe Double -> Handler GraphExport
+    getActivityGraph :: Text -> Text -> Maybe Double -> AppM GraphExport
     getActivityGraph dbName processId maybeCutoff = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         let cutoffPercent = fromMaybe 1.0 maybeCutoff -- Default to 1% cutoff
         result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
         case result of
@@ -1193,9 +1211,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Activity supply chain endpoint (scaling vector based). 'Nothing' takes the
     -- cached solve; 'Just' resolves substitutions through the cross-DB resolver.
-    activitySupplyChainCore :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe SubstitutionRequest -> Handler SupplyChainResponse
+    activitySupplyChainCore :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe SubstitutionRequest -> AppM SupplyChainResponse
     activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         let includeEdges = fromMaybe False includeEdgesParam
             scf =
                 buildSupplyChainFilter
@@ -1256,7 +1274,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                                     includeEdges
                         either throwServiceError pure eResp
 
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler SupplyChainResponse
+    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> AppM SupplyChainResponse
     getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
         activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
 
@@ -1277,7 +1295,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         Maybe Bool -> -- filter_is_reference
         Maybe Text -> -- group_by
         Maybe Text -> -- aggregate fn
-        Handler Aggregation
+        AppM Aggregation
     getActivityAggregate
         dbName
         processId
@@ -1294,7 +1312,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         freferenceParam
         groupByParam
         aggregateParam = do
-            (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+            (db, sharedSolver) <- requireDatabaseByName dbName
             -- Field-level validation via the Validation Applicative (accumulating).
             -- A request with both an invalid `scope` and an invalid `aggregate`
             -- now reports both errors at once, instead of just the first.
@@ -1369,9 +1387,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Activity LCIA endpoint (single method within a collection). The GET
     -- variant honours a top-flows query param and logs the result; the POST
     -- route carries neither (no top-flows param, no logging).
-    activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> Handler LCIAResult
+    activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
     activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
         sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
@@ -1379,12 +1397,12 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         when (isNothing mSub) $ liftIO $ logLCIAResult result method
         pure result
 
-    getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> Handler LCIAResult
+    getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> AppM LCIAResult
     getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
         activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
 
     -- POST: LCIA with substitutions
-    postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> Handler LCIAResult
+    postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> AppM LCIAResult
     postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
         activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
 
@@ -1402,9 +1420,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Cost: each perturbation now triggers one cross-DB back-substitution
     -- per dep DB it actually reaches. MUMPS factorizations are cached, so
     -- back-sub is O(n²) per dep DB, not full O(n³) factorization.
-    postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> Handler SensitivityResponse
+    postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> AppM SensitivityResponse
     postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         requireFullyLinked dbName db
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
@@ -1454,31 +1472,31 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
 
     -- Batch LCIA endpoint (all methods in a collection). Thin alias over the
     -- top-level activityLCIABatchH; preserves the Servant call sites.
-    activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> Handler LCIABatchResult
-    activityLCIABatchCore = activityLCIABatchH dbManager
+    activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> AppM LCIABatchResult
+    activityLCIABatchCore = activityLCIABatchH
 
-    getActivityLCIABatch :: Text -> Text -> Text -> Handler LCIABatchResult
+    getActivityLCIABatch :: Text -> Text -> Text -> AppM LCIABatchResult
     getActivityLCIABatch dbName processIdText collectionName =
         activityLCIABatchCore dbName processIdText collectionName Nothing
 
     -- POST: Batch LCIA with substitutions
-    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> Handler LCIABatchResult
+    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> AppM LCIABatchResult
     postActivityLCIABatch dbName processIdText collectionName subReq =
         activityLCIABatchCore dbName processIdText collectionName (Just subReq)
 
     -- POST: Inventory with substitutions
-    postActivityInventory :: Text -> Text -> SubstitutionRequest -> Handler InventoryExport
+    postActivityInventory :: Text -> Text -> SubstitutionRequest -> AppM InventoryExport
     postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
 
     -- POST: Supply chain with substitutions
-    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> Handler SupplyChainResponse
+    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> AppM SupplyChainResponse
     postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
         activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
 
     -- Activity consumers endpoint (reverse supply chain)
-    getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Bool -> Handler ConsumersResponse
+    getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Bool -> AppM ConsumersResponse
     getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam includeEdgesParam = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         let presetFilters = expandPreset classificationPresets presetParam
             explicitFilters =
                 zipWith3
@@ -1510,9 +1528,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Right consumers -> return consumers
 
     -- Activity path-to endpoint (shortest supply chain path to first matching upstream activity)
-    getActivityPathTo :: Text -> Text -> Maybe Text -> Handler Value
+    getActivityPathTo :: Text -> Text -> Maybe Text -> AppM Value
     getActivityPathTo dbName processIdText targetParam = do
-        (db, solver) <- requireDatabaseByName dbManager dbName
+        (db, solver) <- requireDatabaseByName dbName
         target <-
             maybe
                 (throwError err400{errBody = "Missing required 'target' query parameter"})
@@ -1533,9 +1551,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- Call sites in this `where` pass `dbManager` explicitly when needed.)
 
     -- Activity analysis endpoint (dispatches to registered analyzers)
-    getActivityAnalyze :: Text -> Text -> Text -> Handler Value
+    getActivityAnalyze :: Text -> Text -> Text -> AppM Value
     getActivityAnalyze dbName processIdText analyzerName = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         case M.lookup analyzerName (prAnalyzers (dmPlugins dbManager)) of
             Nothing -> throwError err404{errBody = "Analyzer not found: " <> BSL.fromStrict (T.encodeUtf8 analyzerName)}
             Just analyzer -> do
@@ -1544,7 +1562,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
                     Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
                     Right (actProcessId, _) -> do
-                        inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+                        inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
                         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
                         loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
                         let methods = map snd loadedMethods
@@ -1561,13 +1579,13 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                         liftIO $ ahAnalyze analyzer ctx
 
     -- Contributing flows: top elementary flows by LCIA contribution for a specific method
-    getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> Handler ContributingFlowsResult
+    getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
     getContributingFlows dbName processIdText _collectionName methodIdText limitParam =
         withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
             let lim = fromMaybe 20 limitParam
             unitCfg <- liftIO $ getMergedUnitConfig dbManager
             (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-            inventory <- inventoryWithDeps dbManager dbName db sharedSolver actProcessId
+            inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
             tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
             let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
                 (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1602,7 +1620,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                     }
 
     -- Contributing activities: top upstream activities by LCIA contribution for a specific method
-    getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> Handler ContributingActivitiesResult
+    getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
     getContributingActivities dbName processIdText _collectionName methodIdText limitParam =
         withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
             let lim = fromMaybe 10 limitParam
@@ -1650,9 +1668,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     -- as a sum across all participating DBs (root + each dep DB reached at
     -- request time); non-regional methods read the merged inventory only.
     -- Flow detail endpoint
-    getFlowDetail :: Text -> Text -> Handler FlowDetail
+    getFlowDetail :: Text -> Text -> AppM FlowDetail
     getFlowDetail dbName flowIdText = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedFlow db flowIdText $ \flow -> do
             let fid = flowKindId flow
                 unitName' = flowKindUnitName (dbUnits db) flow
@@ -1660,14 +1678,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             return $ FlowDetail (apiFlowOfKind flow) unitName' usageCount
 
     -- Activities using a specific flow
-    getFlowActivities :: Text -> Text -> Handler [ActivitySummary]
+    getFlowActivities :: Text -> Text -> AppM [ActivitySummary]
     getFlowActivities dbName flowIdText = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         withValidatedFlow db flowIdText $ \flow ->
             return $ Service.getActivitiesUsingFlow db (flowKindId flow)
 
     -- List all available methods (from loaded collections)
-    getMethods :: Handler [MethodSummary]
+    getMethods :: AppM [MethodSummary]
     getMethods = do
         loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
         return
@@ -1683,7 +1701,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             ]
 
     -- Get method details
-    getMethodDetail :: Text -> Handler MethodDetail
+    getMethodDetail :: Text -> AppM MethodDetail
     getMethodDetail methodIdText = do
         method <- loadMethodByUUID methodIdText
         return $
@@ -1698,15 +1716,15 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 }
 
     -- Get method characterization factors
-    getMethodFactors :: Text -> Handler [MethodFactorAPI]
+    getMethodFactors :: Text -> AppM [MethodFactorAPI]
     getMethodFactors methodIdText = do
         method <- loadMethodByUUID methodIdText
         return $ map cfToAPI (methodFactors method)
 
     -- Get method flow mapping status
-    getMethodMapping :: Text -> Text -> Handler MappingStatus
+    getMethodMapping :: Text -> Text -> AppM MappingStatus
     getMethodMapping dbName methodIdText = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
         let stats = computeMappingStats mappings
@@ -1746,9 +1764,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 }
 
     -- DB-flow-centric mapping: all biosphere flows with their CF assignments
-    getFlowCFMapping :: Text -> Text -> Handler FlowCFMapping
+    getFlowCFMapping :: Text -> Text -> AppM FlowCFMapping
     getFlowCFMapping dbName methodIdText = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
         let
@@ -1790,9 +1808,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     strategyToText NoMatch = "none"
 
     -- Characterization: matched CFs for a method, filterable by flow name
-    getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> Handler CharacterizationResult
+    getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM CharacterizationResult
     getCharacterization dbName methodIdText flowFilter limitParam = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         let lim = fromMaybe 50 limitParam
             queryLower = fmap T.toLower flowFilter
@@ -1833,7 +1851,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     matchesQuery (Just q) cfName dbName = T.isInfixOf q (T.toLower cfName) || T.isInfixOf q (T.toLower dbName)
 
     -- Helper to load a method by UUID from the loaded collections
-    loadMethodByUUID :: Text -> Handler Method
+    loadMethodByUUID :: Text -> AppM Method
     loadMethodByUUID uuidText = do
         loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
         let allMethods = map snd loadedMethods
@@ -1850,10 +1868,10 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
         Text ->
         Text ->
         Text ->
-        (Database -> SharedSolver -> ProcessId -> Activity -> Method -> Handler a) ->
-        Handler a
+        (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a) ->
+        AppM a
     withActivityAndMethod dbName processIdText methodIdText k = do
-        (db, sharedSolver) <- requireDatabaseByName dbManager dbName
+        (db, sharedSolver) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         case Service.resolveActivityAndProcessId db processIdText of
             Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
@@ -1862,7 +1880,7 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
 
     -- Method collection handlers
-    getMethodCollections :: Handler MethodCollectionListResponse
+    getMethodCollections :: AppM MethodCollectionListResponse
     getMethodCollections = do
         statuses <- liftIO $ DM.listMethodCollections dbManager
         return $
@@ -1882,11 +1900,11 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 | s <- statuses
                 ]
 
-    loadMethodCollectionHandler :: Text -> Handler ActivateResponse
+    loadMethodCollectionHandler :: Text -> AppM ActivateResponse
     loadMethodCollectionHandler name =
         simpleAction (DM.loadMethodCollection dbManager name) ("Loaded method: " <> name)
 
-    unloadMethodCollectionHandler :: Text -> Handler ActivateResponse
+    unloadMethodCollectionHandler :: Text -> AppM ActivateResponse
     unloadMethodCollectionHandler name =
         simpleAction (DM.unloadMethodCollection dbManager name) ("Unloaded method: " <> name)
 
@@ -1903,9 +1921,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
             }
 
     -- Search flows by name or synonym with optional language filtering and pagination
-    searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults FlowSearchResult)
+    searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
     searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         case queryParam of
             Nothing -> return (SearchResults [] 0 0 50 False 0.0)
             Just query -> do
@@ -1921,9 +1939,9 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 searchFlowsInternal db ff
 
     -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Handler (SearchResults ActivitySummary)
+    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
     searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         -- Expand preset filters then merge with explicit classification params
         let exactMatch = fromMaybe False exactParam
             presetFilters = expandPreset classificationPresets presetParam
@@ -1956,14 +1974,14 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
                 Success searchResults -> return searchResults
                 Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
 
-    getClassifications :: Text -> Handler [ClassificationSystem]
+    getClassifications :: Text -> AppM [ClassificationSystem]
     getClassifications dbName = do
-        (db, _) <- requireDatabaseByName dbManager dbName
+        (db, _) <- requireDatabaseByName dbName
         return $ Service.getClassifications db
 
     -- Batch impacts: thin alias over the top-level batchImpactsH.
-    postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> Handler BatchImpactsResponse
-    postImpactsBatch = batchImpactsH dbManager
+    postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> AppM BatchImpactsResponse
+    postImpactsBatch = batchImpactsH
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).
@@ -2021,7 +2039,7 @@ paginateResults results limitParam offsetParam = do
 The 'ffQuery' is always present (callers short-circuit on the no-query
 case); language filtering is not yet implemented.
 -}
-searchFlowsInternal :: Database -> Service.FlowFilter -> Handler (SearchResults FlowSearchResult)
+searchFlowsInternal :: Database -> Service.FlowFilter -> AppM (SearchResults FlowSearchResult)
 searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam, Service.ffSort = sortParam, Service.ffOrder = orderParam} = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
