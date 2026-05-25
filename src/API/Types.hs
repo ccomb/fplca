@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (BiosphereFlow (..), Compartment, Exchange, Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -68,9 +68,11 @@ apiFlowSynonyms (ApiBioFlow f) = bfSynonyms f
 apiFlowSynonyms (ApiWasteFlow f) = wfSynonyms f
 apiFlowSynonyms (ApiUnresolvedFlow _) = M.empty
 
--- | Lift the internal @Either@ used during flow lookup into the wire wrapper.
-apiFlowOfEither :: Either TechnosphereFlow BiosphereFlow -> ApiFlow
-apiFlowOfEither = either ApiTechFlow ApiBioFlow
+-- | Lift a 'FlowKind' into the wire wrapper. Three constructors, three arms.
+apiFlowOfKind :: FlowKind -> ApiFlow
+apiFlowOfKind (TechKind f) = ApiTechFlow f
+apiFlowOfKind (BioKind f) = ApiBioFlow f
+apiFlowOfKind (WasteKind f) = ApiWasteFlow f
 
 instance ToJSON ApiFlow where
     toJSON (ApiTechFlow f) = object ["kind" .= ("technosphere" :: Text), "flow" .= f]

@@ -839,16 +839,12 @@ searchFlows db FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offs
         offset = maybe 0 (max 0) offsetParam
         rawResults = findFlowsBySynonym db query
         isDesc = orderParam == Just "desc"
-        -- Projection helpers: pick the per-side accessor for a tagged flow.
-        nameOf = either tfName bfName
-        idOf = either tfId bfId
-        unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
-        synonymsOf = either tfSynonyms bfSynonyms
-        categoryOf = either (const "") bfCompartmentName
+        -- Three-arm projections from API.Types are total over FlowKind.
+        unitOf = flowKindUnitName (dbUnits db)
         flowCmp = case sortParam of
-            Just "category" -> \a b -> compare (categoryOf a) (categoryOf b)
+            Just "category" -> \a b -> compare (flowKindCategory a) (flowKindCategory b)
             Just "unit" -> \a b -> compare (unitOf a) (unitOf b)
-            _ -> \a b -> compare (nameOf a) (nameOf b)
+            _ -> \a b -> compare (flowKindName a) (flowKindName b)
         allResults = L.sortBy (if isDesc then flip flowCmp else flowCmp) rawResults
         total = length allResults
         dropped = drop offset allResults
@@ -857,7 +853,7 @@ searchFlows db FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offs
         pagedResults = take limit taken
         flowResults =
             map
-                (\flow -> FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)))
+                (\flow -> FlowSearchResult (flowKindId flow) (flowKindName flow) (flowKindCategory flow) (unitOf flow) (M.map S.toList (flowKindSynonyms flow)))
                 pagedResults
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double

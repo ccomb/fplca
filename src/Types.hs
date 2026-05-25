@@ -451,6 +451,57 @@ data ParsedFlow
     | ParsedWaste !WasteFlow
     deriving (Generic, NFData)
 
+{- | A resolved flow tagged with its kind. Returned by lookup/search code
+(e.g. 'findFlowsBySynonym') so consumers can render the appropriate shape
+via the 'flowKind*' projections below, or lift into the wire layer via
+@API.Types.apiFlowOfKind@.
+-}
+data FlowKind
+    = TechKind !TechnosphereFlow
+    | BioKind !BiosphereFlow
+    | WasteKind !WasteFlow
+
+-- | UUID accessor. Total over the three flow kinds.
+flowKindId :: FlowKind -> UUID
+flowKindId (TechKind f) = tfId f
+flowKindId (BioKind f) = bfId f
+flowKindId (WasteKind f) = wfId f
+
+-- | Display-name accessor. Total over the three flow kinds.
+flowKindName :: FlowKind -> Text
+flowKindName (TechKind f) = tfName f
+flowKindName (BioKind f) = bfName f
+flowKindName (WasteKind f) = wfName f
+
+-- | Synonyms accessor (keyed by language code). Total.
+flowKindSynonyms :: FlowKind -> M.Map Text (S.Set Text)
+flowKindSynonyms (TechKind f) = tfSynonyms f
+flowKindSynonyms (BioKind f) = bfSynonyms f
+flowKindSynonyms (WasteKind f) = wfSynonyms f
+
+{- | "Category" projection for flat list views. Biosphere flows carry a
+compartment; technosphere and waste flows have none here (their taxonomy
+lives on the producing/consuming activity).
+-}
+flowKindCategory :: FlowKind -> Text
+flowKindCategory (TechKind _) = ""
+flowKindCategory (BioKind f) = bfCompartmentName f
+flowKindCategory (WasteKind _) = ""
+
+-- | Unit-id accessor — for unit-name lookup against the 'UnitDB'.
+flowKindUnitId :: FlowKind -> UUID
+flowKindUnitId (TechKind f) = tfUnitId f
+flowKindUnitId (BioKind f) = bfUnitId f
+flowKindUnitId (WasteKind f) = wfUnitId f
+
+{- | Unit-name accessor. Falls back to "unknown" when the unit UUID isn't in
+the database, matching the per-flow @getUnitNameForXxxFlow@ helpers.
+-}
+flowKindUnitName :: UnitDB -> FlowKind -> Text
+flowKindUnitName udb (TechKind f) = getUnitNameForTechFlow udb f
+flowKindUnitName udb (BioKind f) = getUnitNameForBioFlow udb f
+flowKindUnitName udb (WasteKind f) = getUnitNameForWasteFlow udb f
+
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
 

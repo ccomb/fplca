@@ -474,17 +474,19 @@ findActivitiesByFields db nameParam geoParam productParam classFilters exactMatc
         exactMatch
         (findActivityNameCandidates db nameParam exactMatch)
 
-{- | Search flows by synonym across both technosphere and biosphere maps.
-Result tagged with the flow kind so consumers can render the appropriate shape.
+{- | Search flows by synonym across the technosphere, biosphere, and waste
+maps. Result tagged with the flow kind so consumers can render the
+appropriate shape via the 'flowKind*' projections in "API.Types".
 -}
-findFlowsBySynonym :: Database -> Text -> [Either TechnosphereFlow BiosphereFlow]
+findFlowsBySynonym :: Database -> Text -> [FlowKind]
 findFlowsBySynonym db query =
     let queryLower = T.toLower query
-        matchesTech f =
-            T.isInfixOf queryLower (T.toLower (tfName f))
-                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (tfSynonyms f))
-        matchesBio f =
-            T.isInfixOf queryLower (T.toLower (bfName f))
-                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (bfSynonyms f))
-     in [Left f | f <- M.elems (dbTechFlows db), matchesTech f]
-            ++ [Right f | f <- M.elems (dbBioFlows db), matchesBio f]
+        matches name syns =
+            T.isInfixOf queryLower (T.toLower name)
+                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems syns)
+        matchesTech f = matches (tfName f) (tfSynonyms f)
+        matchesBio f = matches (bfName f) (bfSynonyms f)
+        matchesWaste f = matches (wfName f) (wfSynonyms f)
+     in [TechKind f | f <- M.elems (dbTechFlows db), matchesTech f]
+            ++ [BioKind f | f <- M.elems (dbBioFlows db), matchesBio f]
+            ++ [WasteKind f | f <- M.elems (dbWasteFlows db), matchesWaste f]

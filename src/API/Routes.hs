@@ -9,7 +9,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfEither)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
@@ -336,7 +336,7 @@ withValidatedActivity db processId action = do
 {- | Helper function to validate UUID and lookup flow. Returns a tagged sum
 so callers can dispatch on tech vs bio.
 -}
-withValidatedFlow :: Database -> Text -> (Either TechnosphereFlow BiosphereFlow -> Handler a) -> Handler a
+withValidatedFlow :: Database -> Text -> (FlowKind -> Handler a) -> Handler a
 withValidatedFlow db uuid action = do
     case Service.validateUUID uuid of
         Left (Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
@@ -346,10 +346,12 @@ withValidatedFlow db uuid action = do
                 Nothing -> throwError err400{errBody = "Invalid UUID format"}
                 Just validUuid ->
                     case M.lookup validUuid (dbTechFlows db) of
-                        Just flow -> action (Left flow)
+                        Just flow -> action (TechKind flow)
                         Nothing -> case M.lookup validUuid (dbBioFlows db) of
-                            Just flow -> action (Right flow)
-                            Nothing -> throwError err404{errBody = "Flow not found"}
+                            Just flow -> action (BioKind flow)
+                            Nothing -> case M.lookup validUuid (dbWasteFlows db) of
+                                Just flow -> action (WasteKind flow)
+                                Nothing -> throwError err404{errBody = "Flow not found"}
 
 -- | Login request body
 newtype LoginRequest = LoginRequest
@@ -1641,17 +1643,17 @@ lcaServer dbManager maxTreeDepth password hostingConfig classificationPresets =
     getFlowDetail dbName flowIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedFlow db flowIdText $ \flow -> do
-            let fid = either tfId bfId flow
-                unitName' = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db)) flow
+            let fid = flowKindId flow
+                unitName' = flowKindUnitName (dbUnits db) flow
                 usageCount = Service.getFlowUsageCount db fid
-            return $ FlowDetail (apiFlowOfEither flow) unitName' usageCount
+            return $ FlowDetail (apiFlowOfKind flow) unitName' usageCount
 
     -- Activities using a specific flow
     getFlowActivities :: Text -> Text -> Handler [ActivitySummary]
     getFlowActivities dbName flowIdText = do
         (db, _) <- requireDatabaseByName dbManager dbName
         withValidatedFlow db flowIdText $ \flow ->
-            return $ Service.getActivitiesUsingFlow db (either tfId bfId flow)
+            return $ Service.getActivitiesUsingFlow db (flowKindId flow)
 
     -- List all available methods (from loaded collections)
     getMethods :: Handler [MethodSummary]
@@ -2012,12 +2014,8 @@ searchFlowsInternal :: Database -> Service.FlowFilter -> Handler (SearchResults 
 searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam, Service.ffSort = sortParam, Service.ffOrder = orderParam} = do
     -- Language filtering not yet implemented, search all synonyms
     let flows = findFlowsBySynonym db query
-        nameOf = either tfName bfName
-        idOf = either tfId bfId
-        unitOf = either (getUnitNameForTechFlow (dbUnits db)) (getUnitNameForBioFlow (dbUnits db))
-        synonymsOf = either tfSynonyms bfSynonyms
-        categoryOf = either (const "") bfCompartmentName
-        allResults = [FlowSearchResult (idOf flow) (nameOf flow) (categoryOf flow) (unitOf flow) (M.map S.toList (synonymsOf flow)) | flow <- flows]
+        unitOf = flowKindUnitName (dbUnits db)
+        allResults = [FlowSearchResult (flowKindId flow) (flowKindName flow) (flowKindCategory flow) (unitOf flow) (M.map S.toList (flowKindSynonyms flow)) | flow <- flows]
         isDesc = orderParam == Just "desc"
         fsCmp = case sortParam of
             Just "category" -> \a b -> compare (fsrCategory a) (fsrCategory b)
