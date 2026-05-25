@@ -177,6 +177,39 @@ multiDatasetXml =
         , "</ecoSpold>"
         ]
 
+{- | Fixture exercising bw2io's 'Final waste flows' export. bw2io
+flattens SimaPro's third flow class onto inputGroup=5 (consumer-side),
+but preserves the category attribute. Exchange #1 is the reference
+product, #2 is a real waste output the parser must route to
+WasteExchange instead of treating it as an unresolved tech input.
+-}
+wasteFlowXml :: BC.ByteString
+wasteFlowXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"7\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"aluminium ingot\" category=\"metals\""
+        , "                           subCategory=\"primary\" unit=\"kg\"/>"
+        , "        <geography location=\"RoW\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"1\" name=\"aluminium ingot\" category=\"metals\""
+        , "                subCategory=\"primary\" unit=\"kg\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"2\" name=\"Organic carbon, placed in landfill\""
+        , "                category=\"Final waste flows\" unit=\"kg\" meanValue=\"0.02\">"
+        , "        <inputGroup>5</inputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 -- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
@@ -418,3 +451,33 @@ spec = do
                 Right results ->
                     let locs = [activityLocation act | Right (act, _, _, _, _, _, _) <- results]
                      in locs `shouldBe` ["CH", "FR"]
+
+    -- -----------------------------------------------------------------------
+    -- Waste-flow routing: category="Final waste flows" must surface as
+    -- WasteExchange + WasteFlow, not a technosphere input. This is the
+    -- bw2io export path that motivated the three-flow-kind series.
+    -- -----------------------------------------------------------------------
+    describe "Final waste flows routing" $ do
+        it "routes category=\"Final waste flows\" to WasteExchange" $
+            case parseWithXeno wasteFlowXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, wastes, _, _, _) -> do
+                    let wasteExchanges = [e | e@WasteExchange{} <- exchanges act]
+                    length wasteExchanges `shouldBe` 1
+                    length wastes `shouldBe` 1
+
+        it "does not route the waste flow to the technosphere bucket" $
+            case parseWithXeno wasteFlowXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (_, techs, _, _, _, _, _) ->
+                    -- Only the reference product remains on the tech side;
+                    -- the Final-waste-flows row must not show up there.
+                    map tfName techs `shouldBe` ["aluminium ingot"]
+
+        it "preserves waIsInput from inputGroup (5 → True)" $
+            case parseWithXeno wasteFlowXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) ->
+                    -- bw2io exports Final waste flows on inputGroup=5; preserve
+                    -- that consumer-side semantic in the resulting WasteExchange.
+                    [waIsInput e | e@WasteExchange{} <- exchanges act] `shouldBe` [True]
