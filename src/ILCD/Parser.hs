@@ -249,10 +249,7 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, wasteFlows, a
     bioFlows = M.fromList [(uuid, mkBioFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, classify info == BioClass]
     wasteFlows = M.fromList [(uuid, mkWasteFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, classify info == WasteClass]
 
-    classify info = case ilcdFlowType info of
-        "Elementary flow" -> BioClass
-        "Waste flow" -> WasteClass
-        _ -> TechClass
+    classify = classifyFlowType . ilcdFlowType
 
     -- Collect all unique units (keyed by unitGroup UUID)
     allUnits =
@@ -306,6 +303,20 @@ shape in buildActivity. Keep this enum in sync between the two sites.
 -}
 data FlowClass = TechClass | BioClass | WasteClass
     deriving (Eq)
+
+{- | Classify an ILCD @flowType@ string. Tolerates whitespace and casing
+variants ("Elementary flow", "ELEMENTARY_FLOW", "  waste  flow ", …) —
+ILCD exporters in the wild are not strict about either, and the standard
+enumeration values differ between ILCD 1.1 and newer formats. Anything
+unrecognized lands in the technosphere bucket, matching the partition's
+"product/other" default arm.
+-}
+classifyFlowType :: Text -> FlowClass
+classifyFlowType raw =
+    case T.unwords (T.words (T.toLower (T.replace "_" " " raw))) of
+        "elementary flow" -> BioClass
+        "waste flow" -> WasteClass
+        _ -> TechClass
 
 --------------------------------------------------------------------------------
 -- Process XML Parsing
@@ -564,12 +575,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
         let flowUUID = ierFlowRef raw
             isInput = ierDirection raw == "Input"
             isRef = ierInternalId raw == refIdx
-            flowClass = case M.lookup flowUUID flowInfoMap of
-                Just fi -> case ilcdFlowType fi of
-                    "Elementary flow" -> BioClass
-                    "Waste flow" -> WasteClass
-                    _ -> TechClass
-                Nothing -> TechClass
+            flowClass = maybe TechClass (classifyFlowType . ilcdFlowType) (M.lookup flowUUID flowInfoMap)
             fUnitId =
                 Data.Maybe.fromMaybe UUID.nil $
                     (tfUnitId <$> M.lookup flowUUID techFlowDB)
