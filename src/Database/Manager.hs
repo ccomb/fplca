@@ -1322,9 +1322,9 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
             Left err -> return $ Left err
             Right csvFile -> do
                 reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                (activities, techFlowDB, bioFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
+                (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
                 reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB M.empty unitDB
+                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
                 linkedDb <- Loader.fixSimaProActivityLinks simpleDb
                 dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
                 case dbResult of

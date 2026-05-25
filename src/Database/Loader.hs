@@ -519,7 +519,7 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
-    (activities, techFlowDB, bioFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
+    (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
 
     if null activities
         then return $ Left "No activities found in SimaPro CSV file."
@@ -533,7 +533,7 @@ loadSimaProCSV unitConfig csvPath = do
                         ]
 
             -- Build initial database
-            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB M.empty unitDB
+            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
 
             -- Fix activity links using supplier lookup (same as EcoSpold1)
             Right <$> fixSimaProActivityLinks simpleDb

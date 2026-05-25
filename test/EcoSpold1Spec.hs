@@ -305,50 +305,50 @@ spec = do
         it "parses activity name from referenceFunction" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) -> activityName act `shouldBe` "electricity production"
+                Right (act, _, _, _, _, _, _) -> activityName act `shouldBe` "electricity production"
 
         it "parses activity location from geography" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) -> activityLocation act `shouldBe` "DE"
+                Right (act, _, _, _, _, _, _) -> activityLocation act `shouldBe` "DE"
 
         it "parses activity unit from referenceFunction" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) -> activityUnit act `shouldBe` "kWh"
+                Right (act, _, _, _, _, _, _) -> activityUnit act `shouldBe` "kWh"
 
         it "parses dataset number" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, _, _, _, num, _) -> num `shouldBe` 42
+                Right (_, _, _, _, _, num, _) -> num `shouldBe` 42
 
         it "produces 4 exchanges" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) -> length (exchanges act) `shouldBe` 4
+                Right (act, _, _, _, _, _, _) -> length (exchanges act) `shouldBe` 4
 
         it "produces 4 flows (1 tech reference + 3 bio)" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, techs, bios, _, _, _) ->
+                Right (_, techs, bios, _, _, _, _) ->
                     (length techs + length bios) `shouldBe` 4
 
         it "marks the reference output (outputGroup 0) as isReference" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) ->
+                Right (act, _, _, _, _, _, _) ->
                     length (filter exchangeIsReference (exchanges act)) `shouldBe` 1
 
         it "marks biosphere exchange (outputGroup 4) as BiosphereExchange" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) ->
+                Right (act, _, _, _, _, _, _) ->
                     let bios = filter (\e -> case e of BiosphereExchange{} -> True; _ -> False) (exchanges act)
                      in length bios `shouldBe` 2 -- CO2 output + natural gas input (inputGroup 4)
         it "parses flow with CAS number" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, _, bios, _, _, _) ->
+                Right (_, _, bios, _, _, _, _) ->
                     let co2Flows = filter (\f -> bfName f == "Carbon dioxide, fossil") bios
                      in case co2Flows of
                             [f] -> bfCAS f `shouldBe` Just "124-38-9"
@@ -357,19 +357,19 @@ spec = do
         it "sets activity classification from category/subCategory" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) ->
+                Right (act, _, _, _, _, _, _) ->
                     M.lookup "Category" (activityClassification act) `shouldBe` Just "Energy"
 
         it "captures per-exchange generalComment as exchangeComment" $
             case parseWithXeno commentXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) ->
+                Right (act, _, _, _, _, _, _) ->
                     map exchangeComment (exchanges act) `shouldBe` [Just "Global", Nothing]
 
         it "still routes referenceFunction generalComment to activity description" $
             case parseWithXeno commentXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _) ->
+                Right (act, _, _, _, _, _, _) ->
                     activityDescription act `shouldBe` ["Process-level note"]
 
     -- -----------------------------------------------------------------------
@@ -390,19 +390,19 @@ spec = do
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let names = [activityName act | Right (act, _, _, _, _, _) <- results]
+                    let names = [activityName act | Right (act, _, _, _, _, _, _) <- results]
                      in names `shouldBe` ["process A", "process B"]
 
         it "preserves dataset numbers in order" $
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let nums = [n | Right (_, _, _, _, n, _) <- results]
+                    let nums = [n | Right (_, _, _, _, _, n, _) <- results]
                      in nums `shouldBe` [1, 2]
 
         it "parses location from each dataset" $
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let locs = [activityLocation act | Right (act, _, _, _, _, _) <- results]
+                    let locs = [activityLocation act | Right (act, _, _, _, _, _, _) <- results]
                      in locs `shouldBe` ["CH", "FR"]

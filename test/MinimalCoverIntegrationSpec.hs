@@ -150,6 +150,7 @@ supplierDB offset =
             { sdbActivities = M.singleton (actUUID, prodUUID) act
             , sdbTechFlows = M.singleton flowUUID techFlow
             , sdbBioFlows = M.empty
+            , sdbWasteFlows = M.empty
             , sdbUnits = M.singleton kgUnitId kgUnit
             }
 
@@ -227,5 +228,6 @@ consumerDB offset n =
             { sdbActivities = activities
             , sdbTechFlows = flows
             , sdbBioFlows = M.empty
+            , sdbWasteFlows = M.empty
             , sdbUnits = M.singleton kgUnitId kgUnit
             }

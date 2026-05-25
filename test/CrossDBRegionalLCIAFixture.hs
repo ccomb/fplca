@@ -142,6 +142,7 @@ mkDB offset locs bioTriples =
             , dbActivities = activities
             , dbTechFlows = M.empty
             , dbBioFlows = M.singleton flowUUID testFlow
+            , dbWasteFlows = M.empty
             , dbUnits = M.singleton (unitId kgUnit) kgUnit
             , dbIndexes = emptyIndexes
             , dbTechnosphereTriples = U.empty
