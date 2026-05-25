@@ -575,22 +575,29 @@ callGetActivity rid args (db, _) =
             Right _ ->
                 case Service.getActivityInfo defaultUnitConfig db pid of
                     Left err -> return $ toolError rid (T.pack $ show err)
-                    Right val
-                        | noFilters -> return $ toolSuccessJson rid (hintFor pid val)
-                        | otherwise -> case fromJSON val of
-                            Error _ -> return $ toolSuccessJson rid (hintFor pid val)
-                            Success ai ->
-                                let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
-                                 in return $ toolSuccessJson rid (hintFor pid (toJSON filtered))
+                    Right val -> case fromJSON val of
+                        -- 'val' was built from an 'ActivityInfo' upstream, so a
+                        -- decode failure is genuinely defensive — pass it
+                        -- through unchanged, hint-less.
+                        Error _ -> return $ toolSuccessJson rid val
+                        Success ai ->
+                            -- Single resolve: take the activity name from the
+                            -- 'ActivityInfo' already in hand instead of asking
+                            -- the engine to resolve the PID again.
+                            let attach = attachMarketHintByName (pfaName (piActivity ai))
+                                payload
+                                    | noFilters = val
+                                    | otherwise =
+                                        toJSON
+                                            ai
+                                                { piActivity =
+                                                    (piActivity ai)
+                                                        { pfaExchanges =
+                                                            filter matchExchange (pfaExchanges (piActivity ai))
+                                                        }
+                                                }
+                             in return $ toolSuccessJson rid (attach payload)
   where
-    -- Surface a hint when the resolved process is a "market for ..." activity:
-    -- markets aggregate multiple suppliers and are not source ICVs. The lookup
-    -- is in-memory and cheap; on resolution failure we silently skip the hint
-    -- because the underlying handler has already reported the resolution
-    -- failure path via 'getActivityInfo'.
-    hintFor pid = case Service.resolveActivityAndProcessId db pid of
-        Right (_, act) -> attachMarketHintByName (activityName act)
-        Left _ -> id
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
     isInputFilter = boolArg "is_input" args
