@@ -95,7 +95,12 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowD
     -- Build technosphere sparse triplets
     reportMatrixOperation "Building technosphere matrix triplets"
     let buildTechTriple normalizationFactor j consumerActivity _consumerPid ex
-            | not (isTechnosphereExchange ex) = Right ([], [])
+            -- Biosphere exchanges live in the B matrix, not A.
+            -- WasteExchanges follow the OpenLCA convention: they share the A
+            -- matrix with technosphere flows. Orphan waste outputs (no
+            -- activityLinkId) naturally drop out below when producerIdx is
+            -- Nothing — same as orphan tech inputs.
+            | isBiosphereExchange ex = Right ([], [])
             | exchangeIsReference ex = Right ([], []) -- reference product is on the diagonal
             | otherwise =
                 let producerResult = case exchangeProcessLinkId ex of
