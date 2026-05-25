@@ -1325,6 +1325,7 @@ findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consu
                                     CrossDBLink
                                         { cdlConsumerActUUID = consumerActUUID
                                         , cdlConsumerProdUUID = consumerProdUUID
+                                        , cdlConsumerFlowId = fid
                                         , cdlSupplierActUUID = cdlrActivityUUID result
                                         , cdlSupplierProdUUID = cdlrProductUUID result
                                         , cdlCoefficient = amt
@@ -1338,7 +1339,7 @@ findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consu
                                     [ LocationFallback (cdlrProductName result) req actLoc kind
                                     | UpperLocationUsed req actLoc kind <- cdlrWarnings result
                                     ]
-                             in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks [] 0 0 0 0
+                             in emptyCrossDBLinkingStats{cdlLinks = [crossLink], cdlLocationFallbacks = fallbacks}
                         CrossDBNotLinked blocker ->
                             let unresolved = case blocker of
                                     LocationRejectedByPolicy req actLoc kind ->
@@ -1355,7 +1356,10 @@ findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consu
                                         [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
                                     NoNameMatch -> []
                                     UnitIncompatible _ _ -> []
-                             in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0 0 0 0
+                             in emptyCrossDBLinkingStats
+                                    { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
+                                    , cdlLocationUnresolved = unresolved
+                                    }
     | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
 -- Cross-DB linking for orphan waste OUTPUTS: strict match only — see
@@ -1372,6 +1376,7 @@ findExchangeCrossDBLink ctx _ wasteFlowDb _ consumerActUUID consumerProdUUID Was
                             CrossDBLink
                                 { cdlConsumerActUUID = consumerActUUID
                                 , cdlConsumerProdUUID = consumerProdUUID
+                                , cdlConsumerFlowId = fid
                                 , cdlSupplierActUUID = seActivityUUID entry
                                 , cdlSupplierProdUUID = seProductUUID entry
                                 , cdlCoefficient = amt
@@ -1381,9 +1386,9 @@ findExchangeCrossDBLink ctx _ wasteFlowDb _ consumerActUUID consumerProdUUID Was
                                 , cdlSourceDatabase = dbN
                                 , cdlTiedAlternatives = []
                                 }
-                     in CrossDBLinkingStats [crossLink] M.empty S.empty [] [] 0 1 0 0
-                WasteAmbiguous _ -> CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 1 0
-                WasteNoMatch -> CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 1
+                     in emptyCrossDBLinkingStats{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
+                WasteAmbiguous _ -> emptyCrossDBLinkingStats{cdlWasteAmbiguous = 1}
+                WasteNoMatch -> emptyCrossDBLinkingStats{cdlCutoffWasteCount = 1}
     | otherwise = emptyCrossDBLinkingStats
 
 -- | Report cross-database linking statistics

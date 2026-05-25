@@ -477,7 +477,10 @@ and no other loaded database provides an explicit match either. The score
 excludes it; this record makes that exclusion visible.
 -}
 data CutoffWasteFlow = CutoffWasteFlow
-    { cwfFlowName :: Text
+    { cwfFlowId :: UUID
+    -- ^ Waste flow UUID — lets consumers programmatically address the
+    -- cut-off (e.g. to propose a treatment activity that would close it).
+    , cwfFlowName :: Text
     , cwfAmount :: Double
     , cwfUnit :: Text
     }

@@ -1175,6 +1175,14 @@ data CrossDBLink = CrossDBLink
     -- ^ Consumer activity UUID (in this database)
     , cdlConsumerProdUUID :: !UUID
     -- ^ Consumer product UUID (in this database)
+    , cdlConsumerFlowId :: !UUID
+    {- ^ Consumer-side flow UUID that this link resolves. For technosphere
+    inputs this is the tech-flow UUID; for orphan waste outputs it is the
+    waste-flow UUID. Used as the keying discriminator on the API surface so
+    a tech "X" link and a waste "X" link on the same activity cannot
+    collide. 'UUID.nil' for synthetic substitution links built by
+    'mkVirtualLink', which never enter 'dbCrossDBLinks'.
+    -}
     , cdlSupplierActUUID :: !UUID
     -- ^ Supplier activity UUID (in another database)
     , cdlSupplierProdUUID :: !UUID

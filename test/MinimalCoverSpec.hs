@@ -81,6 +81,7 @@ mkLink src tied =
     CrossDBLink
         { cdlConsumerActUUID = UUID.nil
         , cdlConsumerProdUUID = UUID.nil
+        , cdlConsumerFlowId = UUID.nil
         , cdlSupplierActUUID = UUID.nil
         , cdlSupplierProdUUID = UUID.nil
         , cdlCoefficient = 0
