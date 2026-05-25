@@ -1058,7 +1058,7 @@ Only essential state is stored; counts are derived via accessor functions.
 -}
 data CrossDBLinkingStats = CrossDBLinkingStats
     { cdlLinks :: ![CrossDBLink]
-    -- ^ Resolved cross-DB links
+    -- ^ Resolved cross-DB links (technosphere + waste)
     , cdlUnresolvedProducts :: !(M.Map Text (Int, LinkBlocker))
     -- ^ Product name -> (count, reason)
     , cdlUnknownUnits :: !(S.Set Text)
@@ -1069,12 +1069,18 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     -- ^ Inputs rejected by policy or with no candidate
     , cdlTotalInputs :: !Int
     -- ^ Total technosphere inputs at time of linking
+    , cdlWasteExactLinks :: !Int
+    -- ^ Orphan waste exchanges resolved by exact UUID / canonical-name match
+    , cdlWasteAmbiguous :: !Int
+    -- ^ Orphan waste exchanges with matches in 2+ databases (stayed orphan)
+    , cdlCutoffWasteCount :: !Int
+    -- ^ Orphan waste exchanges with no match in any DB (true cut-offs)
     }
     deriving (Generic, NFData, Store)
 
 -- | Empty stats
 emptyCrossDBLinkingStats :: CrossDBLinkingStats
-emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] [] 0
+emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 0
 
 -- | Merge two CrossDBLinkingStats
 mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
@@ -1086,6 +1092,9 @@ mergeCrossDBStats s1 s2 =
         , cdlLocationFallbacks = cdlLocationFallbacks s1 ++ cdlLocationFallbacks s2
         , cdlLocationUnresolved = cdlLocationUnresolved s1 ++ cdlLocationUnresolved s2
         , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
+        , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
+        , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
+        , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
         }
   where
     mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)

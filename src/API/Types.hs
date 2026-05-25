@@ -464,6 +464,22 @@ data LCIABatchResult = LCIABatchResult
     -- ^ Scoring set name → display unit (e.g., "Pts", "µPts PEF")
     , lbrScoringIndicators :: M.Map Text (M.Map Text ScoringIndicator)
     -- ^ Scoring set name → (variable name → indicator). One row per scoring variable.
+    , lbrCutoffWaste :: [CutoffWasteFlow]
+    -- ^ Orphan waste exchanges on the scored activity — flows the dataset author
+    -- left unmodelled. They contribute 0 to the score; surfacing them lets
+    -- consumers see what's excluded rather than silently undercounting.
+    }
+    deriving (Generic)
+
+{- | A single orphan waste exchange on a scored activity: the dataset author
+declared this waste output but did not link it to a treatment activity,
+and no other loaded database provides an explicit match either. The score
+excludes it; this record makes that exclusion visible.
+-}
+data CutoffWasteFlow = CutoffWasteFlow
+    { cwfFlowName :: Text
+    , cwfAmount :: Double
+    , cwfUnit :: Text
     }
     deriving (Generic)
 
@@ -791,7 +807,8 @@ data ActivityMetadata = ActivityMetadata
     { pmTotalFlows :: Int -- Number of unique flows used
     , pmTechnosphereInputs :: Int -- Count of technosphere inputs
     , pmBiosphereExchanges :: Int -- Count of biosphere exchanges (strict: excludes waste)
-    , pmWasteExchanges :: Int -- Count of waste exchanges (third flow kind)
+    , pmWasteExchangesLinked :: Int -- Waste exchanges resolved to a treatment activity
+    , pmWasteExchangesOrphan :: Int -- Cut-off waste exchanges (no modelled treatment)
     , pmHasReferenceProduct :: Bool -- Whether activity has reference product
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     }
@@ -934,6 +951,7 @@ instance ToJSON FlowContributionEntry where toJSON = strippedToJSON; toEncoding 
 instance ToJSON LCIAResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON ScoringIndicator where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON LCIABatchResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+instance ToJSON CutoffWasteFlow where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON BatchImpactsEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON BatchImpactsResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance FromJSON BatchImpactsRequest where parseJSON = strippedParseJSON

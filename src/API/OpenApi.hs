@@ -103,6 +103,7 @@ instance ToSchema GraphEdge where declareNamedSchema = genericDeclareNamedSchema
 instance ToSchema LCIAResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ScoringIndicator where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema LCIABatchResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+instance ToSchema CutoffWasteFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema BatchImpactsRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema BatchImpactsEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema BatchImpactsResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions

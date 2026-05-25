@@ -4,7 +4,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
@@ -973,6 +973,27 @@ getClassifications db =
         | (sys, vals) <- L.sortOn fst (M.toList bySystem)
         ]
 
+{- | Build the list of orphan waste exchanges on an activity — waste flows the
+dataset author left unmodelled (no link to a treatment activity, and no
+explicit match in any other loaded database). These contribute 0 to LCIA
+scores; surfacing them lets consumers see what is excluded rather than
+silently undercounting.
+-}
+buildCutoffWaste :: Database -> Activity -> [CutoffWasteFlow]
+buildCutoffWaste db activity =
+    [ CutoffWasteFlow
+        { cwfFlowName = maybe (unresolvedName fid) wfName mFlow
+        , cwfAmount = amt
+        , cwfUnit = maybe "" (lookupUnitName . wfUnitId) mFlow
+        }
+    | WasteExchange{waActivityLinkId = lid, waFlowId = fid, waAmount = amt} <- exchanges activity
+    , lid == UUID.nil
+    , let mFlow = M.lookup fid (dbWasteFlows db)
+    ]
+  where
+    unresolvedName fid = "<unresolved waste " <> UUID.toText fid <> ">"
+    lookupUnitName uid = maybe "" unitName (M.lookup uid (dbUnits db))
+
 -- | Calculate extended metadata for an activity
 calculateActivityMetadata :: Database -> Activity -> ActivityMetadata
 calculateActivityMetadata _db activity =
@@ -980,7 +1001,9 @@ calculateActivityMetadata _db activity =
         uniqueFlows = length $ M.fromList [(exchangeFlowId ex, ()) | ex <- allExchanges]
         techInputs = length [ex | ex <- allExchanges, isTechnosphereExchange ex, exchangeIsInput ex, not (exchangeIsReference ex)]
         bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
-        wasteExchanges = length [ex | ex <- allExchanges, isWasteExchange ex]
+        wasteLinkIds = [linkId | WasteExchange{waActivityLinkId = linkId} <- allExchanges]
+        wasteLinked = length (filter (/= UUID.nil) wasteLinkIds)
+        wasteOrphan = length wasteLinkIds - wasteLinked
         refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
             [] -> Nothing
             (ex : _) -> Just (exchangeFlowId ex)
@@ -988,7 +1011,8 @@ calculateActivityMetadata _db activity =
             { pmTotalFlows = uniqueFlows
             , pmTechnosphereInputs = techInputs
             , pmBiosphereExchanges = bioExchanges
-            , pmWasteExchanges = wasteExchanges
+            , pmWasteExchangesLinked = wasteLinked
+            , pmWasteExchangesOrphan = wasteOrphan
             , pmHasReferenceProduct = refProduct /= Nothing
             , pmReferenceProductFlow = refProduct
             }
@@ -1092,8 +1116,9 @@ convertActivityForAPI unitCfg db processId activity =
                 BiosphereExchange{} -> (Nothing, Nothing, Nothing)
                 -- A waste exchange consumed by a treatment activity links the
                 -- generator to that treatment, same shape as a technosphere
-                -- Input. Orphan waste outputs (the bulk of Final waste flows)
-                -- have nil linkId and stay unresolved on this surface.
+                -- Input. Orphan waste outputs that the exact-match cross-DB
+                -- linker resolved show up via 'crossDBLinkMap' keyed on the
+                -- waste flow name. The remaining orphans stay unresolved.
                 WasteExchange{waActivityLinkId = linkId, waIsInput = True}
                     | linkId /= UUID.nil ->
                         case findActivityByActivityUUID db linkId of
@@ -1101,6 +1126,18 @@ convertActivityForAPI unitCfg db processId activity =
                                 let maybeProcessId = findProcessIdByActivityUUID db linkId
                                     processIdText = fmap (processIdToText db) maybeProcessId
                                  in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
+                            Nothing -> (Nothing, Nothing, Nothing)
+                WasteExchange{waActivityLinkId = linkId, waIsInput = False}
+                    | linkId == UUID.nil ->
+                        case wasteFlowInfo >>= \flow -> M.lookup (T.toLower (wfName flow)) crossDBLinkMap of
+                            Just link ->
+                                let crossPid =
+                                        cdlSourceDatabase link
+                                            <> "::"
+                                            <> UUID.toText (cdlSupplierActUUID link)
+                                            <> "_"
+                                            <> UUID.toText (cdlSupplierProdUUID link)
+                                 in (Just (cdlFlowName link), Just (cdlLocation link), Just crossPid)
                             Nothing -> (Nothing, Nothing, Nothing)
                 WasteExchange{} -> (Nothing, Nothing, Nothing)
             -- When the exchange's flow UUID resolves on none of the three sides
@@ -1270,10 +1307,7 @@ getActivityExchangeDetails db activity filterFn =
                             (getUnitNameForWasteFlow (dbUnits db) flow)
                             unitForExchange
                             exUnitName
-                            -- Linked-treatment-activity resolution is deferred
-                            -- to the cross-DB linker; orphan waste outputs (the
-                            -- typical SimaPro Final waste flow) carry no target.
-                            Nothing
+                            (resolveWasteTarget exchange flow)
                     Nothing -> unresolved (ApiUnresolvedFlow fid)
 
     -- Sentinel returned only when the exchange's unit UUID itself failed
@@ -1297,10 +1331,18 @@ getActivityExchangeDetails db activity filterFn =
     resolveTechTarget exchange flow =
         case getTargetActivity db exchange of
             Just s -> Just s
-            Nothing -> crossDBTarget flow
+            Nothing -> crossDBTarget (tfName flow)
 
-    crossDBTarget flow =
-        case M.lookup (T.toLower (tfName flow)) crossLinkByFlow of
+    -- Orphan waste outputs resolved by the exact-match cross-DB linker share
+    -- the same crossLinkByFlow path as technosphere inputs; both index by
+    -- normalized flow name.
+    resolveWasteTarget exchange flow =
+        case getTargetActivity db exchange of
+            Just s -> Just s
+            Nothing -> crossDBTarget (wfName flow)
+
+    crossDBTarget flowName =
+        case M.lookup (T.toLower flowName) crossLinkByFlow of
             Nothing -> Nothing
             Just link ->
                 let qualifiedPid =
