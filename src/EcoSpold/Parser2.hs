@@ -372,9 +372,9 @@ parseWithXeno xmlContent processId =
                             (Nothing, Nothing) -> Nothing
                             (Just c, sc) -> Just (Compartment c sc)
                             (Nothing, Just _) -> Nothing -- sub without medium is meaningless; drop
-                        -- Determine the biosphere direction.
-                        -- Primary: use inputGroup/outputGroup if present.
-                        -- Fallback: compartment heuristic — natural-resource flows are extractions.
+                            -- Determine the biosphere direction.
+                            -- Primary: use inputGroup/outputGroup if present.
+                            -- Fallback: compartment heuristic — natural-resource flows are extractions.
                         direction
                             | not (T.null finalInputGroup) = Resource
                             | not (T.null finalOutputGroup) = Emission
@@ -579,6 +579,7 @@ removeZeroAmountCoproducts = filter keepExchange
     keepExchange TechnosphereExchange{techRole = Input} = True
     keepExchange TechnosphereExchange{techRole = Coproduct, techAmount = amount} = amount /= 0.0
     keepExchange BiosphereExchange{} = True
+    keepExchange WasteExchange{} = True
 
 -- | Assign single product as reference product
 assignSingleProductAsReference :: Activity -> Activity
@@ -600,6 +601,7 @@ isProductionExchange TechnosphereExchange{techRole = Coproduct} = True
 isProductionExchange TechnosphereExchange{techRole = Input} = False
 isProductionExchange TechnosphereExchange{techRole = ReferenceInput} = False
 isProductionExchange BiosphereExchange{} = False
+isProductionExchange WasteExchange{} = False
 
 -- | Update reference product flag for the specified exchange
 updateReferenceProduct :: Exchange -> Exchange -> Exchange
@@ -611,6 +613,7 @@ updateReferenceProduct target current
 markAsReference :: Exchange -> Exchange
 markAsReference ex@TechnosphereExchange{} = ex{techRole = ReferenceProduct}
 markAsReference ex@BiosphereExchange{} = ex
+markAsReference ex@WasteExchange{} = ex
 
 -- | Demote a reference role back to non-reference (preserving input/output direction)
 unmarkAsReference :: Exchange -> Exchange
@@ -621,3 +624,4 @@ unmarkAsReference ex@TechnosphereExchange{techRole = role} = ex{techRole = demot
     demote Coproduct = Coproduct
     demote Input = Input
 unmarkAsReference ex@BiosphereExchange{} = ex
+unmarkAsReference ex@WasteExchange{} = ex

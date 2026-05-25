@@ -100,7 +100,7 @@ parseILCDDirectory dir = do
     let activityMap = buildActivityMap flowInfoMap techFlowDB bioFlowDB unitDB rawProcesses
 
     -- Step 6: Fix supplier links (name-based, like SimaPro)
-    let simpleDb = SimpleDatabase activityMap techFlowDB bioFlowDB unitDB
+    let simpleDb = SimpleDatabase activityMap techFlowDB bioFlowDB M.empty unitDB
     fixedDb <- fixILCDActivityLinks simpleDb
     reportProgress Info $
         printf
@@ -621,3 +621,14 @@ fixActivityExchanges idx act =
             Nothing -> ex
     fixEx ex@TechnosphereExchange{} = ex
     fixEx ex@BiosphereExchange{} = ex
+    -- A waste input awaiting treatment-activity resolution follows the same
+    -- name-lookup logic as a technosphere Input.
+    fixEx ex@WasteExchange{waFlowId = fid, waIsInput = True} =
+        case M.lookup fid idx of
+            Just (actUUID, prodUUID) ->
+                ex
+                    { waFlowId = prodUUID
+                    , waActivityLinkId = actUUID
+                    }
+            Nothing -> ex
+    fixEx ex@WasteExchange{} = ex

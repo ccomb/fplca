@@ -354,10 +354,9 @@ parseWithXeno xmlContent =
                 | isReferenceProduct = ReferenceProduct
                 | isInput = Input
                 | otherwise = Coproduct
-
-            -- Set activityLinkId to nil - will be resolved later in Loader using
+         in -- Set activityLinkId to nil - will be resolved later in Loader using
             -- (flowName, exchangeLocation) lookup against supplier activities
-         in if isBiosphere
+            if isBiosphere
                 then
                     let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
                         compartment =
@@ -444,6 +443,7 @@ removeZeroAmountCoproducts = filter keepExchange
     keepExchange TechnosphereExchange{techRole = Input} = True
     keepExchange TechnosphereExchange{techRole = Coproduct, techAmount = amount} = amount /= 0.0
     keepExchange BiosphereExchange{} = True
+    keepExchange WasteExchange{} = True
 
 -- | Assign single product as reference product
 assignSingleProductAsReference :: Activity -> Activity
@@ -463,6 +463,7 @@ isProductionExchange TechnosphereExchange{techRole = Coproduct} = True
 isProductionExchange TechnosphereExchange{techRole = Input} = False
 isProductionExchange TechnosphereExchange{techRole = ReferenceInput} = False
 isProductionExchange BiosphereExchange{} = False
+isProductionExchange WasteExchange{} = False -- waste outputs aren't "production" in the SimaPro sense
 
 -- | Update reference product flag
 updateReferenceProduct :: Exchange -> Exchange -> Exchange
@@ -474,6 +475,7 @@ updateReferenceProduct target current
 markAsReference :: Exchange -> Exchange
 markAsReference ex@TechnosphereExchange{} = ex{techRole = ReferenceProduct}
 markAsReference ex@BiosphereExchange{} = ex
+markAsReference ex@WasteExchange{} = ex -- waste flows can't be promoted to reference product
 
 -- | Demote a reference role back to non-reference (preserving input/output direction)
 unmarkAsReference :: Exchange -> Exchange
@@ -484,6 +486,7 @@ unmarkAsReference ex@TechnosphereExchange{techRole = role} = ex{techRole = demot
     demote Coproduct = Coproduct
     demote Input = Input
 unmarkAsReference ex@BiosphereExchange{} = ex
+unmarkAsReference ex@WasteExchange{} = ex
 
 -- ============================================================================
 -- Multi-dataset file support

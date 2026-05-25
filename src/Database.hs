@@ -240,6 +240,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
                         , dbActivities = dbActivities
                         , dbTechFlows = techFlowDB
                         , dbBioFlows = bioFlowDB
+                        , dbWasteFlows = M.empty
                         , dbUnits = unitDB
                         , dbIndexes = indexes
                         , dbTechnosphereTriples = techTriples
@@ -258,9 +259,10 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
                         , dbBM25Index = Nothing
                         }
 
--- | Build activity-level indexes (name / location / flow / unit). Flow-side
--- taxonomy lives on activities or biosphere compartments and is queried via
--- the flow databases directly, so no separate flow index is built here.
+{- | Build activity-level indexes (name / location / flow / unit). Flow-side
+taxonomy lives on activities or biosphere compartments and is queried via
+the flow databases directly, so no separate flow index is built here.
+-}
 buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> Indexes
 buildIndexesWithProcessIds activityVec processIdTable =
     let
@@ -467,8 +469,9 @@ findActivitiesByFields db nameParam geoParam productParam classFilters exactMatc
         exactMatch
         (findActivityNameCandidates db nameParam exactMatch)
 
--- | Search flows by synonym across both technosphere and biosphere maps.
--- Result tagged with the flow kind so consumers can render the appropriate shape.
+{- | Search flows by synonym across both technosphere and biosphere maps.
+Result tagged with the flow kind so consumers can render the appropriate shape.
+-}
 findFlowsBySynonym :: Database -> Text -> [Either TechnosphereFlow BiosphereFlow]
 findFlowsBySynonym db query =
     let queryLower = T.toLower query

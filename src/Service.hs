@@ -728,6 +728,9 @@ buildActivityGraph db sharedSolver queryText cutoffPercent = do
                                         exchangeActivityLinkId ex == Just targetUUID
                                     TechnosphereExchange{} -> False
                                     BiosphereExchange{} -> False
+                                    -- Waste exchanges aren't traversed by the graph builder
+                                    -- (they don't form upstream tech edges).
+                                    WasteExchange{} -> False
                                 )
                                 (exchanges srcAct)
                           flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
@@ -816,6 +819,9 @@ getActivityFlowSummaries db activity = map mkSummary (exchanges activity)
                     Nothing -> FlowSummary (ApiUnresolvedFlow fid) exUnit 0 role
                 BiosphereExchange{} -> case M.lookup fid (dbBioFlows db) of
                     Just f -> FlowSummary (ApiBioFlow f) (getUnitNameForBioFlow (dbUnits db) f) (getFlowUsageCount db (bfId f)) role
+                    Nothing -> FlowSummary (ApiUnresolvedFlow fid) exUnit 0 role
+                WasteExchange{} -> case M.lookup fid (dbWasteFlows db) of
+                    Just f -> FlowSummary (ApiWasteFlow f) (getUnitNameForWasteFlow (dbUnits db) f) (getFlowUsageCount db (wfId f)) role
                     Nothing -> FlowSummary (ApiUnresolvedFlow fid) exUnit 0 role
 
     determineFlowRole ex
@@ -1045,13 +1051,19 @@ convertActivityForAPI unitCfg db processId activity =
 
     convertExchangeWithUnit exchange =
         let
-            -- Look up the flow in the appropriate side (tech vs bio) based on exchange variant.
+            -- Look up the flow in the appropriate side (tech vs bio vs waste) based on exchange variant.
             techFlowInfo = case exchange of
                 TechnosphereExchange{techFlowId = fid} -> M.lookup fid (dbTechFlows db)
                 BiosphereExchange{} -> Nothing
+                WasteExchange{} -> Nothing
             bioFlowInfo = case exchange of
                 BiosphereExchange{bioFlowId = fid} -> M.lookup fid (dbBioFlows db)
                 TechnosphereExchange{} -> Nothing
+                WasteExchange{} -> Nothing
+            wasteFlowInfo = case exchange of
+                WasteExchange{waFlowId = fid} -> M.lookup fid (dbWasteFlows db)
+                TechnosphereExchange{} -> Nothing
+                BiosphereExchange{} -> Nothing
             (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
                 TechnosphereExchange{techFlowId = fId, techRole = role, techActivityLinkId = linkId}
                     | (role == Input || role == ReferenceInput) && linkId /= UUID.nil ->
@@ -1080,13 +1092,27 @@ convertActivityForAPI unitCfg db processId activity =
                                     Nothing -> (Nothing, Nothing, Nothing)
                     | otherwise -> (Nothing, Nothing, Nothing)
                 BiosphereExchange{} -> (Nothing, Nothing, Nothing)
-            -- When neither the tech nor the bio map knows the exchange flow
-            -- UUID we surface the raw UUID rather than a generic "unknown" —
-            -- that way the consumer can tell which flow failed to resolve and
-            -- the gap is debuggable instead of silently misnamed.
-            flowNameTxt = case (techFlowInfo, bioFlowInfo) of
-                (Just tf, _) -> tfName tf
-                (_, Just bf) -> bfName bf
+                -- A waste exchange consumed by a treatment activity links the
+                -- generator to that treatment, same shape as a technosphere
+                -- Input. Orphan waste outputs (the bulk of Final waste flows)
+                -- have nil linkId and stay unresolved on this surface.
+                WasteExchange{waActivityLinkId = linkId, waIsInput = True}
+                    | linkId /= UUID.nil ->
+                        case findActivityByActivityUUID db linkId of
+                            Just targetActivity ->
+                                let maybeProcessId = findProcessIdByActivityUUID db linkId
+                                    processIdText = fmap (processIdToText db) maybeProcessId
+                                 in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
+                            Nothing -> (Nothing, Nothing, Nothing)
+                WasteExchange{} -> (Nothing, Nothing, Nothing)
+            -- When the exchange's flow UUID resolves on none of the three sides
+            -- we surface the raw UUID rather than a generic "unknown" — that
+            -- way the consumer can tell which flow failed to resolve and the
+            -- gap is debuggable instead of silently misnamed.
+            flowNameTxt = case (techFlowInfo, bioFlowInfo, wasteFlowInfo) of
+                (Just tf, _, _) -> tfName tf
+                (_, Just bf, _) -> bfName bf
+                (_, _, Just wf) -> wfName wf
                 _ -> "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
             compartment = bfCompartment =<< bioFlowInfo
          in
@@ -1237,6 +1263,19 @@ getActivityExchangeDetails db activity filterFn =
                             unitForExchange
                             exUnitName
                             Nothing -- Biosphere flows have no target activity
+                    Nothing -> unresolved (ApiUnresolvedFlow fid)
+                WasteExchange{} -> case M.lookup fid (dbWasteFlows db) of
+                    Just flow ->
+                        ExchangeDetail
+                            exchange
+                            (ApiWasteFlow flow)
+                            (getUnitNameForWasteFlow (dbUnits db) flow)
+                            unitForExchange
+                            exUnitName
+                            -- Linked-treatment-activity resolution is deferred
+                            -- to the cross-DB linker; orphan waste outputs (the
+                            -- typical SimaPro Final waste flow) carry no target.
+                            Nothing
                     Nothing -> unresolved (ApiUnresolvedFlow fid)
 
     -- Sentinel returned only when the exchange's unit UUID itself failed

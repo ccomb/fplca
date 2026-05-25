@@ -893,6 +893,7 @@ isNumericFormula t = case TR.double t of
 scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex * factor}
 scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
+scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 
 {- | Convert product row to exchange, flow, and unit in one pass.
 
@@ -1031,7 +1032,8 @@ and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc.
 -}
 bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange env isInput compartment BioExchangeRow{..} =
-    let -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
+    let
+        -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
         -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
         -- SimaPro-style method) characterises them via suffix-keyed CFs of
         -- matching name, so collapsing them to a canonical name breaks
@@ -1076,7 +1078,8 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                         else Just (Compartment compartment subcomp)
                 }
         unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
-     in (exchange, flow, unit)
+     in
+        (exchange, flow, unit)
 
 -- ============================================================================
 -- Encoding Conversion
