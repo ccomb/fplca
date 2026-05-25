@@ -1,20 +1,17 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Pure JSON munging used by the @score_activity@ / @score_activities@
-MCP tools.
+{- | Pure JSON munging used by the @score_activity@ MCP tool and by
+single-activity handlers that need a @web_url@ deep link, a slimmer
+panel, a scoring-set filter, or a market-activity hint.
 
-Two responsibilities:
+The columnar batch projection for @score_activities@ lives in
+"API.MCP" — it works on typed records, not raw 'Value's, so it does not
+fit this module's "pure JSON munging" remit.
 
-  * Decorate the serialized 'LCIABatchResult' / 'BatchImpactsResponse'
-    with @web_url@ deep links so MCP clients can hand a human a clickable
-    follow-up.
-  * Restrict the response to a user-requested subset of scoring sets,
-    failing loudly on names that are not configured on the collection.
-
-Every traversal goes through 'overObject' / 'overObjectE' / 'overArray' /
-'overArrayE', the single place that has to enumerate every constructor
-of Aeson's 'Value'. Callers stay free of wildcard patterns on the sum.
+Every traversal goes through 'overObject' / 'overArray', the single
+place that has to enumerate every constructor of Aeson's 'Value'.
+Callers stay free of wildcard patterns on the sum.
 -}
 module API.MCP.Enrich (
     -- * URL helpers
@@ -23,7 +20,6 @@ module API.MCP.Enrich (
 
     -- * web_url enrichment
     addWebUrl,
-    summarizeBatchResults,
 
     -- * payload slimming
     slimLCIAPanel,
@@ -31,16 +27,18 @@ module API.MCP.Enrich (
 
     -- * scoring_sets filter
     filterScoringSets,
-    filterScoringSetsBatch,
+
+    -- * market-activity hint
+    isMarketActivityName,
+    attachMarketHintByName,
 
     -- * Value combinators (exported for tests)
     overObject,
-    overObjectE,
     overArray,
     valueText,
 ) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key (fromText)
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.KeyMap (KeyMap)
@@ -66,16 +64,6 @@ overObject f = \case
     Number n -> Number n
     Bool b -> Bool b
     Null -> Null
-
--- | Same as 'overObject' but the transformation may fail with 'Text'.
-overObjectE :: (KeyMap Value -> Either Text (KeyMap Value)) -> Value -> Either Text Value
-overObjectE f = \case
-    Object km -> Object <$> f km
-    Array a -> Right (Array a)
-    String s -> Right (String s)
-    Number n -> Right (Number n)
-    Bool b -> Right (Bool b)
-    Null -> Right Null
 
 -- | Apply 'f' to each element of a JSON Array; pass any other shape through.
 overArray :: (Value -> Value) -> Value -> Value
@@ -124,15 +112,11 @@ scoreActivityWebUrl baseUrl dbName pidText coll =
 -- web_url enrichment
 -- ---------------------------------------------------------------------------
 
-webUrlKey, resultsKey, impactsKey, processIdKey, functionalUnitKey :: Key.Key
+webUrlKey, resultsKey, functionalUnitKey, hintKey :: Key.Key
 webUrlKey = fromText "web_url"
 resultsKey = fromText "results"
-impactsKey = fromText "impacts"
--- 'strippedToJSON' on the API record drops the field prefix and keeps
--- camelCase; stay aligned with what 'LCIABatchResult' / 'BatchImpactsEntry'
--- actually serialize to ('processId', not 'process_id').
-processIdKey = fromText "processId"
 functionalUnitKey = fromText "functionalUnit"
+hintKey = fromText "hint"
 
 -- | Add a 'web_url' field to a JSON object at the top level.
 addWebUrl :: Text -> Value -> Value
@@ -150,47 +134,6 @@ that wants per-method drill-down on a specific activity calls
 -}
 summarizeLCIAPanel :: Value -> Value
 summarizeLCIAPanel = overObject (KM.delete resultsKey . hoistFunctionalUnit)
-
-{- | Summarize each entry of a serialized 'BatchImpactsResponse'.
-
-For every entry:
-
-  * Reduce its @impacts@ subtree via 'summarizeLCIAPanel' (drops the
-    @results@ array, hoists @functionalUnit@) — the bulk endpoint
-    returns aggregates only.
-  * Attach a @web_url@ to the activity-level impacts page at two
-    locations:
-
-      - @results[i].web_url@ — what the @score_activities@ resource
-        description promises; a client reading the entry shape directly
-        lands on it.
-      - @results[i].impacts.web_url@ — same shape as a standalone
-        @score_activity@ response, so clients reading either shape land
-        on the same link.
-
-An entry without an @impacts@ subtree (defensive — the
-'BatchImpactsEntry' record guarantees one) still gains the top-level
-@web_url@, but no empty @impacts@ placeholder is materialized.
--}
-summarizeBatchResults :: Text -> Text -> Text -> Value -> Value
-summarizeBatchResults baseUrl dbName coll =
-    overObject (adjustKey resultsKey (overArray (summarizeBatchEntry baseUrl dbName coll)))
-
-summarizeBatchEntry :: Text -> Text -> Text -> Value -> Value
-summarizeBatchEntry baseUrl dbName coll =
-    overObject $ \km ->
-        case KM.lookup processIdKey km >>= valueText of
-            Just pidText ->
-                let url = scoreActivityWebUrl baseUrl dbName pidText coll
-                    withImpacts = case KM.lookup impactsKey km of
-                        Just impactsValue ->
-                            KM.insert
-                                impactsKey
-                                (addWebUrl url (summarizeLCIAPanel impactsValue))
-                                km
-                        Nothing -> km
-                 in KM.insert webUrlKey (String url) withImpacts
-            Nothing -> km
 
 -- ---------------------------------------------------------------------------
 -- payload slimming
@@ -264,20 +207,6 @@ filterScoringSets configured requested v = do
     validateRequested configured requested
     Right (restrictScoringSets requested v)
 
-{- | Apply 'filterScoringSets' to every entry's @impacts@ subtree in a
-serialized 'BatchImpactsResponse'.
-
-Validation runs once at the top level — not inside each entry — so a
-batch with zero successful entries still surfaces an unknown-name
-error. Otherwise a @score_activities@ call where every PID is invalid
-would silently swallow a typo'd scoring-set filter.
--}
-filterScoringSetsBatch :: [Text] -> [Text] -> Value -> Either Text Value
-filterScoringSetsBatch _ [] v = Right v
-filterScoringSetsBatch configured requested v = do
-    validateRequested configured requested
-    overObjectE (traverseKey resultsKey (overArrayE (filterEntry requested))) v
-
 {- | Check 'requested' against 'configured', failing with a message that
 lists the missing names and the legal options.
 -}
@@ -307,42 +236,6 @@ restrictScoringSets requested =
     restrict = overObject (KM.filterWithKey keep)
     restrictAt k = adjustKey k restrict
 
--- | Restrict one entry's @impacts@ subtree; entries without one pass through.
-filterEntry :: [Text] -> Value -> Either Text Value
-filterEntry requested =
-    overObjectE $ \km ->
-        case KM.lookup impactsKey km of
-            Just impactsValue ->
-                Right (KM.insert impactsKey (restrictScoringSets requested impactsValue) km)
-            Nothing -> Right km
-
-{- | Apply a 'Value' → 'Either' transformation to each element of an
-Array; non-Array values pass through.
--}
-overArrayE :: (Value -> Either Text Value) -> Value -> Either Text Value
-overArrayE f = \case
-    Array v -> Array . V.fromList <$> traverse f (V.toList v)
-    Object km -> Right (Object km)
-    String s -> Right (String s)
-    Number n -> Right (Number n)
-    Bool b -> Right (Bool b)
-    Null -> Right Null
-
-{- | Update one key of a 'KeyMap' via a transformation that may fail; if
-the key is absent, the map is returned unchanged.
--}
-traverseKey ::
-    Key.Key ->
-    (Value -> Either Text Value) ->
-    KeyMap Value ->
-    Either Text (KeyMap Value)
-traverseKey k f km =
-    case KM.lookup k km of
-        Just v -> do
-            v' <- f v
-            pure (KM.insert k v' km)
-        Nothing -> Right km
-
 {- | Update one key of a 'KeyMap' via a pure transformation; if the key
 is absent, the map is returned unchanged. (Aeson's 'KeyMap' has no
 @adjust@ of its own.)
@@ -352,3 +245,37 @@ adjustKey k f km =
     case KM.lookup k km of
         Just v -> KM.insert k (f v) km
         Nothing -> km
+
+-- ---------------------------------------------------------------------------
+-- market-activity hint
+-- ---------------------------------------------------------------------------
+
+{- | Case-insensitive test for the @"market for "@ naming convention used
+across ecoinvent and SimaPro-imported databases. A market activity is an
+aggregated supplier mix, not a source ICV — a caller asking for raw
+inventory probably wants the upstream producers instead.
+-}
+isMarketActivityName :: Text -> Bool
+isMarketActivityName name = "market for " `T.isPrefixOf` T.toLower (T.stripStart name)
+
+-- | The hint payload attached to responses for market activities.
+marketHintObject :: Value
+marketHintObject =
+    object
+        [ "kind" .= ("market_activity" :: Text)
+        , "message"
+            .= ( "This is a 'market for ...' activity — an aggregated supplier mix, \
+                 \not a source ICV. Call get_activity to inspect its technosphere \
+                 \inputs (the actual producers)." ::
+                    Text
+               )
+        ]
+
+{- | When 'name' looks like a market activity, attach a @hint@ field at
+the top level of the JSON object. Non-objects and non-markets pass
+through unchanged.
+-}
+attachMarketHintByName :: Text -> Value -> Value
+attachMarketHintByName name
+    | isMarketActivityName name = overObject (KM.insert hintKey marketHintObject)
+    | otherwise = id

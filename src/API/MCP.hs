@@ -17,6 +17,7 @@ import qualified Data.ByteString.Lazy as BSL
 import Data.IORef
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -34,8 +35,8 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.MCP.Enrich (addWebUrl, encodeSegment, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl, slimLCIAPanel, summarizeBatchResults)
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
+import API.MCP.Enrich (addWebUrl, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), BatchImpactsEntry (..), BatchImpactsResponse (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), LCIABatchResult (..), LCIAResult (..), Perturbation (..), ScoringIndicator (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
@@ -231,6 +232,7 @@ handleInitialize req =
                         , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
                         , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
                         , "Use list_methods for available LCIA methods."
+                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field from each result as a clickable markdown link — never show bare process IDs as a final answer."
                         ]
                 ]
 
@@ -574,13 +576,21 @@ callGetActivity rid args (db, _) =
                 case Service.getActivityInfo defaultUnitConfig db pid of
                     Left err -> return $ toolError rid (T.pack $ show err)
                     Right val
-                        | noFilters -> return $ toolSuccessJson rid val
+                        | noFilters -> return $ toolSuccessJson rid (hintFor pid val)
                         | otherwise -> case fromJSON val of
-                            Error _ -> return $ toolSuccessJson rid val
+                            Error _ -> return $ toolSuccessJson rid (hintFor pid val)
                             Success ai ->
                                 let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
-                                 in return $ toolSuccessJson rid (toJSON filtered)
+                                 in return $ toolSuccessJson rid (hintFor pid (toJSON filtered))
   where
+    -- Surface a hint when the resolved process is a "market for ..." activity:
+    -- markets aggregate multiple suppliers and are not source ICVs. The lookup
+    -- is in-memory and cheap; on resolution failure we silently skip the hint
+    -- because the underlying handler has already reported the resolution
+    -- failure path via 'getActivityInfo'.
+    hintFor pid = case Service.resolveActivityAndProcessId db pid of
+        Right (_, act) -> attachMarketHintByName (activityName act)
+        Left _ -> id
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
     isInputFilter = boolArg "is_input" args
@@ -1034,30 +1044,31 @@ callGetImpacts dbManager baseUrl rid args =
                         ]
                 pure $
                     toolSuccessJson rid $
-                        object $
-                            [ "method" .= methodName method
-                            , "category" .= methodCategory method
-                            , "score" .= score
-                            , "unit" .= methodUnit method
-                            , "functional_unit" .= functionalUnit
-                            , "mapped_flows" .= (msTotal stats - msUnmatched stats)
-                            , "has_negative_contributions" .= hasNeg
-                            , "web_url" .= webUrl
-                            , "top_flows"
-                                .= [ object
-                                        [ "flow_name" .= bfName f
-                                        , "contribution" .= c
-                                        , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                        , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= bfCompartmentName f
-                                        , "compartment" .= bfCompartmentSub f
-                                        , "cf_value" .= cfVal
-                                        , "flow_unit" .= getUnitNameForBioFlow mUnits f
-                                        ]
-                                   | (f, cfVal, c) <- topFlows
-                                   ]
-                            ]
-                                ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
+                        attachMarketHintByName (activityName (raActivity ra)) $
+                            object $
+                                [ "method" .= methodName method
+                                , "category" .= methodCategory method
+                                , "score" .= score
+                                , "unit" .= methodUnit method
+                                , "functional_unit" .= functionalUnit
+                                , "mapped_flows" .= (msTotal stats - msUnmatched stats)
+                                , "has_negative_contributions" .= hasNeg
+                                , "web_url" .= webUrl
+                                , "top_flows"
+                                    .= [ object
+                                            [ "flow_name" .= bfName f
+                                            , "contribution" .= c
+                                            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+                                            , "flow_id" .= UUID.toText (bfId f)
+                                            , "category" .= bfCompartmentName f
+                                            , "compartment" .= bfCompartmentSub f
+                                            , "cf_value" .= cfVal
+                                            , "flow_unit" .= getUnitNameForBioFlow mUnits f
+                                            ]
+                                       | (f, cfVal, c) <- topFlows
+                                       ]
+                                ]
+                                    ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
             )
 
 {- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
@@ -1822,26 +1833,185 @@ callScoreActivity dbManager baseUrl rid args =
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right lbr -> do
                         configured <- liftIO $ configuredScoringSetNames dbManager coll
+                        actName <- liftIO $ lookupActivityName dbManager dbName pidText
                         let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
                             enriched =
-                                addWebUrl
-                                    topUrl
-                                    (slimLCIAPanel (toJSON lbr))
+                                attachMarketHintByName actName $
+                                    addWebUrl
+                                        topUrl
+                                        (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
+
+{- | Resolve the activity name for a (db, processId) pair. Returns "" if
+the database is not loaded or the PID does not resolve — the caller uses
+the name only as input to 'attachMarketHintByName', which is itself a
+no-op on empty / non-market strings.
+-}
+lookupActivityName :: DatabaseManager -> Text -> Text -> IO Text
+lookupActivityName dbManager dbName pidText = do
+    mLd <- getDatabase dbManager dbName
+    pure $ case mLd of
+        Just ld -> case Service.resolveActivityAndProcessId (ldDatabase ld) pidText of
+            Right (_, act) -> activityName act
+            Left _ -> ""
+        Nothing -> ""
+
+{- | Return every 'ScoringSet' configured on a collection (full record, not
+just names). Empty list when the collection is not loaded — the same
+defensive shape as 'configuredScoringSetNames'.
+-}
+configuredScoringSets :: DatabaseManager -> Text -> IO [ScoringSet]
+configuredScoringSets dbm collName = do
+    loaded <- readTVarIO (dmLoadedMethods dbm)
+    pure $ case M.lookup collName loaded of
+        Just mc -> mcScoringSets mc
+        Nothing -> []
+
+{- | Pick the single 'ScoringSet' the columnar 'score_activities' response
+will project against. The columnar shape covers one set per call (one
+unit, one list of indicator columns), so:
+
+  * Caller passes one name in 'scoring_sets' → that one (validated).
+  * Caller passes none, exactly one set is configured → that one.
+  * Caller passes none, several sets are configured → error listing the
+    options. We don't pick arbitrarily to avoid silent ambiguity.
+  * Caller passes several names → error: only one is supported.
+  * No sets configured at all → error.
+-}
+resolveSingleScoringSet :: [Text] -> [ScoringSet] -> Either Text ScoringSet
+resolveSingleScoringSet wantedNames configured = case wantedNames of
+    [] -> case configured of
+        [] -> Left "No scoring sets configured on this collection."
+        [s] -> Right s
+        ss ->
+            Left $
+                "Multiple scoring sets are configured ("
+                    <> T.intercalate ", " (map ssName ss)
+                    <> "); pass scoring_sets: [\"<one>\"] to pick one. score_activities returns a columnar shape that covers a single scoring set per call."
+    [w] -> case L.find (\s -> ssName s == w) configured of
+        Just s -> Right s
+        Nothing ->
+            Left $
+                "Unknown scoring set: "
+                    <> w
+                    <> ". Configured on this collection: "
+                    <> T.intercalate ", " (map ssName configured)
+    ws ->
+        Left $
+            "score_activities accepts at most one scoring set in 'scoring_sets'; got ["
+                <> T.intercalate ", " ws
+                <> "]. The columnar response shape covers a single scoring set per call."
+
+{- | Project a 'BatchImpactsResponse' against one chosen 'ScoringSet' into
+the columnar JSON shape:
+
+@
+{ "scoringSet":     "PEF"
+, "scoringUnit":    "µPts PEF"
+, "functionalUnit": "1.00 cubic meter of ..."
+, "columns": ["name","processId","web_url","total","acd","cch",...]
+, "rows":    [[...], [...], ...]
+, "notFound": [...]
+, "invalid":  [...]
+}
+@
+
+Once per batch the metadata (set name, unit, functional unit) is hoisted
+to the top; the 2D 'rows' array carries one scalar per cell. Saves the
+N×M repetition of JSON keys the previous row-shaped payload paid for.
+
+A row's @total@ cell is the @total@ score from @ssScores@ when present;
+otherwise null. An indicator cell is the @siValue@ of the matching entry
+in @lbrScoringIndicators[setName]@; missing keys land as null.
+
+With @summaryOnly = True@, the per-indicator columns collapse to a
+single @dominantIndicator@ column shaped @\"key:share_pct\"@ (e.g.
+@\"ldu:82.3\"@) — the variable with the largest absolute share of the
+total. Useful for ranking large batches before drilling into one PID
+with @score_activity@.
+-}
+toColumnarBatch :: Bool -> Text -> Text -> Text -> ScoringSet -> BatchImpactsResponse -> Value
+toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
+    object
+        [ "scoringSet" .= ssName ss
+        , "scoringUnit" .= scoringUnit
+        , "functionalUnit" .= functionalUnit
+        , "columns" .= columns
+        , "rows" .= map entryRow (birResults bir)
+        , "notFound" .= birNotFound bir
+        , "invalid" .= birInvalid bir
+        ]
+  where
+    setName = ssName ss
+    fixedColumns :: [Text]
+    fixedColumns = ["name", "processId", "web_url", "total"]
+    -- Union of primitive and computed variables — same shape the
+    -- engine populates 'lbrScoringIndicators' with. Sorted so column
+    -- order is stable across calls.
+    indicatorKeys :: [Text]
+    indicatorKeys = L.sort (M.keys (ssVariables ss) <> M.keys (ssComputed ss))
+    columns :: [Text]
+    columns
+        | summaryOnly = fixedColumns ++ ["dominantIndicator"]
+        | otherwise = fixedColumns ++ indicatorKeys
+    scoringUnit = case birResults bir of
+        e : _ -> M.findWithDefault (ssUnit ss) setName (lbrScoringUnits (bieImpacts e))
+        [] -> ssUnit ss
+    functionalUnit = case birResults bir of
+        e : _ -> case lbrResults (bieImpacts e) of
+            r : _ -> lrFunctionalUnit r
+            [] -> ""
+        [] -> ""
+    entryRow :: BatchImpactsEntry -> Value
+    entryRow e =
+        let url = scoreActivityWebUrl baseUrl dbName (bieProcessId e) coll
+            lbr = bieImpacts e
+            scoreMap = M.findWithDefault M.empty setName (lbrScoringResults lbr)
+            indMap = M.findWithDefault M.empty setName (lbrScoringIndicators lbr)
+            totalRaw = M.lookup "total" scoreMap
+            total = maybe Null toJSON totalRaw
+            indVal k = maybe Null (toJSON . siValue) (M.lookup k indMap)
+            tail_ =
+                if summaryOnly
+                    then [dominantIndicatorCell totalRaw indMap]
+                    else map indVal indicatorKeys
+         in toJSON $
+                [ toJSON (bieActivityName e)
+                , toJSON (bieProcessId e)
+                , toJSON url
+                , total
+                ]
+                    ++ tail_
+
+{- | Format the dominant indicator of a row as @"key:share_pct"@. Returns
+'Null' when the row has no total, the total is zero (share is
+undefined), or the indicator map is empty.
+-}
+dominantIndicatorCell :: Maybe Double -> M.Map Text ScoringIndicator -> Value
+dominantIndicatorCell mTotal indMap
+    | Just t <- mTotal
+    , t /= 0
+    , not (M.null indMap) =
+        let (k, ind) =
+                L.maximumBy
+                    (comparing (abs . siValue . snd))
+                    (M.toList indMap)
+            share = abs (siValue ind) / abs t * 100
+         in toJSON (k <> ":" <> T.pack (showFFloat (Just 1) share ""))
+    | otherwise = Null
 
 {- | Handler for the 'score_activities' MCP tool.
 
 Ranks N activities against every method in a collection in one
-multi-RHS MUMPS solve plus parallel characterization, then strips each
-entry's @impacts@ subtree to its aggregates (single score,
-@scoringResults@, @scoringIndicators@, @scoringUnits@, hoisted
-@functionalUnit@). The per-method @results@ array is not emitted —
-callers needing per-method drill-down call 'score_activity' on a
-specific process_id. Each successful entry carries a top-level
-@web_url@ to its impacts page; the same URL is replicated inside the
-@impacts@ subtree. Unresolved process IDs land in @not_found@ /
-@invalid@ of the response, not as a 'BatchError'.
+multi-RHS MUMPS solve plus parallel characterization, then projects the
+result against a single 'ScoringSet' into a columnar JSON payload
+(@{scoringSet, scoringUnit, functionalUnit, columns, rows}@). The shape
+hoists the constant metadata once and packs each activity as a flat
+array of scalars — typically ~6× smaller than a row-shaped JSON for a
+batch of 24+ activities. Unresolved process IDs land in
+@notFound@ \/ @invalid@. The chosen scoring set is required to be
+unambiguous; see 'resolveSingleScoringSet' for the rules.
 -}
 callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
 callScoreActivities dbManager baseUrl rid args =
@@ -1852,13 +2022,13 @@ callScoreActivities dbManager baseUrl rid args =
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
                 wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
+                let summaryOnly = fromMaybe False (boolArg "summary_only" args)
+                configured <- liftIO $ configuredScoringSets dbManager coll
+                chosen <- ExceptT $ pure (resolveSingleScoringSet wantedSets configured)
                 res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
-                    Right bir -> do
-                        configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        let summarized = summarizeBatchResults baseUrl dbName coll (toJSON bir)
-                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets summarized)
+                    Right bir -> pure (toolSuccessJson rid (toColumnarBatch summaryOnly baseUrl dbName coll chosen bir))
             )
 
 {- | Handler for the 'list_scoring_sets' MCP tool.
