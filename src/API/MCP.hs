@@ -1840,29 +1840,29 @@ callScoreActivity dbManager baseUrl rid args =
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right lbr -> do
                         configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        actName <- liftIO $ lookupActivityName dbManager dbName pidText
+                        mActName <- liftIO $ lookupActivityName dbManager dbName pidText
                         let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
                             enriched =
-                                attachMarketHintByName actName $
+                                maybe id attachMarketHintByName mActName $
                                     addWebUrl
                                         topUrl
                                         (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
 
-{- | Resolve the activity name for a (db, processId) pair. Returns "" if
-the database is not loaded or the PID does not resolve — the caller uses
-the name only as input to 'attachMarketHintByName', which is itself a
-no-op on empty / non-market strings.
+{- | Resolve the activity name for a (db, processId) pair. 'Nothing' when
+the database is not loaded or the PID does not resolve — callers fold
+this through 'maybe id attachMarketHintByName', so a missing name
+simply skips the hint without making up a default.
 -}
-lookupActivityName :: DatabaseManager -> Text -> Text -> IO Text
+lookupActivityName :: DatabaseManager -> Text -> Text -> IO (Maybe Text)
 lookupActivityName dbManager dbName pidText = do
     mLd <- getDatabase dbManager dbName
     pure $ case mLd of
         Just ld -> case Service.resolveActivityAndProcessId (ldDatabase ld) pidText of
-            Right (_, act) -> activityName act
-            Left _ -> ""
-        Nothing -> ""
+            Right (_, act) -> Just (activityName act)
+            Left _ -> Nothing
+        Nothing -> Nothing
 
 {- | Return every 'ScoringSet' configured on a collection (full record, not
 just names). Empty list when the collection is not loaded — the same
