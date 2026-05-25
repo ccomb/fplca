@@ -140,12 +140,12 @@ mergeTechFlows a b = a{tfSynonyms = M.unionWith S.union (tfSynonyms a) (tfSynony
 mergeBioFlows :: BiosphereFlow -> BiosphereFlow -> BiosphereFlow
 mergeBioFlows a b = a{bfSynonyms = M.unionWith S.union (bfSynonyms a) (bfSynonyms b)}
 
--- | 8-element unzip helper (Data.List ships 7-tuple as max).
-unzip8 :: [(a, b, c, d, e, f, g, h)] -> ([a], [b], [c], [d], [e], [f], [g], [h])
-unzip8 = foldr step ([], [], [], [], [], [], [], [])
+-- | 9-element unzip helper (Data.List ships 7-tuple as max).
+unzip9 :: [(a, b, c, d, e, f, g, h, i)] -> ([a], [b], [c], [d], [e], [f], [g], [h], [i])
+unzip9 = foldr step ([], [], [], [], [], [], [], [], [])
   where
-    step (a, b, c, d, e, f, g, h) (as, bs, cs, ds, es, fs, gs, hs) =
-        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs)
+    step (a, b, c, d, e, f, g, h, i) (as, bs, cs, ds, es, fs, gs, hs, is) =
+        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs, i : is)
 
 {- |
 Schema signature automatically derived from the Database type structure.
@@ -464,6 +464,11 @@ fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{tec
                     (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, emptyUnlinkedSummary)
 fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+-- A WasteExchange in input direction (consumed by treatment) would benefit
+-- from the same supplier-lookup logic as a technosphere Input, but at this
+-- stage we leave waste links to the cross-DB linker (see CrossLinking) and
+-- the downstream parsers. Pure pass-through here.
+fixExchangeLink _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -514,7 +519,7 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
-    (activities, techFlowDB, bioFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
+    (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
 
     if null activities
         then return $ Left "No activities found in SimaPro CSV file."
@@ -528,7 +533,7 @@ loadSimaProCSV unitConfig csvPath = do
                         ]
 
             -- Build initial database
-            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB unitDB
+            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
 
             -- Fix activity links using supplier lookup (same as EcoSpold1)
             Right <$> fixSimaProActivityLinks simpleDb
@@ -605,6 +610,8 @@ fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFl
                 (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, emptyUnlinkedSummary) -- Reference products: nothing to relink
 fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+-- Waste link resolution is deferred to the cross-DB linker path.
+fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
@@ -655,10 +662,11 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let successResults = [r | Right r <- results]
-                let (procMaps, techFlowMaps, bioFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip8 successResults
+                let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip9 successResults
                 let !finalProcMap = M.unions procMaps
                 let !finalTechFlowMap = M.unionsWith mergeTechFlows techFlowMaps
                 let !finalBioFlowMap = M.unionsWith mergeBioFlows bioFlowMaps
+                let !finalWasteFlowMap = M.unions wasteFlowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
                 let !finalSupplierLinks = M.unions supplierLinksLists
@@ -691,38 +699,42 @@ loadEcoSpoldDirectory locationAliases dir = do
                 reportMemoryUsage "Final parsing memory usage"
 
                 -- For EcoSpold1: fix activity links using supplier lookup table
-                let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap finalUnitMap
+                let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap finalWasteFlowMap finalUnitMap
                 if isEcoSpold1
                     then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex finalSupplierLinks simpleDb
                     else return $ Right simpleDb
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
     processWorker _startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
         -- Parse all files for this worker using appropriate parser.
-        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int).
-        -- For EcoSpold2: dataset number = 0, supplier links = empty (fields padded here).
+        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int).
+        -- For EcoSpold2: dataset number = 0, supplier links = empty. WasteFlows now flow
+        -- through (Pattern A: elementaryExchange compartment=inventory indicator/waste;
+        -- Pattern B: intermediateExchange classification=By-product:Waste).
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else fmap (fmap (\(a, ts, bs, us) -> (a, ts, bs, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
+                    else fmap (fmap (\(a, ts, bs, ws, us) -> (a, ts, bs, ws, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
         let (okFiles, okResults) = unzip oks
-        let procs = [a | (a, _, _, _, _, _) <- okResults]
-            techLists = [ts | (_, ts, _, _, _, _) <- okResults]
-            bioLists = [bs | (_, _, bs, _, _, _) <- okResults]
-            unitLists = [us | (_, _, _, us, _, _) <- okResults]
-            dsNums = [n | (_, _, _, _, n, _) <- okResults]
-            supplierLinksList = [sl | (_, _, _, _, _, sl) <- okResults]
+        let procs = [a | (a, _, _, _, _, _, _) <- okResults]
+            techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
+            bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
+            wasteLists = [ws | (_, _, _, ws, _, _, _) <- okResults]
+            unitLists = [us | (_, _, _, _, us, _, _) <- okResults]
+            dsNums = [n | (_, _, _, _, _, n, _) <- okResults]
+            supplierLinksList = [sl | (_, _, _, _, _, _, sl) <- okResults]
         let !allTechs = concat techLists
         let !allBios = concat bioLists
+        let !allWastes = concat wasteLists
         let !allUnits = concat unitLists
 
         let procEntries = zipWith (buildProcEntry isEcoSpold1) okFiles procs
@@ -733,6 +745,7 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let !procMap = M.fromList [e | Right e <- procEntries]
                 let !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
                 let !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
+                let !wasteFlowMap = M.fromList [(wfId f, f) | f <- allWastes]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
                 let !dsIndex =
                         M.fromList
@@ -742,19 +755,20 @@ loadEcoSpoldDirectory locationAliases dir = do
                 workerEndTime <- getCurrentTime
                 let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
                 let filesPerSec = fromIntegral (length workerFiles) / workerDuration
-                let rawFlowCount = length allTechs + length allBios
+                let rawFlowCount = length allTechs + length allBios + length allWastes
                 let rawUnitCount = length allUnits
                 reportProgress Info $
                     printf
-                        "Worker %d completed: %d activities, %d tech + %d bio flows (%s, %.1f files/sec)"
+                        "Worker %d completed: %d activities, %d tech + %d bio + %d waste flows (%s, %.1f files/sec)"
                         workerNum
                         (M.size procMap)
                         (M.size techFlowMap)
                         (M.size bioFlowMap)
+                        (M.size wasteFlowMap)
                         (formatDuration workerDuration)
                         filesPerSec
 
-                return $ Right (procMap, techFlowMap, bioFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
+                return $ Right (procMap, techFlowMap, bioFlowMap, wasteFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
@@ -785,26 +799,28 @@ loadSingleEcoSpold1File locationAliases filepath = do
     -- Build activity map from all parsed activities
     let expanded = map buildProcEntryFromResult results
         !procMap = M.fromList expanded
-        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _) <- results, f <- techs]
-        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _) <- results, f <- bios]
-        !unitMap = M.fromList [(unitId u, u) | (_, _, _, units, _, _) <- results, u <- units]
+        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
+        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
+        !wasteFlowMap = M.fromList [(wfId f, f) | (_, _, _, wastes, _, _, _) <- results, f <- wastes]
+        !unitMap = M.fromList [(unitId u, u) | (_, _, _, _, units, _, _) <- results, u <- units]
         !dsIndex =
             M.fromList
-                [(dsNum, key) | ((_, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
-        !supplierLinks = M.unions [sl | (_, _, _, _, _, sl) <- results]
-        simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap unitMap
+                [(dsNum, key) | ((_, _, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
+        !supplierLinks = M.unions [sl | (_, _, _, _, _, _, sl) <- results]
+        simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap wasteFlowMap unitMap
 
-    let totalTechs = sum [length techs | (_, techs, _, _, _, _) <- results]
-    let totalBios = sum [length bios | (_, _, bios, _, _, _) <- results]
-    let totalUnits = sum [length units | (_, _, _, units, _, _) <- results]
+    let totalTechs = sum [length techs | (_, techs, _, _, _, _, _) <- results]
+    let totalBios = sum [length bios | (_, _, bios, _, _, _, _) <- results]
+    let totalWastes = sum [length wastes | (_, _, _, wastes, _, _, _) <- results]
+    let totalUnits = sum [length units | (_, _, _, _, units, _, _) <- results]
     reportProgress Info $ printf "  Activities: %d processes" (M.size procMap)
-    reportProgress Info $ printf "  Flows: %d tech + %d bio (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (totalTechs + totalBios)
+    reportProgress Info $ printf "  Flows: %d tech + %d bio + %d waste (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (M.size wasteFlowMap) (totalTechs + totalBios + totalWastes)
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
     Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
-    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
-    buildProcEntryFromResult (activity, _, _, _, _, _) =
+    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult (activity, _, _, _, _, _, _) =
         let actUUID = generateActivityUUIDFromActivity activity
             prodUUID = getReferenceProductUUID activity
          in ((actUUID, prodUUID), activity)
@@ -1223,6 +1239,13 @@ countUnlinkedExchanges db =
     isUnlinkedTechInput ex@TechnosphereExchange{techActivityLinkId = linkId} =
         exchangeIsInput ex && linkId == UUID.nil
     isUnlinkedTechInput BiosphereExchange{} = False
+    -- A waste exchange counts as an unlinked "tech input" only when it is
+    -- consumed (treatment side) and has no supplier yet. Waste *outputs*
+    -- (the typical SimaPro 'Final waste flows' case) are end-of-life
+    -- markers, not demands — they shouldn't inflate the missing-supplier
+    -- tally.
+    isUnlinkedTechInput ex@WasteExchange{waActivityLinkId = linkId} =
+        exchangeIsInput ex && linkId == UUID.nil
 
 -- | Count total technosphere input exchanges in a database
 countTotalTechInputs :: SimpleDatabase -> Int
@@ -1237,6 +1260,8 @@ countTotalTechInputs db =
     isTechInput :: Exchange -> Bool
     isTechInput ex@TechnosphereExchange{} = exchangeIsInput ex
     isTechInput BiosphereExchange{} = False
+    -- Mirror isUnlinkedTechInput: only waste *inputs* (treatment side) count.
+    isTechInput ex@WasteExchange{} = exchangeIsInput ex
 
 {- | Find all cross-database links without modifying activities
 Returns statistics including the CrossDBLinks for chained solving
@@ -1323,6 +1348,11 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                              in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
     | otherwise = emptyCrossDBLinkingStats
 findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
+-- Cross-DB linking for waste flows is deferred: orphan waste outputs are
+-- end-of-life markers (no demand on another DB), and waste *inputs* that
+-- require a treatment supplier would need a dedicated lookup keyed on
+-- WasteFlow rather than TechnosphereFlow. Pure no-op until that path lands.
+findExchangeCrossDBLink _ _ _ _ _ WasteExchange{} = emptyCrossDBLinkingStats
 
 -- | Report cross-database linking statistics
 reportCrossDBLinkingStats :: Int -> CrossDBLinkingStats -> IO ()

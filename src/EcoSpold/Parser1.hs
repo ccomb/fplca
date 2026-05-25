@@ -115,12 +115,13 @@ data ParseState = ParseState
     , psExchanges :: ![Exchange]
     , psTechFlows :: ![TechnosphereFlow]
     , psBioFlows :: ![BiosphereFlow]
+    , psWasteFlows :: ![WasteFlow]
     , psUnits :: ![Unit]
     , psPath :: ![BS.ByteString]
     , psContext :: !ElementContext
     , psTextAccum :: ![BS.ByteString]
     , psSupplierLinks :: !(M.Map UUID Int) -- flowId → supplier dataset number (technosphere inputs)
-    , psCompletedActivities :: ![Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)]
+    , psCompletedActivities :: ![Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
     }
 
 -- | Initial parsing state
@@ -137,6 +138,7 @@ initialParseState =
         , psExchanges = []
         , psTechFlows = []
         , psBioFlows = []
+        , psWasteFlows = []
         , psUnits = []
         , psPath = []
         , psContext = Other
@@ -146,7 +148,7 @@ initialParseState =
         }
 
 -- | Xeno SAX parser for EcoSpold1
-parseWithXeno :: BS.ByteString -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)
+parseWithXeno :: BS.ByteString -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
 parseWithXeno xmlContent =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
@@ -263,19 +265,21 @@ parseWithXeno xmlContent =
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
-                    let (exchange, flowEither, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
+                    let (exchange, parsedFlow, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
                         !supplierLinks = case exchange of
                             TechnosphereExchange{techRole = Input}
                                 | exNumber edata /= 0 ->
                                     M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
                             _ -> psSupplierLinks state
-                        (techs, bios) = case flowEither of
-                            Left tf -> (tf : psTechFlows state, psBioFlows state)
-                            Right bf -> (psTechFlows state, bf : psBioFlows state)
+                        (techs, bios, wastes) = case parsedFlow of
+                            ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
+                            ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
+                            ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
                      in state
                             { psExchanges = exchange : psExchanges state
                             , psTechFlows = techs
                             , psBioFlows = bios
+                            , psWasteFlows = wastes
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
@@ -305,6 +309,7 @@ parseWithXeno xmlContent =
                         , psExchanges = []
                         , psTechFlows = []
                         , psBioFlows = []
+                        , psWasteFlows = []
                         , psUnits = []
                         , psContext = Other
                         , psTextAccum = []
@@ -319,7 +324,7 @@ parseWithXeno xmlContent =
 
     -- Build exchange, flow, and unit from exchange data
     -- activityLoc is the activity's location for fallback
-    buildExchange :: Int -> Maybe Text -> ExchangeData -> (Exchange, Either TechnosphereFlow BiosphereFlow, Unit)
+    buildExchange :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
     buildExchange datasetNum activityLoc edata =
         let flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
             unitId = generateUnitUUID (exUnit edata)
@@ -334,6 +339,13 @@ parseWithXeno xmlContent =
             isBiosphere = inputGroup == "4" || outputGroup == "4"
             isInput = not (T.null inputGroup)
             isReferenceProduct = outputGroup == "0"
+            -- SimaPro's third flow class ('Final waste flows'). EcoSpold1
+            -- exports surface them on inputGroup=5 to fit the 4-type
+            -- input/output model, but the category attribute survives.
+            -- Route to WasteExchange so they bypass cross-DB technosphere
+            -- linking (orphan outputs, not demands) and land in the
+            -- dedicated waste-side surfaces.
+            isWasteFlow = exCategory edata == "Final waste flows"
 
             -- Exchange location: use exchange's own location
             -- For technosphere: leave empty if not specified, so Loader can use name-only lookup
@@ -354,46 +366,66 @@ parseWithXeno xmlContent =
                 | isReferenceProduct = ReferenceProduct
                 | isInput = Input
                 | otherwise = Coproduct
-
-            -- Set activityLinkId to nil - will be resolved later in Loader using
+         in -- Set activityLinkId to nil - will be resolved later in Loader using
             -- (flowName, exchangeLocation) lookup against supplier activities
-         in if isBiosphere
+            if isWasteFlow
                 then
-                    let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                        compartment =
-                            if T.null (exCategory edata) && isNothing subCat
-                                then Nothing
-                                else Just (Compartment (exCategory edata) subCat)
-                        bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
+                    let wf = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
                         ex =
-                            BiosphereExchange
-                                { bioFlowId = flowId
-                                , bioAmount = exMeanValue edata
-                                , bioUnitId = unitId
-                                , bioDirection = if inputGroup == "4" then Resource else Emission
-                                , bioLocation = exchangeLocation
-                                , bioComment = nonEmptyText (exComment edata)
-                                , bioPedigree = Nothing
+                            WasteExchange
+                                { waFlowId = flowId
+                                , waAmount = exMeanValue edata
+                                , waUnitId = unitId
+                                , -- Final waste flows surface on inputGroup=5
+                                  -- (consumer's POV: input from a hypothetical
+                                  -- treatment service). Preserve that semantic
+                                  -- by mirroring isInput here.
+                                  waIsInput = isInput
+                                , waActivityLinkId = UUID.nil
+                                , waProcessLinkId = Nothing
+                                , waLocation = exchangeLocation
+                                , waComment = nonEmptyText (exComment edata)
+                                , waPedigree = Nothing
                                 }
-                     in (ex, Right bioFlow, unit)
+                     in (ex, ParsedWaste wf, unit)
                 else
-                    let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
-                        ex =
-                            TechnosphereExchange
-                                { techFlowId = flowId
-                                , techAmount = exMeanValue edata
-                                , techUnitId = unitId
-                                , techRole = techRoleFor
-                                , techActivityLinkId = UUID.nil
-                                , techProcessLinkId = Nothing
-                                , techLocation = exchangeLocation
-                                , techComment = nonEmptyText (exComment edata)
-                                , techPedigree = Nothing
-                                }
-                     in (ex, Left techFlow, unit)
+                    if isBiosphere
+                        then
+                            let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
+                                compartment =
+                                    if T.null (exCategory edata) && isNothing subCat
+                                        then Nothing
+                                        else Just (Compartment (exCategory edata) subCat)
+                                bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
+                                ex =
+                                    BiosphereExchange
+                                        { bioFlowId = flowId
+                                        , bioAmount = exMeanValue edata
+                                        , bioUnitId = unitId
+                                        , bioDirection = if inputGroup == "4" then Resource else Emission
+                                        , bioLocation = exchangeLocation
+                                        , bioComment = nonEmptyText (exComment edata)
+                                        , bioPedigree = Nothing
+                                        }
+                             in (ex, ParsedBio bioFlow, unit)
+                        else
+                            let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
+                                ex =
+                                    TechnosphereExchange
+                                        { techFlowId = flowId
+                                        , techAmount = exMeanValue edata
+                                        , techUnitId = unitId
+                                        , techRole = techRoleFor
+                                        , techActivityLinkId = UUID.nil
+                                        , techProcessLinkId = Nothing
+                                        , techLocation = exchangeLocation
+                                        , techComment = nonEmptyText (exComment edata)
+                                        , techPedigree = Nothing
+                                        }
+                             in (ex, ParsedTech techFlow, unit)
 
     -- Build final result
-    buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)
+    buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
     buildResult st =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
@@ -407,13 +439,14 @@ parseWithXeno xmlContent =
             activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
+            wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, units, psDatasetNumber st, psSupplierLinks st)
+                Right act -> Right (act, techs, bios, wastes, units, psDatasetNumber st, psSupplierLinks st)
                 Left err -> Left err
 
 -- | Parse EcoSpold1 file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int))
+streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int))
 streamParseActivityAndFlowsFromFile1 path = do
     !xmlContent <- BS.readFile path
     return (parseWithXeno xmlContent)
@@ -444,6 +477,7 @@ removeZeroAmountCoproducts = filter keepExchange
     keepExchange TechnosphereExchange{techRole = Input} = True
     keepExchange TechnosphereExchange{techRole = Coproduct, techAmount = amount} = amount /= 0.0
     keepExchange BiosphereExchange{} = True
+    keepExchange WasteExchange{} = True
 
 -- | Assign single product as reference product
 assignSingleProductAsReference :: Activity -> Activity
@@ -463,6 +497,7 @@ isProductionExchange TechnosphereExchange{techRole = Coproduct} = True
 isProductionExchange TechnosphereExchange{techRole = Input} = False
 isProductionExchange TechnosphereExchange{techRole = ReferenceInput} = False
 isProductionExchange BiosphereExchange{} = False
+isProductionExchange WasteExchange{} = False -- waste outputs aren't "production" in the SimaPro sense
 
 -- | Update reference product flag
 updateReferenceProduct :: Exchange -> Exchange -> Exchange
@@ -474,6 +509,7 @@ updateReferenceProduct target current
 markAsReference :: Exchange -> Exchange
 markAsReference ex@TechnosphereExchange{} = ex{techRole = ReferenceProduct}
 markAsReference ex@BiosphereExchange{} = ex
+markAsReference ex@WasteExchange{} = ex -- waste flows can't be promoted to reference product
 
 -- | Demote a reference role back to non-reference (preserving input/output direction)
 unmarkAsReference :: Exchange -> Exchange
@@ -484,6 +520,7 @@ unmarkAsReference ex@TechnosphereExchange{techRole = role} = ex{techRole = demot
     demote Coproduct = Coproduct
     demote Input = Input
 unmarkAsReference ex@BiosphereExchange{} = ex
+unmarkAsReference ex@WasteExchange{} = ex
 
 -- ============================================================================
 -- Multi-dataset file support
@@ -493,7 +530,7 @@ unmarkAsReference ex@BiosphereExchange{} = ex
 Returns the accumulated completed activities from psCompletedActivities
 Outer Either = XML parse failure; inner Either = per-activity failure
 -}
-parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)]
+parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
 parseAllWithXeno xmlContent =
     case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
         Left err -> Left (show err)
@@ -605,19 +642,21 @@ parseAllWithXeno xmlContent =
         | isElement tagName "exchange" =
             case psContext state of
                 InExchange edata ->
-                    let (exchange, flowEither, unit) = buildExchangeForAll (psDatasetNumber state) (psLocation state) edata
+                    let (exchange, parsedFlow, unit) = buildExchangeForAll (psDatasetNumber state) (psLocation state) edata
                         !supplierLinks = case exchange of
                             TechnosphereExchange{techRole = Input}
                                 | exNumber edata /= 0 ->
                                     M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
                             _ -> psSupplierLinks state
-                        (techs, bios) = case flowEither of
-                            Left tf -> (tf : psTechFlows state, psBioFlows state)
-                            Right bf -> (psTechFlows state, bf : psBioFlows state)
+                        (techs, bios, wastes) = case parsedFlow of
+                            ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
+                            ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
+                            ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
                      in state
                             { psExchanges = exchange : psExchanges state
                             , psTechFlows = techs
                             , psBioFlows = bios
+                            , psWasteFlows = wastes
                             , psUnits = unit : psUnits state
                             , psSupplierLinks = supplierLinks
                             , psContext = Other
@@ -645,6 +684,7 @@ parseAllWithXeno xmlContent =
                         , psExchanges = []
                         , psTechFlows = []
                         , psBioFlows = []
+                        , psWasteFlows = []
                         , psUnits = []
                         , psContext = Other
                         , psTextAccum = []
@@ -658,7 +698,7 @@ parseAllWithXeno xmlContent =
     cdata = text
 
     -- Build exchange, flow, and unit from exchange data (same logic as parseWithXeno)
-    buildExchangeForAll :: Int -> Maybe Text -> ExchangeData -> (Exchange, Either TechnosphereFlow BiosphereFlow, Unit)
+    buildExchangeForAll :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
     buildExchangeForAll datasetNum activityLoc edata =
         let flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
             unitId = generateUnitUUID (exUnit edata)
@@ -667,6 +707,7 @@ parseAllWithXeno xmlContent =
             isBiosphere = inputGroup == "4" || outputGroup == "4"
             isInput = not (T.null inputGroup)
             isReferenceProduct = outputGroup == "0"
+            isWasteFlow = exCategory edata == "Final waste flows"
             exchangeLocation =
                 if T.null (exLocation edata)
                     then
@@ -680,43 +721,60 @@ parseAllWithXeno xmlContent =
                 | isReferenceProduct = ReferenceProduct
                 | isInput = Input
                 | otherwise = Coproduct
-         in if isBiosphere
+         in if isWasteFlow
                 then
-                    let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                        compartment =
-                            if T.null (exCategory edata) && isNothing subCat
-                                then Nothing
-                                else Just (Compartment (exCategory edata) subCat)
-                        bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
+                    let wf = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
                         ex =
-                            BiosphereExchange
-                                { bioFlowId = flowId
-                                , bioAmount = exMeanValue edata
-                                , bioUnitId = unitId
-                                , bioDirection = if inputGroup == "4" then Resource else Emission
-                                , bioLocation = exchangeLocation
-                                , bioComment = nonEmptyText (exComment edata)
-                                , bioPedigree = Nothing
+                            WasteExchange
+                                { waFlowId = flowId
+                                , waAmount = exMeanValue edata
+                                , waUnitId = unitId
+                                , waIsInput = isInput
+                                , waActivityLinkId = UUID.nil
+                                , waProcessLinkId = Nothing
+                                , waLocation = exchangeLocation
+                                , waComment = nonEmptyText (exComment edata)
+                                , waPedigree = Nothing
                                 }
-                     in (ex, Right bioFlow, unit)
+                     in (ex, ParsedWaste wf, unit)
                 else
-                    let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
-                        ex =
-                            TechnosphereExchange
-                                { techFlowId = flowId
-                                , techAmount = exMeanValue edata
-                                , techUnitId = unitId
-                                , techRole = techRoleFor
-                                , techActivityLinkId = UUID.nil
-                                , techProcessLinkId = Nothing
-                                , techLocation = exchangeLocation
-                                , techComment = nonEmptyText (exComment edata)
-                                , techPedigree = Nothing
-                                }
-                     in (ex, Left techFlow, unit)
+                    if isBiosphere
+                        then
+                            let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
+                                compartment =
+                                    if T.null (exCategory edata) && isNothing subCat
+                                        then Nothing
+                                        else Just (Compartment (exCategory edata) subCat)
+                                bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
+                                ex =
+                                    BiosphereExchange
+                                        { bioFlowId = flowId
+                                        , bioAmount = exMeanValue edata
+                                        , bioUnitId = unitId
+                                        , bioDirection = if inputGroup == "4" then Resource else Emission
+                                        , bioLocation = exchangeLocation
+                                        , bioComment = nonEmptyText (exComment edata)
+                                        , bioPedigree = Nothing
+                                        }
+                             in (ex, ParsedBio bioFlow, unit)
+                        else
+                            let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
+                                ex =
+                                    TechnosphereExchange
+                                        { techFlowId = flowId
+                                        , techAmount = exMeanValue edata
+                                        , techUnitId = unitId
+                                        , techRole = techRoleFor
+                                        , techActivityLinkId = UUID.nil
+                                        , techProcessLinkId = Nothing
+                                        , techLocation = exchangeLocation
+                                        , techComment = nonEmptyText (exComment edata)
+                                        , techPedigree = Nothing
+                                        }
+                             in (ex, ParsedTech techFlow, unit)
 
     -- Build final result for a single dataset
-    buildResultForAll :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)
+    buildResultForAll :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
     buildResultForAll st =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
@@ -730,16 +788,17 @@ parseAllWithXeno xmlContent =
             activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
+            wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
          in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, units, psDatasetNumber st, psSupplierLinks st)
+                Right act -> Right (act, techs, bios, wastes, units, psDatasetNumber st, psSupplierLinks st)
                 Left err -> Left err
 
 {- | Parse ALL datasets from a single EcoSpold1 file
 Used for multi-dataset files where <ecoSpold> contains multiple <dataset> elements
 Skips activities that fail (e.g. no reference product) and logs warnings
 -}
-streamParseAllDatasetsFromFile1 :: FilePath -> IO [(Activity, [TechnosphereFlow], [BiosphereFlow], [Unit], Int, M.Map UUID Int)]
+streamParseAllDatasetsFromFile1 :: FilePath -> IO [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
 streamParseAllDatasetsFromFile1 path = do
     !xmlContent <- BS.readFile path
     case parseAllWithXeno xmlContent of

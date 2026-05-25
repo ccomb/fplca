@@ -155,6 +155,27 @@ data BiosphereFlow = BiosphereFlow
     }
     deriving (Generic, NFData, Store)
 
+{- | A waste flow — a residual output that a process generates and which a
+treatment activity may consume as its reference input. Sister type to
+'TechnosphereFlow' and 'BiosphereFlow'. Distinct from product flows so the
+UI and import logic can surface them separately, but routed to the same
+technosphere matrix because the underlying calculation is identical to a
+product link.
+
+When no treatment activity is present in the loaded data, a waste output
+flow stays orphan and contributes zero impact — same cut-off semantics
+as an orphan product input.
+-}
+data WasteFlow = WasteFlow
+    { wfId :: !UUID
+    , wfName :: !Text
+    , wfUnitId :: !UUID
+    , wfSynonyms :: !(M.Map Text (S.Set Text))
+    , wfCAS :: !(Maybe Text)
+    , wfSubstanceId :: !(Maybe Int)
+    }
+    deriving (Generic, NFData, Store)
+
 {- | Pedigree matrix (Weidema & Wesnæs 1996) — five LCA data-quality scores
 each in 1..5 (1 = best, 5 = worst). SimaPro CSV encodes it as a prefix in the
 trailing comment column; ecoinvent/EcoSpold2 stores it as structured XML.
@@ -201,20 +222,37 @@ data Exchange
         , bioComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , bioPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
+    | WasteExchange
+        { waFlowId :: !UUID -- Flow being exchanged (points at a WasteFlow)
+        , waAmount :: !Double -- Quantity exchanged
+        , waUnitId :: !UUID -- Unit of measurement
+        , waIsInput :: !Bool
+        {- ^ True when consumed by a treatment activity; False when generated
+        by the activity (the typical SimaPro 'Final waste flows' case).
+        -}
+        , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
+        , waProcessLinkId :: !(Maybe ProcessId) -- Target process ID (matches techProcessLinkId)
+        , waLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
+        , waComment :: !(Maybe Text) -- Free-text per-exchange comment from source
+        , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
+        }
     deriving (Generic, NFData, Store)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
 exchangeFlowId TechnosphereExchange{techFlowId = fid} = fid
 exchangeFlowId BiosphereExchange{bioFlowId = fid} = fid
+exchangeFlowId WasteExchange{waFlowId = fid} = fid
 
 exchangeAmount :: Exchange -> Double
 exchangeAmount TechnosphereExchange{techAmount = amt} = amt
 exchangeAmount BiosphereExchange{bioAmount = amt} = amt
+exchangeAmount WasteExchange{waAmount = amt} = amt
 
 exchangeUnitId :: Exchange -> UUID
 exchangeUnitId TechnosphereExchange{techUnitId = uid} = uid
 exchangeUnitId BiosphereExchange{bioUnitId = uid} = uid
+exchangeUnitId WasteExchange{waUnitId = uid} = uid
 
 exchangeIsInput :: Exchange -> Bool
 exchangeIsInput TechnosphereExchange{techRole = role} = case role of
@@ -225,6 +263,7 @@ exchangeIsInput TechnosphereExchange{techRole = role} = case role of
 exchangeIsInput BiosphereExchange{bioDirection = dir} = case dir of
     Resource -> True
     Emission -> False
+exchangeIsInput WasteExchange{waIsInput = b} = b
 
 exchangeIsReference :: Exchange -> Bool
 exchangeIsReference TechnosphereExchange{techRole = role} = case role of
@@ -233,41 +272,57 @@ exchangeIsReference TechnosphereExchange{techRole = role} = case role of
     Input -> False
     Coproduct -> False
 exchangeIsReference BiosphereExchange{} = False
+exchangeIsReference WasteExchange{} = False
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
 exchangeActivityLinkId TechnosphereExchange{techActivityLinkId = linkId} =
     if linkId == UUID.nil then Nothing else Just linkId
 exchangeActivityLinkId BiosphereExchange{} = Nothing
+exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} =
+    if linkId == UUID.nil then Nothing else Just linkId
 
 -- | Get process link ID (new field)
 exchangeProcessLinkId :: Exchange -> Maybe ProcessId
 exchangeProcessLinkId TechnosphereExchange{techProcessLinkId = pid} = pid
 exchangeProcessLinkId BiosphereExchange{} = Nothing
+exchangeProcessLinkId WasteExchange{waProcessLinkId = pid} = pid
 
 -- | Get exchange location (for EcoSpold1 supplier lookup)
 exchangeLocation :: Exchange -> Text
 exchangeLocation TechnosphereExchange{techLocation = loc} = loc
 exchangeLocation BiosphereExchange{bioLocation = loc} = loc
+exchangeLocation WasteExchange{waLocation = loc} = loc
 
 -- | Get free-text comment attached to the exchange by the source dataset
 exchangeComment :: Exchange -> Maybe Text
 exchangeComment TechnosphereExchange{techComment = c} = c
 exchangeComment BiosphereExchange{bioComment = c} = c
+exchangeComment WasteExchange{waComment = c} = c
 
 -- | Get pedigree matrix attached to the exchange (when the source provides it)
 exchangePedigree :: Exchange -> Maybe Pedigree
 exchangePedigree TechnosphereExchange{techPedigree = p} = p
 exchangePedigree BiosphereExchange{bioPedigree = p} = p
+exchangePedigree WasteExchange{waPedigree = p} = p
 
 -- | Check if exchange is technosphere
 isTechnosphereExchange :: Exchange -> Bool
 isTechnosphereExchange TechnosphereExchange{} = True
 isTechnosphereExchange BiosphereExchange{} = False
+isTechnosphereExchange WasteExchange{} = False
 
 -- | Check if exchange is biosphere
 isBiosphereExchange :: Exchange -> Bool
-isBiosphereExchange = not . isTechnosphereExchange
+isBiosphereExchange TechnosphereExchange{} = False
+isBiosphereExchange BiosphereExchange{} = True
+isBiosphereExchange WasteExchange{} = False
+
+-- | Check if exchange is waste
+isWasteExchange :: Exchange -> Bool
+isWasteExchange TechnosphereExchange{} = False
+isWasteExchange BiosphereExchange{} = False
+isWasteExchange WasteExchange{} = True
 
 {- | Activity's reference-product amount used to normalize its matrix column.
 Net output = sum of reference outputs minus self-loop consumption; falls back
@@ -338,6 +393,15 @@ getUnitNameForBioFlow :: UnitDB -> BiosphereFlow -> Text
 getUnitNameForBioFlow unitDB f =
     maybe "unknown" unitName (getUnitForBioFlow unitDB f)
 
+-- | Get unit information for a waste flow
+getUnitForWasteFlow :: UnitDB -> WasteFlow -> Maybe Unit
+getUnitForWasteFlow unitDB f = M.lookup (wfUnitId f) unitDB
+
+-- | Get unit name for a waste flow (fallback to "unknown" if not found)
+getUnitNameForWasteFlow :: UnitDB -> WasteFlow -> Text
+getUnitNameForWasteFlow unitDB f =
+    maybe "unknown" unitName (getUnitForWasteFlow unitDB f)
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
@@ -372,6 +436,71 @@ type TechFlowDB = M.Map UUID TechnosphereFlow
 
 -- | Biosphere flow database (deduplicated by UUID)
 type BioFlowDB = M.Map UUID BiosphereFlow
+
+-- | Map from waste flow UUID to WasteFlow (Map for O(log n) lookups)
+type WasteFlowDB = M.Map UUID WasteFlow
+
+{- | A parsed flow tagged with its kind. Returned by parsers when an
+@Exchange@ carries its corresponding @*Flow@ catalog entry. Distinct from
+'ApiFlow' (which is wire-shape, with an 'ApiUnresolvedFlow' fallback) —
+parsers never produce unresolved entries.
+-}
+data ParsedFlow
+    = ParsedTech !TechnosphereFlow
+    | ParsedBio !BiosphereFlow
+    | ParsedWaste !WasteFlow
+    deriving (Generic, NFData)
+
+{- | A resolved flow tagged with its kind. Returned by lookup/search code
+(e.g. 'findFlowsBySynonym') so consumers can render the appropriate shape
+via the 'flowKind*' projections below, or lift into the wire layer via
+@API.Types.apiFlowOfKind@.
+-}
+data FlowKind
+    = TechKind !TechnosphereFlow
+    | BioKind !BiosphereFlow
+    | WasteKind !WasteFlow
+
+-- | UUID accessor. Total over the three flow kinds.
+flowKindId :: FlowKind -> UUID
+flowKindId (TechKind f) = tfId f
+flowKindId (BioKind f) = bfId f
+flowKindId (WasteKind f) = wfId f
+
+-- | Display-name accessor. Total over the three flow kinds.
+flowKindName :: FlowKind -> Text
+flowKindName (TechKind f) = tfName f
+flowKindName (BioKind f) = bfName f
+flowKindName (WasteKind f) = wfName f
+
+-- | Synonyms accessor (keyed by language code). Total.
+flowKindSynonyms :: FlowKind -> M.Map Text (S.Set Text)
+flowKindSynonyms (TechKind f) = tfSynonyms f
+flowKindSynonyms (BioKind f) = bfSynonyms f
+flowKindSynonyms (WasteKind f) = wfSynonyms f
+
+{- | "Category" projection for flat list views. Biosphere flows carry a
+compartment; technosphere and waste flows have none here (their taxonomy
+lives on the producing/consuming activity).
+-}
+flowKindCategory :: FlowKind -> Text
+flowKindCategory (TechKind _) = ""
+flowKindCategory (BioKind f) = bfCompartmentName f
+flowKindCategory (WasteKind _) = ""
+
+-- | Unit-id accessor — for unit-name lookup against the 'UnitDB'.
+flowKindUnitId :: FlowKind -> UUID
+flowKindUnitId (TechKind f) = tfUnitId f
+flowKindUnitId (BioKind f) = bfUnitId f
+flowKindUnitId (WasteKind f) = wfUnitId f
+
+{- | Unit-name accessor. Falls back to "unknown" when the unit UUID isn't in
+the database, matching the per-flow @getUnitNameForXxxFlow@ helpers.
+-}
+flowKindUnitName :: UnitDB -> FlowKind -> Text
+flowKindUnitName udb (TechKind f) = getUnitNameForTechFlow udb f
+flowKindUnitName udb (BioKind f) = getUnitNameForBioFlow udb f
+flowKindUnitName udb (WasteKind f) = getUnitNameForWasteFlow udb f
 
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
@@ -534,6 +663,7 @@ data Database = Database
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbTechFlows :: !TechFlowDB -- Technosphere flows by UUID
     , dbBioFlows :: !BioFlowDB -- Biosphere flows by UUID
+    , dbWasteFlows :: !WasteFlowDB -- Waste flows by UUID
     , dbUnits :: !UnitDB
     , dbIndexes :: !Indexes
     , -- Pre-computed sparse matrices for efficient LCA calculations (unboxed for memory efficiency)
@@ -572,6 +702,7 @@ instance Store Database where
             + getSize (dbActivities db)
             + getSize (dbTechFlows db)
             + getSize (dbBioFlows db)
+            + getSize (dbWasteFlows db)
             + getSize (dbUnits db)
             + getSize (dbIndexes db)
             + getSize (dbTechnosphereTriples db)
@@ -593,6 +724,7 @@ instance Store Database where
         poke (dbActivities db)
         poke (dbTechFlows db)
         poke (dbBioFlows db)
+        poke (dbWasteFlows db)
         poke (dbUnits db)
         poke (dbIndexes db)
         poke (dbTechnosphereTriples db)
@@ -617,6 +749,7 @@ instance Store Database where
         activities <- peek
         techFlows <- peek
         bioFlows <- peek
+        wasteFlows <- peek
         units <- peek
         indexes <- peek
         techTriples <- peek
@@ -638,6 +771,7 @@ instance Store Database where
                 , dbActivities = activities
                 , dbTechFlows = techFlows
                 , dbBioFlows = bioFlows
+                , dbWasteFlows = wasteFlows
                 , dbUnits = units
                 , dbIndexes = indexes
                 , dbTechnosphereTriples = techTriples
@@ -819,6 +953,7 @@ data SimpleDatabase = SimpleDatabase
     { sdbActivities :: !ActivityMap -- Temporary Map structure
     , sdbTechFlows :: !TechFlowDB
     , sdbBioFlows :: !BioFlowDB
+    , sdbWasteFlows :: !WasteFlowDB
     , sdbUnits :: !UnitDB
     }
     deriving (Generic, Store)
@@ -832,6 +967,7 @@ toSimpleDatabase db =
         { sdbActivities = M.fromList $ V.toList $ V.zipWith (,) (dbProcessIdTable db) (dbActivities db)
         , sdbTechFlows = dbTechFlows db
         , sdbBioFlows = dbBioFlows db
+        , sdbWasteFlows = dbWasteFlows db
         , sdbUnits = dbUnits db
         }
 
@@ -1095,4 +1231,10 @@ instance ToJSON BiosphereFlow where
     toJSON = genericToJSON stripLowerPrefix
     toEncoding = genericToEncoding stripLowerPrefix
 instance FromJSON BiosphereFlow where
+    parseJSON = genericParseJSON stripLowerPrefix
+
+instance ToJSON WasteFlow where
+    toJSON = genericToJSON stripLowerPrefix
+    toEncoding = genericToEncoding stripLowerPrefix
+instance FromJSON WasteFlow where
     parseJSON = genericParseJSON stripLowerPrefix

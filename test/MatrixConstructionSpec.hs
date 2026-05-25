@@ -177,7 +177,7 @@ spec = do
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB unitDB
+            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB M.empty unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db -> do
@@ -247,7 +247,7 @@ spec = do
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB unitDB
+            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB M.empty unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db ->

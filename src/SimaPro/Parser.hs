@@ -768,7 +768,7 @@ processBlockToActivity ::
     UnitConversion.UnitConfig ->
     ([(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)]) ->
     ProcessBlock ->
-    [(Activity, [TechnosphereFlow], [BiosphereFlow], [Unit])]
+    [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])]
 processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
     let
         -- Build parameter environment: input params first, then calculated params
@@ -808,33 +808,40 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
         -- Convert all rows in one pass, collecting exchanges/flows/units together
         avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
         techTriples = map (techRowToExchange env) (pbMaterials ++ pbElectricity)
-        wasteTriples = map (techRowToExchange env) pbWasteToTreatment
+        treatmentTriples = map (techRowToExchange env) pbWasteToTreatment
+        -- SimaPro's 'Final waste flows' section: outputs the activity 'throws
+        -- away' with no modelled treatment in the dataset. Route to
+        -- WasteExchange so the cross-DB linker doesn't tally them as missing
+        -- suppliers (they're end-of-life markers, not demands).
+        finalWasteTriples = map (wasteRowToExchange env) pbFinalWaste
         bioTriples =
             map (bioRowToExchange env True "resource") pbResources
                 ++ map (bioRowToExchange env False "air") pbEmissionsAir
                 ++ map (bioRowToExchange env False "water") pbEmissionsWater
                 ++ map (bioRowToExchange env False "soil") pbEmissionsSoil
-                ++ map (bioRowToExchange env False "waste") pbFinalWaste
 
         -- Tech rows may have zero amounts (Maybe Exchange), others always have exchanges
-        techRowExchanges = [e | (Just e, _, _) <- techTriples ++ wasteTriples]
-        techRowFlows = [f | (_, f, _) <- techTriples ++ wasteTriples]
-        techRowUnits = [u | (_, _, u) <- techTriples ++ wasteTriples]
+        techRowExchanges = [e | (Just e, _, _) <- techTriples ++ treatmentTriples]
+        techRowFlows = [f | (_, f, _) <- techTriples ++ treatmentTriples]
+        techRowUnits = [u | (_, _, u) <- techTriples ++ treatmentTriples]
 
         sharedExchanges =
             map (\(e, _, _) -> e) avoidedTriples
                 ++ techRowExchanges
                 ++ map (\(e, _, _) -> e) bioTriples
+                ++ map (\(e, _, _) -> e) finalWasteTriples
         sharedTechFlows = map (\(_, f, _) -> f) avoidedTriples ++ techRowFlows
         sharedBioFlows = map (\(_, f, _) -> f) bioTriples
+        sharedWasteFlows = map (\(_, f, _) -> f) finalWasteTriples
         sharedUnits =
             S.toList . S.fromList $
                 map (\(_, _, u) -> unitName u) avoidedTriples
                     ++ map unitName techRowUnits
                     ++ map (\(_, _, u) -> unitName u) bioTriples
+                    ++ map (\(_, _, u) -> unitName u) finalWasteTriples
 
         -- Create one activity per product
-        makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [Unit])
+        makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
         makeActivity prod =
             let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
                 effUnitName = unitName productUnit
@@ -875,11 +882,12 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                         }
                 allTechFlows = productFlow : sharedTechFlows
                 allBioFlows = sharedBioFlows
+                allWasteFlows = sharedWasteFlows
                 allUnits =
                     map
                         (\name -> Unit (generateUnitUUID name) name name "")
                         (S.toList . S.fromList $ effUnitName : sharedUnits)
-             in (activity, allTechFlows, allBioFlows, allUnits)
+             in (activity, allTechFlows, allBioFlows, allWasteFlows, allUnits)
      in
         map makeActivity pbProducts
 
@@ -893,14 +901,15 @@ isNumericFormula t = case TR.double t of
 scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex * factor}
 scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
+scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 
 {- | Convert product row to exchange, flow, and unit in one pass.
 
 For reference products ('isRef == True'), the declared amount is converted to
 the canonical base unit of its dimension (kg for mass, MJ for energy, m³ for
 volume, …). This ensures 'activityNormFactor' and the resulting matrix column
-are expressed per 1 base unit, matching Brightway conventions — otherwise a
-reference declared as "1 ton" would produce impacts 1000× too large.
+are expressed per 1 base unit — otherwise a reference declared as "1 ton"
+would produce impacts 1000× too large.
 
 If the unit is unknown to the config or its dimension has no base unit, the
 raw values are kept (the downstream matrix builder in 'Database.hs' surfaces
@@ -1031,7 +1040,8 @@ and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc.
 -}
 bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange env isInput compartment BioExchangeRow{..} =
-    let -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
+    let
+        -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
         -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
         -- SimaPro-style method) characterises them via suffix-keyed CFs of
         -- matching name, so collapsing them to a canonical name breaks
@@ -1076,7 +1086,53 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                         else Just (Compartment compartment subcomp)
                 }
         unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
-     in (exchange, flow, unit)
+     in
+        (exchange, flow, unit)
+
+{- | Convert a SimaPro 'Final waste flows' row into a WasteExchange. Mirrors
+'bioRowToExchange' for the same row shape but routes to the third flow
+kind so the cross-DB linker doesn't try to find a producer (these are
+end-of-life markers, not technosphere demands). Modelled as an output
+(waIsInput = False) -- the activity generates the waste.
+-}
+wasteRowToExchange :: M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
+wasteRowToExchange env BioExchangeRow{..} =
+    let
+        cleanName = berName
+        -- Compartment "waste" keeps the UUID generation aligned with
+        -- whatever historical biosphere-side hashing the SimaPro path used
+        -- for these flows before they were reclassified -- so impact methods
+        -- that match by the (name, "waste") combination keep matching.
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment) berUnit
+        unitUUID = generateUnitUUID berUnit
+        amount = resolveAmount env berAmountRaw berAmount
+        (pedigree, cleanedComment) = parsePedigreePrefix berComment
+        exchange =
+            WasteExchange
+                { waFlowId = flowUUID
+                , waAmount = amount
+                , waUnitId = unitUUID
+                , -- SimaPro Final waste flows are outputs (the activity throws
+                  -- the waste away with no modelled treatment in the dataset).
+                  waIsInput = False
+                , waActivityLinkId = UUID.nil
+                , waProcessLinkId = Nothing
+                , waLocation = ""
+                , waComment = cleanedComment
+                , waPedigree = pedigree
+                }
+        flow =
+            WasteFlow
+                { wfId = flowUUID
+                , wfName = cleanName
+                , wfUnitId = unitUUID
+                , wfSynonyms = M.empty
+                , wfCAS = Nothing
+                , wfSubstanceId = Nothing
+                }
+        unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
+     in
+        (exchange, flow, unit)
 
 -- ============================================================================
 -- Encoding Conversion
@@ -1215,9 +1271,9 @@ Handles Windows-1252/Latin-1 encoding common in SimaPro exports.
 
 Reference-product amounts are normalized to the canonical base unit of their
 dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
-construction yields per-base-unit columns — matching Brightway conventions.
+construction yields per-base-unit columns.
 -}
-parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, UnitDB)
+parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
 parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
@@ -1248,22 +1304,25 @@ parseSimaProCSV unitCfg path = do
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
     converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
-    let activities = map (\(a, _, _, _) -> a) converted
-        allTechFlows = concatMap (\(_, tf, _, _) -> tf) converted
-        allBioFlows = concatMap (\(_, _, bf, _) -> bf) converted
-        allUnits = concatMap (\(_, _, _, u) -> u) converted
+    let activities = map (\(a, _, _, _, _) -> a) converted
+        allTechFlows = concatMap (\(_, tf, _, _, _) -> tf) converted
+        allBioFlows = concatMap (\(_, _, bf, _, _) -> bf) converted
+        allWasteFlows = concatMap (\(_, _, _, wf, _) -> wf) converted
+        allUnits = concatMap (\(_, _, _, _, u) -> u) converted
 
     -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
     -- by construction (tech flows hash with empty compartment, bio flows hash
-    -- with their compartment), so two plain M.fromList calls suffice.
+    -- with their compartment, waste flows hash with "waste" compartment).
     let techFlowDB = M.fromList [(tfId f, f) | f <- allTechFlows]
         bioFlowDB = M.fromList [(bfId f, f) | f <- allBioFlows]
+        wasteFlowDB = M.fromList [(wfId f, f) | f <- allWasteFlows]
         unitDB = M.fromList [(unitId u, u) | u <- allUnits]
 
     -- Force evaluation before returning
     let !numActivities = length activities
     let !numTechFlows = M.size techFlowDB
     let !numBioFlows = M.size bioFlowDB
+    let !numWasteFlows = M.size wasteFlowDB
     let !numUnits = M.size unitDB
 
     endTime <- getCurrentTime
@@ -1272,9 +1331,10 @@ parseSimaProCSV unitCfg path = do
     reportProgress Info $ printf "  Activities: %d processes" numActivities
     reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
     reportProgress Info $ printf "  Biosphere flows: %d unique" numBioFlows
+    reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
     reportProgress Info $ printf "  Units: %d unique" numUnits
 
-    return (activities, techFlowDB, bioFlowDB, unitDB)
+    return (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
   where
     -- Strip Windows \r from ByteString (fast, often no-op)
     stripCR :: BS.ByteString -> BS.ByteString

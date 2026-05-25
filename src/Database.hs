@@ -42,8 +42,8 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> UnitDB -> IO (Either Text Database)
-buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = do
+buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> IO (Either Text Database)
+buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowDB unitDB = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
 
     -- Step 1: Build UUID interning tables from Map keys
@@ -95,7 +95,12 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
     -- Build technosphere sparse triplets
     reportMatrixOperation "Building technosphere matrix triplets"
     let buildTechTriple normalizationFactor j consumerActivity _consumerPid ex
-            | not (isTechnosphereExchange ex) = Right ([], [])
+            -- Biosphere exchanges live in the B matrix, not A.
+            -- WasteExchanges share the A matrix with technosphere flows: the
+            -- underlying calculation is identical to a product link. Orphan
+            -- waste outputs (no activityLinkId) naturally drop out below when
+            -- producerIdx is Nothing — same as orphan tech inputs.
+            | isBiosphereExchange ex = Right ([], [])
             | exchangeIsReference ex = Right ([], []) -- reference product is on the diagonal
             | otherwise =
                 let producerResult = case exchangeProcessLinkId ex of
@@ -240,6 +245,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
                         , dbActivities = dbActivities
                         , dbTechFlows = techFlowDB
                         , dbBioFlows = bioFlowDB
+                        , dbWasteFlows = wasteFlowDB
                         , dbUnits = unitDB
                         , dbIndexes = indexes
                         , dbTechnosphereTriples = techTriples
@@ -258,9 +264,10 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB unitDB = d
                         , dbBM25Index = Nothing
                         }
 
--- | Build activity-level indexes (name / location / flow / unit). Flow-side
--- taxonomy lives on activities or biosphere compartments and is queried via
--- the flow databases directly, so no separate flow index is built here.
+{- | Build activity-level indexes (name / location / flow / unit). Flow-side
+taxonomy lives on activities or biosphere compartments and is queried via
+the flow databases directly, so no separate flow index is built here.
+-}
 buildIndexesWithProcessIds :: V.Vector Activity -> V.Vector (UUID, UUID) -> Indexes
 buildIndexesWithProcessIds activityVec processIdTable =
     let
@@ -467,16 +474,19 @@ findActivitiesByFields db nameParam geoParam productParam classFilters exactMatc
         exactMatch
         (findActivityNameCandidates db nameParam exactMatch)
 
--- | Search flows by synonym across both technosphere and biosphere maps.
--- Result tagged with the flow kind so consumers can render the appropriate shape.
-findFlowsBySynonym :: Database -> Text -> [Either TechnosphereFlow BiosphereFlow]
+{- | Search flows by synonym across the technosphere, biosphere, and waste
+maps. Result tagged with the flow kind so consumers can render the
+appropriate shape via the 'flowKind*' projections in "API.Types".
+-}
+findFlowsBySynonym :: Database -> Text -> [FlowKind]
 findFlowsBySynonym db query =
     let queryLower = T.toLower query
-        matchesTech f =
-            T.isInfixOf queryLower (T.toLower (tfName f))
-                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (tfSynonyms f))
-        matchesBio f =
-            T.isInfixOf queryLower (T.toLower (bfName f))
-                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems (bfSynonyms f))
-     in [Left f | f <- M.elems (dbTechFlows db), matchesTech f]
-            ++ [Right f | f <- M.elems (dbBioFlows db), matchesBio f]
+        matches name syns =
+            T.isInfixOf queryLower (T.toLower name)
+                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems syns)
+        matchesTech f = matches (tfName f) (tfSynonyms f)
+        matchesBio f = matches (bfName f) (bfSynonyms f)
+        matchesWaste f = matches (wfName f) (wfSynonyms f)
+     in [TechKind f | f <- M.elems (dbTechFlows db), matchesTech f]
+            ++ [BioKind f | f <- M.elems (dbBioFlows db), matchesBio f]
+            ++ [WasteKind f | f <- M.elems (dbWasteFlows db), matchesWaste f]

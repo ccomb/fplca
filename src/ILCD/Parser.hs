@@ -86,8 +86,8 @@ parseILCDDirectory dir = do
     flowInfoMap <- parseFlowDirectory (dir </> "flows")
     reportProgress Info $ printf "Parsed %d flows" (M.size flowInfoMap)
 
-    -- Step 3: Build TechFlowDB, BioFlowDB and UnitDB from parsed data
-    let (techFlowDB, bioFlowDB, unitDB) = buildFlowAndUnitDB flowInfoMap flowPropMap unitGroupMap
+    -- Step 3: Build TechFlowDB, BioFlowDB, WasteFlowDB and UnitDB from parsed data
+    let (techFlowDB, bioFlowDB, wasteFlowDB, unitDB) = buildFlowAndUnitDB flowInfoMap flowPropMap unitGroupMap
 
     -- Step 4: Parse process XMLs in parallel
     processFiles <- listXMLFiles (dir </> "processes")
@@ -97,10 +97,10 @@ parseILCDDirectory dir = do
     reportProgress Info $ printf "Parsed %d processes, building activity map..." (length rawProcesses)
 
     -- Step 5: Build ActivityMap
-    let activityMap = buildActivityMap flowInfoMap techFlowDB bioFlowDB unitDB rawProcesses
+    let activityMap = buildActivityMap flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB rawProcesses
 
     -- Step 6: Fix supplier links (name-based, like SimaPro)
-    let simpleDb = SimpleDatabase activityMap techFlowDB bioFlowDB unitDB
+    let simpleDb = SimpleDatabase activityMap techFlowDB bioFlowDB wasteFlowDB unitDB
     fixedDb <- fixILCDActivityLinks simpleDb
     reportProgress Info $
         printf
@@ -238,14 +238,18 @@ buildFlowAndUnitDB ::
     M.Map UUID ILCDFlowInfo ->
     M.Map UUID UUID -> -- flowProperty UUID → unitGroup UUID
     M.Map UUID (Text, Int) -> -- unitGroup UUID → (refUnitName, refIdx)
-    (TechFlowDB, BioFlowDB, UnitDB)
-buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, allUnits)
+    (TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, wasteFlows, allUnits)
   where
-    -- Partition flows by type at construction time
-    techFlows = M.fromList [(uuid, mkTechFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, not (isElementary info)]
-    bioFlows = M.fromList [(uuid, mkBioFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, isElementary info]
+    -- Partition flows by type at construction time. ILCD's standard flowType
+    -- enumeration includes "Elementary flow", "Product flow", "Waste flow",
+    -- "Other flow", and "Impact category". Everything that is neither
+    -- elementary nor explicit-waste lands in the technosphere bucket.
+    techFlows = M.fromList [(uuid, mkTechFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, classify info == TechClass]
+    bioFlows = M.fromList [(uuid, mkBioFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, classify info == BioClass]
+    wasteFlows = M.fromList [(uuid, mkWasteFlow uuid info) | (uuid, info) <- M.toList flowInfoMap, classify info == WasteClass]
 
-    isElementary info = ilcdFlowType info == "Elementary flow"
+    classify = classifyFlowType . ilcdFlowType
 
     -- Collect all unique units (keyed by unitGroup UUID)
     allUnits =
@@ -275,6 +279,16 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, allUnits)
             , bfCompartment = toCompartment (ilcdCompartment info)
             }
 
+    mkWasteFlow uuid info =
+        WasteFlow
+            { wfId = uuid
+            , wfName = ilcdBaseName info
+            , wfUnitId = resolveUnit info
+            , wfSynonyms = M.empty
+            , wfCAS = ilcdCAS info
+            , wfSubstanceId = Nothing
+            }
+
     toCompartment Nothing = Nothing
     toCompartment (Just (MT.Compartment m sc _)) =
         Just $ Compartment m (if T.null sc then Nothing else Just sc)
@@ -283,6 +297,26 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, allUnits)
         Data.Maybe.fromMaybe UUID.nil $
             ilcdFlowPropertyRef info >>= (`M.lookup` fpMap) >>= \ugId ->
                 ugId <$ M.lookup ugId ugMap -- use unitGroup UUID as unit key
+
+{- | ILCD flow classification: drives both flowDB partitioning and exchange
+shape in buildActivity. Keep this enum in sync between the two sites.
+-}
+data FlowClass = TechClass | BioClass | WasteClass
+    deriving (Eq)
+
+{- | Classify an ILCD @flowType@ string. Tolerates whitespace and casing
+variants ("Elementary flow", "ELEMENTARY_FLOW", "  waste  flow ", …) —
+ILCD exporters in the wild are not strict about either, and the standard
+enumeration values differ between ILCD 1.1 and newer formats. Anything
+unrecognized lands in the technosphere bucket, matching the partition's
+"product/other" default arm.
+-}
+classifyFlowType :: Text -> FlowClass
+classifyFlowType raw =
+    case T.unwords (T.words (T.toLower (T.replace "_" " " raw))) of
+        "elementary flow" -> BioClass
+        "waste flow" -> WasteClass
+        _ -> TechClass
 
 --------------------------------------------------------------------------------
 -- Process XML Parsing
@@ -489,16 +523,17 @@ buildActivityMap ::
     M.Map UUID ILCDFlowInfo ->
     TechFlowDB ->
     BioFlowDB ->
+    WasteFlowDB ->
     UnitDB ->
     [ILCDProcessRaw] ->
     ActivityMap
-buildActivityMap flowInfoMap techFlowDB bioFlowDB unitDB procs =
+buildActivityMap flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB procs =
     M.fromList
         [ ((iprUUID p, refFlowUUID), activity)
         | p <- procs
         , let refEx = findRefExchange p
         , let refFlowUUID = maybe (iprUUID p) ierFlowRef refEx
-        , let activity = buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p
+        , let activity = buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p
         ]
 
 findRefExchange :: ILCDProcessRaw -> Maybe ILCDExchangeRaw
@@ -507,8 +542,8 @@ findRefExchange p =
         (e : _) -> Just e
         [] -> Nothing
 
-buildActivity :: M.Map UUID ILCDFlowInfo -> TechFlowDB -> BioFlowDB -> UnitDB -> ILCDProcessRaw -> Activity
-buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p =
+buildActivity :: M.Map UUID ILCDFlowInfo -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> ILCDProcessRaw -> Activity
+buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
     Activity
         { activityName = iprName p
         , activityDescription = []
@@ -540,22 +575,19 @@ buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p =
         let flowUUID = ierFlowRef raw
             isInput = ierDirection raw == "Input"
             isRef = ierInternalId raw == refIdx
-            isElementary =
-                maybe
-                    False
-                    (\fi -> ilcdFlowType fi == "Elementary flow")
-                    (M.lookup flowUUID flowInfoMap)
+            flowClass = maybe TechClass (classifyFlowType . ilcdFlowType) (M.lookup flowUUID flowInfoMap)
             fUnitId =
                 Data.Maybe.fromMaybe UUID.nil $
                     (tfUnitId <$> M.lookup flowUUID techFlowDB)
                         <|> (bfUnitId <$> M.lookup flowUUID bioFlowDB)
+                        <|> (wfUnitId <$> M.lookup flowUUID wasteFlowDB)
             techRoleFor
                 | isRef && isInput = ReferenceInput
                 | isRef = ReferenceProduct
                 | isInput = Input
                 | otherwise = Coproduct
-         in if isElementary
-                then
+         in case flowClass of
+                BioClass ->
                     BiosphereExchange
                         { bioFlowId = flowUUID
                         , bioAmount = ierAmount raw
@@ -565,7 +597,19 @@ buildActivity flowInfoMap techFlowDB bioFlowDB unitDB p =
                         , bioComment = ierComment raw
                         , bioPedigree = Nothing
                         }
-                else
+                WasteClass ->
+                    WasteExchange
+                        { waFlowId = flowUUID
+                        , waAmount = ierAmount raw
+                        , waUnitId = fUnitId
+                        , waIsInput = isInput
+                        , waActivityLinkId = UUID.nil
+                        , waProcessLinkId = Nothing
+                        , waLocation = ierLocation raw
+                        , waComment = ierComment raw
+                        , waPedigree = Nothing
+                        }
+                TechClass ->
                     TechnosphereExchange
                         { techFlowId = flowUUID
                         , techAmount = ierAmount raw
@@ -621,3 +665,14 @@ fixActivityExchanges idx act =
             Nothing -> ex
     fixEx ex@TechnosphereExchange{} = ex
     fixEx ex@BiosphereExchange{} = ex
+    -- A waste input awaiting treatment-activity resolution follows the same
+    -- name-lookup logic as a technosphere Input.
+    fixEx ex@WasteExchange{waFlowId = fid, waIsInput = True} =
+        case M.lookup fid idx of
+            Just (actUUID, prodUUID) ->
+                ex
+                    { waFlowId = prodUUID
+                    , waActivityLinkId = actUUID
+                    }
+            Nothing -> ex
+    fixEx ex@WasteExchange{} = ex

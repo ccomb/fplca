@@ -15,6 +15,7 @@ isTechnosphereInput ex =
         TechnosphereExchange{techRole = Input} -> True
         TechnosphereExchange{} -> False
         BiosphereExchange{} -> False
+        WasteExchange{} -> False -- waste flows aren't upstream tech inputs in the tree-builder sense
 
 {- | Get converted exchange amount ensuring unit compatibility.
 Converts exchange amount to the target activity's reference unit for proper scaling.
