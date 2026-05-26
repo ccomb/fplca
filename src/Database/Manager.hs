@@ -350,26 +350,15 @@ instance ToJSON DatabaseSetupInfo where
             , "dependencies" .= dsiDependencies
             , "isReady" .= dsiIsReady
             , "unknownUnits" .= dsiUnknownUnits
-            , "locationFallbacks" .= map encodeFallback dsiLocationFallbacks
-            , "locationUnresolved" .= map encodeUnresolved dsiLocationUnresolved
+            , -- LocationFallback / LocationUnresolved carry their own
+              -- Stripped-derived ToJSON now; no per-site encoder needed.
+              "locationFallbacks" .= dsiLocationFallbacks
+            , "locationUnresolved" .= dsiLocationUnresolved
             , "dataPath" .= dsiDataPath
             , "availablePaths" .= map encodeCandidate dsiAvailablePaths
             , "isLoaded" .= dsiIsLoaded
             ]
       where
-        encodeFallback LocationFallback{lfProduct, lfRequested, lfActual, lfKind} =
-            A.object
-                [ "product" .= lfProduct
-                , "requested" .= lfRequested
-                , "actual" .= lfActual
-                , "kind" .= locationKindCode lfKind
-                ]
-        encodeUnresolved LocationUnresolved{luProduct, luRequested, luReason} =
-            A.object
-                [ "product" .= luProduct
-                , "requested" .= luRequested
-                , "reason" .= luReason
-                ]
         encodeCandidate (path, fmt, cnt) =
             A.object
                 ["path" .= path, "format" .= fmt, "fileCount" .= cnt]

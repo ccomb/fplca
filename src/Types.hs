@@ -1044,6 +1044,22 @@ locationKindCode ParentLoc = "parent"
 locationKindCode GlobalLoc = "global"
 locationKindCode UnrelatedLoc = "unrelated"
 
+-- | Lowercase-wire-code ToJSON for 'LocationKind'. Stays in lock-step with
+-- 'locationKindCode' so the JSON output and the rejection-reason text can
+-- never drift apart.
+instance ToJSON LocationKind where
+    toJSON = toJSON . locationKindCode
+
+instance FromJSON LocationKind where
+    parseJSON v = do
+        s <- parseJSON v
+        case (s :: Text) of
+            "exact" -> pure ExactLoc
+            "parent" -> pure ParentLoc
+            "global" -> pure GlobalLoc
+            "unrelated" -> pure UnrelatedLoc
+            other -> fail $ "Invalid LocationKind: " <> T.unpack other
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text
@@ -1052,6 +1068,7 @@ data LocationFallback = LocationFallback
     , lfKind :: !LocationKind
     }
     deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped LocationFallback)
 
 {- | A product whose supplier could not be linked — either because no candidate
 matched the name/unit, or because every geographic candidate was rejected by
@@ -1063,6 +1080,7 @@ data LocationUnresolved = LocationUnresolved
     , luReason :: !Text
     }
     deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON) via (Stripped LocationUnresolved)
 
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.
