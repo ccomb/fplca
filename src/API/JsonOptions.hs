@@ -53,17 +53,8 @@ strippedParseJSON = genericParseJSON stripLowerPrefix
 strippedSchemaOptions :: SchemaOptions
 strippedSchemaOptions = fromAesonOptions stripLowerPrefix
 
-{- | DerivingVia carrier collapsing the ~180 hand-rolled @ToJSON@ \/ @FromJSON@
-\/ @ToSchema@ instance blocks that share the same shape:
-
-@
-  toJSON     = strippedToJSON
-  toEncoding = strippedToEncoding
-  parseJSON  = strippedParseJSON
-  declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-@
-
-Usage:
+{- | DerivingVia carrier: strips the lowercase field-name prefix
+(@fooBar -> bar@) and uses the @Generic@ instances. Usage:
 
 @
   data Foo = Foo { fooBar :: Int } deriving Generic
@@ -71,11 +62,6 @@ Usage:
   deriving via (Stripped Foo) instance FromJSON Foo
   deriving via (Stripped Foo) instance ToSchema Foo
 @
-
-Categorically: dictionary transport along the zero-cost iso witnessed by
-'Coercible'. The instance bodies bypass the user-facing typeclass on @a@ and
-call the @Generic@ helpers directly, avoiding the recursion that would arise
-from @instance ToJSON a => ToJSON (Stripped a)@.
 -}
 newtype Stripped a = Stripped {unStripped :: a}
 

@@ -1116,12 +1116,10 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     }
     deriving (Generic, NFData, Store)
 
-{- | Product of monoids, componentwise: lists concat, the count\/blocker
-map unions (counts summed, first blocker wins as a tiebreaker), the set
-unions, the @Int@ counter sums. Hand-written rather than @via Generically@
-because bare @Int@ has no canonical 'Monoid' (Sum vs Product is ambiguous)
-and the @(Int, LinkBlocker)@ map value mixes a 'Monoid' with a non-'Monoid'.
--}
+-- | Field-wise '<>'. On unresolved-product collision counts are summed
+-- and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
+-- has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
+-- not itself a 'Monoid'.
 instance Semigroup CrossDBLinkingStats where
     s1 <> s2 =
         CrossDBLinkingStats

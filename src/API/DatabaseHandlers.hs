@@ -131,13 +131,13 @@ import Database.Upload (
  )
 import qualified Database.UploadedDatabase as UploadedDB
 import Types (Database (..), GeographyPolicy (..), unresolvedCount)
-import App.Env (AppM, HasDatabaseManager (..))
+import App.Env (AppEnv (..), AppM)
 import Control.Monad.Reader (asks)
 
 -- | List all databases
 getDatabases :: AppM DatabaseListResponse
 getDatabases = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     dbStatuses <- liftIO $ listDatabases dbManager
     let statusList = map convertDbStatus dbStatuses
     return $ DatabaseListResponse statusList
@@ -145,7 +145,7 @@ getDatabases = do
 -- | Load a database on demand
 loadDatabaseHandler :: Text -> AppM LoadDatabaseResponse
 loadDatabaseHandler dbName= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ loadDatabase dbManager dbName
     case eitherResult of
         Left (ex :: SomeException) ->
@@ -158,7 +158,7 @@ loadDatabaseHandler dbName= do
 -- | Unload a database from memory
 unloadDatabaseHandler :: Text -> AppM ActivateResponse
 unloadDatabaseHandler dbName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     simpleAction (unloadDatabase dbManager dbName) ("Unloaded database: " <> dbName)
 
 {- | Re-run cross-DB linking for a loaded database against the currently-loaded
@@ -167,7 +167,7 @@ suboptimal order without reloading the whole database.
 -}
 relinkDatabaseHandler :: Text -> AppM RelinkResponse
 relinkDatabaseHandler dbName= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     res <- liftIO $ relinkDatabase dbManager dbName
     case res of
         Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
@@ -184,13 +184,13 @@ relinkDatabaseHandler dbName= do
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: Text -> AppM ActivateResponse
 deleteDatabaseHandler dbName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     simpleAction (removeDatabase dbManager dbName) ("Deleted database: " <> dbName)
 
 -- | Upload a new database
 uploadDatabaseHandler :: UploadRequest -> AppM UploadResponse
 uploadDatabaseHandler req= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     -- Decode base64 ZIP data
     let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
     case zipDataResult of
@@ -324,7 +324,7 @@ Returns completeness, missing suppliers, and dependency suggestions
 -}
 getDatabaseSetupHandler :: Text -> AppM DatabaseSetupInfo
 getDatabaseSetupHandler dbName= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ getDatabaseSetupInfo dbManager dbName
     case eitherResult of
         Left (ex :: SomeException) ->
@@ -338,7 +338,7 @@ Runs cross-DB linking and returns updated setup info
 -}
 addDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 addDependencyHandler dbName depName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     ioEither400 (addDependencyToStaged dbManager dbName depName)
 
 {- | Remove a dependency from a staged database
@@ -346,13 +346,13 @@ Re-runs cross-DB linking and returns updated setup info
 -}
 removeDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 removeDependencyHandler dbName depName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     ioEither400 (removeDependencyFromStaged dbManager dbName depName)
 
 -- | Change the data path for an uploaded (staged) database
 setDataPathHandler :: Text -> Value -> AppM DatabaseSetupInfo
 setDataPathHandler dbName body = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     -- Extract "path" from JSON body
     let mPath = case body of
             A.Object obj -> case KM.lookup "path" obj of
@@ -368,7 +368,7 @@ Builds matrices and makes it ready for queries
 -}
 finalizeDatabaseHandler :: Text -> AppM ActivateResponse
 finalizeDatabaseHandler dbName= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ finalizeDatabase dbManager dbName
     case eitherResult of
         Left (ex :: SomeException) ->
@@ -383,7 +383,7 @@ Same flow as database upload but creates MethodConfig entry
 -}
 uploadMethodHandler :: UploadRequest -> AppM UploadResponse
 uploadMethodHandler req= do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
     case zipDataResult of
         Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
@@ -439,7 +439,7 @@ uploadMethodHandler req= do
 -- | Delete an uploaded method collection
 deleteMethodHandler :: Text -> AppM ActivateResponse
 deleteMethodHandler name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     simpleAction (removeMethodCollection dbManager name) ("Deleted method: " <> name)
 
 -- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse
@@ -500,32 +500,32 @@ convertRefDataStatus s =
 
 listRefData :: RefDataKind -> AppM RefDataListResponse
 listRefData kind = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let (listFn, _, _, _, _, _) = rdOps kind
     statuses <- liftIO $ listFn dbManager
     return $ RefDataListResponse (map convertRefDataStatus statuses)
 
 loadRefData :: RefDataKind -> Text -> AppM ActivateResponse
 loadRefData kind name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let (_, loadFn, _, _, _, _) = rdOps kind
     simpleAction (loadFn dbManager name) ("Loaded: " <> name)
 
 unloadRefData :: RefDataKind -> Text -> AppM ActivateResponse
 unloadRefData kind name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let (_, _, unloadFn, _, _, _) = rdOps kind
     simpleAction (unloadFn dbManager name) ("Unloaded: " <> name)
 
 deleteRefData :: RefDataKind -> Text -> AppM ActivateResponse
 deleteRefData kind name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let (_, _, _, _, removeFn, _) = rdOps kind
     simpleAction (removeFn dbManager name) ("Deleted: " <> name)
 
 uploadRefData :: RefDataKind -> UploadRequest -> AppM UploadResponse
 uploadRefData kind req = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let (_, _, _, addFn, _, subdir) = rdOps kind
     let csvDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
     case csvDataResult of
@@ -564,7 +564,7 @@ uploadRefData kind req = do
 
 getFlowSynonymGroupsHandler :: Text -> AppM SynonymGroupsResponse
 getFlowSynonymGroupsHandler name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     result <- liftIO $ getFlowSynonymGroups dbManager name
     case result of
         Left err -> throwError $ err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
@@ -572,7 +572,7 @@ getFlowSynonymGroupsHandler name = do
 
 downloadRefDataHandler :: RefDataKind -> Text -> AppM (Headers '[Header "Content-Disposition" Text] BinaryContent)
 downloadRefDataHandler kind name = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     let tvar = case kind of
             FlowSynonyms -> dmAvailableFlowSyns dbManager
             CompartmentMappings -> dmAvailableCompMaps dbManager

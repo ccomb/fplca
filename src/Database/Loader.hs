@@ -45,7 +45,6 @@ module Database.Loader (
     fixActivityLinksWithCrossDB,
     findAllCrossDBLinks,
     CrossDBLinkingStats (..),
-    mempty,
     crossDBLinksCount,
     unresolvedCount,
     crossDBBySource,
@@ -232,14 +231,9 @@ data UnlinkedExchange = UnlinkedExchange
     }
     deriving (Eq, Ord, Show)
 
-{- | Summary of unlinked exchanges grouped by consumer activity.
-
-Categorically the product of four monoids:
-'M.unionWith (++)' on the activity map, and addition on each 'Int'
-counter. We hand-write the instance because bare 'Int' has no canonical
-'Monoid' (Sum vs Product is ambiguous); wrapping the fields as 'Sum Int'
-would have leaked through every constructor and accessor.
--}
+-- | Summary of unlinked exchanges grouped by consumer activity.
+-- 'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
+-- 'Sum Int' would force every reader to unwrap.
 data UnlinkedSummary = UnlinkedSummary
     { usActivities :: !(M.Map T.Text [UnlinkedExchange]) -- consumer name → list of unlinked exchanges
     , usTotalLinks :: !Int

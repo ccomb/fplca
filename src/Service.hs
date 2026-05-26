@@ -341,10 +341,7 @@ getActivityInventoryWithSharedSolver validators sharedSolver db processIdText = 
                                     let inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
                                     return $ Right inventoryExport
 
--- | Simple stats tracking for tree processing
--- | Tree-traversal counters (total nodes / loop nodes / leaf nodes). The
--- 'Semigroup' / 'Monoid' instance is the product of three Sum-Int monoids,
--- hand-written to keep the bare 'Int' constructor positions ergonomic.
+-- | Tree-traversal counters (total nodes / loop nodes / leaf nodes).
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves
 
 instance Semigroup TreeStats where

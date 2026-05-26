@@ -11,13 +11,8 @@ import qualified Options.Applicative as OA
 import Version (buildTarget, gitHash, gitTag, version)
 
 -- ---------------------------------------------------------------------------
--- Option-builder helpers
---
--- optparse-applicative is the textbook /Free Applicative/ over a primitive
--- @Parser@: composition with @\<*\>@ keeps the static structure exposed
--- (which is why @--help@ generation works), and the helpers below factor
--- the four shapes that dominated this file before — Text option, Int
--- option, switch, positional Text arg — into one line each.
+-- Option-builder helpers: collapses the @long/short/metavar/help@ boilerplate
+-- around the four shapes (Text/Int option, Text/String positional arg).
 -- ---------------------------------------------------------------------------
 
 -- | @strOption@ with @long/metavar/help@, optionally a short alias.

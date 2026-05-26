@@ -56,7 +56,7 @@ import qualified SharedSolver
 import Tree (buildLoopAwareTree)
 import Types
 import qualified Version
-import App.Env (AppEnv (..), AppM, HasDatabaseManager (..), runApp)
+import App.Env (AppEnv (..), AppM, runApp)
 import Control.Monad.Reader (asks)
 
 -- | API type definition - RESTful design with focused endpoints
@@ -189,7 +189,7 @@ notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
 -- | Get database by name, throw 404 if not loaded
 requireDatabaseByName :: Text -> AppM (Database, SharedSolver)
 requireDatabaseByName dbName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
@@ -232,7 +232,7 @@ methods.
 -}
 solutionWithDeps :: Text -> Database -> SharedSolver -> ProcessId -> AppM SharedSolver.CrossDBSolution
 solutionWithDeps dbName db solver pid = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -256,7 +256,7 @@ inventoriesWithDeps dbName db solver pids =
 -- | Batch variant of 'solutionWithDeps'.
 solutionsWithDeps :: Text -> Database -> SharedSolver -> [ProcessId] -> AppM [SharedSolver.CrossDBSolution]
 solutionsWithDeps dbName db solver pids = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     requireFullyLinked dbName db
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
     res <-
@@ -494,7 +494,7 @@ throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Intern
 -- | Load a method collection by name from the live DatabaseManager state.
 loadCollection :: Text -> AppM ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
 loadCollection collectionName = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
         Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
@@ -508,7 +508,7 @@ crossDBSolutionFor :: Text -> Database -> SharedSolver -> ProcessId -> Maybe Sub
 crossDBSolutionFor dbName db solver pid mSub = case mSub of
     Nothing -> solutionWithDeps dbName db solver pid
     Just subReq -> do
-        dbManager <- asks getDatabaseManager
+        dbManager <- asks aeDbManager
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         eSol <-
@@ -772,7 +772,7 @@ activityLCIABatchH ::
     Maybe SubstitutionRequest ->
     AppM LCIABatchResult
 activityLCIABatchH dbName processIdText collectionName mSub = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     (actProcessId, activity) <- resolveOrThrow db processIdText
     (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
@@ -836,7 +836,7 @@ batchImpactsH ::
     BatchImpactsRequest ->
     AppM BatchImpactsResponse
 batchImpactsH dbName collectionName topFlowsParam req = do
-    dbManager <- asks getDatabaseManager
+    dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     collection <- case M.lookup collectionName loadedCollections of
@@ -896,24 +896,983 @@ batchImpactsH dbName collectionName topFlowsParam req = do
             , birInvalid = invalid
             }
 
-{- | API server implementation. Handlers live in 'AppM' (a 'ReaderT'
-'AppEnv' over Servant's 'Handler'); 'hoistServer' is the natural
-transformation that lifts the @ServerT LCAAPI AppM@ into a plain
-@Server LCAAPI@ Servant expects at the WAI boundary.
--}
-lcaServer :: AppEnv -> Server LCAAPI
-lcaServer env =
-    hoistServer lcaAPI (runApp env) handlers
+-- ---------------------------------------------------------------------------
+-- Pure helpers shared by handlers
+-- ---------------------------------------------------------------------------
+
+-- | Parse "System=Value[:exact]" into (system, value, isExact).
+parseClassFilter :: Text -> Maybe (Text, Text, Bool)
+parseClassFilter raw =
+    let (sys, rest) = T.breakOn "=" raw
+     in if T.null rest
+            then Nothing
+            else
+                let valAndMode = T.drop 1 rest
+                    (val, mode) = T.breakOn ":" valAndMode
+                    isExact = T.drop 1 mode == "exact"
+                 in Just (T.strip sys, T.strip val, isExact)
+
+-- | Merge preset-derived and explicit (system, value, exact) classification filters.
+mergeClassFilters
+    :: [Config.ClassificationPreset]
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> [(Text, Text, Bool)]
+mergeClassFilters presets presetParam systems values modes =
+    expandPreset presets presetParam
+        ++ zipWith3
+            (\s v m -> (s, v, m == "exact"))
+            systems
+            values
+            (modes ++ repeat "contains")
+
+-- | Build a 'Service.SupplyChainFilter' shared by GET and POST handlers.
+buildSupplyChainFilter
+    :: [Config.ClassificationPreset]
+    -> Maybe Text
+    -> Maybe Int
+    -> Maybe Double
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> Maybe Text
+    -> Maybe Text
+    -> Service.SupplyChainFilter
+buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
+    Service.SupplyChainFilter
+        { Service.scfCore =
+            Service.ActivityFilterCore
+                { Service.afcName = nameFilter
+                , Service.afcLocation = locationFilter
+                , Service.afcProduct = productFilter
+                , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
+                , Service.afcLimit = limitParam
+                , Service.afcOffset = offsetParam
+                , Service.afcSort = sortParam
+                , Service.afcOrder = orderParam
+                }
+        , Service.scfMaxDepth = maxDepthParam
+        , Service.scfMinQuantity = minQuantity
+        }
+
+buildFlowEntry :: Database -> M.Map UUID (MethodCF, MatchStrategy) -> UUID -> FlowCFEntry
+buildFlowEntry db reverseIndex uuid =
+    let mFlow = M.lookup uuid (dbBioFlows db)
+        mMatch = M.lookup uuid reverseIndex
+     in FlowCFEntry
+            { fceFlowId = uuid
+            , fceFlowName = maybe "" bfName mFlow
+            , fceFlowCategory = maybe "" bfCompartmentName mFlow
+            , fceCfValue = fmap (mcfValue . fst) mMatch
+            , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
+            , fceMatchStrategy = fmap (strategyToText . snd) mMatch
+            }
+
+strategyToText :: MatchStrategy -> Text
+strategyToText ByUUID = "uuid"
+strategyToText ByCAS = "cas"
+strategyToText ByName = "name"
+strategyToText BySynonym = "synonym"
+strategyToText ByFuzzy = "fuzzy"
+strategyToText NoMatch = "none"
+
+matchesQuery :: Maybe Text -> Text -> Text -> Bool
+matchesQuery Nothing _ _ = True
+matchesQuery (Just q) cfName dbFlowName =
+    T.isInfixOf q (T.toLower cfName) || T.isInfixOf q (T.toLower dbFlowName)
+
+cfToAPI :: MethodCF -> MethodFactorAPI
+cfToAPI cf =
+    MethodFactorAPI
+        { mfaFlowRef = mcfFlowRef cf
+        , mfaFlowName = mcfFlowName cf
+        , mfaDirection = case mcfDirection cf of
+            MT.Input -> "Input"
+            MT.Output -> "Output"
+        , mfaValue = mcfValue cf
+        }
+
+-- ---------------------------------------------------------------------------
+-- AppM helpers
+-- ---------------------------------------------------------------------------
+
+-- | Lookup a method by UUID across all loaded collections.
+loadMethodByUUID :: Text -> AppM Method
+loadMethodByUUID uuidText = do
+    dbManager <- asks aeDbManager
+    loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
+    let allMethods = map snd loadedMethods
+    case UUID.fromText uuidText of
+        Nothing -> throwError err400{errBody = "Invalid method UUID format"}
+        Just uuid ->
+            case filter (\m -> methodId m == uuid) allMethods of
+                (m : _) -> return m
+                [] -> throwError err404{errBody = "Method not found"}
+
+-- | Resolve (db, solver, ProcessId, Activity, Method) and dispatch.
+withActivityAndMethod
+    :: Text
+    -> Text
+    -> Text
+    -> (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a)
+    -> AppM a
+withActivityAndMethod dbName processIdText methodIdText k = do
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    method <- loadMethodByUUID methodIdText
+    case Service.resolveActivityAndProcessId db processIdText of
+        Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+        Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+        Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
+
+-- ---------------------------------------------------------------------------
+-- Servant handlers (top-level AppM actions)
+-- ---------------------------------------------------------------------------
+
+getOpenApiSpec :: AppM Value
+getOpenApiSpec = return $ toJSON volcaOpenApi
+
+getVersion :: AppM Value
+getVersion =
+    return $
+        object
+            [ "version" .= Version.version
+            , "gitHash" .= Version.gitHash
+            , "gitTag" .= Version.gitTag
+            , "buildTarget" .= Version.buildTarget
+            ]
+
+getHosting :: AppM Value
+getHosting = do
+    hostingConfig <- asks aeHostingConfig
+    return $ case hostingConfig of
+        Just hc ->
+            object
+                [ "is_hosted" .= True
+                , "max_uploads" .= Config.hcMaxUploads hc
+                , "api_access" .= Config.hcApiAccess hc
+                , "upgrade_upload" .= Config.hcUpgradeUpload hc
+                , "upgrade_api" .= Config.hcUpgradeApi hc
+                , "upgrade_vm_size" .= Config.hcUpgradeVmSize hc
+                ]
+        Nothing ->
+            object
+                [ "is_hosted" .= False
+                , "max_uploads" .= (-1 :: Int)
+                , "api_access" .= True
+                , "upgrade_upload" .= ("" :: Text)
+                , "upgrade_api" .= ("" :: Text)
+                , "upgrade_vm_size" .= ("" :: Text)
+                ]
+
+getStats :: AppM Value
+getStats = liftIO $ do
+    enabled <- GHC.Stats.getRTSStatsEnabled
+    if enabled
+        then do
+            stats <- GHC.Stats.getRTSStats
+            return $
+                object
+                    [ "memory_used_bytes" .= GHC.Stats.gcdetails_live_bytes (GHC.Stats.gc stats)
+                    , "memory_allocated_bytes" .= GHC.Stats.allocated_bytes stats
+                    , "gc_count" .= GHC.Stats.gcs stats
+                    ]
+        else
+            return $
+                object
+                    ["error" .= ("RTS stats not enabled. Run with +RTS -T to enable." :: Text)]
+
+getClassificationPresets :: AppM [ClassificationPresetInfo]
+getClassificationPresets = do
+    presets <- asks aeClassificationPresets
+    return $ map toInfo presets
   where
-    -- Legacy closure access to env fields, kept so handler bodies (and
-    -- the helpers they call) don't all need an explicit `asks`. We could
-    -- replace this with capability-class projections at every call site,
-    -- but the let-binding is identical in LOC and easier to read.
-    dbManager = aeDbManager env
-    maxTreeDepth = aeMaxTreeDepth env
-    password = aePassword env
-    hostingConfig = aeHostingConfig env
-    classificationPresets = aeClassificationPresets env
+    toInfo p =
+        ClassificationPresetInfo
+            { cpiName = Config.cpName p
+            , cpiLabel = Config.cpLabel p
+            , cpiDescription = Config.cpDescription p
+            , cpiFilters = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e) (Config.ceMode e)) (Config.cpFilters p)
+            }
+
+getLogsHandler :: Maybe Int -> AppM Value
+getLogsHandler sinceMaybe = do
+    let since = fromMaybe 0 sinceMaybe
+    (nextIndex, logLines) <- liftIO $ getLogLines since
+    return $
+        object
+            [ "lines" .= logLines
+            , "nextIndex" .= nextIndex
+            ]
+
+postAuth :: LoginRequest -> AppM (Headers '[Header "Set-Cookie" String] Value)
+postAuth loginReq = do
+    password <- asks aePassword
+    case password of
+        Nothing ->
+            return $ noHeader $ object ["ok" .= True]
+        Just pwd ->
+            if T.unpack (lrCode loginReq) == pwd
+                then
+                    let cookieValue = "volca_session=" ++ pwd ++ "; Path=/; HttpOnly; SameSite=Strict"
+                     in return $ addHeader cookieValue $ object ["ok" .= True]
+                else
+                    throwError err401{errBody = "{\"error\":\"invalid code\"}"}
+
+getActivityInfo :: Text -> Text -> AppM ActivityInfo
+getActivityInfo dbName processId = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    result <- either throwServiceError pure (Service.getActivityInfo unitCfg db processId)
+    case fromJSON result of
+        Success activityInfo -> return activityInfo
+        Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
+
+getActivityFlows :: Text -> Text -> AppM [FlowSummary]
+getActivityFlows dbName processId = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedActivity db processId $ \activity ->
+        return $ Service.getActivityFlowSummaries db activity
+
+getActivityInputs :: Text -> Text -> AppM [ExchangeDetail]
+getActivityInputs dbName processId = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedActivity db processId $ \activity ->
+        return $ Service.getActivityInputDetails db activity
+
+getActivityOutputs :: Text -> Text -> AppM [ExchangeDetail]
+getActivityOutputs dbName processId = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedActivity db processId $ \activity ->
+        return $ Service.getActivityOutputDetails db activity
+
+getActivityReferenceProduct :: Text -> Text -> AppM FlowDetail
+getActivityReferenceProduct dbName processId = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedActivity db processId $ \activity ->
+        case Service.getActivityReferenceProductDetail db activity of
+            Nothing -> throwError err404{errBody = "No reference product found"}
+            Just refProduct -> return refProduct
+
+getActivityTree :: Text -> Text -> AppM TreeExport
+getActivityTree dbName processId = do
+    dbManager <- asks aeDbManager
+    maxTreeDepth <- asks aeMaxTreeDepth
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedActivity db processId $ \_activity -> do
+        let activityUuidText = case T.splitOn "_" processId of
+                (uuid : _) -> uuid
+                [] -> processId
+        case UUID.fromText activityUuidText of
+            Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
+            Just activityUuid -> do
+                unitCfg <- liftIO $ getMergedUnitConfig dbManager
+                let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
+                return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
+
+-- | Inventory with optional substitutions; goes through the cross-DB
+-- back-substitution path so dep-DB inventories merge into the response.
+activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> AppM InventoryExport
+activityInventoryCore dbName processIdText mSub = do
+    dbManager <- asks aeDbManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    (processId, activity) <- resolveOrThrow db processIdText
+    sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
+    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+    pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
+
+getActivityInventory :: Text -> Text -> AppM InventoryExport
+getActivityInventory dbName processIdText = activityInventoryCore dbName processIdText Nothing
+
+getActivityGraph :: Text -> Text -> Maybe Double -> AppM GraphExport
+getActivityGraph dbName processId maybeCutoff = do
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    let cutoffPercent = fromMaybe 1.0 maybeCutoff
+    result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
+    either throwServiceError pure result
+
+-- | Supply-chain core (scaling-vector based). 'Nothing' takes the cached
+-- solve; 'Just' applies substitutions via the cross-DB resolver.
+activitySupplyChainCore
+    :: Text
+    -> Text
+    -> Maybe Text
+    -> Maybe Int
+    -> Maybe Double
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> Maybe SubstitutionRequest
+    -> AppM SupplyChainResponse
+activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
+    dbManager <- asks aeDbManager
+    presets <- asks aeClassificationPresets
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    let includeEdges = fromMaybe False includeEdgesParam
+        scf =
+            buildSupplyChainFilter
+                presets
+                nameFilter
+                limitParam
+                minQuantity
+                offsetParam
+                maxDepthParam
+                locationFilter
+                productFilter
+                presetParam
+                classSystems
+                classValues
+                classModes
+                sortParam
+                orderParam
+    case mSub of
+        Nothing -> do
+            unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+            result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
+            either throwServiceError pure result
+        Just subReq -> do
+            (processId, _) <- resolveOrThrow db processIdText
+            scalingResult <-
+                liftIO $
+                    Service.computeScalingVectorWithSubstitutionsCrossDB
+                        (DM.mkDepSolverLookup dbManager)
+                        db
+                        dbName
+                        sharedSolver
+                        processId
+                        (srSubstitutions subReq)
+            case scalingResult of
+                Left err -> throwServiceError err
+                Right (scalingVec, virtualLinks) -> do
+                    unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+                    eResp <-
+                        liftIO $
+                            Service.buildSupplyChainFromScalingVectorCrossDB
+                                unitCfg
+                                (DM.mkDepSolverLookup dbManager)
+                                db
+                                dbName
+                                processId
+                                scalingVec
+                                virtualLinks
+                                scf
+                                includeEdges
+                    either throwServiceError pure eResp
+
+getActivitySupplyChain
+    :: Text
+    -> Text
+    -> Maybe Text
+    -> Maybe Int
+    -> Maybe Double
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> AppM SupplyChainResponse
+getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
+    activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
+
+-- | Aggregate endpoint with accumulating field-level validation (a single
+-- request can report invalid `scope` and invalid `aggregate` together).
+getActivityAggregate
+    :: Text
+    -> Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> Maybe Text
+    -> Maybe Text
+    -> AppM Aggregation
+getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnameParam fnameNotParam funitParam presetParam fclassParams ftargetParam fexchangeTypeParam freferenceParam groupByParam aggregateParam = do
+    dbManager <- asks aeDbManager
+    presets <- asks aeClassificationPresets
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    let parseScope = \case
+            Just "direct" -> V.Success Agg.ScopeDirect
+            Just "supply_chain" -> V.Success Agg.ScopeSupplyChain
+            Just "biosphere" -> V.Success Agg.ScopeBiosphere
+            _ -> V.failure "scope must be one of: direct | supply_chain | biosphere"
+        parseExType = \case
+            Nothing -> V.Success Nothing
+            Just "technosphere" -> V.Success (Just Agg.KindTechnosphere)
+            Just "biosphere" -> V.Success (Just Agg.KindBiosphere)
+            Just "waste" -> V.Success (Just Agg.KindWaste)
+            Just _ -> V.failure "filter_exchange_type must be one of: technosphere | biosphere | waste"
+        parseAgg = \case
+            Nothing -> V.Success Agg.AggSum
+            Just "sum_quantity" -> V.Success Agg.AggSum
+            Just "count" -> V.Success Agg.AggCount
+            Just "share" -> V.Success Agg.AggShare
+            Just other -> V.failure ("aggregate must be one of: sum_quantity | count | share (got " <> other <> ")")
+    (scope, exchangeType, aggFn) <-
+        case V.toEither $ (,,) <$> parseScope scopeParam <*> parseExType fexchangeTypeParam <*> parseAgg aggregateParam of
+            Left errs -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 (T.intercalate "; " (NE.toList errs)))}
+            Right v -> pure v
+    case (exchangeType, scope) of
+        (Just _, Agg.ScopeBiosphere) ->
+            throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}
+        (Just _, Agg.ScopeSupplyChain) ->
+            throwError err400{errBody = "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"}
+        _ -> return ()
+    let presetFilters = expandPreset presets presetParam
+        explicitFilters = mapMaybe parseClassFilter fclassParams
+        params =
+            Agg.AggregateParams
+                { Agg.apScope = scope
+                , Agg.apIsInput = isInputParam
+                , Agg.apMaxDepth = maxDepthParam
+                , Agg.apFilterName = fnameParam
+                , Agg.apFilterNameNot = maybe [] (map T.strip . T.splitOn ",") fnameNotParam
+                , Agg.apFilterUnit = funitParam
+                , Agg.apFilterClassifications = presetFilters ++ explicitFilters
+                , Agg.apFilterTargetName = ftargetParam
+                , Agg.apFilterExchangeType = exchangeType
+                , Agg.apFilterIsReference = freferenceParam
+                , Agg.apGroupBy = groupByParam
+                , Agg.apAggregate = aggFn
+                }
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+    result <- liftIO $ Agg.aggregate unitCfg mFlows mUnits db dbName sharedSolver (DM.mkDepSolverLookup dbManager) processId params
+    either throwServiceError pure result
+
+-- | LCIA single-method core. GET passes a top-flows param and logs;
+-- POST carries substitutions instead and skips logging.
+activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
+activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
+    dbManager <- asks aeDbManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    method <- loadMethodByUUID methodIdText
+    (processId, activity) <- resolveOrThrow db processIdText
+    sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
+    result <- liftIO $ computeCategoryResult dbManager dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+    when (isNothing mSub) $ liftIO $ logLCIAResult result method
+    pure result
+
+getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> AppM LCIAResult
+getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
+    activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
+
+postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> AppM LCIAResult
+postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
+    activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
+
+-- | Sensitivity sweep: rank-1 perturbations on the root scaling, scored
+-- through the cross-DB graph (regional CFs on dep DBs still apply).
+postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> AppM SensitivityResponse
+postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
+    dbManager <- asks aeDbManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    requireFullyLinked dbName db
+    method <- loadMethodByUUID methodIdText
+    (processId, activity) <- resolveOrThrow db processIdText
+    eRes <- liftIO $ Service.computeSensitivities db sharedSolver processId (srPerturbations senReq)
+    (baselineX, perResults) <- either throwServiceError pure eRes
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    let depLookup = DM.mkDepSolverLookup dbManager
+        scaleToSolution x = do
+            eSol <-
+                SharedSolver.goWithDepsFromScalings
+                    unitCfg
+                    depLookup
+                    db
+                    dbName
+                    []
+                    [x]
+                    0
+            pure $ case eSol of
+                Left err -> Left err
+                Right (sol : _) -> Right sol
+                Right [] -> Left "cross-DB propagation returned empty result"
+        buildEntry baselineLcia (p, eitherX) = case eitherX of
+            Left err -> pure (PerturbedEntry p (Left err))
+            Right x' -> do
+                eSol <- scaleToSolution x'
+                case eSol of
+                    Left err -> pure (PerturbedEntry p (Left err))
+                    Right sol -> do
+                        lcia <- computeCategoryResult dbManager dbName db sol activity 5 Nothing method
+                        pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
+    eBaselineSol <- liftIO $ scaleToSolution baselineX
+    baselineSol <-
+        either
+            (\err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err})
+            pure
+            eBaselineSol
+    baselineLcia <-
+        liftIO $
+            computeCategoryResult dbManager dbName db baselineSol activity 5 Nothing method
+    perturbed <-
+        liftIO $
+            mapConcurrently (buildEntry baselineLcia) perResults
+    pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
+
+getActivityLCIABatch :: Text -> Text -> Text -> AppM LCIABatchResult
+getActivityLCIABatch dbName processIdText collectionName =
+    activityLCIABatchH dbName processIdText collectionName Nothing
+
+postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> AppM LCIABatchResult
+postActivityLCIABatch dbName processIdText collectionName subReq =
+    activityLCIABatchH dbName processIdText collectionName (Just subReq)
+
+postActivityInventory :: Text -> Text -> SubstitutionRequest -> AppM InventoryExport
+postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
+
+postActivitySupplyChain
+    :: Text
+    -> Text
+    -> Maybe Text
+    -> Maybe Int
+    -> Maybe Double
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> SubstitutionRequest
+    -> AppM SupplyChainResponse
+postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
+    activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
+
+getActivityConsumers
+    :: Text
+    -> Text
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Text
+    -> [Text]
+    -> [Text]
+    -> [Text]
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Int
+    -> Maybe Text
+    -> Maybe Text
+    -> Maybe Bool
+    -> AppM ConsumersResponse
+getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam includeEdgesParam = do
+    presets <- asks aeClassificationPresets
+    (db, _) <- requireDatabaseByName dbName
+    let cnf =
+            Service.ConsumerFilter
+                { Service.cnfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = nameFilter
+                        , Service.afcLocation = locationFilter
+                        , Service.afcProduct = productFilter
+                        , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
+                        , Service.afcLimit = limitParam
+                        , Service.afcOffset = offsetParam
+                        , Service.afcSort = sortParam
+                        , Service.afcOrder = orderParam
+                        }
+                , Service.cnfMaxDepth = maxDepthParam
+                , Service.cnfIncludeEdges = fromMaybe False includeEdgesParam
+                }
+    either throwServiceError pure (Service.getConsumers db dbName processIdText cnf)
+
+getActivityPathTo :: Text -> Text -> Maybe Text -> AppM Value
+getActivityPathTo dbName processIdText targetParam = do
+    (db, solver) <- requireDatabaseByName dbName
+    target <-
+        maybe
+            (throwError err400{errBody = "Missing required 'target' query parameter"})
+            pure
+            targetParam
+    result <- liftIO $ Service.getPathTo db solver processIdText target
+    case result of
+        Left (Service.ActivityNotFound msg) ->
+            throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+        Left (Service.InvalidProcessId msg) ->
+            throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+        Left err ->
+            throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+        Right val -> return val
+
+getActivityAnalyze :: Text -> Text -> Text -> AppM Value
+getActivityAnalyze dbName processIdText analyzerName = do
+    dbManager <- asks aeDbManager
+    (db, sharedSolver) <- requireDatabaseByName dbName
+    case M.lookup analyzerName (prAnalyzers (dmPlugins dbManager)) of
+        Nothing -> throwError err404{errBody = "Analyzer not found: " <> BSL.fromStrict (T.encodeUtf8 analyzerName)}
+        Just analyzer -> do
+            case Service.resolveActivityAndProcessId db processIdText of
+                Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
+                Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+                Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+                Right (actProcessId, _) -> do
+                    inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
+                    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+                    loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
+                    let methods = map snd loadedMethods
+                        ctx =
+                            AnalyzeContext
+                                { acDatabase = db
+                                , acInventory = inventory
+                                , acMethods = methods
+                                , acParameters = M.empty
+                                , acTechFlowDB = M.empty
+                                , acBioFlowDB = mFlows
+                                , acUnitDB = mUnits
+                                }
+                    liftIO $ ahAnalyze analyzer ctx
+
+getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
+getContributingFlows dbName processIdText _collectionName methodIdText limitParam =
+    withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+        dbManager <- asks aeDbManager
+        let lim = fromMaybe 20 limitParam
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+        inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+            contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+            topFlows =
+                [ FlowContributionEntry
+                    { fcoFlowName = bfName f
+                    , fcoContribution = c
+                    , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                    , fcoFlowId = UUID.toText (bfId f)
+                    , fcoCategory = bfCompartmentName f
+                    , fcoCompartment = bfCompartmentSub f
+                    , fcoCfValue = cfVal
+                    }
+                | (f, cfVal, c) <- take lim contribs
+                ]
+        liftIO $
+            unless (null unknownUuids) $
+                reportProgress Warning $
+                    "[contributing-flows "
+                        <> T.unpack (methodName method)
+                        <> "] "
+                        <> show (length unknownUuids)
+                        <> " inventory flow UUID(s) absent from merged FlowDB. Samples: "
+                        <> show (take 3 unknownUuids)
+        return
+            ContributingFlowsResult
+                { cfrMethod = methodName method
+                , cfrUnit = methodUnit method
+                , cfrTotalScore = score
+                , cfrTopFlows = topFlows
+                }
+
+getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
+getContributingActivities dbName processIdText _collectionName methodIdText limitParam =
+    withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+        dbManager <- asks aeDbManager
+        let lim = fromMaybe 10 limitParam
+        requireFullyLinked dbName db
+        unitCfg <- liftIO $ getMergedUnitConfig dbManager
+        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        eContribs <-
+            liftIO $
+                SharedSolver.crossDBProcessContributions
+                    unitCfg
+                    mUnits
+                    mFlows
+                    (DM.mkDepSolverLookup dbManager)
+                    db
+                    dbName
+                    sharedSolver
+                    actProcessId
+                    tables
+        case eContribs of
+            Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+            Right contributions -> do
+                let score = sum (M.elems contributions)
+                    sorted = sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
+                    top = take lim sorted
+                rows <- liftIO $ mapM (mkCrossDBContrib dbManager dbName mFlows mUnits score) top
+                return
+                    ContributingActivitiesResult
+                        { carMethod = methodName method
+                        , carUnit = methodUnit method
+                        , carTotalScore = score
+                        , carActivities = rows
+                        }
+
+getFlowDetail :: Text -> Text -> AppM FlowDetail
+getFlowDetail dbName flowIdText = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedFlow db flowIdText $ \flow -> do
+        let fid = flowKindId flow
+            unitName' = flowKindUnitName (dbUnits db) flow
+            usageCount = Service.getFlowUsageCount db fid
+        return $ FlowDetail (apiFlowOfKind flow) unitName' usageCount
+
+getFlowActivities :: Text -> Text -> AppM [ActivitySummary]
+getFlowActivities dbName flowIdText = do
+    (db, _) <- requireDatabaseByName dbName
+    withValidatedFlow db flowIdText $ \flow ->
+        return $ Service.getActivitiesUsingFlow db (flowKindId flow)
+
+getMethods :: AppM [MethodSummary]
+getMethods = do
+    dbManager <- asks aeDbManager
+    loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
+    return
+        [ MethodSummary
+            { msmId = methodId m
+            , msmName = methodName m
+            , msmCategory = methodCategory m
+            , msmUnit = methodUnit m
+            , msmFactorCount = length (methodFactors m)
+            , msmCollection = collName
+            }
+        | (collName, m) <- loadedMethods
+        ]
+
+getMethodDetail :: Text -> AppM MethodDetail
+getMethodDetail methodIdText = do
+    method <- loadMethodByUUID methodIdText
+    return $
+        MethodDetail
+            { mdId = methodId method
+            , mdName = methodName method
+            , mdDescription = methodDescription method
+            , mdUnit = methodUnit method
+            , mdCategory = methodCategory method
+            , mdMethodology = methodMethodology method
+            , mdFactorCount = length (methodFactors method)
+            }
+
+getMethodFactors :: Text -> AppM [MethodFactorAPI]
+getMethodFactors methodIdText = do
+    method <- loadMethodByUUID methodIdText
+    return $ map cfToAPI (methodFactors method)
+
+getMethodMapping :: Text -> Text -> AppM MappingStatus
+getMethodMapping dbName methodIdText = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    method <- loadMethodByUUID methodIdText
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    let stats = computeMappingStats mappings
+        totalFactors = length mappings
+        coverage =
+            if totalFactors > 0
+                then fromIntegral (totalFactors - msUnmatched stats) / fromIntegral totalFactors * 100
+                else 0.0
+        unmappedFlows =
+            take
+                50
+                [ UnmappedFlowAPI
+                    { ufaFlowRef = mcfFlowRef cf
+                    , ufaFlowName = mcfFlowName cf
+                    , ufaDirection = case mcfDirection cf of
+                        MT.Input -> "Input"
+                        MT.Output -> "Output"
+                    }
+                | (cf, Nothing) <- mappings
+                ]
+        uniqueDbFlows = S.size $ S.fromList [bfId f | (_, Just (f, _)) <- mappings]
+    return
+        MappingStatus
+            { mstMethodId = methodId method
+            , mstMethodName = methodName method
+            , mstTotalFactors = msTotal stats
+            , mstMappedByUUID = msByUUID stats
+            , mstMappedByCAS = msByCAS stats
+            , mstMappedByName = msByName stats
+            , mstMappedBySynonym = msBySynonym stats
+            , mstUnmapped = msUnmatched stats
+            , mstCoverage = coverage
+            , mstDbBiosphereCount = fromIntegral (dbBiosphereCount db)
+            , mstUniqueDbFlowsMatched = uniqueDbFlows
+            , mstUnmappedFlows = unmappedFlows
+            }
+
+getFlowCFMapping :: Text -> Text -> AppM FlowCFMapping
+getFlowCFMapping dbName methodIdText = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    method <- loadMethodByUUID methodIdText
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    let reverseIndex =
+            M.fromList
+                [(bfId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
+        entries = map (buildFlowEntry db reverseIndex) (V.toList (dbBiosphereOrder db))
+        matchedCount = length [() | e <- entries, isJust (fceCfValue e)]
+    return
+        FlowCFMapping
+            { fcmMethodName = methodName method
+            , fcmMethodUnit = methodUnit method
+            , fcmTotalFlows = fromIntegral (dbBiosphereCount db)
+            , fcmMatchedFlows = matchedCount
+            , fcmFlows = entries
+            }
+
+getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM CharacterizationResult
+getCharacterization dbName methodIdText flowFilter limitParam = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    method <- loadMethodByUUID methodIdText
+    let lim = fromMaybe 50 limitParam
+        queryLower = fmap T.toLower flowFilter
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    let matched =
+            [ (cf, f, strat)
+            | (cf, Just (f, strat)) <- mappings
+            , matchesQuery queryLower (mcfFlowName cf) (bfName f)
+            ]
+        sorted = sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
+        top = take lim sorted
+        mkEntry (cf, f, strat) =
+            CharacterizationEntry
+                { cheMethodFlowName = mcfFlowName cf
+                , cheCfValue = mcfValue cf
+                , cheCfUnit = mcfUnit cf
+                , cheDirection = case mcfDirection cf of
+                    MT.Input -> "Input"
+                    MT.Output -> "Output"
+                , cheDbFlowName = bfName f
+                , cheFlowId = UUID.toText (bfId f)
+                , cheFlowUnit = getUnitNameForBioFlow (dbUnits db) f
+                , cheCategory = bfCompartmentName f
+                , cheCompartment = bfCompartmentSub f
+                , cheMatchStrategy = strategyToText strat
+                }
+    return
+        CharacterizationResult
+            { chrMethod = methodName method
+            , chrUnit = methodUnit method
+            , chrMatches = length matched
+            , chrShown = length top
+            , chrFactors = map mkEntry top
+            }
+
+getMethodCollections :: AppM MethodCollectionListResponse
+getMethodCollections = do
+    dbManager <- asks aeDbManager
+    statuses <- liftIO $ DM.listMethodCollections dbManager
+    return $
+        MethodCollectionListResponse
+            [ MethodCollectionStatusAPI
+                { mcaName = mcsName s
+                , mcaDisplayName = mcsDisplayName s
+                , mcaDescription = mcsDescription s
+                , mcaStatus = case mcsStatus s of
+                    DM.Loaded -> "loaded"
+                    _ -> "unloaded"
+                , mcaIsUploaded = mcsIsUploaded s
+                , mcaPath = mcsPath s
+                , mcaMethodCount = mcsMethodCount s
+                , mcaFormat = Just (mcsFormat s)
+                }
+            | s <- statuses
+            ]
+
+loadMethodCollectionHandler :: Text -> AppM ActivateResponse
+loadMethodCollectionHandler name = do
+    dbManager <- asks aeDbManager
+    simpleAction (DM.loadMethodCollection dbManager name) ("Loaded method: " <> name)
+
+unloadMethodCollectionHandler :: Text -> AppM ActivateResponse
+unloadMethodCollectionHandler name = do
+    dbManager <- asks aeDbManager
+    simpleAction (DM.unloadMethodCollection dbManager name) ("Unloaded method: " <> name)
+
+searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
+searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
+    (db, _) <- requireDatabaseByName dbName
+    case queryParam of
+        Nothing -> return (SearchResults [] 0 0 50 False 0.0)
+        Just query -> do
+            let ff =
+                    Service.FlowFilter
+                        { Service.ffQuery = query
+                        , Service.ffLang = langParam
+                        , Service.ffLimit = limitParam
+                        , Service.ffOffset = offsetParam
+                        , Service.ffSort = sortParam
+                        , Service.ffOrder = orderParam
+                        }
+            searchFlowsInternal db ff
+
+searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
+searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
+    presets <- asks aeClassificationPresets
+    (db, _) <- requireDatabaseByName dbName
+    let exactMatch = fromMaybe False exactParam
+        sf =
+            Service.SearchFilter
+                { Service.sfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = nameParam
+                        , Service.afcLocation = geoParam
+                        , Service.afcProduct = productParam
+                        , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
+                        , Service.afcLimit = limitParam
+                        , Service.afcOffset = offsetParam
+                        , Service.afcSort = sortParam
+                        , Service.afcOrder = orderParam
+                        }
+                , Service.sfExactMatch = exactMatch
+                }
+    result <- liftIO $ Service.searchActivities db sf
+    case result of
+        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+        Right jsonValue -> case fromJSON jsonValue of
+            Success searchResults -> return searchResults
+            Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
+
+getClassifications :: Text -> AppM [ClassificationSystem]
+getClassifications dbName = do
+    (db, _) <- requireDatabaseByName dbName
+    return $ Service.getClassifications db
+
+postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> AppM BatchImpactsResponse
+postImpactsBatch = batchImpactsH
+
+-- ---------------------------------------------------------------------------
+-- Servant server
+-- ---------------------------------------------------------------------------
+
+lcaServer :: AppEnv -> Server LCAAPI
+lcaServer env = hoistServer lcaAPI (runApp env) handlers
+  where
     handlers =
         getActivityInfo
         :<|> getActivityFlows
@@ -965,7 +1924,6 @@ lcaServer env =
         :<|> unloadMethodCollectionHandler
         :<|> DBHandlers.deleteMethodHandler
         :<|> DBHandlers.uploadMethodHandler
-        -- Flow synonyms
         :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms
         :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms
         :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms
@@ -973,13 +1931,11 @@ lcaServer env =
         :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms
         :<|> DBHandlers.getFlowSynonymGroupsHandler
         :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms
-        -- Compartment mappings
         :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings
         :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings
         :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings
         :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings
         :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings
-        -- Units
         :<|> DBHandlers.listRefData DBHandlers.UnitDefs
         :<|> DBHandlers.loadRefData DBHandlers.UnitDefs
         :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs
@@ -992,958 +1948,6 @@ lcaServer env =
         :<|> getStats
         :<|> getClassificationPresets
         :<|> getOpenApiSpec
-    getOpenApiSpec :: AppM Value
-    getOpenApiSpec = return $ toJSON volcaOpenApi
-
-    getVersion :: AppM Value
-    getVersion =
-        return $
-            object
-                [ "version" .= Version.version
-                , "gitHash" .= Version.gitHash
-                , "gitTag" .= Version.gitTag
-                , "buildTarget" .= Version.buildTarget
-                ]
-
-    getHosting :: AppM Value
-    getHosting = return $ case hostingConfig of
-        Just hc ->
-            object
-                [ "is_hosted" .= True
-                , "max_uploads" .= Config.hcMaxUploads hc
-                , "api_access" .= Config.hcApiAccess hc
-                , "upgrade_upload" .= Config.hcUpgradeUpload hc
-                , "upgrade_api" .= Config.hcUpgradeApi hc
-                , "upgrade_vm_size" .= Config.hcUpgradeVmSize hc
-                ]
-        Nothing ->
-            object
-                [ "is_hosted" .= False
-                , "max_uploads" .= (-1 :: Int)
-                , "api_access" .= True
-                , "upgrade_upload" .= ("" :: Text)
-                , "upgrade_api" .= ("" :: Text)
-                , "upgrade_vm_size" .= ("" :: Text)
-                ]
-
-    getStats :: AppM Value
-    getStats = liftIO $ do
-        enabled <- GHC.Stats.getRTSStatsEnabled
-        if enabled
-            then do
-                stats <- GHC.Stats.getRTSStats
-                return $
-                    object
-                        [ "memory_used_bytes" .= GHC.Stats.gcdetails_live_bytes (GHC.Stats.gc stats)
-                        , "memory_allocated_bytes" .= GHC.Stats.allocated_bytes stats
-                        , "gc_count" .= GHC.Stats.gcs stats
-                        ]
-            else
-                return $
-                    object
-                        ["error" .= ("RTS stats not enabled. Run with +RTS -T to enable." :: Text)]
-
-    getClassificationPresets :: AppM [ClassificationPresetInfo]
-    getClassificationPresets = return $ map toInfo classificationPresets
-      where
-        toInfo p =
-            ClassificationPresetInfo
-                { cpiName = Config.cpName p
-                , cpiLabel = Config.cpLabel p
-                , cpiDescription = Config.cpDescription p
-                , cpiFilters = map (\e -> ClassificationEntryInfo (Config.ceSystem e) (Config.ceValue e) (Config.ceMode e)) (Config.cpFilters p)
-                }
-
-    getLogsHandler :: Maybe Int -> AppM Value
-    getLogsHandler sinceMaybe = do
-        let since = fromMaybe 0 sinceMaybe
-        (nextIndex, logLines) <- liftIO $ getLogLines since
-        return $
-            object
-                [ "lines" .= logLines
-                , "nextIndex" .= nextIndex
-                ]
-
-    postAuth :: LoginRequest -> AppM (Headers '[Header "Set-Cookie" String] Value)
-    postAuth loginReq =
-        case password of
-            Nothing ->
-                -- No password configured, auth always succeeds
-                return $ noHeader $ object ["ok" .= True]
-            Just pwd ->
-                if T.unpack (lrCode loginReq) == pwd
-                    then
-                        let cookieValue = "volca_session=" ++ pwd ++ "; Path=/; HttpOnly; SameSite=Strict"
-                         in return $ addHeader cookieValue $ object ["ok" .= True]
-                    else
-                        throwError err401{errBody = "{\"error\":\"invalid code\"}"}
-
-    -- Core activity endpoint - streamlined data
-    getActivityInfo :: Text -> Text -> AppM ActivityInfo
-    getActivityInfo dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        result <- either throwServiceError pure (Service.getActivityInfo unitCfg db processId)
-        case fromJSON result of
-            Success activityInfo -> return activityInfo
-            Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
-
-    -- Activity flows sub-resource
-    getActivityFlows :: Text -> Text -> AppM [FlowSummary]
-    getActivityFlows dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedActivity db processId $ \activity ->
-            return $ Service.getActivityFlowSummaries db activity
-
-    -- Activity inputs sub-resource
-    getActivityInputs :: Text -> Text -> AppM [ExchangeDetail]
-    getActivityInputs dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedActivity db processId $ \activity ->
-            return $ Service.getActivityInputDetails db activity
-
-    -- Activity outputs sub-resource
-    getActivityOutputs :: Text -> Text -> AppM [ExchangeDetail]
-    getActivityOutputs dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedActivity db processId $ \activity ->
-            return $ Service.getActivityOutputDetails db activity
-
-    -- Activity reference product sub-resource
-    getActivityReferenceProduct :: Text -> Text -> AppM FlowDetail
-    getActivityReferenceProduct dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedActivity db processId $ \activity -> do
-            case Service.getActivityReferenceProductDetail db activity of
-                Nothing -> throwError err404{errBody = "No reference product found"}
-                Just refProduct -> return refProduct
-
-    -- Activity tree export for visualization (configurable depth)
-    getActivityTree :: Text -> Text -> AppM TreeExport
-    getActivityTree dbName processId = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedActivity db processId $ \_activity -> do
-            -- Use CLI --tree-depth option for configurable depth
-            -- Default depth limit prevents DOS attacks via deep tree requests
-            -- Extract activity UUID from processId (format: activityUUID_productUUID)
-            let activityUuidText = case T.splitOn "_" processId of
-                    (uuid : _) -> uuid
-                    [] -> processId -- Fallback
-            case UUID.fromText activityUuidText of
-                Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
-                Just activityUuid -> do
-                    unitCfg <- liftIO $ getMergedUnitConfig dbManager
-                    let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
-                    return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
-
-    -- Activity inventory calculation (full supply chain LCI).
-    -- Goes through the cross-DB back-substitution path so inventories from
-    -- dep DBs are merged into the returned flow map; metadata (flow names,
-    -- units) comes from the merged FlowDB/UnitDB snapshot.
-    activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> AppM InventoryExport
-    activityInventoryCore dbName processIdText mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
-        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
-
-    getActivityInventory :: Text -> Text -> AppM InventoryExport
-    getActivityInventory dbName processIdText = activityInventoryCore dbName processIdText Nothing
-
-    -- Activity graph endpoint for network visualization
-    getActivityGraph :: Text -> Text -> Maybe Double -> AppM GraphExport
-    getActivityGraph dbName processId maybeCutoff = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        let cutoffPercent = fromMaybe 1.0 maybeCutoff -- Default to 1% cutoff
-        result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
-        either throwServiceError pure result
-
-    -- Build the supply-chain filter shared by the GET and POST handlers.
-    buildSupplyChainFilter :: Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Service.SupplyChainFilter
-    buildSupplyChainFilter nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
-        let presetFilters = expandPreset classificationPresets presetParam
-            explicitFilters =
-                zipWith3
-                    (\s v m -> (s, v, m == "exact"))
-                    classSystems
-                    classValues
-                    (classModes ++ repeat "contains")
-            classFilters = presetFilters ++ explicitFilters
-         in Service.SupplyChainFilter
-                { Service.scfCore =
-                    Service.ActivityFilterCore
-                        { Service.afcName = nameFilter
-                        , Service.afcLocation = locationFilter
-                        , Service.afcProduct = productFilter
-                        , Service.afcClassifications = classFilters
-                        , Service.afcLimit = limitParam
-                        , Service.afcOffset = offsetParam
-                        , Service.afcSort = sortParam
-                        , Service.afcOrder = orderParam
-                        }
-                , Service.scfMaxDepth = maxDepthParam
-                , Service.scfMinQuantity = minQuantity
-                }
-
-    -- Activity supply chain endpoint (scaling vector based). 'Nothing' takes the
-    -- cached solve; 'Just' resolves substitutions through the cross-DB resolver.
-    activitySupplyChainCore :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe SubstitutionRequest -> AppM SupplyChainResponse
-    activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        let includeEdges = fromMaybe False includeEdgesParam
-            scf =
-                buildSupplyChainFilter
-                    nameFilter
-                    limitParam
-                    minQuantity
-                    offsetParam
-                    maxDepthParam
-                    locationFilter
-                    productFilter
-                    presetParam
-                    classSystems
-                    classValues
-                    classModes
-                    sortParam
-                    orderParam
-        case mSub of
-            Nothing -> do
-                unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
-                either throwServiceError pure result
-            Just subReq -> do
-                (processId, _) <- resolveOrThrow db processIdText
-                -- Use the cross-DB-aware substitution resolver so qualified PIDs in
-                -- subFrom/subTo are accepted; the virtual cross-DB links it returns
-                -- don't affect the root scaling vector (they drive dep-DB demand),
-                -- which is all the supply-chain navigation reads.
-                scalingResult <-
-                    liftIO $
-                        Service.computeScalingVectorWithSubstitutionsCrossDB
-                            (DM.mkDepSolverLookup dbManager)
-                            db
-                            dbName
-                            sharedSolver
-                            processId
-                            (srSubstitutions subReq)
-                case scalingResult of
-                    Left err -> throwServiceError err
-                    Right (scalingVec, virtualLinks) -> do
-                        unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-                        eResp <-
-                            liftIO $
-                                Service.buildSupplyChainFromScalingVectorCrossDB
-                                    unitCfg
-                                    (DM.mkDepSolverLookup dbManager)
-                                    db
-                                    dbName
-                                    processId
-                                    scalingVec
-                                    virtualLinks
-                                    scf
-                                    includeEdges
-                        either throwServiceError pure eResp
-
-    getActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> AppM SupplyChainResponse
-    getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
-        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
-
-    -- Activity aggregate endpoint (generic SQL-group-by-style aggregation)
-    getActivityAggregate ::
-        Text ->
-        Text ->
-        Maybe Text -> -- scope
-        Maybe Bool -> -- is_input
-        Maybe Int -> -- max_depth
-        Maybe Text -> -- filter_name
-        Maybe Text -> -- filter_name_not
-        Maybe Text -> -- filter_unit
-        Maybe Text -> -- preset
-        [Text] -> -- filter_classification (repeatable: "System=Value[:exact]")
-        Maybe Text -> -- filter_target_name
-        Maybe Text -> -- filter_exchange_type ("technosphere" | "biosphere" | "waste")
-        Maybe Bool -> -- filter_is_reference
-        Maybe Text -> -- group_by
-        Maybe Text -> -- aggregate fn
-        AppM Aggregation
-    getActivityAggregate
-        dbName
-        processId
-        scopeParam
-        isInputParam
-        maxDepthParam
-        fnameParam
-        fnameNotParam
-        funitParam
-        presetParam
-        fclassParams
-        ftargetParam
-        fexchangeTypeParam
-        freferenceParam
-        groupByParam
-        aggregateParam = do
-            (db, sharedSolver) <- requireDatabaseByName dbName
-            -- Field-level validation via the Validation Applicative (accumulating).
-            -- A request with both an invalid `scope` and an invalid `aggregate`
-            -- now reports both errors at once, instead of just the first.
-            let parseScope = \case
-                    Just "direct" -> V.Success Agg.ScopeDirect
-                    Just "supply_chain" -> V.Success Agg.ScopeSupplyChain
-                    Just "biosphere" -> V.Success Agg.ScopeBiosphere
-                    _ -> V.failure "scope must be one of: direct | supply_chain | biosphere"
-                parseExType = \case
-                    Nothing -> V.Success Nothing
-                    Just "technosphere" -> V.Success (Just Agg.KindTechnosphere)
-                    Just "biosphere" -> V.Success (Just Agg.KindBiosphere)
-                    Just "waste" -> V.Success (Just Agg.KindWaste)
-                    Just _ -> V.failure "filter_exchange_type must be one of: technosphere | biosphere | waste"
-                parseAgg = \case
-                    Nothing -> V.Success Agg.AggSum
-                    Just "sum_quantity" -> V.Success Agg.AggSum
-                    Just "count" -> V.Success Agg.AggCount
-                    Just "share" -> V.Success Agg.AggShare
-                    Just other -> V.failure ("aggregate must be one of: sum_quantity | count | share (got " <> other <> ")")
-            (scope, exchangeType, aggFn) <-
-                case V.toEither $ (,,) <$> parseScope scopeParam <*> parseExType fexchangeTypeParam <*> parseAgg aggregateParam of
-                    Left errs -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 (T.intercalate "; " (NE.toList errs)))}
-                    Right v -> pure v
-            -- Cross-check requires the parsed scope value, so it runs after the
-            -- Applicative phase. Validation is not a Monad, by design.
-            case (exchangeType, scope) of
-                (Just _, Agg.ScopeBiosphere) ->
-                    throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}
-                (Just _, Agg.ScopeSupplyChain) ->
-                    throwError err400{errBody = "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"}
-                _ -> return ()
-            let presetFilters = expandPreset classificationPresets presetParam
-                explicitFilters = mapMaybe parseClassFilter fclassParams
-                params =
-                    Agg.AggregateParams
-                        { Agg.apScope = scope
-                        , Agg.apIsInput = isInputParam
-                        , Agg.apMaxDepth = maxDepthParam
-                        , Agg.apFilterName = fnameParam
-                        , Agg.apFilterNameNot = maybe [] (map T.strip . T.splitOn ",") fnameNotParam
-                        , Agg.apFilterUnit = funitParam
-                        , Agg.apFilterClassifications = presetFilters ++ explicitFilters
-                        , Agg.apFilterTargetName = ftargetParam
-                        , Agg.apFilterExchangeType = exchangeType
-                        , Agg.apFilterIsReference = freferenceParam
-                        , Agg.apGroupBy = groupByParam
-                        , Agg.apAggregate = aggFn
-                        }
-            unitCfg <- liftIO $ getMergedUnitConfig dbManager
-            (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-            result <- liftIO $ Agg.aggregate unitCfg mFlows mUnits db dbName sharedSolver (DM.mkDepSolverLookup dbManager) processId params
-            either throwServiceError pure result
-          where
-            -- Parse "System=Value[:exact]" into (system, value, isExact).
-            parseClassFilter :: Text -> Maybe (Text, Text, Bool)
-            parseClassFilter raw =
-                let (sys, rest) = T.breakOn "=" raw
-                 in if T.null rest
-                        then Nothing
-                        else
-                            let valAndMode = T.drop 1 rest
-                                (val, mode) = T.breakOn ":" valAndMode
-                                isExact = T.drop 1 mode == "exact"
-                             in Just (T.strip sys, T.strip val, isExact)
-
-    -- Activity LCIA endpoint (single method within a collection). The GET
-    -- variant honours a top-flows query param and logs the result; the POST
-    -- route carries neither (no top-flows param, no logging).
-    activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
-    activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        method <- loadMethodByUUID methodIdText
-        (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
-        result <- liftIO $ computeCategoryResult dbManager dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
-        when (isNothing mSub) $ liftIO $ logLCIAResult result method
-        pure result
-
-    getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> AppM LCIAResult
-    getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
-        activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
-
-    -- POST: LCIA with substitutions
-    postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> AppM LCIAResult
-    postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
-        activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
-
-    -- POST: sensitivity sweep (parallel rank-1 perturbations of A_ij)
-    --
-    -- Perturbations are root-only by design (Sherman-Morrison rank-1 on
-    -- root's MUMPS factorization; 'Service.resolveRootOnly' rejects
-    -- "dbName::pid" forms). But scoring the perturbed root scaling must
-    -- still walk the cross-DB graph: dep-DB regional CFs are invisible
-    -- to a root-only 'applyBiosphereMatrix', and the propagation infra
-    -- ('SharedSolver.goWithDepsFromScalings') is already documented for
-    -- this exact use case ("caller supplies root scalings, e.g. after
-    -- a Sherman-Morrison update").
-    --
-    -- Cost: each perturbation now triggers one cross-DB back-substitution
-    -- per dep DB it actually reaches. MUMPS factorizations are cached, so
-    -- back-sub is O(n²) per dep DB, not full O(n³) factorization.
-    postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> AppM SensitivityResponse
-    postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        requireFullyLinked dbName db
-        method <- loadMethodByUUID methodIdText
-        (processId, activity) <- resolveOrThrow db processIdText
-        eRes <- liftIO $ Service.computeSensitivities db sharedSolver processId (srPerturbations senReq)
-        (baselineX, perResults) <- either throwServiceError pure eRes
-        unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        let depLookup = DM.mkDepSolverLookup dbManager
-            scaleToSolution x = do
-                eSol <-
-                    SharedSolver.goWithDepsFromScalings
-                        unitCfg
-                        depLookup
-                        db
-                        dbName
-                        []
-                        [x]
-                        0
-                pure $ case eSol of
-                    Left err -> Left err
-                    Right (sol : _) -> Right sol
-                    Right [] -> Left "cross-DB propagation returned empty result"
-        eBaselineSol <- liftIO $ scaleToSolution baselineX
-        baselineSol <-
-            either
-                (\err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err})
-                pure
-                eBaselineSol
-        baselineLcia <-
-            liftIO $
-                computeCategoryResult dbManager dbName db baselineSol activity 5 Nothing method
-        perturbed <-
-            liftIO $
-                mapConcurrently
-                    (buildEntry db activity method baselineLcia scaleToSolution)
-                    perResults
-        pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
-      where
-        buildEntry db activity method baselineLcia scaleToSolution (p, eitherX) = case eitherX of
-            Left err -> pure (PerturbedEntry p (Left err))
-            Right x' -> do
-                eSol <- scaleToSolution x'
-                case eSol of
-                    Left err -> pure (PerturbedEntry p (Left err))
-                    Right sol -> do
-                        lcia <- computeCategoryResult dbManager dbName db sol activity 5 Nothing method
-                        pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
-
-    -- Batch LCIA endpoint (all methods in a collection). Thin alias over the
-    -- top-level activityLCIABatchH; preserves the Servant call sites.
-    activityLCIABatchCore :: Text -> Text -> Text -> Maybe SubstitutionRequest -> AppM LCIABatchResult
-    activityLCIABatchCore = activityLCIABatchH
-
-    getActivityLCIABatch :: Text -> Text -> Text -> AppM LCIABatchResult
-    getActivityLCIABatch dbName processIdText collectionName =
-        activityLCIABatchCore dbName processIdText collectionName Nothing
-
-    -- POST: Batch LCIA with substitutions
-    postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> AppM LCIABatchResult
-    postActivityLCIABatch dbName processIdText collectionName subReq =
-        activityLCIABatchCore dbName processIdText collectionName (Just subReq)
-
-    -- POST: Inventory with substitutions
-    postActivityInventory :: Text -> Text -> SubstitutionRequest -> AppM InventoryExport
-    postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
-
-    -- POST: Supply chain with substitutions
-    postActivitySupplyChain :: Text -> Text -> Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Maybe Bool -> SubstitutionRequest -> AppM SupplyChainResponse
-    postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
-        activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
-
-    -- Activity consumers endpoint (reverse supply chain)
-    getActivityConsumers :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Bool -> AppM ConsumersResponse
-    getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam includeEdgesParam = do
-        (db, _) <- requireDatabaseByName dbName
-        let presetFilters = expandPreset classificationPresets presetParam
-            explicitFilters =
-                zipWith3
-                    (\s v m -> (s, v, m == "exact"))
-                    classSystems
-                    classValues
-                    (classModes ++ repeat "contains")
-            classFilters = presetFilters ++ explicitFilters
-            cnf =
-                Service.ConsumerFilter
-                    { Service.cnfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameFilter
-                            , Service.afcLocation = locationFilter
-                            , Service.afcProduct = productFilter
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.cnfMaxDepth = maxDepthParam
-                    , Service.cnfIncludeEdges = fromMaybe False includeEdgesParam
-                    }
-        either throwServiceError pure (Service.getConsumers db dbName processIdText cnf)
-
-    -- Activity path-to endpoint (shortest supply chain path to first matching upstream activity)
-    getActivityPathTo :: Text -> Text -> Maybe Text -> AppM Value
-    getActivityPathTo dbName processIdText targetParam = do
-        (db, solver) <- requireDatabaseByName dbName
-        target <-
-            maybe
-                (throwError err400{errBody = "Missing required 'target' query parameter"})
-                pure
-                targetParam
-        result <- liftIO $ Service.getPathTo db solver processIdText target
-        case result of
-            Left (Service.ActivityNotFound msg) ->
-                throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left (Service.InvalidProcessId msg) ->
-                throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left err ->
-                throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right val -> return val
-
-    -- (resolveOrThrow, throwServiceError, logBatchCategory and loadCollection
-    -- now live at the top level — see the block above the `lcaServer` def.
-    -- Call sites in this `where` pass `dbManager` explicitly when needed.)
-
-    -- Activity analysis endpoint (dispatches to registered analyzers)
-    getActivityAnalyze :: Text -> Text -> Text -> AppM Value
-    getActivityAnalyze dbName processIdText analyzerName = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        case M.lookup analyzerName (prAnalyzers (dmPlugins dbManager)) of
-            Nothing -> throwError err404{errBody = "Analyzer not found: " <> BSL.fromStrict (T.encodeUtf8 analyzerName)}
-            Just analyzer -> do
-                case Service.resolveActivityAndProcessId db processIdText of
-                    Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-                    Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-                    Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-                    Right (actProcessId, _) -> do
-                        inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
-                        (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                        loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
-                        let methods = map snd loadedMethods
-                            ctx =
-                                AnalyzeContext
-                                    { acDatabase = db
-                                    , acInventory = inventory
-                                    , acMethods = methods
-                                    , acParameters = M.empty
-                                    , acTechFlowDB = M.empty
-                                    , acBioFlowDB = mFlows
-                                    , acUnitDB = mUnits
-                                    }
-                        liftIO $ ahAnalyze analyzer ctx
-
-    -- Contributing flows: top elementary flows by LCIA contribution for a specific method
-    getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
-    getContributingFlows dbName processIdText _collectionName methodIdText limitParam =
-        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
-            let lim = fromMaybe 20 limitParam
-            unitCfg <- liftIO $ getMergedUnitConfig dbManager
-            (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-            inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
-            tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-            let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
-                (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-                contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-                topFlows =
-                    [ FlowContributionEntry
-                        { fcoFlowName = bfName f
-                        , fcoContribution = c
-                        , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                        , fcoFlowId = UUID.toText (bfId f)
-                        , fcoCategory = bfCompartmentName f
-                        , fcoCompartment = bfCompartmentSub f
-                        , fcoCfValue = cfVal
-                        }
-                    | (f, cfVal, c) <- take lim contribs
-                    ]
-            liftIO $
-                unless (null unknownUuids) $
-                    reportProgress Warning $
-                        "[contributing-flows "
-                            <> T.unpack (methodName method)
-                            <> "] "
-                            <> show (length unknownUuids)
-                            <> " inventory flow UUID(s) absent from merged FlowDB. Samples: "
-                            <> show (take 3 unknownUuids)
-            return
-                ContributingFlowsResult
-                    { cfrMethod = methodName method
-                    , cfrUnit = methodUnit method
-                    , cfrTotalScore = score
-                    , cfrTopFlows = topFlows
-                    }
-
-    -- Contributing activities: top upstream activities by LCIA contribution for a specific method
-    getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
-    getContributingActivities dbName processIdText _collectionName methodIdText limitParam =
-        withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
-            let lim = fromMaybe 10 limitParam
-            requireFullyLinked dbName db
-            unitCfg <- liftIO $ getMergedUnitConfig dbManager
-            (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-            tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
-            -- Skip separate inventory compute: contributions sum equals the
-            -- score (same B·scaling·CF sum, just grouped per activity).
-            eContribs <-
-                liftIO $
-                    SharedSolver.crossDBProcessContributions
-                        unitCfg
-                        mUnits
-                        mFlows
-                        (DM.mkDepSolverLookup dbManager)
-                        db
-                        dbName
-                        sharedSolver
-                        actProcessId
-                        tables
-            case eContribs of
-                Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-                Right contributions -> do
-                    let score = sum (M.elems contributions)
-                        sorted = sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
-                        top = take lim sorted
-                    rows <- liftIO $ mapM (mkCrossDBContrib dbManager dbName mFlows mUnits score) top
-                    return
-                        ContributingActivitiesResult
-                            { carMethod = methodName method
-                            , carUnit = methodUnit method
-                            , carTotalScore = score
-                            , carActivities = rows
-                            }
-
-    -- Score every method in a set against one inventory in a single batched
-    -- pass. For fully non-regionalized sets (PEF) this is a stacked-broadcast
-    -- matvec — one walk over the inventory, m FMAs per non-zero entry —
-    -- instead of m separate inventory walks. Mixed/regio sets fall through
-    -- to the per-DB cross-DB regional sum inside the set-scoring function.
-    --
-    -- The 'CrossDBSolution' carries the merged inventory and per-DB scaling
-    -- vectors collected during the inventory solve. Regional methods score
-    -- as a sum across all participating DBs (root + each dep DB reached at
-    -- request time); non-regional methods read the merged inventory only.
-    -- Flow detail endpoint
-    getFlowDetail :: Text -> Text -> AppM FlowDetail
-    getFlowDetail dbName flowIdText = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedFlow db flowIdText $ \flow -> do
-            let fid = flowKindId flow
-                unitName' = flowKindUnitName (dbUnits db) flow
-                usageCount = Service.getFlowUsageCount db fid
-            return $ FlowDetail (apiFlowOfKind flow) unitName' usageCount
-
-    -- Activities using a specific flow
-    getFlowActivities :: Text -> Text -> AppM [ActivitySummary]
-    getFlowActivities dbName flowIdText = do
-        (db, _) <- requireDatabaseByName dbName
-        withValidatedFlow db flowIdText $ \flow ->
-            return $ Service.getActivitiesUsingFlow db (flowKindId flow)
-
-    -- List all available methods (from loaded collections)
-    getMethods :: AppM [MethodSummary]
-    getMethods = do
-        loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
-        return
-            [ MethodSummary
-                { msmId = methodId m
-                , msmName = methodName m
-                , msmCategory = methodCategory m
-                , msmUnit = methodUnit m
-                , msmFactorCount = length (methodFactors m)
-                , msmCollection = collName
-                }
-            | (collName, m) <- loadedMethods
-            ]
-
-    -- Get method details
-    getMethodDetail :: Text -> AppM MethodDetail
-    getMethodDetail methodIdText = do
-        method <- loadMethodByUUID methodIdText
-        return $
-            MethodDetail
-                { mdId = methodId method
-                , mdName = methodName method
-                , mdDescription = methodDescription method
-                , mdUnit = methodUnit method
-                , mdCategory = methodCategory method
-                , mdMethodology = methodMethodology method
-                , mdFactorCount = length (methodFactors method)
-                }
-
-    -- Get method characterization factors
-    getMethodFactors :: Text -> AppM [MethodFactorAPI]
-    getMethodFactors methodIdText = do
-        method <- loadMethodByUUID methodIdText
-        return $ map cfToAPI (methodFactors method)
-
-    -- Get method flow mapping status
-    getMethodMapping :: Text -> Text -> AppM MappingStatus
-    getMethodMapping dbName methodIdText = do
-        (db, _) <- requireDatabaseByName dbName
-        method <- loadMethodByUUID methodIdText
-        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-        let stats = computeMappingStats mappings
-            totalFactors = length mappings
-            coverage =
-                if totalFactors > 0
-                    then fromIntegral (totalFactors - msUnmatched stats) / fromIntegral totalFactors * 100
-                    else 0.0
-            -- Get unmapped flows (limit to first 50 for API response)
-            unmappedFlows =
-                take
-                    50
-                    [ UnmappedFlowAPI
-                        { ufaFlowRef = mcfFlowRef cf
-                        , ufaFlowName = mcfFlowName cf
-                        , ufaDirection = case mcfDirection cf of
-                            MT.Input -> "Input"
-                            MT.Output -> "Output"
-                        }
-                    | (cf, Nothing) <- mappings
-                    ]
-            uniqueDbFlows = S.size $ S.fromList [bfId f | (_, Just (f, _)) <- mappings]
-        return
-            MappingStatus
-                { mstMethodId = methodId method
-                , mstMethodName = methodName method
-                , mstTotalFactors = msTotal stats
-                , mstMappedByUUID = msByUUID stats
-                , mstMappedByCAS = msByCAS stats
-                , mstMappedByName = msByName stats
-                , mstMappedBySynonym = msBySynonym stats
-                , mstUnmapped = msUnmatched stats
-                , mstCoverage = coverage
-                , mstDbBiosphereCount = fromIntegral (dbBiosphereCount db)
-                , mstUniqueDbFlowsMatched = uniqueDbFlows
-                , mstUnmappedFlows = unmappedFlows
-                }
-
-    -- DB-flow-centric mapping: all biosphere flows with their CF assignments
-    getFlowCFMapping :: Text -> Text -> AppM FlowCFMapping
-    getFlowCFMapping dbName methodIdText = do
-        (db, _) <- requireDatabaseByName dbName
-        method <- loadMethodByUUID methodIdText
-        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-        let
-            -- Build reverse index: DB flow UUID → (MethodCF, MatchStrategy)
-            reverseIndex =
-                M.fromList
-                    [(bfId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
-            -- Build entries for all biosphere flows
-            entries = map (buildFlowEntry db reverseIndex) (V.toList (dbBiosphereOrder db))
-            matchedCount = length [() | e <- entries, isJust (fceCfValue e)]
-        return
-            FlowCFMapping
-                { fcmMethodName = methodName method
-                , fcmMethodUnit = methodUnit method
-                , fcmTotalFlows = fromIntegral (dbBiosphereCount db)
-                , fcmMatchedFlows = matchedCount
-                , fcmFlows = entries
-                }
-
-    buildFlowEntry :: Database -> M.Map UUID (MethodCF, MatchStrategy) -> UUID -> FlowCFEntry
-    buildFlowEntry db reverseIndex uuid =
-        let mFlow = M.lookup uuid (dbBioFlows db)
-            mMatch = M.lookup uuid reverseIndex
-         in FlowCFEntry
-                { fceFlowId = uuid
-                , fceFlowName = maybe "" bfName mFlow
-                , fceFlowCategory = maybe "" bfCompartmentName mFlow
-                , fceCfValue = fmap (mcfValue . fst) mMatch
-                , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
-                , fceMatchStrategy = fmap (strategyToText . snd) mMatch
-                }
-
-    strategyToText :: MatchStrategy -> Text
-    strategyToText ByUUID = "uuid"
-    strategyToText ByCAS = "cas"
-    strategyToText ByName = "name"
-    strategyToText BySynonym = "synonym"
-    strategyToText ByFuzzy = "fuzzy"
-    strategyToText NoMatch = "none"
-
-    -- Characterization: matched CFs for a method, filterable by flow name
-    getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM CharacterizationResult
-    getCharacterization dbName methodIdText flowFilter limitParam = do
-        (db, _) <- requireDatabaseByName dbName
-        method <- loadMethodByUUID methodIdText
-        let lim = fromMaybe 50 limitParam
-            queryLower = fmap T.toLower flowFilter
-        mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-        let matched =
-                [ (cf, f, strat)
-                | (cf, Just (f, strat)) <- mappings
-                , matchesQuery queryLower (mcfFlowName cf) (bfName f)
-                ]
-            sorted = sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
-            top = take lim sorted
-            mkEntry (cf, f, strat) =
-                CharacterizationEntry
-                    { cheMethodFlowName = mcfFlowName cf
-                    , cheCfValue = mcfValue cf
-                    , cheCfUnit = mcfUnit cf
-                    , cheDirection = case mcfDirection cf of
-                        MT.Input -> "Input"
-                        MT.Output -> "Output"
-                    , cheDbFlowName = bfName f
-                    , cheFlowId = UUID.toText (bfId f)
-                    , cheFlowUnit = getUnitNameForBioFlow (dbUnits db) f
-                    , cheCategory = bfCompartmentName f
-                    , cheCompartment = bfCompartmentSub f
-                    , cheMatchStrategy = strategyToText strat
-                    }
-        return
-            CharacterizationResult
-                { chrMethod = methodName method
-                , chrUnit = methodUnit method
-                , chrMatches = length matched
-                , chrShown = length top
-                , chrFactors = map mkEntry top
-                }
-
-    matchesQuery :: Maybe Text -> Text -> Text -> Bool
-    matchesQuery Nothing _ _ = True
-    matchesQuery (Just q) cfName dbName = T.isInfixOf q (T.toLower cfName) || T.isInfixOf q (T.toLower dbName)
-
-    -- Helper to load a method by UUID from the loaded collections
-    loadMethodByUUID :: Text -> AppM Method
-    loadMethodByUUID uuidText = do
-        loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
-        let allMethods = map snd loadedMethods
-        case UUID.fromText uuidText of
-            Nothing -> throwError err400{errBody = "Invalid method UUID format"}
-            Just uuid ->
-                case filter (\m -> methodId m == uuid) allMethods of
-                    (m : _) -> return m
-                    [] -> throwError err404{errBody = "Method not found"}
-
-    -- Resolve (database, shared solver, ProcessId, Activity, Method) from URL path params
-    -- and dispatch to the continuation. Maps the three Service errors to standard HTTP codes.
-    withActivityAndMethod ::
-        Text ->
-        Text ->
-        Text ->
-        (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a) ->
-        AppM a
-    withActivityAndMethod dbName processIdText methodIdText k = do
-        (db, sharedSolver) <- requireDatabaseByName dbName
-        method <- loadMethodByUUID methodIdText
-        case Service.resolveActivityAndProcessId db processIdText of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
-
-    -- Method collection handlers
-    getMethodCollections :: AppM MethodCollectionListResponse
-    getMethodCollections = do
-        statuses <- liftIO $ DM.listMethodCollections dbManager
-        return $
-            MethodCollectionListResponse
-                [ MethodCollectionStatusAPI
-                    { mcaName = mcsName s
-                    , mcaDisplayName = mcsDisplayName s
-                    , mcaDescription = mcsDescription s
-                    , mcaStatus = case mcsStatus s of
-                        DM.Loaded -> "loaded"
-                        _ -> "unloaded"
-                    , mcaIsUploaded = mcsIsUploaded s
-                    , mcaPath = mcsPath s
-                    , mcaMethodCount = mcsMethodCount s
-                    , mcaFormat = Just (mcsFormat s)
-                    }
-                | s <- statuses
-                ]
-
-    loadMethodCollectionHandler :: Text -> AppM ActivateResponse
-    loadMethodCollectionHandler name =
-        simpleAction (DM.loadMethodCollection dbManager name) ("Loaded method: " <> name)
-
-    unloadMethodCollectionHandler :: Text -> AppM ActivateResponse
-    unloadMethodCollectionHandler name =
-        simpleAction (DM.unloadMethodCollection dbManager name) ("Unloaded method: " <> name)
-
-    -- Helper to convert MethodCF to API type
-    cfToAPI :: MethodCF -> MethodFactorAPI
-    cfToAPI cf =
-        MethodFactorAPI
-            { mfaFlowRef = mcfFlowRef cf
-            , mfaFlowName = mcfFlowName cf
-            , mfaDirection = case mcfDirection cf of
-                MT.Input -> "Input"
-                MT.Output -> "Output"
-            , mfaValue = mcfValue cf
-            }
-
-    -- Search flows by name or synonym with optional language filtering and pagination
-    searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
-    searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
-        (db, _) <- requireDatabaseByName dbName
-        case queryParam of
-            Nothing -> return (SearchResults [] 0 0 50 False 0.0)
-            Just query -> do
-                let ff =
-                        Service.FlowFilter
-                            { Service.ffQuery = query
-                            , Service.ffLang = langParam
-                            , Service.ffLimit = limitParam
-                            , Service.ffOffset = offsetParam
-                            , Service.ffSort = sortParam
-                            , Service.ffOrder = orderParam
-                            }
-                searchFlowsInternal db ff
-
-    -- Search activities by specific fields with pagination and count
-    searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
-    searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
-        (db, _) <- requireDatabaseByName dbName
-        -- Expand preset filters then merge with explicit classification params
-        let exactMatch = fromMaybe False exactParam
-            presetFilters = expandPreset classificationPresets presetParam
-            explicitFilters =
-                zipWith3
-                    (\s v m -> (s, v, m == "exact"))
-                    classSystems
-                    classValues
-                    (classModes ++ repeat "contains")
-            classFilters = presetFilters ++ explicitFilters
-        let sf =
-                Service.SearchFilter
-                    { Service.sfCore =
-                        Service.ActivityFilterCore
-                            { Service.afcName = nameParam
-                            , Service.afcLocation = geoParam
-                            , Service.afcProduct = productParam
-                            , Service.afcClassifications = classFilters
-                            , Service.afcLimit = limitParam
-                            , Service.afcOffset = offsetParam
-                            , Service.afcSort = sortParam
-                            , Service.afcOrder = orderParam
-                            }
-                    , Service.sfExactMatch = exactMatch
-                    }
-        result <- liftIO $ Service.searchActivities db sf
-        case result of
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right jsonValue -> case fromJSON jsonValue of
-                Success searchResults -> return searchResults
-                Error parseErr -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack parseErr}
-
-    getClassifications :: Text -> AppM [ClassificationSystem]
-    getClassifications dbName = do
-        (db, _) <- requireDatabaseByName dbName
-        return $ Service.getClassifications db
-
-    -- Batch impacts: thin alias over the top-level batchImpactsH.
-    postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> AppM BatchImpactsResponse
-    postImpactsBatch = batchImpactsH
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).

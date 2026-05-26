@@ -1,12 +1,6 @@
-{- | An Applicative-only validation type that accumulates errors via the
-'Semigroup' on @e@ — the canonical example, in Milewski's
-/Category Theory for Programmers/, of an Applicative that is /not/ a
-Monad. A lawful 'Monad' instance for 'Validation' would have to
-short-circuit on the first 'Failure' (to make @>>=@ associative w.r.t.
-the underlying 'Either' behaviour); that would erase the accumulation
-that motivates the type, so we stop at 'Applicative'.
-
-Use:
+{- | Applicative-only validation that accumulates errors via the 'Semigroup'
+on @e@. No 'Monad' instance: the @ap = (\<*\>)@ law would force '<*>' to
+short-circuit, destroying accumulation.
 
 @
     validateAll
@@ -14,8 +8,7 @@ Use:
     validateAll a b = (,) \<$\> validateA a \<*\> validateB b
 @
 
-When both @validateA@ and @validateB@ fail, the resulting 'Failure'
-carries /both/ messages, not just the first.
+When both arms fail, the resulting 'Failure' carries both messages.
 -}
 module Data.Validation (
     Validation (..),
