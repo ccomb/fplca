@@ -36,7 +36,7 @@ import API.Types (
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import qualified Data.List as L
 import qualified Data.Map as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isJust, mapMaybe, maybeToList)
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -116,9 +116,13 @@ single @dominant_indicator@ column carrying an object
 @{key, share_pct}@ — the variable with the largest absolute share of
 the total. Useful for ranking large batches before drilling into one
 PID with @score_activity@.
+
+When the base URL is 'Nothing' (backend-only deployment, no Elm SPA
+bundled), the @web_url@ column is dropped from both the header and
+every row — emitting a column of dead links would be a silent lie.
 -}
-toColumnarBatch :: Bool -> Text -> Text -> Text -> ScoringSet -> BatchImpactsResponse -> Value
-toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
+toColumnarBatch :: Bool -> Maybe Text -> Text -> Text -> ScoringSet -> BatchImpactsResponse -> Value
+toColumnarBatch summaryOnly mBaseUrl dbName coll ss bir =
     object $
         [ "scoring_set" .= ssName ss
         , "scoring_unit" .= scoringUnit
@@ -144,10 +148,11 @@ toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
         _ -> []
     indicatorKeys :: [Text]
     indicatorKeys = M.keys (M.union (ssVariables ss) (ssComputed ss))
+    webUrlCol = ["web_url" | isJust mBaseUrl]
     fixedColumns :: [Text]
     fixedColumns
-        | isHeterogeneous = ["name", "process_id", "web_url", "functional_unit", "total"]
-        | otherwise = ["name", "process_id", "web_url", "total"]
+        | isHeterogeneous = ["name", "process_id"] ++ webUrlCol ++ ["functional_unit", "total"]
+        | otherwise = ["name", "process_id"] ++ webUrlCol ++ ["total"]
     columns :: [Text]
     columns
         | summaryOnly = fixedColumns ++ ["dominant_indicator"]
@@ -158,7 +163,7 @@ toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
     entryRow :: BatchImpactsEntry -> Value
     entryRow e = toJSON cells
       where
-        url = scoreActivityWebUrl baseUrl dbName (bieProcessId e) coll
+        urlCells = toJSON <$> maybeToList (scoreActivityWebUrl mBaseUrl dbName (bieProcessId e) coll)
         lbr = bieImpacts e
         scoreMap = M.findWithDefault M.empty setName (lbrScoringResults lbr)
         indMap = M.findWithDefault M.empty setName (lbrScoringIndicators lbr)
@@ -174,8 +179,8 @@ toColumnarBatch summaryOnly baseUrl dbName coll ss bir =
         cells =
             [ toJSON (bieActivityName e)
             , toJSON (bieProcessId e)
-            , toJSON url
             ]
+                ++ urlCells
                 ++ fuCells
                 ++ [total]
                 ++ tailCells
