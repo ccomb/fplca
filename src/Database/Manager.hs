@@ -1,7 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -104,7 +105,9 @@ import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
 import Control.Monad (forM, forM_, unless, when)
+import API.JsonOptions (Stripped (..))
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
+import Data.OpenApi (ToSchema)
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
@@ -254,16 +257,7 @@ data MissingSupplier = MissingSupplier
     -- ^ e.g. "kg vs ton", "FR not available"
     }
     deriving (Show, Eq, Generic)
-
-instance ToJSON MissingSupplier where
-    toJSON MissingSupplier{..} =
-        A.object
-            [ "productName" .= msProductName
-            , "count" .= msCount
-            , "location" .= msLocation
-            , "reason" .= msReason
-            , "detail" .= msDetail
-            ]
+    deriving (ToJSON) via (Stripped MissingSupplier)
 
 {- | Whether a candidate dependency is currently selected, merely available,
 or redundant under the minimal cover (matches links but every link it wins
@@ -285,15 +279,23 @@ data DependencyChoice = DependencyChoice
     , dchMatchCount :: !Int
     }
     deriving (Show, Eq, Generic)
+    deriving (ToJSON) via (Stripped DependencyChoice)
 
-instance ToJSON DependencyChoice where
-    toJSON DependencyChoice{..} =
-        A.object
-            [ "status" .= dchStatus
-            , "databaseName" .= dchDatabaseName
-            , "displayName" .= dchDisplayName
-            , "matchCount" .= dchMatchCount
-            ]
+{- | One of the candidate data directories inside an uploaded database's
+upload root. Surfaces in @DatabaseSetupInfo.dsiAvailablePaths@ so the UI
+can present a picker. The schema is now a proper named object instead
+of a positional 3-tuple.
+-}
+data PathCandidate = PathCandidate
+    { pcPath :: !Text
+    -- ^ Relative path under the upload root
+    , pcFormat :: !Text
+    -- ^ Format label (e.g. "EcoSpold 2", "SimaPro CSV", "Unknown")
+    , pcFileCount :: !Int
+    -- ^ Number of data files detected in this directory
+    }
+    deriving (Show, Eq, Generic)
+    deriving (ToJSON, ToSchema) via (Stripped PathCandidate)
 
 -- | Setup info for a database (for the setup page)
 data DatabaseSetupInfo = DatabaseSetupInfo
@@ -328,40 +330,13 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -}
     , dsiDataPath :: !Text
     -- ^ Current selected data path (relative)
-    , dsiAvailablePaths :: ![(Text, Text, Int)]
-    -- ^ (relativePath, formatLabel, fileCount)
+    , dsiAvailablePaths :: ![PathCandidate]
+    -- ^ Candidate data directories within the upload root
     , dsiIsLoaded :: !Bool
     -- ^ True if database is already loaded (read-only info)
     }
     deriving (Show, Eq, Generic)
-
-instance ToJSON DatabaseSetupInfo where
-    toJSON DatabaseSetupInfo{..} =
-        A.object
-            [ "name" .= dsiName
-            , "displayName" .= dsiDisplayName
-            , "activityCount" .= dsiActivityCount
-            , "inputCount" .= dsiInputCount
-            , "completeness" .= dsiCompleteness
-            , "internalLinks" .= dsiInternalLinks
-            , "crossDBLinks" .= dsiCrossDBLinks
-            , "unresolvedLinks" .= dsiUnresolvedLinks
-            , "missingSuppliers" .= dsiMissingSuppliers
-            , "dependencies" .= dsiDependencies
-            , "isReady" .= dsiIsReady
-            , "unknownUnits" .= dsiUnknownUnits
-            , -- LocationFallback / LocationUnresolved carry their own
-              -- Stripped-derived ToJSON now; no per-site encoder needed.
-              "locationFallbacks" .= dsiLocationFallbacks
-            , "locationUnresolved" .= dsiLocationUnresolved
-            , "dataPath" .= dsiDataPath
-            , "availablePaths" .= map encodeCandidate dsiAvailablePaths
-            , "isLoaded" .= dsiIsLoaded
-            ]
-      where
-        encodeCandidate (path, fmt, cnt) =
-            A.object
-                ["path" .= path, "format" .= fmt, "fileCount" .= cnt]
+    deriving (ToJSON) via (Stripped DatabaseSetupInfo)
 
 -- | Errors from getDatabaseSetupInfo
 data SetupError = SetupNotFound Text | SetupFailed Text
@@ -2051,9 +2026,9 @@ buildLoadedSetupInfo config db configs indexedDbs =
             }
 
 {- | Discover candidate data paths within an uploaded database's root directory.
-Returns (relativePath, formatLabel, fileCount) for each candidate.
+Returns one 'PathCandidate' per candidate directory.
 -}
-discoverCandidatePaths :: DatabaseConfig -> IO [(Text, Text, Int)]
+discoverCandidatePaths :: DatabaseConfig -> IO [PathCandidate]
 discoverCandidatePaths dbConfig = do
     uploadsDir <- UploadedDB.getDatabaseUploadsDir
     let uploadRoot = uploadsDir </> T.unpack (dcName dbConfig)
@@ -2069,7 +2044,7 @@ discoverCandidatePaths dbConfig = do
                 Upload.ILCDProcess -> "ILCD"
                 Upload.OpenLcaJsonLd -> "openLCA JSON-LD"
                 Upload.UnknownFormat -> "Unknown"
-        return (T.pack rel, label, count)
+        return PathCandidate{pcPath = T.pack rel, pcFormat = label, pcFileCount = count}
   where
     -- Simple relative path: strip upload root prefix
     makeRelativePath base path
