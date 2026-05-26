@@ -9,20 +9,18 @@ name: Build
 #     prebuilt usually masks this, but only when its hash matches; cache
 #     fallback is what catches the hash-changed case.
 #
-# Pyvolca PRs are skipped: pyvolca dispatches dynamically against the
-# engine's OpenAPI spec, so its changes don't affect the Haskell build —
-# running the full 4-platform cabal compile (~30 min on Windows cold)
-# is pure waste. Pyvolca has its own CI in pyvolca.yml.
+# Pyvolca-only PRs short-circuit inside _build-matrix.yml: a preflight
+# job detects a pyvolca-only diff and every matrix step no-ops, so the
+# four required `build / *` checks still report success without burning
+# the ~30 min cold-cabal compile. (A `paths-ignore: pyvolca/**` here
+# would skip the workflow entirely, leaving the required checks pending
+# forever — branch protection treats missing required checks as blocked.)
 
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'pyvolca/**'
   push:
     branches: [main]
-    paths-ignore:
-      - 'pyvolca/**'
 
 # Cancel any older in-flight runs for the same PR when a new commit is
 # pushed. Keeps queue depth bounded — Windows cold builds are 30 min

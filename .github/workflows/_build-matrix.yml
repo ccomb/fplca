@@ -22,6 +22,45 @@ permissions:
   contents: read
 
 jobs:
+  # Detect pyvolca-only PRs so the heavy build can no-op while still
+  # reporting `build / <platform>` as success. Branch protection's
+  # required-check list does not honour `paths-ignore`: a workflow that
+  # never runs leaves the check pending, blocking merge forever. The
+  # only safe way to skip the build is to keep the job running and
+  # short-circuit every step inside it — that is what `skip=true`
+  # signals to the matrix below.
+  preflight:
+    name: Detect pyvolca-only diff
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.s.outputs.skip }}
+    steps:
+      - id: s
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          # Compare via API instead of a heavyweight fetch — we only need
+          # filenames. Empty list (e.g. compare across unrelated histories)
+          # falls through to skip=false to stay on the safe side.
+          changed=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base}...${head}" --jq '.files[].filename' 2>/dev/null || true)
+          if [[ -z "$changed" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if echo "$changed" | grep -qvE '^pyvolca/'; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::pyvolca-only diff — build matrix will report success without compiling."
+          fi
+
   # Single source of truth for toolchain pins. Each downstream job
   # references needs.versions.outputs.* so a versions.env edit propagates
   # everywhere without touching workflow YAML.
@@ -42,7 +81,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: versions
+    needs: [preflight, versions]
     runs-on: ${{ matrix.runner }}
     # Linux jobs run in an Alpine container so the released binary links
     # against musl libc — truly portable across distros (vs. glibc-static,
@@ -83,6 +122,16 @@ jobs:
       run:
         shell: ${{ matrix.os == 'windows' && 'msys2 {0}' || 'bash' }}
     steps:
+      # Surfaces the no-op in the job log when the preflight has decided
+      # this is a pyvolca-only PR. Every step below is gated on
+      # `needs.preflight.outputs.skip != 'true'` so the job lands as
+      # "success" with no real work done — satisfies the four required
+      # `build / <platform>` checks without paying the cold compile.
+      - name: Pyvolca-only PR — skipping Haskell build
+        if: needs.preflight.outputs.skip == 'true'
+        shell: bash
+        run: echo "::notice::Pyvolca-only diff (per preflight); reporting success without building."
+
       # GitHub's JavaScript actions (checkout, cache, …) ship a glibc-linked
       # Node binary which refuses to run in an Alpine container on ARM64
       # ("JavaScript Actions in Alpine containers are only supported on x64
@@ -91,15 +140,17 @@ jobs:
       # Alpine. The action's own `runner.arch == 'ARM64'` guard makes it a
       # no-op on amd64. Every Linux matrix row runs in Alpine; future
       # non-Alpine Linux rows would need a separate selector.
-      - if: matrix.os == 'linux'
+      - if: needs.preflight.outputs.skip != 'true' && matrix.os == 'linux'
         uses: laverdet/alpine-arm64@v1
-      - uses: actions/checkout@v4
+      - if: needs.preflight.outputs.skip != 'true'
+        uses: actions/checkout@v4
 
       # POSIX `sh` here — bash isn't preinstalled in the Alpine container
       # we now use for Linux jobs (setup-haskell-env apk-installs it below).
       # All the work these two steps do is POSIX-compatible already.
       - name: Read pinned versions
         id: versions
+        if: needs.preflight.outputs.skip != 'true'
         shell: sh
         run: |
           # `./` so dash (Ubuntu /bin/sh) doesn't PATH-search for the file —
@@ -111,6 +162,7 @@ jobs:
 
       - name: Read engine version from cabal
         id: cabal-version
+        if: needs.preflight.outputs.skip != 'true'
         shell: sh
         run: |
           ver=$(awk '/^version:/ {print $2; exit}' volca.cabal)
@@ -118,6 +170,7 @@ jobs:
 
       - name: Setup Haskell build environment
         id: setup-haskell
+        if: needs.preflight.outputs.skip != 'true'
         uses: ./.github/actions/setup-haskell-env
         with:
           matrix-os: ${{ matrix.os }}
@@ -147,6 +200,7 @@ jobs:
 
       - name: Download prebuilt MUMPS (if release exists)
         id: download-mumps
+        if: needs.preflight.outputs.skip != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,7 +234,7 @@ jobs:
 
       - name: Restore MUMPS local build (fallback when prebuilt missing)
         id: cache-mumps
-        if: steps.download-mumps.outputs.populated != 'true'
+        if: needs.preflight.outputs.skip != 'true' && steps.download-mumps.outputs.populated != 'true'
         uses: actions/cache/restore@v4
         with:
           path: deps/mumps
@@ -202,6 +256,7 @@ jobs:
 
       - name: Download prebuilt cabal store (if release exists)
         id: download-cabal
+        if: needs.preflight.outputs.skip != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -241,7 +296,7 @@ jobs:
 
       - name: Restore Cabal store
         id: cache-cabal
-        if: steps.download-cabal.outputs.populated != 'true'
+        if: needs.preflight.outputs.skip != 'true' && steps.download-cabal.outputs.populated != 'true'
         uses: actions/cache/restore@v4
         with:
           # GHCup-installed cabal on Windows uses C:\cabal\store, not the
@@ -266,6 +321,7 @@ jobs:
             cabal-${{ matrix.name }}-
 
       - name: Build and test
+        if: needs.preflight.outputs.skip != 'true'
         run: |
           # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
           # does not inherit PATH from the previous step.
@@ -295,7 +351,7 @@ jobs:
         # Catches the case where build-mumps.sh (or someone's local edit)
         # introduces dynamic MUMPS deps, including any future variant that
         # enables Scotch and ends up linking the system libscotch.so.
-        if: matrix.os == 'linux'
+        if: needs.preflight.outputs.skip != 'true' && matrix.os == 'linux'
         run: |
           VOLCA_BIN=$(cabal list-bin exe:volca)
           # Decompress UPX wrapper so ldd can read the dynamic section
@@ -319,7 +375,7 @@ jobs:
         # so the uploaded artifact is meaningfully smaller. Then verify it
         # still launches before upload — if a future UPX path is re-enabled
         # in build.sh and breaks the binary, this catches it loudly.
-        if: matrix.os == 'macos'
+        if: needs.preflight.outputs.skip != 'true' && matrix.os == 'macos'
         run: |
           ./build.sh --optimize-only
           VOLCA_BIN=$(cabal list-bin exe:volca)
@@ -334,6 +390,7 @@ jobs:
         # cache key namespace.
         if: |
           always() &&
+          needs.preflight.outputs.skip != 'true' &&
           steps.download-mumps.outputs.populated != 'true' &&
           steps.cache-mumps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -349,7 +406,7 @@ jobs:
         # risk of caching a partial ~/.ghcup. (Contrast with the Windows
         # pattern, which is split across multiple steps and prefers the
         # safer no-always policy.)
-        if: always() && (matrix.os == 'linux' || matrix.os == 'macos') && steps.setup-haskell.outputs.ghcup-cache-hit != 'true'
+        if: always() && needs.preflight.outputs.skip != 'true' && (matrix.os == 'linux' || matrix.os == 'macos') && steps.setup-haskell.outputs.ghcup-cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.ghcup
@@ -375,7 +432,7 @@ jobs:
         # Key is inlined (not steps.cache-cabal.outputs.cache-primary-key)
         # because Restore Cabal store is skipped on the prebuilt-win path,
         # so its outputs are unset and we'd save with an empty key.
-        if: always() && steps.cache-cabal.outputs.cache-hit != 'true'
+        if: always() && needs.preflight.outputs.skip != 'true' && steps.cache-cabal.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -385,7 +442,7 @@ jobs:
           key: cabal-${{ matrix.name }}-ghc${{ steps.versions.outputs.ghc }}-${{ hashFiles('volca.cabal', 'mumps-hs/mumps-hs.cabal', 'cabal.project') }}-v2
 
       - name: Package release tarball
-        if: inputs.release
+        if: needs.preflight.outputs.skip != 'true' && inputs.release
         # Same `cabal list-bin` trick the macOS optimize step uses — handles
         # both opt/build and build paths regardless of optimization level.
         run: |
@@ -409,7 +466,7 @@ jobs:
           echo "ARTIFACT_PATH=${ARTIFACT}" >> "$GITHUB_ENV"
 
       - name: Upload binary (build mode)
-        if: ${{ !inputs.release }}
+        if: ${{ needs.preflight.outputs.skip != 'true' && !inputs.release }}
         uses: actions/upload-artifact@v4
         with:
           name: volca-${{ matrix.name }}
@@ -424,7 +481,7 @@ jobs:
           retention-days: 14
 
       - name: Upload tarball (release mode)
-        if: inputs.release
+        if: needs.preflight.outputs.skip != 'true' && inputs.release
         uses: actions/upload-artifact@v4
         with:
           name: volca-${{ matrix.name }}
