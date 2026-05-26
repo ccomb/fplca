@@ -18,17 +18,16 @@ import API.JsonOptions (strippedSchemaOptions)
 import API.Resources (Resource)
 import qualified API.Resources as R
 import API.Types
-import Control.Lens ((%~), (&), (.~), (?~), (^.))
+import Control.Lens ((%~), (&), (?~), (^.))
 import Data.Aeson (Value, toJSON)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
 import qualified Data.OpenApi.Lens as OA
-import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (BioDirection, BiosphereFlow, Compartment, Exchange, LocationFallback, LocationKind, LocationUnresolved, Pedigree, TechRole, TechnosphereFlow, Unit)
+import Types (LocationFallback, LocationKind, LocationUnresolved)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -40,15 +39,8 @@ the type in "API.Routes" — see 'instance ToSchema LoginRequest' there.
 instance ToSchema Value where
     declareNamedSchema _ = pure $ NamedSchema (Just "JsonValue") mempty
 
--- Domain types
-instance ToSchema TechRole
-instance ToSchema BioDirection
-instance ToSchema Compartment where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Unit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema TechnosphereFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema BiosphereFlow where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Pedigree where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Exchange where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+-- Domain types: TechRole, BioDirection, Unit now derive ToSchema next to
+-- their data declarations in src/Types.hs (via anyclass / DerivingVia).
 
 -- Database.Manager types
 instance ToSchema MissingSupplier
@@ -78,155 +70,14 @@ instance ToSchema DatabaseSetupInfo where declareNamedSchema = genericDeclareNam
 
 -- API.Types — every record type uses strippedSchemaOptions so the generated
 -- OpenAPI spec matches the wire JSON keys produced by API.JsonOptions.stripLowerPrefix.
-instance ToSchema ClassificationSystem where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance (ToSchema a) => ToSchema (SearchResults a) where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivitySummary where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ConsumerResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ConsumersResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowSearchResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema InventoryExport where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema InventoryMetadata where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema InventoryFlowDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema InventoryStatistics where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema TreeExport where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema TreeMetadata where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ExportNode where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema NodeType
-instance ToSchema EdgeType
-instance ToSchema TreeEdge where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowSummary where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowRole
-instance ToSchema GraphExport where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema GraphNode where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema GraphEdge where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema LCIAResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ScoringIndicator where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema LCIABatchResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema BatchImpactsRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema BatchImpactsEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema BatchImpactsResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowContributionEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ContributingFlowsResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityContribution where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ContributingActivitiesResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MappingStatus where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema UnmappedFlowAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowCFMapping where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowCFEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema CharacterizationResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema CharacterizationEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema DatabaseListResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema DatabaseStatusAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivateResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema RelinkResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema DepLoadResult where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema LoadDatabaseResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema UploadRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema UploadResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MethodCollectionListResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MethodCollectionStatusAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema RefDataListResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema RefDataStatusAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SynonymGroupsResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MethodSummary where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MethodDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema MethodFactorAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SupplyChainResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SupplyChainEntry where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SupplyChainEdge where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Aggregation where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema AggregationGroup where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SubstitutionRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema Substitution where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SensitivityRequest where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema SensitivityResponse where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+-- ToSchema (SearchResults a) standalone-derived in API.Types via Stripped.
+-- ToSchema for ApiFlow, NodeType, EdgeType, FlowRole now derived next to
+-- their data declarations in src/API/Types.hs (NodeType/EdgeType/FlowRole
+-- via anyclass; ApiFlow has a custom instance there to keep the discriminated
+-- `kind` union representation).
 
--- Manual schema for ApiFlow — discriminated by 'kind' so OpenAPI consumers
--- see a real tagged union instead of a generic Either.
-instance ToSchema ApiFlow where
-    declareNamedSchema _ = do
-        techRef <- declareSchemaRef (Proxy :: Proxy TechnosphereFlow)
-        bioRef <- declareSchemaRef (Proxy :: Proxy BiosphereFlow)
-        let kindEnum =
-                mempty
-                    & type_ ?~ OpenApiString
-                    & enum_
-                        ?~ [ toJSON ("technosphere" :: Text)
-                           , toJSON ("biosphere" :: Text)
-                           , toJSON ("unresolved" :: Text)
-                           ]
-            tech =
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & properties
-                        .~ InsOrdHashMap.fromList
-                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("technosphere" :: Text)]))
-                            , ("flow", techRef)
-                            ]
-                    & required .~ ["kind", "flow"]
-            bio =
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & properties
-                        .~ InsOrdHashMap.fromList
-                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("biosphere" :: Text)]))
-                            , ("flow", bioRef)
-                            ]
-                    & required .~ ["kind", "flow"]
-            unresolved =
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & properties
-                        .~ InsOrdHashMap.fromList
-                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("unresolved" :: Text)]))
-                            , ("id", Inline (mempty & type_ ?~ OpenApiString & format ?~ "uuid"))
-                            ]
-                    & required .~ ["kind", "id"]
-        pure $
-            NamedSchema (Just "ApiFlow") $
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & properties
-                        .~ InsOrdHashMap.fromList
-                            [ ("kind", Inline kindEnum)
-                            ]
-                    & required .~ ["kind"]
-                    & OA.oneOf ?~ [Inline tech, Inline bio, Inline unresolved]
+-- PerturbedEntry's custom schema moved to API.Types alongside its data decl.
 
--- Manual schema: the Either inside PerturbedEntry is flattened by ToJSON
--- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
--- on failure. The Generic-derived schema would expose the Haskell shape
--- (a oneOf wrapper around the Either) instead of the flat wire format.
-instance ToSchema PerturbedEntry where
-    declareNamedSchema _ = do
-        pertRef <- declareSchemaRef (Proxy :: Proxy Perturbation)
-        lciaRef <- declareSchemaRef (Proxy :: Proxy LCIAResult)
-        doubleRef <- declareSchemaRef (Proxy :: Proxy Double)
-        textRef <- declareSchemaRef (Proxy :: Proxy Text)
-        pure $
-            NamedSchema (Just "PerturbedEntry") $
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & properties
-                        .~ InsOrdHashMap.fromList
-                            [ ("perturbation", pertRef)
-                            , ("impact", lciaRef)
-                            , ("deltaImpact", doubleRef)
-                            , ("error", textRef)
-                            ]
-                    & required .~ ["perturbation"]
-instance ToSchema Perturbation where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ExchangeDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ExchangeWithUnit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityForAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityMetadata where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityLinks where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ActivityStats where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema FlowDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ClassificationEntryInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema ClassificationPresetInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema BinaryContent where
     declareNamedSchema _ =
         pure $

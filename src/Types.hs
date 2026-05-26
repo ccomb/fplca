@@ -36,6 +36,7 @@ import Data.List (nub)
 import Search.BM25.Types (BM25Index)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
+import Data.OpenApi (ToSchema)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -65,7 +66,7 @@ data Compartment = Compartment
     , compartmentSub :: !(Maybe Text) -- "high. pop.", "river water", …
     }
     deriving (Eq, Show, Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped Compartment)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Compartment)
 
 {- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
 source dataset omitted the compartment. Use 'bfCompartment' directly when
@@ -90,6 +91,7 @@ biosphere side also gets named variants instead of a load-bearing 'Bool'.
 -}
 data BioDirection = Resource | Emission
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving anyclass (ToSchema)
 
 {- | Role of a technosphere exchange within its host activity. Names the four
 valid combinations of (input?, reference?). `ReferenceInput` is the
@@ -102,6 +104,7 @@ data TechRole
     | ReferenceInput -- main input of a treatment process
     | Input -- ordinary technosphere input
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving anyclass (ToSchema)
 
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -111,6 +114,7 @@ data Unit = Unit
     , unitComment :: !Text -- Description/comment
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Unit)
 
 {- | Substance - groups flows with the same chemical identity across databases
 Used for flow matching between different LCA databases (ecoinvent, ILCD, SimaPro)
@@ -137,7 +141,7 @@ data TechnosphereFlow = TechnosphereFlow
     , tfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped TechnosphereFlow)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped TechnosphereFlow)
 
 {- | A biosphere flow — an environmental exchange (resource extraction or
 emission). Always carries a `Compartment` identifying the medium.
@@ -157,7 +161,7 @@ data BiosphereFlow = BiosphereFlow
     -}
     }
     deriving (Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped BiosphereFlow)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped BiosphereFlow)
 
 {- | A waste flow — a residual output that a process generates and which a
 treatment activity may consume as its reference input. Sister type to
@@ -179,7 +183,7 @@ data WasteFlow = WasteFlow
     , wfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped WasteFlow)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped WasteFlow)
 
 {- | Pedigree matrix (Weidema & Wesnæs 1996) — five LCA data-quality scores
 each in 1..5 (1 = best, 5 = worst). SimaPro CSV encodes it as a prefix in the
@@ -193,7 +197,7 @@ data Pedigree = Pedigree
     , pedTechnological :: !Int -- 1..5
     }
     deriving (Eq, Show, Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped Pedigree)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Pedigree)
 
 {- | Smart constructor: rejects out-of-range values (anything not in 1..5)
 by returning Nothing. Callers should treat Nothing as "no pedigree
@@ -243,7 +247,7 @@ data Exchange
         , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
     deriving (Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped Exchange)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Exchange)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
