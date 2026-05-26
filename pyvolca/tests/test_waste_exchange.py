@@ -109,6 +109,24 @@ class TestParseExchangeWaste:
         assert isinstance(tech, TechnosphereExchange) and tech.is_waste is False
         assert isinstance(bio, BiosphereExchange) and bio.is_waste is False
 
+    def test_is_reference_is_defined_on_every_variant(self):
+        """All three variants expose `is_reference` so duck-typing callers
+        never trip on AttributeError when iterating mixed exchanges."""
+        tech = parse_exchange({
+            "exchange": {"tag": "TechnosphereExchange", "amount": 1.0, "role": "Input"},
+            "flowName": "wheat", "unitName": "kg",
+            "targetActivity": None, "targetLocation": None, "targetProcessId": None,
+        })
+        bio = parse_exchange({
+            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
+            "flowName": "CO2", "unitName": "kg",
+            "compartment": {"name": "air", "sub": None},
+        })
+        waste = parse_exchange(_waste_ewu(is_input=False))
+        assert tech.is_reference is False
+        assert bio.is_reference is False
+        assert waste.is_reference is False
+
 
 class TestParseExchangeDetailWaste:
     def test_waste_kind_flow_envelope_parses(self):

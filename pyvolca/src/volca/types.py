@@ -426,6 +426,10 @@ class BiosphereExchange:
     def is_input(self) -> bool:
         return _direction_is_input(self.direction)
 
+    @property
+    def is_reference(self) -> bool:
+        return False
+
     @classmethod
     def from_json(cls, ewu: dict) -> "BiosphereExchange":
         inner = ewu["exchange"]
