@@ -107,7 +107,8 @@ import qualified Control.Exception
 import Control.Monad (forM, forM_, unless, when)
 import API.JsonOptions (Stripped (..))
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
-import Data.OpenApi (ToSchema)
+import Control.Lens ((&), (?~))
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
@@ -257,7 +258,7 @@ data MissingSupplier = MissingSupplier
     -- ^ e.g. "kg vs ton", "FR not available"
     }
     deriving (Show, Eq, Generic)
-    deriving (ToJSON) via (Stripped MissingSupplier)
+    deriving (ToJSON, ToSchema) via (Stripped MissingSupplier)
 
 {- | Whether a candidate dependency is currently selected, merely available,
 or redundant under the minimal cover (matches links but every link it wins
@@ -271,6 +272,18 @@ instance ToJSON DependencyStatus where
     toJSON AvailableDep = A.String "available"
     toJSON RedundantDep = A.String "redundant"
 
+-- | String-enum schema matching the lowercase wire codes from ToJSON above.
+-- The previous default-Generic schema advertised the raw Haskell constructor
+-- names (SelectedDep / AvailableDep / RedundantDep), which is what the schema
+-- said but never what the wire emitted.
+instance ToSchema DependencyStatus where
+    declareNamedSchema _ =
+        pure $
+            NamedSchema (Just "DependencyStatus") $
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_ ?~ [toJSON (c :: Text) | c <- ["selected", "available", "redundant"]]
+
 -- | A candidate dependency database in one of three states
 data DependencyChoice = DependencyChoice
     { dchStatus :: !DependencyStatus
@@ -279,7 +292,7 @@ data DependencyChoice = DependencyChoice
     , dchMatchCount :: !Int
     }
     deriving (Show, Eq, Generic)
-    deriving (ToJSON) via (Stripped DependencyChoice)
+    deriving (ToJSON, ToSchema) via (Stripped DependencyChoice)
 
 {- | One of the candidate data directories inside an uploaded database's
 upload root. Surfaces in @DatabaseSetupInfo.dsiAvailablePaths@ so the UI

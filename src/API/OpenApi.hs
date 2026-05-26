@@ -42,10 +42,9 @@ instance ToSchema Value where
 -- Domain types: TechRole, BioDirection, Unit now derive ToSchema next to
 -- their data declarations in src/Types.hs (via anyclass / DerivingVia).
 
--- Database.Manager types
-instance ToSchema MissingSupplier
-instance ToSchema DependencyStatus
-instance ToSchema DependencyChoice
+-- Database.Manager ToSchema instances (MissingSupplier, DependencyChoice via
+-- Stripped; DependencyStatus as a lowercase string-enum) now live next to
+-- their data declarations in src/Database/Manager.hs.
 
 -- ToSchema for LocationKind / LocationFallback / LocationUnresolved derived
 -- alongside their data declarations in src/Types.hs (LocationKind as a string
