@@ -1,0 +1,60 @@
+# git-cliff config — pyvolca-scoped changelog generation.
+#
+# Usage:
+#   cd pyvolca
+#   git cliff --unreleased                              # preview next section
+#   git cliff --unreleased --prepend CHANGELOG.md       # prepend to file
+#   git cliff --tag pyvolca-v0.5.0 --unreleased         # cut a release
+#
+# The `include_path` filter keeps engine-only commits out of the pyvolca
+# log. The `tag_pattern` makes git-cliff treat `pyvolca-vX.Y.Z` tags as
+# the release boundaries, ignoring engine tags entirely.
+
+[changelog]
+header = """
+# Changelog\n
+All notable changes to **pyvolca** are documented here. Versions follow
+[semver](https://semver.org/); breaking changes bump the minor while we're
+in 0.x.\n
+"""
+body = """
+{% if version %}
+## [{{ version | trim_start_matches(pat="pyvolca-v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}
+## [Unreleased]
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for c in commits %}
+- {{ c.message | split(pat="\n") | first | trim | upper_first }}{% if c.breaking %} **(BREAKING)**{% endif %}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = false  # keep unprefixed PR titles ("Add X ...") visible
+commit_parsers = [
+    { message = "^feat\\(pyvolca\\)", group = "Added" },
+    { message = "^feat", group = "Added" },
+    { message = "^fix\\(pyvolca\\)", group = "Fixed" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs\\(pyvolca\\)", group = "Documentation" },
+    { message = "^docs", skip = true },                       # engine docs only
+    { message = "^test", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^style", skip = true },
+    { body = "BREAKING CHANGE", group = "Breaking changes" },
+    # Catch-all for unprefixed PR-merge subjects so a PR like
+    # "Add WasteFlow / WasteExchange ..." still shows up.
+    { message = ".*", group = "Other" },
+]
+filter_commits = true
+tag_pattern = "pyvolca-v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "newest"
+include_path = ["pyvolca/**"]
