@@ -19,6 +19,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
+import Data.Foldable (asum)
 import Data.List (find, intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Validation as V
@@ -333,32 +334,24 @@ mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c)
 
 -- | Helper function to validate ProcessId and lookup activity
 withValidatedActivity :: Database -> Text -> (Activity -> AppM a) -> AppM a
-withValidatedActivity db processId action = do
-    case Service.resolveActivityByProcessId db processId of
-        Left (Service.InvalidProcessId errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
-        Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-        Left _ -> throwError err400{errBody = "Invalid request"}
-        Right activity -> action activity
+withValidatedActivity db processId action =
+    either throwServiceError action (Service.resolveActivityByProcessId db processId)
 
 {- | Helper function to validate UUID and lookup flow. Returns a tagged sum
 so callers can dispatch on tech vs bio.
 -}
 withValidatedFlow :: Database -> Text -> (FlowKind -> AppM a) -> AppM a
 withValidatedFlow db uuid action = do
-    case Service.validateUUID uuid of
-        Left (Service.InvalidUUID errorMsg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 errorMsg}
-        Left _ -> throwError err400{errBody = "Invalid request"}
-        Right validUuidText ->
-            case UUID.fromText validUuidText of
-                Nothing -> throwError err400{errBody = "Invalid UUID format"}
-                Just validUuid ->
-                    case M.lookup validUuid (dbTechFlows db) of
-                        Just flow -> action (TechKind flow)
-                        Nothing -> case M.lookup validUuid (dbBioFlows db) of
-                            Just flow -> action (BioKind flow)
-                            Nothing -> case M.lookup validUuid (dbWasteFlows db) of
-                                Just flow -> action (WasteKind flow)
-                                Nothing -> throwError err404{errBody = "Flow not found"}
+    validUuidText <- either throwServiceError pure (Service.validateUUID uuid)
+    validUuid <- maybe (throwError err400{errBody = "Invalid UUID format"}) pure (UUID.fromText validUuidText)
+    let lookups =
+            [ TechKind <$> M.lookup validUuid (dbTechFlows db)
+            , BioKind <$> M.lookup validUuid (dbBioFlows db)
+            , WasteKind <$> M.lookup validUuid (dbWasteFlows db)
+            ]
+    case asum lookups of
+        Just flow -> action flow
+        Nothing -> throwError err404{errBody = "Flow not found"}
 
 -- | Login request body
 newtype LoginRequest = LoginRequest
@@ -480,20 +473,10 @@ HTTP status. Validates the resolved ProcessId against the technosphere
 matrix index too — see Service.validateProcessIdInMatrixIndex.
 -}
 resolveOrThrow :: Database -> Text -> AppM (ProcessId, Activity)
-resolveOrThrow db processIdText =
-    case Service.resolveActivityAndProcessId db processIdText of
-        Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-        Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-        Left e@(Service.MatrixError _) -> internalError e
-        Left e@(Service.InvalidUUID _) -> internalError e
-        Left e@(Service.FlowNotFound _) -> internalError e
-        Right (pid, act) ->
-            case Service.validateProcessIdInMatrixIndex db pid of
-                Left e -> internalError e
-                Right () -> return (pid, act)
-  where
-    internalError :: Service.ServiceError -> AppM a
-    internalError e = throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show e}
+resolveOrThrow db processIdText = do
+    (pid, act) <- either throwServiceError pure (Service.resolveActivityAndProcessId db processIdText)
+    either throwServiceError pure (Service.validateProcessIdInMatrixIndex db pid)
+    pure (pid, act)
 
 {- | Translate a Service-level error into the HTTP status used across the
 cross-DB LCIA paths.
@@ -1100,13 +1083,10 @@ lcaServer env =
     getActivityInfo dbName processId = do
         (db, _) <- requireDatabaseByName dbName
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
-        case Service.getActivityInfo unitCfg db processId of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left _ -> throwError err500{errBody = "Internal server error"}
-            Right result -> case fromJSON result of
-                Success activityInfo -> return activityInfo
-                Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
+        result <- either throwServiceError pure (Service.getActivityInfo unitCfg db processId)
+        case fromJSON result of
+            Success activityInfo -> return activityInfo
+            Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}
 
     -- Activity flows sub-resource
     getActivityFlows :: Text -> Text -> AppM [FlowSummary]
@@ -1177,12 +1157,7 @@ lcaServer env =
         (db, sharedSolver) <- requireDatabaseByName dbName
         let cutoffPercent = fromMaybe 1.0 maybeCutoff -- Default to 1% cutoff
         result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
-        case result of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-            Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left _ -> throwError err500{errBody = "Internal server error"}
-            Right graphExport -> return graphExport
+        either throwServiceError pure result
 
     -- Build the supply-chain filter shared by the GET and POST handlers.
     buildSupplyChainFilter :: Maybe Text -> Maybe Int -> Maybe Double -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Text -> Maybe Text -> Service.SupplyChainFilter
@@ -1236,13 +1211,7 @@ lcaServer env =
             Nothing -> do
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
-                case result of
-                    Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-                    Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-                    Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-                    Left (Service.InvalidUUID _) -> throwError err500{errBody = "Internal server error"}
-                    Left (Service.FlowNotFound _) -> throwError err500{errBody = "Internal server error"}
-                    Right supplyChain -> return supplyChain
+                either throwServiceError pure result
             Just subReq -> do
                 (processId, _) <- resolveOrThrow db processIdText
                 -- Use the cross-DB-aware substitution resolver so qualified PIDs in
@@ -1367,12 +1336,7 @@ lcaServer env =
             unitCfg <- liftIO $ getMergedUnitConfig dbManager
             (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
             result <- liftIO $ Agg.aggregate unitCfg mFlows mUnits db dbName sharedSolver (DM.mkDepSolverLookup dbManager) processId params
-            case result of
-                Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-                Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-                Left (Service.MatrixError msg) -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-                Left _ -> throwError err500{errBody = "Internal server error"}
-                Right agg -> return agg
+            either throwServiceError pure result
           where
             -- Parse "System=Value[:exact]" into (system, value, isExact).
             parseClassFilter :: Text -> Maybe (Text, Text, Bool)
@@ -1523,11 +1487,7 @@ lcaServer env =
                     , Service.cnfMaxDepth = maxDepthParam
                     , Service.cnfIncludeEdges = fromMaybe False includeEdgesParam
                     }
-        case Service.getConsumers db dbName processIdText cnf of
-            Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-            Left (Service.InvalidProcessId msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-            Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-            Right consumers -> return consumers
+        either throwServiceError pure (Service.getConsumers db dbName processIdText cnf)
 
     -- Activity path-to endpoint (shortest supply chain path to first matching upstream activity)
     getActivityPathTo :: Text -> Text -> Maybe Text -> AppM Value
