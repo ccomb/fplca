@@ -342,10 +342,16 @@ getActivityInventoryWithSharedSolver validators sharedSolver db processIdText = 
                                     return $ Right inventoryExport
 
 -- | Simple stats tracking for tree processing
+-- | Tree-traversal counters (total nodes / loop nodes / leaf nodes). The
+-- 'Semigroup' / 'Monoid' instance is the product of three Sum-Int monoids,
+-- hand-written to keep the bare 'Int' constructor positions ergonomic.
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves
 
-combineStats :: TreeStats -> TreeStats -> TreeStats
-combineStats (TreeStats t1 l1 v1) (TreeStats t2 l2 v2) = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
+instance Semigroup TreeStats where
+    TreeStats t1 l1 v1 <> TreeStats t2 l2 v2 = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
+
+instance Monoid TreeStats where
+    mempty = TreeStats 0 0 0
 
 {- | Helper to find ProcessId for an activity by searching the database
 This is needed because activities don't store their own ProcessId/UUID
@@ -585,7 +591,7 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
                             , teUnit = getUnitNameForTechFlow (dbUnits db) flow
                             , teEdgeType = TechnosphereEdge
                             }
-                    newStats = combineStats statsAcc childStats'
+                    newStats = statsAcc <> childStats'
                  in (childNodes, edge : childEdges, newStats)
             (finalNodes, finalEdges, combinedStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
             -- Add biosphere nodes and edges only for depth 0 (root level)

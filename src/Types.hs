@@ -1116,23 +1116,27 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     }
     deriving (Generic, NFData, Store)
 
--- | Empty stats
-emptyCrossDBLinkingStats :: CrossDBLinkingStats
-emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] [] 0
+{- | Product of monoids, componentwise: lists concat, the count\/blocker
+map unions (counts summed, first blocker wins as a tiebreaker), the set
+unions, the @Int@ counter sums. Hand-written rather than @via Generically@
+because bare @Int@ has no canonical 'Monoid' (Sum vs Product is ambiguous)
+and the @(Int, LinkBlocker)@ map value mixes a 'Monoid' with a non-'Monoid'.
+-}
+instance Semigroup CrossDBLinkingStats where
+    s1 <> s2 =
+        CrossDBLinkingStats
+            { cdlLinks = cdlLinks s1 <> cdlLinks s2
+            , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
+            , cdlUnknownUnits = cdlUnknownUnits s1 <> cdlUnknownUnits s2
+            , cdlLocationFallbacks = cdlLocationFallbacks s1 <> cdlLocationFallbacks s2
+            , cdlLocationUnresolved = cdlLocationUnresolved s1 <> cdlLocationUnresolved s2
+            , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
+            }
+      where
+        mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
--- | Merge two CrossDBLinkingStats
-mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
-mergeCrossDBStats s1 s2 =
-    CrossDBLinkingStats
-        { cdlLinks = cdlLinks s1 ++ cdlLinks s2
-        , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
-        , cdlUnknownUnits = S.union (cdlUnknownUnits s1) (cdlUnknownUnits s2)
-        , cdlLocationFallbacks = cdlLocationFallbacks s1 ++ cdlLocationFallbacks s2
-        , cdlLocationUnresolved = cdlLocationUnresolved s1 ++ cdlLocationUnresolved s2
-        , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
-        }
-  where
-    mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
+instance Monoid CrossDBLinkingStats where
+    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] 0
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
 deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]

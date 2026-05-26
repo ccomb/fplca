@@ -31,7 +31,6 @@ import Types (
     Indexes (..),
     SparseTriple (..),
     Unit (..),
-    emptyCrossDBLinkingStats,
     emptyProductIndex,
  )
 import UnitConversion (UnitConfig (..), UnitDef (..))
@@ -125,7 +124,7 @@ mkDB locsAndEmissions =
             , dbBiosphereCount = 1
             , dbCrossDBLinks = []
             , dbDependsOn = []
-            , dbLinkingStats = emptyCrossDBLinkingStats
+            , dbLinkingStats = mempty
             , dbSynonymDB = Nothing
             , dbFlowsByName = M.empty
             , dbFlowsByCAS = M.empty

@@ -45,7 +45,7 @@ module Database.Loader (
     fixActivityLinksWithCrossDB,
     findAllCrossDBLinks,
     CrossDBLinkingStats (..),
-    emptyCrossDBLinkingStats,
+    mempty,
     crossDBLinksCount,
     unresolvedCount,
     crossDBBySource,
@@ -1055,7 +1055,7 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
 -- Cross-Database Linking
 --------------------------------------------------------------------------------
 
-{- | CrossDBLinkingStats, emptyCrossDBLinkingStats, mergeCrossDBStats,
+{- | CrossDBLinkingStats, mempty, (<>),
   crossDBLinksCount, unresolvedCount, crossDBBySource
   are now defined in Types and re-exported from this module.
 -}
@@ -1113,7 +1113,7 @@ loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig
             if null otherIndexes
                 then do
                     -- No cross-DB linking needed
-                    let !stats = emptyCrossDBLinkingStats{cdlUnknownUnits = unknownUnits, cdlTotalInputs = totalInputs}
+                    let !stats = mempty{cdlUnknownUnits = unknownUnits, cdlTotalInputs = totalInputs}
                     reportCrossDBLinkingStats (M.size (sdbActivities simpleDb)) stats
                     return $ Right (simpleDb, stats)
                 else do
@@ -1166,7 +1166,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
     if unlinkedBefore == 0
         then do
             reportProgress Info "No unlinked exchanges to resolve via cross-DB linking"
-            return (db, emptyCrossDBLinkingStats{cdlTotalInputs = totalInputs})
+            return (db, mempty{cdlTotalInputs = totalInputs})
         else do
             reportProgress Info $
                 printf
@@ -1272,7 +1272,7 @@ findAllCrossDBLinks ::
     CrossDBLinkingStats
 findAllCrossDBLinks ctx techFlowDb unitDb activities =
     let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb unitDb) activities
-     in foldr mergeCrossDBStats emptyCrossDBLinkingStats (M.elems results)
+     in mconcat (M.elems results)
 
 -- | Find cross-database links for one activity's exchanges
 findActivityCrossDBLinks ::
@@ -1285,7 +1285,7 @@ findActivityCrossDBLinks ::
     CrossDBLinkingStats
 findActivityCrossDBLinks ctx techFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
     let stats = map (findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
-     in foldr mergeCrossDBStats emptyCrossDBLinkingStats stats
+     in mconcat stats
 
 {- | Find cross-database link for a single exchange.
 
@@ -1304,7 +1304,7 @@ findExchangeCrossDBLink ::
 findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
     | exchangeIsInput ex && linkId == UUID.nil =
         case M.lookup fid techFlowDb of
-            Nothing -> emptyCrossDBLinkingStats
+            Nothing -> mempty
             Just flow ->
                 let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
                  in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
@@ -1344,13 +1344,13 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                     NoNameMatch -> []
                                     UnitIncompatible _ _ -> []
                              in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
-    | otherwise = emptyCrossDBLinkingStats
-findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
+    | otherwise = mempty
+findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = mempty
 -- Cross-DB linking for waste flows is deferred: orphan waste outputs are
 -- end-of-life markers (no demand on another DB), and waste *inputs* that
 -- require a treatment supplier would need a dedicated lookup keyed on
 -- WasteFlow rather than TechnosphereFlow. Pure no-op until that path lands.
-findExchangeCrossDBLink _ _ _ _ _ WasteExchange{} = emptyCrossDBLinkingStats
+findExchangeCrossDBLink _ _ _ _ _ WasteExchange{} = mempty
 
 -- | Report cross-database linking statistics
 reportCrossDBLinkingStats :: Int -> CrossDBLinkingStats -> IO ()

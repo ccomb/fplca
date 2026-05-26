@@ -256,7 +256,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowD
                         , dbBiosphereCount = bioFlowCount
                         , dbCrossDBLinks = []
                         , dbDependsOn = []
-                        , dbLinkingStats = emptyCrossDBLinkingStats
+                        , dbLinkingStats = mempty
                         , dbSynonymDB = Nothing
                         , dbFlowsByName = M.empty
                         , dbFlowsByCAS = M.empty
