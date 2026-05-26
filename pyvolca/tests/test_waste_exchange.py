@@ -156,3 +156,23 @@ class TestParseExchangeDetailWaste:
         bad["flow"]["kind"] = "biosphere"
         with pytest.raises(ValueError, match="WasteExchange carried flow kind 'biosphere'"):
             parse_exchange_detail(bad)
+
+    def test_waste_flow_envelope_rejected_on_technosphere_tag(self):
+        """A waste-kind flow paired with a TechnosphereExchange tag is a
+        wire-format bug — refuse it rather than parsing as a product input."""
+        bad = {
+            "exchange": {"tag": "TechnosphereExchange", "amount": 1.0, "role": "Input"},
+            "exchangeUnitName": "kg",
+            "flow": {"kind": "waste", "flow": {"name": "wheat"}},
+        }
+        with pytest.raises(ValueError, match="TechnosphereExchange carried flow kind 'waste'"):
+            parse_exchange_detail(bad)
+
+    def test_waste_flow_envelope_rejected_on_biosphere_tag(self):
+        bad = {
+            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
+            "exchangeUnitName": "kg",
+            "flow": {"kind": "waste", "flow": {"name": "CO2"}},
+        }
+        with pytest.raises(ValueError, match="BiosphereExchange carried flow kind 'waste'"):
+            parse_exchange_detail(bad)
