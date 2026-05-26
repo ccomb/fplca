@@ -13,6 +13,7 @@ module MCPEnrichSpec (spec) where
 
 import API.MCP.Enrich (
     addWebUrl,
+    addWebUrlMaybe,
     attachMarketHintByName,
     encodeSegment,
     filterScoringSets,
@@ -78,12 +79,15 @@ spec :: Spec
 spec = do
     describe "scoreActivityWebUrl" $ do
         it "encodes every dynamic segment (no raw slashes leak through)" $
-            scoreActivityWebUrl "https://volca.run" "db/with-slash" "pid/with-slash" "EF 3.1"
-                `shouldBe` "https://volca.run/db/db%2Fwith-slash/activity/pid%2Fwith-slash/impacts/EF%203.1"
+            scoreActivityWebUrl (Just "https://volca.run") "db/with-slash" "pid/with-slash" "EF 3.1"
+                `shouldBe` Just "https://volca.run/db/db%2Fwith-slash/activity/pid%2Fwith-slash/impacts/EF%203.1"
 
         it "round-trips ASCII-safe segments unchanged" $
-            scoreActivityWebUrl "https://x" "agribalyse" "abc_def" "EF31"
-                `shouldBe` "https://x/db/agribalyse/activity/abc_def/impacts/EF31"
+            scoreActivityWebUrl (Just "https://x") "agribalyse" "abc_def" "EF31"
+                `shouldBe` Just "https://x/db/agribalyse/activity/abc_def/impacts/EF31"
+
+        it "yields Nothing when no base URL is configured (no frontend)" $
+            scoreActivityWebUrl Nothing "agribalyse" "abc_def" "EF31" `shouldBe` Nothing
 
     describe "encodeSegment" $
         it "percent-encodes unsafe URL characters" $ do
@@ -103,6 +107,15 @@ spec = do
             addWebUrl "https://x" (Number 42) `shouldBe` Number 42
             addWebUrl "https://x" (Bool True) `shouldBe` Bool True
             addWebUrl "https://x" Null `shouldBe` Null
+
+    describe "addWebUrlMaybe" $ do
+        it "inserts web_url when Just" $
+            addWebUrlMaybe (Just "https://x") (object ["a" .= (1 :: Int)])
+                `shouldBe` object ["a" .= (1 :: Int), "web_url" .= ("https://x" :: Text)]
+
+        it "is a no-op when Nothing" $
+            addWebUrlMaybe Nothing (object ["a" .= (1 :: Int)])
+                `shouldBe` object ["a" .= (1 :: Int)]
 
     describe "slimLCIAPanel" $ do
         let panelWithFnUnit =

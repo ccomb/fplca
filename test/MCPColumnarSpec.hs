@@ -131,7 +131,7 @@ spec = do
                     , birNotFound = []
                     , birInvalid = []
                     }
-            Object km = toColumnarBatch False "https://x" "ei" "EF31" pefSet bir
+            Object km = toColumnarBatch False (Just "https://x") "ei" "EF31" pefSet bir
 
         it "uses snake_case top-level keys throughout" $ do
             KM.lookup (fromText "scoring_set") km `shouldBe` Just (String "PEF")
@@ -192,7 +192,7 @@ spec = do
                     , birNotFound = []
                     , birInvalid = []
                     }
-            Object km = toColumnarBatch False "https://x" "agri" "EF31" pefSet bir
+            Object km = toColumnarBatch False (Just "https://x") "agri" "EF31" pefSet bir
 
         it "drops the top-level functional_unit field when rows disagree" $
             KM.lookup (fromText "functional_unit") km `shouldBe` Nothing
@@ -231,7 +231,7 @@ spec = do
                     , birNotFound = []
                     , birInvalid = []
                     }
-            Object km = toColumnarBatch True "https://x" "ei" "EF31" pefSet bir
+            Object km = toColumnarBatch True (Just "https://x") "ei" "EF31" pefSet bir
 
         it "replaces per-indicator columns with a single dominant_indicator column" $
             KM.lookup (fromText "columns") km
@@ -256,8 +256,48 @@ spec = do
                     other -> expectationFailure ("expected one row, got " <> show other)
                 other -> expectationFailure ("expected rows array, got " <> show other)
 
+    describe "toColumnarBatch (no frontend bundled — Nothing baseUrl)" $ do
+        let bir =
+                BatchImpactsResponse
+                    { birResults =
+                        [ mkEntry "pidA" "oak forestry, RoW" "1 m³ wood" "PEF" 10.0 [("acd", 4.0), ("cch", 6.0)]
+                        ]
+                    , birNotFound = []
+                    , birInvalid = []
+                    }
+            Object km = toColumnarBatch False Nothing "ei" "EF31" pefSet bir
+
+        it "drops the web_url column from the header" $
+            KM.lookup (fromText "columns") km
+                `shouldBe` Just
+                    ( Array
+                        ( V.fromList
+                            [ String "name"
+                            , String "process_id"
+                            , String "total"
+                            , String "acd"
+                            , String "cch"
+                            ]
+                        )
+                    )
+
+        it "drops the web_url cell from each row (no dead-link slot)" $
+            case KM.lookup (fromText "rows") km of
+                Just (Array rs) ->
+                    V.toList rs
+                        `shouldBe` [ Array $
+                                        V.fromList
+                                            [ String "oak forestry, RoW"
+                                            , String "pidA"
+                                            , Number 10.0
+                                            , Number 4.0
+                                            , Number 6.0
+                                            ]
+                                   ]
+                other -> expectationFailure ("expected rows array, got " <> show other)
+
     describe "toColumnarBatch (edge: empty results)" $ do
-        let Object km = toColumnarBatch False "https://x" "ei" "EF31" pefSet emptyBir
+        let Object km = toColumnarBatch False (Just "https://x") "ei" "EF31" pefSet emptyBir
 
         it "omits top-level functional_unit (nothing to hoist)" $
             KM.lookup (fromText "functional_unit") km `shouldBe` Nothing

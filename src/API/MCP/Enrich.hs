@@ -20,6 +20,7 @@ module API.MCP.Enrich (
 
     -- * web_url enrichment
     addWebUrl,
+    addWebUrlMaybe,
 
     -- * payload slimming
     slimLCIAPanel,
@@ -97,16 +98,23 @@ encodeSegment = T.pack . escapeURIString isUnreserved . T.unpack
 Every dynamic segment is percent-encoded so a 'dbName' \/ 'processId' \/
 'collection' that contains @/@ or @?@ does not silently fracture the
 URL.
+
+The 'Maybe' on 'baseUrl' threads frontend availability through callers:
+'Nothing' means the SPA is not bundled (backend-only image), and the
+URL would point at a 404. We propagate the absence rather than emit a
+dead link.
 -}
-scoreActivityWebUrl :: Text -> Text -> Text -> Text -> Text
-scoreActivityWebUrl baseUrl dbName pidText coll =
-    baseUrl
-        <> "/db/"
-        <> encodeSegment dbName
-        <> "/activity/"
-        <> encodeSegment pidText
-        <> "/impacts/"
-        <> encodeSegment coll
+scoreActivityWebUrl :: Maybe Text -> Text -> Text -> Text -> Maybe Text
+scoreActivityWebUrl mBaseUrl dbName pidText coll = do
+    base <- mBaseUrl
+    pure $
+        base
+            <> "/db/"
+            <> encodeSegment dbName
+            <> "/activity/"
+            <> encodeSegment pidText
+            <> "/impacts/"
+            <> encodeSegment coll
 
 -- ---------------------------------------------------------------------------
 -- web_url enrichment
@@ -121,6 +129,13 @@ hintKey = fromText "hint"
 -- | Add a 'web_url' field to a JSON object at the top level.
 addWebUrl :: Text -> Value -> Value
 addWebUrl url = overObject (KM.insert webUrlKey (String url))
+
+{- | Like 'addWebUrl', but a no-op when the URL is 'Nothing'. Lets callers
+thread frontend availability through 'Maybe Text' without case-splitting
+at every emission site.
+-}
+addWebUrlMaybe :: Maybe Text -> Value -> Value
+addWebUrlMaybe = maybe id addWebUrl
 
 {- | Reduce a serialized 'LCIABatchResult' to its aggregates for bulk
 transport: hoist @functionalUnit@ to the top level (same value on
