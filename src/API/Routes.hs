@@ -509,8 +509,9 @@ throwServiceError (Service.InvalidUUID _) = throwError err500{errBody = "Interna
 throwServiceError (Service.FlowNotFound _) = throwError err500{errBody = "Internal server error"}
 
 -- | Load a method collection by name from the live DatabaseManager state.
-loadCollection :: DatabaseManager -> Text -> AppM ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
-loadCollection dbManager collectionName = do
+loadCollection :: Text -> AppM ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
+loadCollection collectionName = do
+    dbManager <- asks getDatabaseManager
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
         Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
@@ -520,10 +521,11 @@ loadCollection dbManager collectionName = do
 no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
 'Just' applies the substitutions through the uncached path.
 -}
-crossDBSolutionFor :: DatabaseManager -> Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> AppM SharedSolver.CrossDBSolution
-crossDBSolutionFor dbManager dbName db solver pid mSub = case mSub of
+crossDBSolutionFor :: Text -> Database -> SharedSolver -> ProcessId -> Maybe SubstitutionRequest -> AppM SharedSolver.CrossDBSolution
+crossDBSolutionFor dbName db solver pid mSub = case mSub of
     Nothing -> solutionWithDeps dbName db solver pid
     Just subReq -> do
+        dbManager <- asks getDatabaseManager
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         eSol <-
@@ -790,11 +792,11 @@ activityLCIABatchH dbName processIdText collectionName mSub = do
     dbManager <- asks getDatabaseManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     (actProcessId, activity) <- resolveOrThrow db processIdText
-    (methods, damageCats, nwSets, scoringSets) <- loadCollection dbManager collectionName
+    (methods, damageCats, nwSets, scoringSets) <- loadCollection collectionName
     let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
         mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
     t0 <- liftIO getCurrentTime
-    sol <- crossDBSolutionFor dbManager dbName db sharedSolver actProcessId mSub
+    sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub
     t1 <- liftIO getCurrentTime
     let inventory = SharedSolver.csInventory sol
         !invSize = M.size inventory
@@ -1162,7 +1164,7 @@ lcaServer env =
     activityInventoryCore dbName processIdText mSub = do
         (db, sharedSolver) <- requireDatabaseByName dbName
         (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         pure $ Service.convertToInventoryExport db mFlows mUnits processId activity (SharedSolver.csInventory sol)
 
@@ -1392,7 +1394,7 @@ lcaServer env =
         (db, sharedSolver) <- requireDatabaseByName dbName
         method <- loadMethodByUUID methodIdText
         (processId, activity) <- resolveOrThrow db processIdText
-        sol <- crossDBSolutionFor dbManager dbName db sharedSolver processId mSub
+        sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
         result <- liftIO $ computeCategoryResult dbManager dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
         when (isNothing mSub) $ liftIO $ logLCIAResult result method
         pure result
