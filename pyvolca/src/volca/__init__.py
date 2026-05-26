@@ -30,6 +30,7 @@ from .types import (
     SupplyChainEntry,
     TechRole,
     TechnosphereExchange,
+    WasteExchange,
 )
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "TechRole",
     "TechnosphereExchange",
     "VoLCAError",
+    "WasteExchange",
     "compare_activities",
     "download",
 ]

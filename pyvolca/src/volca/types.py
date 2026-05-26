@@ -376,6 +376,7 @@ class TechnosphereExchange:
     comment: str | None = None
 
     is_biosphere: bool = False  # discriminator for callers using duck typing
+    is_waste: bool = False
 
     @property
     def is_input(self) -> bool:
@@ -419,6 +420,7 @@ class BiosphereExchange:
     comment: str | None = None
 
     is_biosphere: bool = True  # discriminator for callers using duck typing
+    is_waste: bool = False
 
     @property
     def is_input(self) -> bool:
@@ -437,30 +439,74 @@ class BiosphereExchange:
         )
 
 
-Exchange = Union[TechnosphereExchange, BiosphereExchange]
+@dataclass
+class WasteExchange:
+    """An exchange of a waste flow with a treatment activity.
+
+    Shares the technosphere matrix with product flows but tracked as its own
+    kind so callers can tell a "waste sent to landfill" output apart from a
+    product input. Orphan waste (no linked treatment) contributes zero impact
+    — same cut-off semantics as an orphan technosphere input.
+    """
+
+    flow_name: str
+    amount: float
+    unit: str
+    is_input: bool  # True = consumed by treatment process; False = generated (typical case)
+    target_activity: str | None
+    target_location: str | None
+    target_process_id: str | None
+    comment: str | None = None
+
+    is_biosphere: bool = False
+    is_waste: bool = True
+
+    @property
+    def is_reference(self) -> bool:
+        return False
+
+    @classmethod
+    def from_json(cls, ewu: dict) -> "WasteExchange":
+        inner = ewu["exchange"]
+        return cls(
+            flow_name=ewu["flowName"],
+            amount=inner["amount"],
+            unit=ewu["unitName"],
+            is_input=inner["isInput"],
+            target_activity=ewu.get("targetActivity"),
+            target_location=ewu.get("targetLocation"),
+            target_process_id=ewu.get("targetProcessId"),
+            comment=_exchange_comment(ewu, inner),
+        )
+
+
+Exchange = Union[TechnosphereExchange, BiosphereExchange, WasteExchange]
 
 
 def parse_exchange(ewu: dict) -> Exchange:
     """Parse an `ExchangeWithUnit` JSON dict (as returned by GET /activity).
 
     The inner `exchange` object is tagged with a `"tag"` discriminator
-    (``"TechnosphereExchange"`` or ``"BiosphereExchange"``) and carries all
-    variant-specific fields flat at the same level.
+    (``"TechnosphereExchange"``, ``"BiosphereExchange"`` or
+    ``"WasteExchange"``) and carries all variant-specific fields flat at the
+    same level.
     """
     tag = ewu["exchange"].get("tag")
     if tag == "TechnosphereExchange":
         return TechnosphereExchange.from_json(ewu)
     if tag == "BiosphereExchange":
         return BiosphereExchange.from_json(ewu)
+    if tag == "WasteExchange":
+        return WasteExchange.from_json(ewu)
     raise ValueError(f"Unknown exchange variant tag: {tag!r}")
 
 
 def parse_exchange_detail(ed: dict) -> Exchange:
     """Parse an ``ExchangeDetail`` JSON dict (returned by GET /activity/{pid}/inputs|outputs).
 
-    The flow is a tagged sum: ``{"kind": "technosphere", "flow": <techFlow>}``
-    or ``{"kind": "biosphere", "flow": <bioFlow>}``. The flow's ``kind`` lines
-    up with the exchange variant tag.
+    The flow is a tagged sum: ``{"kind": "technosphere"|"biosphere"|"waste",
+    "flow": <flow>}``. The flow's ``kind`` lines up with the exchange variant
+    tag.
     """
     inner = ed["exchange"]
     flow_outer = ed.get("flow") or {}
@@ -496,6 +542,22 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             amount=inner["amount"],
             unit=unit,
             direction=inner["direction"],
+            comment=comment,
+        )
+    if tag == "WasteExchange":
+        if flow_kind not in (None, "waste"):
+            raise ValueError(
+                f"WasteExchange carried flow kind {flow_kind!r}"
+            )
+        target = ed.get("targetActivity") or {}
+        return WasteExchange(
+            flow_name=flow_payload.get("name", ""),
+            amount=inner["amount"],
+            unit=unit,
+            is_input=inner["isInput"],
+            target_activity=target.get("name"),
+            target_location=target.get("location"),
+            target_process_id=target.get("processId"),
             comment=comment,
         )
     raise ValueError(f"Unknown exchange variant tag: {tag!r}")
