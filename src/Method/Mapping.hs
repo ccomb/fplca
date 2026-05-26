@@ -67,6 +67,7 @@ module Method.Mapping (
     computeMappingStats,
 ) where
 
+import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
@@ -114,7 +115,9 @@ data MatchStrategy
       NoMatch
     deriving (Eq, Show)
 
--- | Statistics about mapping results
+-- | Per-strategy mapping counters. Forms a 'Monoid' (field-wise sum, all-zero
+-- identity) so per-batch stats compose with '<>' and 'computeMappingStats'
+-- is a single 'foldMap' pass over the mapping list.
 data MappingStats = MappingStats
     { msTotal :: !Int
     -- ^ Total CFs in method
@@ -132,6 +135,20 @@ data MappingStats = MappingStats
     -- ^ Not matched
     }
     deriving (Eq, Show)
+
+instance Semigroup MappingStats where
+    a <> b =
+        MappingStats
+            (msTotal a + msTotal b)
+            (msByUUID a + msByUUID b)
+            (msByCAS a + msByCAS b)
+            (msByName a + msByName b)
+            (msBySynonym a + msBySynonym b)
+            (msByFuzzy a + msByFuzzy b)
+            (msUnmatched a + msUnmatched b)
+
+instance Monoid MappingStats where
+    mempty = MappingStats 0 0 0 0 0 0 0
 
 -- | Build a MapContext from a Database (convenience for callers)
 buildMapContext :: Database -> MapContext
@@ -252,20 +269,20 @@ pickByCompartment (f : fs) (Just comp) = Just $
         | med `T.isInfixOf` cat = True
         | otherwise = False
 
--- | Compute statistics about mapping results
+-- | Per-strategy counts of mapping results in one pass.
+-- Each 'MatchStrategy' must be named below — adding a new variant is a
+-- compile error here until it gets a row.
 computeMappingStats :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MappingStats
-computeMappingStats mappings =
-    MappingStats
-        { msTotal = length mappings
-        , msByUUID = count ByUUID
-        , msByCAS = count ByCAS
-        , msByName = count ByName
-        , msBySynonym = count BySynonym
-        , msByFuzzy = count ByFuzzy
-        , msUnmatched = length $ filter (isNothing . snd) mappings
-        }
+computeMappingStats = foldMap (tally . fmap snd . snd)
   where
-    count strategy = length $ filter ((== Just strategy) . fmap snd . snd) mappings
+    one = mempty{msTotal = 1}
+    tally Nothing = one{msUnmatched = 1}
+    tally (Just ByUUID) = one{msByUUID = 1}
+    tally (Just ByCAS) = one{msByCAS = 1}
+    tally (Just ByName) = one{msByName = 1}
+    tally (Just BySynonym) = one{msBySynonym = 1}
+    tally (Just ByFuzzy) = one{msByFuzzy = 1}
+    tally (Just NoMatch) = one{msUnmatched = 1}
 
 {- | Precomputed CF lookup tables for one (database, method) pair.
 Building these from raw mappings is O(n log n) over thousands of CFs, so they
@@ -1088,28 +1105,25 @@ against ILCD-style bare media without requiring an explicit (medium, sub)
 pair for every combination.
 -}
 lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe (Double, Text)
-lookupCascadeCF tables flowDB fid = case M.lookup fid (mtUuidCF tables) of
-    Just cfv -> Just cfv
-    Nothing -> case M.lookup fid flowDB of
-        Nothing -> Nothing
-        Just flow ->
-            let name = normalizeName (bfName flow)
-                rawCategory = T.toLower (VT.bfCompartmentName flow)
-                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                    (m, rest)
-                        | T.null rest -> (m, T.empty)
-                        | otherwise -> (m, T.drop 1 rest)
-                rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
-                     in if T.null s then rawSubFromCat else s
-                Compartment normMedRaw normSub _ =
-                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-                baseMed = normalizeMedium normMedRaw
-                subcomp = normSub
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
+lookupCascadeCF tables flowDB fid =
+    M.lookup fid (mtUuidCF tables)
+        <|> (M.lookup fid flowDB >>= byName)
+  where
+    byName flow =
+        let name = normalizeName (bfName flow)
+            rawCategory = T.toLower (VT.bfCompartmentName flow)
+            (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+                (m, rest)
+                    | T.null rest -> (m, T.empty)
+                    | otherwise -> (m, T.drop 1 rest)
+            rawSub =
+                let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
+                 in if T.null s then rawSubFromCat else s
+            Compartment normMedRaw normSub _ =
+                normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
+            baseMed = normalizeMedium normMedRaw
+         in M.lookup (name, baseMed, normSub) (mtExactCF tables)
+                <|> M.lookup (name, baseMed) (mtFallbackCF tables)
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
