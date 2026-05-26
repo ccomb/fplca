@@ -36,7 +36,8 @@ import Data.List (nub)
 import Search.BM25.Types (BM25Index)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
-import Data.OpenApi (ToSchema)
+import Control.Lens ((&), (?~))
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -1060,6 +1061,20 @@ instance FromJSON LocationKind where
             "unrelated" -> pure UnrelatedLoc
             other -> fail $ "Invalid LocationKind: " <> T.unpack other
 
+-- | OpenAPI schema for 'LocationKind' as a string-enum matching the wire codes
+-- produced by 'locationKindCode'. The generic schema would expose the raw
+-- Haskell constructor names; this keeps the spec in sync with the ToJSON.
+instance ToSchema LocationKind where
+    declareNamedSchema _ =
+        pure $
+            NamedSchema (Just "LocationKind") $
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_
+                        ?~ [ toJSON (c :: Text)
+                           | c <- ["exact", "parent", "global", "unrelated"]
+                           ]
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text
@@ -1068,7 +1083,7 @@ data LocationFallback = LocationFallback
     , lfKind :: !LocationKind
     }
     deriving (Show, Eq, Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped LocationFallback)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped LocationFallback)
 
 {- | A product whose supplier could not be linked — either because no candidate
 matched the name/unit, or because every geographic candidate was rejected by
@@ -1080,7 +1095,7 @@ data LocationUnresolved = LocationUnresolved
     , luReason :: !Text
     }
     deriving (Show, Eq, Generic, NFData, Store)
-    deriving (ToJSON, FromJSON) via (Stripped LocationUnresolved)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped LocationUnresolved)
 
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.

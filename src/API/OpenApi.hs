@@ -47,25 +47,9 @@ instance ToSchema MissingSupplier
 instance ToSchema DependencyStatus
 instance ToSchema DependencyChoice
 
--- Manual schema for LocationKind: ToJSON in Database.Manager.encodeFallback
--- emits lowercase wire codes (exact / parent / global / unrelated) via
--- Types.locationKindCode. The generic schema would otherwise advertise the
--- raw Haskell constructor names.
-instance ToSchema LocationKind where
-    declareNamedSchema _ =
-        pure $
-            NamedSchema (Just "LocationKind") $
-                mempty
-                    & type_ ?~ OpenApiString
-                    & enum_
-                        ?~ [ toJSON ("exact" :: Text)
-                           , toJSON ("parent" :: Text)
-                           , toJSON ("global" :: Text)
-                           , toJSON ("unrelated" :: Text)
-                           ]
-
-instance ToSchema LocationFallback where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
-instance ToSchema LocationUnresolved where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+-- ToSchema for LocationKind / LocationFallback / LocationUnresolved derived
+-- alongside their data declarations in src/Types.hs (LocationKind as a string
+-- enum matching the lowercase wire codes; the records via Stripped).
 instance ToSchema DatabaseSetupInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 
 -- API.Types — every record type uses strippedSchemaOptions so the generated
