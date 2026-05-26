@@ -21,6 +21,7 @@ module API.MCP.Enrich (
     -- * web_url enrichment
     addWebUrl,
     addWebUrlMaybe,
+    webUrlField,
 
     -- * payload slimming
     slimLCIAPanel,
@@ -44,6 +45,7 @@ import Data.Aeson.Key (fromText)
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.KeyMap (KeyMap)
 import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (Pair)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -136,6 +138,16 @@ at every emission site.
 -}
 addWebUrlMaybe :: Maybe Text -> Value -> Value
 addWebUrlMaybe = maybe id addWebUrl
+
+{- | Inline-object companion to 'addWebUrlMaybe' for handlers that build
+their response via @object (fields ++ extras)@.
+
+Yields @["web_url" .= base <> path]@ when a base URL is configured and
+@[]@ otherwise — keeping the "drop the field when no frontend" invariant
+in one place rather than fanning out a 'case' at every emission site.
+-}
+webUrlField :: Maybe Text -> Text -> [Pair]
+webUrlField mBase path = foldMap (\b -> ["web_url" .= (b <> path)]) mBase
 
 {- | Reduce a serialized 'LCIABatchResult' to its aggregates for bulk
 transport: hoist @functionalUnit@ to the top level (same value on

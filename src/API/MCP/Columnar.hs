@@ -36,7 +36,7 @@ import API.Types (
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import qualified Data.List as L
 import qualified Data.Map as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isJust, mapMaybe, maybeToList)
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -148,10 +148,7 @@ toColumnarBatch summaryOnly mBaseUrl dbName coll ss bir =
         _ -> []
     indicatorKeys :: [Text]
     indicatorKeys = M.keys (M.union (ssVariables ss) (ssComputed ss))
-    hasWebUrl = case mBaseUrl of
-        Just _ -> True
-        Nothing -> False
-    webUrlCol = ["web_url" | hasWebUrl]
+    webUrlCol = ["web_url" | isJust mBaseUrl]
     fixedColumns :: [Text]
     fixedColumns
         | isHeterogeneous = ["name", "process_id"] ++ webUrlCol ++ ["functional_unit", "total"]
@@ -166,9 +163,7 @@ toColumnarBatch summaryOnly mBaseUrl dbName coll ss bir =
     entryRow :: BatchImpactsEntry -> Value
     entryRow e = toJSON cells
       where
-        urlCells = case scoreActivityWebUrl mBaseUrl dbName (bieProcessId e) coll of
-            Just u -> [toJSON u]
-            Nothing -> []
+        urlCells = toJSON <$> maybeToList (scoreActivityWebUrl mBaseUrl dbName (bieProcessId e) coll)
         lbr = bieImpacts e
         scoreMap = M.findWithDefault M.empty setName (lbrScoringResults lbr)
         indMap = M.findWithDefault M.empty setName (lbrScoringIndicators lbr)

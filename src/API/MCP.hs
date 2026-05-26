@@ -35,7 +35,7 @@ import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
-import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel)
+import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
@@ -237,7 +237,7 @@ handleInitialize req =
                         , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
                         , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
                         , "Use list_methods for available LCIA methods."
-                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field from each result as a clickable markdown link — never show bare process IDs as a final answer."
+                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field as a clickable markdown link whenever it is present. If 'web_url' is absent (backend-only deployment), show the activity name and 'process_id' as plain text instead — never invent a link."
                         ]
                 ]
 
@@ -1033,10 +1033,7 @@ callGetImpacts dbManager mBaseUrl rid args =
                             <> irRefProductName ir
                     contribs = irContribs ir
                     topFlows = take topN contribs
-                    webUrlPair = case mBaseUrl of
-                        Just base ->
-                            ["web_url" .= (base <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)]
-                        Nothing -> []
+                    webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
                     unknownUuids = irUnknownUuids ir
                 liftIO $
@@ -1132,10 +1129,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
                 baselineScore <- case scoreOf baselineX of
                     Right s -> pure s
                     Left e -> throwE ("baseline scoring failed: " <> e)
-                let webUrlPair = case mBaseUrl of
-                        Just base ->
-                            ["web_url" .= (base <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)]
-                        Nothing -> []
+                let webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                     pertEntry (p, eitherX) =
                         let base =
                                 [ "perturbation"
@@ -1521,21 +1515,18 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unit
                  in (maybe "" activityName mAct, maybe "" activityLocation mAct, pn, txt)
             Nothing ->
                 ("", "", "", depDbName <> "::<unloaded>")
-        webUrlPair = case mBaseUrl of
-            Just base ->
-                [ "web_url"
-                    .= ( base
-                            <> "/db/"
-                            <> rootDbName
-                            <> "/activity/"
-                            <> pidText
-                            <> "/contributing-activities/"
-                            <> encodeSegment colName
-                            <> "/"
-                            <> methodIdText
-                       )
-                ]
-            Nothing -> []
+        webUrlPair =
+            webUrlField
+                mBaseUrl
+                ( "/db/"
+                    <> rootDbName
+                    <> "/activity/"
+                    <> pidText
+                    <> "/contributing-activities/"
+                    <> encodeSegment colName
+                    <> "/"
+                    <> methodIdText
+                )
     pure $
         object $
             [ "process_id" .= pidText
@@ -1643,10 +1634,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
                     dbName = lrDbName req
                     ra = lrResolved req
                     lim = fromMaybe 20 (intArg "limit" args)
-                    webUrlPair = case mBaseUrl of
-                        Just base ->
-                            ["web_url" .= (base <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)]
-                        Nothing -> []
+                    webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                 ExceptT $ pure $ ensureLinked dbName "computing contributions" db
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager

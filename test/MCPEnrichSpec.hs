@@ -21,6 +21,7 @@ import API.MCP.Enrich (
     scoreActivityWebUrl,
     slimLCIAPanel,
     summarizeLCIAPanel,
+    webUrlField,
  )
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, (.=))
@@ -116,6 +117,14 @@ spec = do
         it "is a no-op when Nothing" $
             addWebUrlMaybe Nothing (object ["a" .= (1 :: Int)])
                 `shouldBe` object ["a" .= (1 :: Int)]
+
+    describe "webUrlField" $ do
+        it "yields a single web_url pair when a base URL is configured" $
+            object (webUrlField (Just "https://x") "/db/foo/activity/bar/impacts/EF31")
+                `shouldBe` object ["web_url" .= ("https://x/db/foo/activity/bar/impacts/EF31" :: Text)]
+
+        it "yields an empty pair list when no base URL is configured" $
+            webUrlField Nothing "/anything" `shouldBe` []
 
     describe "slimLCIAPanel" $ do
         let panelWithFnUnit =
