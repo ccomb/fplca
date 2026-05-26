@@ -337,27 +337,21 @@ getDatabaseSetupHandler dbName= do
 Runs cross-DB linking and returns updated setup info
 -}
 addDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
-addDependencyHandler dbName depName= do
+addDependencyHandler dbName depName = do
     dbManager <- asks getDatabaseManager
-    result <- liftIO $ addDependencyToStaged dbManager dbName depName
-    case result of
-        Left err -> throwError $ err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-        Right setupInfo -> return setupInfo
+    ioEither400 (addDependencyToStaged dbManager dbName depName)
 
 {- | Remove a dependency from a staged database
 Re-runs cross-DB linking and returns updated setup info
 -}
 removeDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
-removeDependencyHandler dbName depName= do
+removeDependencyHandler dbName depName = do
     dbManager <- asks getDatabaseManager
-    result <- liftIO $ removeDependencyFromStaged dbManager dbName depName
-    case result of
-        Left err -> throwError $ err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-        Right setupInfo -> return setupInfo
+    ioEither400 (removeDependencyFromStaged dbManager dbName depName)
 
 -- | Change the data path for an uploaded (staged) database
 setDataPathHandler :: Text -> Value -> AppM DatabaseSetupInfo
-setDataPathHandler dbName body= do
+setDataPathHandler dbName body = do
     dbManager <- asks getDatabaseManager
     -- Extract "path" from JSON body
     let mPath = case body of
@@ -367,11 +361,7 @@ setDataPathHandler dbName body= do
             _ -> Nothing
     case mPath of
         Nothing -> throwError $ err400{errBody = "Missing \"path\" field in request body"}
-        Just newPath -> do
-            result <- liftIO $ setDataPath dbManager dbName newPath
-            case result of
-                Left err -> throwError $ err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-                Right setupInfo -> return setupInfo
+        Just newPath -> ioEither400 (setDataPath dbManager dbName newPath)
 
 {- | Finalize a staged database
 Builds matrices and makes it ready for queries
@@ -459,6 +449,18 @@ simpleAction action successMsg = do
     return $ case result of
         Left err -> ActivateResponse False err Nothing
         Right () -> ActivateResponse True successMsg Nothing
+
+{- | @ioEither400 m@ runs an IO action that returns @Either Text a@; on
+@Left@ throws a 400 with the message body, on @Right@ propagates. Used
+to compress the @do result <- liftIO ...; case result of Left … Right …@
+ladder that recurs across every handler returning a typed payload.
+-}
+ioEither400 :: IO (Either Text a) -> AppM a
+ioEither400 action = do
+    result <- liftIO action
+    case result of
+        Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right v -> return v
 
 --------------------------------------------------------------------------------
 -- Reference Data Handlers (flow synonyms, compartment mappings, units)
