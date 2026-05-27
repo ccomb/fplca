@@ -32,6 +32,7 @@ import Types (
     Activity (..),
     BiosphereFlow,
     Exchange (..),
+    NativeActivityType (..),
     Pedigree (..),
     TechRole (..),
     TechnosphereFlow,
@@ -503,6 +504,13 @@ spec = do
             names `shouldContain` ["Irradiated Food"]
             let flowNames = map tfName (M.elems techFlowDB)
             flowNames `shouldContain` ["Food product (irradiated ; with treatment)"]
+
+    describe "SimaPro native process type" $ do
+        it "propagates the Type: header (\"Unit process\") to activityNativeType" $ do
+            (activities, _, _, _, _) <- parseTestCSV
+            let nativeTypes = map activityNativeType activities
+            -- Both fixture processes declare Type: Unit process
+            nativeTypes `shouldBe` replicate (length activities) (Just (SimaProProcessType{sptLabel = "Unit process"}))
 
     describe "SimaPro classification parsing" $ do
         it "parses Category type from metadata" $ do

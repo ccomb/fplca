@@ -879,7 +879,10 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                         , activityParamExprs = exprMap
                         , activityAllocationPercent = Just allocPercent
                         , activityAllocationFormula = allocFormula
-                        , activityNativeType = Nothing
+                        , activityNativeType =
+                            if T.null pbType
+                                then Nothing
+                                else Just (SimaProProcessType{sptLabel = pbType})
                         }
                 allTechFlows = productFlow : sharedTechFlows
                 allBioFlows = sharedBioFlows
