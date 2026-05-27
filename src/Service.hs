@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -6,6 +7,7 @@ module Service where
 
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
+import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
 import Control.Monad (foldM)
@@ -1082,6 +1084,7 @@ convertActivityForAPI unitCfg db processId activity =
             Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
             Nothing -> []
         (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
+        linkMap = buildCrossDBLinkMap db processId
      in ActivityForAPI
             { pfaProcessId = processIdToText db processId
             , pfaName = activityName activity
@@ -1094,115 +1097,130 @@ convertActivityForAPI unitCfg db processId activity =
             , pfaReferenceProductAmount = if T.null refProdName then Nothing else Just refProdAmount
             , pfaReferenceProductUnit = if T.null refProdName then Nothing else Just refProdUnit
             , pfaAllProducts = allProducts
-            , pfaExchanges = map convertExchangeWithUnit (exchanges activity)
+            , pfaExchanges = map (toExchangeWithUnit unitCfg db linkMap) (exchanges activity)
             , pfaNativeType = activityNativeType activity
             }
-  where
-    -- Cross-DB link lookup keyed by 'cdlConsumerFlowId' (the consumer-side flow
-    -- UUID). UUIDs are unique across flow kinds, so a tech "X" link and a waste
-    -- "X" link on the same activity cannot collide here.
-    crossDBLinkMap :: M.Map UUID CrossDBLink
-    crossDBLinkMap = case processIdToUUIDs db processId of
-        Just (actUUID, _) ->
-            M.fromList
-                [ (cdlConsumerFlowId link, link)
-                | link <- dbCrossDBLinks db
-                , cdlConsumerActUUID link == actUUID
-                , cdlConsumerFlowId link /= UUID.nil
-                ]
-        Nothing -> M.empty
 
-    convertExchangeWithUnit exchange =
-        let
-            -- Look up the flow in the appropriate side (tech vs bio vs waste) based on exchange variant.
-            techFlowInfo = case exchange of
-                TechnosphereExchange{techFlowId = fid} -> M.lookup fid (dbTechFlows db)
-                BiosphereExchange{} -> Nothing
-                WasteExchange{} -> Nothing
-            bioFlowInfo = case exchange of
-                BiosphereExchange{bioFlowId = fid} -> M.lookup fid (dbBioFlows db)
-                TechnosphereExchange{} -> Nothing
-                WasteExchange{} -> Nothing
-            wasteFlowInfo = case exchange of
-                WasteExchange{waFlowId = fid} -> M.lookup fid (dbWasteFlows db)
-                TechnosphereExchange{} -> Nothing
-                BiosphereExchange{} -> Nothing
-            (targetActivityName, targetActivityLocation, targetProcessId) = case exchange of
-                TechnosphereExchange{techFlowId = fId, techRole = role, techActivityLinkId = linkId}
-                    | (role == Input || role == ReferenceInput) && linkId /= UUID.nil ->
-                        case findActivityByActivityUUID db linkId of
-                            Just targetActivity ->
-                                let maybeProcessId = findProcessIdByActivityUUID db linkId
-                                    processIdText = fmap (processIdToText db) maybeProcessId
-                                 in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
-                            Nothing -> (Nothing, Nothing, Nothing)
-                    | role == Input || role == ReferenceInput ->
-                        -- SimaPro path: linkId is nil, resolve by product flow UUID
-                        case findProcessIdByProductFlowWithFallback unitCfg db fId of
-                            Just pid
-                                | Just act <- getActivity db pid ->
-                                    (Just (activityName act), Just (activityLocation act), Just (processIdToText db pid))
-                            _ ->
-                                case M.lookup fId crossDBLinkMap of
-                                    Just link ->
-                                        let crossPid =
-                                                cdlSourceDatabase link
-                                                    <> "::"
-                                                    <> UUID.toText (cdlSupplierActUUID link)
-                                                    <> "_"
-                                                    <> UUID.toText (cdlSupplierProdUUID link)
-                                         in (Just (cdlFlowName link), Just (cdlLocation link), Just crossPid)
-                                    Nothing -> (Nothing, Nothing, Nothing)
-                    | otherwise -> (Nothing, Nothing, Nothing)
-                BiosphereExchange{} -> (Nothing, Nothing, Nothing)
-                -- A waste exchange consumed by a treatment activity links the
-                -- generator to that treatment, same shape as a technosphere
-                -- Input. Orphan waste outputs that the exact-match cross-DB
-                -- linker resolved show up via 'crossDBLinkMap' keyed on the
-                -- waste flow name. The remaining orphans stay unresolved.
-                WasteExchange{waActivityLinkId = linkId, waIsInput = True}
-                    | linkId /= UUID.nil ->
-                        case findActivityByActivityUUID db linkId of
-                            Just targetActivity ->
-                                let maybeProcessId = findProcessIdByActivityUUID db linkId
-                                    processIdText = fmap (processIdToText db) maybeProcessId
-                                 in (Just (activityName targetActivity), Just (activityLocation targetActivity), processIdText)
-                            Nothing -> (Nothing, Nothing, Nothing)
-                WasteExchange{waActivityLinkId = linkId, waIsInput = False, waFlowId = fid}
-                    | linkId == UUID.nil ->
-                        case M.lookup fid crossDBLinkMap of
-                            Just link ->
-                                let crossPid =
-                                        cdlSourceDatabase link
-                                            <> "::"
-                                            <> UUID.toText (cdlSupplierActUUID link)
-                                            <> "_"
-                                            <> UUID.toText (cdlSupplierProdUUID link)
-                                 in (Just (cdlFlowName link), Just (cdlLocation link), Just crossPid)
-                            Nothing -> (Nothing, Nothing, Nothing)
-                WasteExchange{} -> (Nothing, Nothing, Nothing)
-            -- When the exchange's flow UUID resolves on none of the three sides
-            -- we surface the raw UUID rather than a generic "unknown" — that
-            -- way the consumer can tell which flow failed to resolve and the
-            -- gap is debuggable instead of silently misnamed.
-            flowNameTxt = case (techFlowInfo, bioFlowInfo, wasteFlowInfo) of
-                (Just tf, _, _) -> tfName tf
-                (_, Just bf, _) -> bfName bf
-                (_, _, Just wf) -> wfName wf
-                _ -> "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
-            compartment = bfCompartment =<< bioFlowInfo
-         in
-            ExchangeWithUnit
-                { ewuExchange = exchange
-                , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
-                , ewuFlowName = flowNameTxt
-                , ewuCompartment = compartment
-                , ewuTargetActivity = targetActivityName
-                , ewuTargetLocation = targetActivityLocation
-                , ewuTargetProcessId = targetProcessId
-                , ewuExComment = exchangeComment exchange
-                , ewuPedigree = exchangePedigree exchange
-                }
+{- | Resolved target activity for a technosphere or waste exchange. Either all
+three fields are present (Just TargetRef) or none (Nothing) — the formerly
+correlated triple of Maybes can no longer drift apart.
+-}
+data TargetRef = TargetRef
+    { trName :: !Text
+    , trLocation :: !Text
+    , trProcessId :: !Text
+    }
+
+activityToTarget :: Database -> ProcessId -> Activity -> TargetRef
+activityToTarget db pid act =
+    TargetRef (activityName act) (activityLocation act) (processIdToText db pid)
+
+crossDBLinkToTarget :: CrossDBLink -> TargetRef
+crossDBLinkToTarget link =
+    TargetRef
+        (cdlFlowName link)
+        (cdlLocation link)
+        ( cdlSourceDatabase link
+            <> "::"
+            <> UUID.toText (cdlSupplierActUUID link)
+            <> "_"
+            <> UUID.toText (cdlSupplierProdUUID link)
+        )
+
+-- | EcoSpold path: resolve a target by activity UUID.
+resolveByActivityUUID :: Database -> UUID -> Maybe TargetRef
+resolveByActivityUUID db linkId
+    | linkId == UUID.nil = Nothing
+    | otherwise = do
+        pid <- findProcessIdByActivityUUID db linkId
+        act <- getActivity db pid
+        pure (activityToTarget db pid act)
+
+-- | SimaPro path: resolve a target by product flow UUID.
+resolveByProductFlow :: UnitConfig -> Database -> UUID -> Maybe TargetRef
+resolveByProductFlow cfg db fId = do
+    pid <- findProcessIdByProductFlowWithFallback cfg db fId
+    act <- getActivity db pid
+    pure (activityToTarget db pid act)
+
+-- | Cross-database link resolution (orphan waste outputs, missing tech links).
+resolveByCrossDBLink :: M.Map UUID CrossDBLink -> UUID -> Maybe TargetRef
+resolveByCrossDBLink links fId = crossDBLinkToTarget <$> M.lookup fId links
+
+{- | Resolve the target activity (if any) for one exchange. Technosphere broken
+links (linkId set but unresolvable) do NOT fall through to the product-flow
+path — that matches the original behaviour. Use '<|>' to chain fallbacks only
+where the original code did.
+-}
+resolveTarget
+    :: UnitConfig
+    -> Database
+    -> M.Map UUID CrossDBLink
+    -> Exchange
+    -> Maybe TargetRef
+resolveTarget cfg db links = \case
+    TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
+        | role /= Input && role /= ReferenceInput -> Nothing
+        | lid /= UUID.nil -> resolveByActivityUUID db lid
+        | otherwise -> resolveByProductFlow cfg db fid <|> resolveByCrossDBLink links fid
+    BiosphereExchange{} -> Nothing
+    WasteExchange{waIsInput = True, waActivityLinkId = lid}
+        | lid /= UUID.nil -> resolveByActivityUUID db lid
+        | otherwise -> Nothing
+    WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
+        | lid == UUID.nil -> resolveByCrossDBLink links fid
+        | otherwise -> Nothing
+
+{- | Flow name + (biosphere-only) compartment. Each variant has exactly one
+flow side by construction, so no Maybe-merge is needed downstream.
+-}
+resolveFlow :: Database -> Exchange -> Maybe (Text, Maybe Compartment)
+resolveFlow db = \case
+    TechnosphereExchange{techFlowId = fid} ->
+        (\tf -> (tfName tf, Nothing)) <$> M.lookup fid (dbTechFlows db)
+    BiosphereExchange{bioFlowId = fid} ->
+        (\bf -> (bfName bf, bfCompartment bf)) <$> M.lookup fid (dbBioFlows db)
+    WasteExchange{waFlowId = fid} ->
+        (\wf -> (wfName wf, Nothing)) <$> M.lookup fid (dbWasteFlows db)
+
+{- | Build the cross-DB link map for one activity, keyed by consumer flow UUID.
+UUIDs are unique across flow kinds, so a tech and a waste link on the same
+activity cannot collide here.
+-}
+buildCrossDBLinkMap :: Database -> ProcessId -> M.Map UUID CrossDBLink
+buildCrossDBLinkMap db pid = case processIdToUUIDs db pid of
+    Just (actUUID, _) ->
+        M.fromList
+            [ (cdlConsumerFlowId link, link)
+            | link <- dbCrossDBLinks db
+            , cdlConsumerActUUID link == actUUID
+            , cdlConsumerFlowId link /= UUID.nil
+            ]
+    Nothing -> M.empty
+
+toExchangeWithUnit
+    :: UnitConfig
+    -> Database
+    -> M.Map UUID CrossDBLink
+    -> Exchange
+    -> ExchangeWithUnit
+toExchangeWithUnit cfg db links exchange =
+    -- Surface the raw UUID when the flow does not resolve — a clear failure
+    -- the consumer can debug, not a silent "unknown".
+    let unresolvedName = "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
+        (flowName, compartment) = fromMaybe (unresolvedName, Nothing) (resolveFlow db exchange)
+        target = resolveTarget cfg db links exchange
+     in ExchangeWithUnit
+            { ewuExchange = exchange
+            , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
+            , ewuFlowName = flowName
+            , ewuCompartment = compartment
+            , ewuTargetActivity = trName <$> target
+            , ewuTargetLocation = trLocation <$> target
+            , ewuTargetProcessId = trProcessId <$> target
+            , ewuExComment = exchangeComment exchange
+            , ewuPedigree = exchangePedigree exchange
+            }
 
 {- | Get reference product name from activity exchanges. Reference products
 are always technosphere.
