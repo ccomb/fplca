@@ -222,16 +222,27 @@ instance ToSchema ExchangeDetail where declareNamedSchema = genericDeclareNamedS
 instance ToSchema ExchangeWithUnit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 
 -- Manual schema: the NativeActivityType sum is flattened by ToJSON to a
--- single record with `source` discriminator and nullable code/special_*
--- fields. The Generic schema would expose the Haskell sum-of-records shape.
+-- single record with `source` discriminator. The Generic schema would expose
+-- the Haskell sum-of-records shape. code / special_code / special_label are
+-- inlined with `nullable: true` because ToJSON emits explicit `null` for
+-- non-ecospold variants and strict OpenAPI codegen otherwise rejects null.
 instance ToSchema NativeActivityType where
     declareNamedSchema _ = do
-        intRef <- declareSchemaRef (Proxy :: Proxy Int)
-        textRef <- declareSchemaRef (Proxy :: Proxy Text)
         let sourceEnum =
                 mempty
                     & type_ ?~ OpenApiString
                     & enum_ ?~ [toJSON ("ecospold2" :: Text), toJSON ("simapro" :: Text), toJSON ("ilcd" :: Text)]
+            labelSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+            nullableIntSchema =
+                mempty
+                    & type_ ?~ OpenApiInteger
+                    & nullable ?~ True
+            nullableTextSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & nullable ?~ True
         pure $
             NamedSchema (Just "NativeActivityType") $
                 mempty
@@ -239,10 +250,10 @@ instance ToSchema NativeActivityType where
                     & properties
                         .~ InsOrdHashMap.fromList
                             [ ("source", Inline sourceEnum)
-                            , ("label", textRef)
-                            , ("code", intRef)
-                            , ("special_code", intRef)
-                            , ("special_label", textRef)
+                            , ("label", Inline labelSchema)
+                            , ("code", Inline nullableIntSchema)
+                            , ("special_code", Inline nullableIntSchema)
+                            , ("special_label", Inline nullableTextSchema)
                             ]
                     & required .~ ["source", "label"]
 instance ToSchema ActivityForAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
