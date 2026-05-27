@@ -20,7 +20,7 @@ import qualified Data.IntSet as IS
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe)
 import Data.Sequence (Seq (..), (|>))
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -463,146 +463,154 @@ extractCompartment category =
                             then "soil"
                             else "other"
 
--- | Extract biosphere exchanges from an activity and create nodes and edges
+{- | Cap on biosphere flows shown per activity. System processes can declare
+hundreds; we keep the top-N by |amount| to keep graphs renderable.
+-}
+maxBiosphereFlows :: Int
+maxBiosphereFlows = 50
+
+-- | ExportNode for a single biosphere flow attached to a parent activity.
+mkBiosphereExportNode :: UnitDB -> BiosphereFlow -> Text -> Int -> Bool -> ExportNode
+mkBiosphereExportNode units flow parentPid depth isEmission =
+    let compartmentTxt = bfCompartmentName flow
+     in ExportNode
+            { enId = UUID.toText (bfId flow)
+            , enName = bfName flow
+            , enDescription = [compartmentTxt]
+            , enLocation = ""
+            , enUnit = getUnitNameForBioFlow units flow
+            , enNodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
+            , enDepth = depth
+            , enLoopTarget = Nothing
+            , enParentId = Just parentPid
+            , enChildrenCount = 0
+            , enCompartment = Just compartmentTxt
+            }
+
+-- | Edge linking an activity to a biosphere flow. Direction depends on whether
+-- the exchange is an emission (activity -> flow) or a resource (flow -> activity).
+mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> Bool -> Exchange -> TreeEdge
+mkBiosphereTreeEdge units flow activityPid isEmission ex =
+    let flowIdText = UUID.toText (bfId flow)
+        (edgeFrom, edgeTo, edgeType) =
+            if isEmission
+                then (activityPid, flowIdText, BiosphereEmissionEdge)
+                else (flowIdText, activityPid, BiosphereResourceEdge)
+     in TreeEdge
+            { teFrom = edgeFrom
+            , teTo = edgeTo
+            , teFlow = FlowInfo (bfId flow) (bfName flow) (bfCompartmentName flow)
+            , teQuantity = exchangeAmount ex
+            , teUnit = getUnitNameForBioFlow units flow
+            , teEdgeType = edgeType
+            }
+
+-- | Extract biosphere exchanges from an activity and create nodes and edges.
 extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge])
 extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
-    let allBiosphereExchanges = [ex | ex <- exchanges activity, isBiosphereExchange ex]
-        -- Limit to top 50 most significant flows to prevent performance issues with system processes
-        maxBiosphereFlows = 50
-        biosphereExchanges =
-            take maxBiosphereFlows $
-                L.sortBy
-                    (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a)))
-                    allBiosphereExchanges
-        processBiosphere ex (nodeAcc', edgeAcc') =
-            case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
-                Nothing -> (nodeAcc', edgeAcc')
-                Just flow ->
-                    let flowIdText = UUID.toText (bfId flow)
-                        isEmission = not (exchangeIsInput ex) -- False = emission, True = resource
-                        nodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
-                        compartmentTxt = bfCompartmentName flow
-                        biosphereNode =
-                            ExportNode
-                                { enId = flowIdText
-                                , enName = bfName flow
-                                , enDescription = [compartmentTxt]
-                                , enLocation = ""
-                                , enUnit = getUnitNameForBioFlow (dbUnits db) flow
-                                , enNodeType = nodeType
-                                , enDepth = depth
-                                , enLoopTarget = Nothing
-                                , enParentId = Just activityProcessId
-                                , enChildrenCount = 0
-                                , enCompartment = Just compartmentTxt
-                                }
-                        nodeAcc'' = M.insert flowIdText biosphereNode nodeAcc'
-                        (edgeFrom, edgeTo, edgeType) =
-                            if isEmission
-                                then (activityProcessId, flowIdText, BiosphereEmissionEdge)
-                                else (flowIdText, activityProcessId, BiosphereResourceEdge)
-                        edge =
-                            TreeEdge
-                                { teFrom = edgeFrom
-                                , teTo = edgeTo
-                                , teFlow = FlowInfo (bfId flow) (bfName flow) compartmentTxt
-                                , teQuantity = exchangeAmount ex
-                                , teUnit = getUnitNameForBioFlow (dbUnits db) flow
-                                , teEdgeType = edgeType
-                                }
-                        edgeAcc'' = edge : edgeAcc'
-                     in (nodeAcc'', edgeAcc'')
-     in foldr processBiosphere (nodeAcc, edgeAcc) biosphereExchanges
+    foldr step (nodeAcc, edgeAcc) topBiosphereExchanges
+  where
+    units = dbUnits db
+    topBiosphereExchanges =
+        take maxBiosphereFlows $
+            L.sortBy (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a))) $
+                filter isBiosphereExchange (exchanges activity)
+    step ex acc@(nodes, edges) = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
+        Nothing -> acc
+        Just flow ->
+            let isEmission = not (exchangeIsInput ex)
+                node = mkBiosphereExportNode units flow activityProcessId depth isEmission
+                edge = mkBiosphereTreeEdge units flow activityProcessId isEmission ex
+             in (M.insert (UUID.toText (bfId flow)) node nodes, edge : edges)
 
--- | Extract nodes and edges from LoopAwareTree
+-- | ExportNode for an activity-bearing tree node (TreeLeaf or TreeNode).
+mkActivityExportNode :: Database -> Activity -> Text -> Int -> Maybe Text -> ExportNode
+mkActivityExportNode db activity nodeId depth parentId =
+    ExportNode
+        { enId = nodeId
+        , enName = activityName activity
+        , enDescription = activityDescription activity
+        , enLocation = activityLocation activity
+        , enUnit = activityUnit activity
+        , enNodeType = ActivityNode
+        , enDepth = depth
+        , enLoopTarget = Nothing
+        , enParentId = parentId
+        , enChildrenCount = countPotentialChildren db activity
+        , enCompartment = Nothing
+        }
+
+-- | ExportNode for a TreeLoop. Looks up the referenced activity for its real
+-- unit and location; falls back to "N/A" sentinels when the referent is missing.
+mkLoopExportNode :: Database -> UUID -> Text -> Text -> Int -> Maybe Text -> ExportNode
+mkLoopExportNode db uuid nodeId name loopDepth parentId =
+    let (actualLocation, actualUnit) = case findActivityByActivityUUID db uuid of
+            Just act -> (activityLocation act, activityUnit act)
+            Nothing -> ("N/A", "N/A")
+     in ExportNode
+            { enId = nodeId
+            , enName = name
+            , enDescription = ["Loop reference"]
+            , enLocation = actualLocation
+            , enUnit = actualUnit
+            , enNodeType = LoopNode
+            , enDepth = loopDepth
+            , enLoopTarget = Just (UUID.toText uuid)
+            , enParentId = parentId
+            , enChildrenCount = 0
+            , enCompartment = Nothing
+            }
+
+{- | Attach biosphere nodes/edges to the accumulator when we're at the root of
+the tree (depth == 0). Below the root we leave the accumulator untouched to
+keep the graph readable.
+-}
+withRootBiosphere
+    :: Database
+    -> Activity
+    -> Text
+    -> Int
+    -> (M.Map Text ExportNode, [TreeEdge])
+    -> (M.Map Text ExportNode, [TreeEdge])
+withRootBiosphere db activity pid depth acc@(nodes, edges)
+    | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth nodes edges
+    | otherwise = acc
+
+-- | Technosphere edge from the current node to a child subtree.
+mkTechnosphereTreeEdge :: UnitDB -> Text -> Text -> Double -> TechnosphereFlow -> TreeEdge
+mkTechnosphereTreeEdge units fromPid toPid quantity flow =
+    TreeEdge
+        { teFrom = fromPid
+        , teTo = toPid
+        , teFlow = FlowInfo (tfId flow) (tfName flow) ""
+        , teQuantity = quantity
+        , teUnit = getUnitNameForTechFlow units flow
+        , teEdgeType = TechnosphereEdge
+        }
+
+-- | Extract nodes and edges from a 'LoopAwareTree'.
 extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
 extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
     TreeLeaf activity ->
-        let childrenCount = countPotentialChildren db activity
-            processIdText = getTreeNodeId db tree
-            node =
-                ExportNode
-                    { enId = processIdText -- Now ProcessId format
-                    , enName = activityName activity
-                    , enDescription = activityDescription activity
-                    , enLocation = activityLocation activity
-                    , enUnit = activityUnit activity
-                    , enNodeType = ActivityNode
-                    , enDepth = depth
-                    , enLoopTarget = Nothing
-                    , enParentId = parentId
-                    , enChildrenCount = childrenCount
-                    , enCompartment = Nothing
-                    }
-            nodes' = M.insert processIdText node nodeAcc -- Use ProcessId as key
-            -- Add biosphere nodes and edges only for depth 0 (root level)
-            (nodes'', edges') =
-                if depth == 0
-                    then extractBiosphereNodesAndEdges db activity processIdText depth nodes' edgeAcc
-                    else (nodes', edgeAcc)
+        let nodeId = getTreeNodeId db tree
+            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
+            (nodes'', edges') = withRootBiosphere db activity nodeId depth (nodes', edgeAcc)
          in (nodes'', edges', TreeStats 1 0 1)
     TreeLoop uuid name loopDepth ->
-        let nodeId = getTreeNodeId db tree -- Use ProcessId format for consistency
-            uuidText = UUID.toText uuid -- Keep bare UUID for loopTarget
-            -- Look up the actual activity to get real unit and location
-            maybeActivity = findActivityByActivityUUID db uuid
-            (actualLocation, actualUnit) = case maybeActivity of
-                Just activity -> (activityLocation activity, activityUnit activity)
-                Nothing -> ("N/A", "N/A") -- Fallback only if activity not found
-            node =
-                ExportNode
-                    { enId = nodeId -- Now uses ProcessId format
-                    , enName = name
-                    , enDescription = ["Loop reference"]
-                    , enLocation = actualLocation
-                    , enUnit = actualUnit
-                    , enNodeType = LoopNode
-                    , enDepth = loopDepth
-                    , enLoopTarget = Just uuidText
-                    , enParentId = parentId
-                    , enChildrenCount = 0 -- Loops don't expand
-                    , enCompartment = Nothing
-                    }
-            nodes' = M.insert nodeId node nodeAcc -- Store with ProcessId format key
+        let nodeId = getTreeNodeId db tree
+            nodes' = M.insert nodeId (mkLoopExportNode db uuid nodeId name loopDepth parentId) nodeAcc
          in (nodes', edgeAcc, TreeStats 1 1 0)
     TreeNode activity children ->
-        let childrenCount = countPotentialChildren db activity
-            currentProcessId = getTreeNodeId db tree
-            parentNode =
-                ExportNode
-                    { enId = currentProcessId -- Now ProcessId format
-                    , enName = activityName activity
-                    , enDescription = activityDescription activity
-                    , enLocation = activityLocation activity
-                    , enUnit = activityUnit activity
-                    , enNodeType = ActivityNode
-                    , enDepth = depth
-                    , enLoopTarget = Nothing
-                    , enParentId = parentId
-                    , enChildrenCount = childrenCount
-                    , enCompartment = Nothing
-                    }
-            nodes' = M.insert currentProcessId parentNode nodeAcc -- Use ProcessId as key
-            processChild (quantity, flow, subtree) (nodeAcc', edgeAcc', statsAcc) =
-                let (childNodes, childEdges, childStats') = extractNodesAndEdges db subtree (depth + 1) (Just currentProcessId) nodeAcc' edgeAcc'
-                    edge =
-                        TreeEdge
-                            { teFrom = currentProcessId
-                            , teTo = getTreeNodeId db subtree
-                            , teFlow = FlowInfo (tfId flow) (tfName flow) ""
-                            , teQuantity = quantity
-                            , teUnit = getUnitNameForTechFlow (dbUnits db) flow
-                            , teEdgeType = TechnosphereEdge
-                            }
-                    newStats = statsAcc <> childStats'
-                 in (childNodes, edge : childEdges, newStats)
-            (finalNodes, finalEdges, combinedStats) = foldr processChild (nodes', edgeAcc, TreeStats 1 0 0) children
-            -- Add biosphere nodes and edges only for depth 0 (root level)
-            (finalNodesWithBio, finalEdgesWithBio) =
-                if depth == 0
-                    then extractBiosphereNodesAndEdges db activity currentProcessId depth finalNodes finalEdges
-                    else (finalNodes, finalEdges)
-         in (finalNodesWithBio, finalEdgesWithBio, combinedStats)
+        let nodeId = getTreeNodeId db tree
+            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
+            (childNodes, childEdges, childStats) = foldr (processChild nodeId) (nodes', edgeAcc, TreeStats 1 0 0) children
+            (finalNodes, finalEdges) = withRootBiosphere db activity nodeId depth (childNodes, childEdges)
+         in (finalNodes, finalEdges, childStats)
+  where
+    processChild parentPid (quantity, flow, subtree) (nodes, edges, stats) =
+        let (n', e', s') = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) nodes edges
+            edge = mkTechnosphereTreeEdge (dbUnits db) parentPid (getTreeNodeId db subtree) quantity flow
+         in (n', edge : e', stats <> s')
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
@@ -665,126 +673,112 @@ filterTreeExport pat export =
         meta = (teTree export){tmTotalNodes = M.size filteredNodes}
      in export{teTree = meta, teNodes = filteredNodes, teEdges = filteredEdges}
 
-{- | Build activity network graph from factorized matrix column
-Uses efficient sparse matrix operations to extract connections
+{- | Activities whose absolute cumulative value clears the threshold, plus the
+root activity (which we always surface, even if it falls below). Out-of-bounds
+roots become a zero-valued entry rather than crashing.
+-}
+selectSignificantActivities :: Double -> ProcessId -> [Double] -> [(ProcessId, Double)]
+selectSignificantActivities threshold rootPid supplyList =
+    let kept =
+            [ (fromIntegral idx :: ProcessId, val)
+            | (idx, val) <- zip [(0 :: Int) ..] supplyList
+            , abs val > threshold || idx == fromIntegral rootPid
+            ]
+        rootInBounds = fromIntegral rootPid < length supplyList
+     in if rootInBounds then kept else (rootPid, 0.0) : kept
+
+{- | True iff the exchange is a technosphere @Input@ whose link points at the
+given target activity. Waste exchanges aren't traversed by the graph builder
+(they don't form upstream tech edges).
+-}
+isInputLinkTo :: UUID -> Exchange -> Bool
+isInputLinkTo targetUUID ex@TechnosphereExchange{techRole = Input} =
+    exchangeActivityLinkId ex == Just targetUUID
+isInputLinkTo _ TechnosphereExchange{} = False
+isInputLinkTo _ BiosphereExchange{} = False
+isInputLinkTo _ WasteExchange{} = False
+
+{- | Build one 'GraphEdge' from a sparse technosphere triple. Returns 'Nothing'
+when either endpoint is outside the projected subgraph (i.e. below cutoff) or
+the triple itself is zero. When the supplier flow can't be resolved we still
+emit the edge — with sentinel name/unit — so the gap is debuggable instead of
+silently dropped.
+-}
+mkGraphEdgeFromTriple
+    :: Database
+    -> V.Vector Activity
+    -> UnitDB
+    -> TechFlowDB
+    -> M.Map ProcessId Int
+    -> SparseTriple
+    -> Maybe GraphEdge
+mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col value)
+    | value == 0.0 = Nothing
+    | otherwise = do
+        let sourcePid = fromIntegral row :: ProcessId
+            targetPid = fromIntegral col :: ProcessId
+        src <- M.lookup sourcePid nodeIdMap
+        tgt <- M.lookup targetPid nodeIdMap
+        let matchingExchange = do
+                srcAct <- activities V.!? fromIntegral row
+                (targetUUID, _) <- processIdToUUIDs db targetPid
+                L.find (isInputLinkTo targetUUID) (exchanges srcAct)
+            flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
+            uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
+            flowName = case (flowInfo, matchingExchange) of
+                (Just f, _) -> tfName f
+                (Nothing, Just ex) -> unresolvedFlowName (exchangeFlowId ex)
+                (Nothing, Nothing) -> "<unresolved flow>"
+        pure $ GraphEdge src tgt (realToFrac value) uName flowName
+
+{- | 'GraphNode' for one significant activity. Out-of-bounds 'ProcessId's get a
+sentinel node rather than crashing — preserves the project's "no silent
+errors, no silent successes" stance.
+-}
+mkGraphNode :: Database -> V.Vector Activity -> Int -> (ProcessId, Double) -> GraphNode
+mkGraphNode db activities nodeId (pid, cumulativeVal) =
+    let processIdText = processIdToText db pid
+     in case activities V.!? fromIntegral pid of
+            Just activity ->
+                GraphNode
+                    { gnNodeId = nodeId
+                    , gnLabel = activityName activity
+                    , gnValue = cumulativeVal
+                    , gnUnit = activityUnit activity
+                    , gnProcessId = processIdText
+                    , gnLocation = activityLocation activity
+                    }
+            Nothing ->
+                GraphNode
+                    { gnNodeId = nodeId
+                    , gnLabel = "<unresolved activity " <> processIdText <> ">"
+                    , gnValue = cumulativeVal
+                    , gnUnit = ""
+                    , gnProcessId = processIdText
+                    , gnLocation = ""
+                    }
+
+{- | Build activity network graph from factorized matrix column.
+Uses efficient sparse matrix operations to extract connections.
 -}
 buildActivityGraph :: Database -> SharedSolver -> Text -> Double -> IO (Either ServiceError GraphExport)
-buildActivityGraph db sharedSolver queryText cutoffPercent = do
+buildActivityGraph db sharedSolver queryText cutoffPercent =
     case resolveActivityAndProcessId db queryText of
-        Left err -> return $ Left err
+        Left err -> pure (Left err)
         Right (processId, _activity) -> do
-            -- Step 1: Get factorized column (cumulative amounts) by solving
-            let activityIndex = dbActivityIndex db
-                demandVec = buildDemandVectorFromIndex activityIndex processId
-
-            -- Solve to get cumulative amounts (lazy factorization on first call)
-            supplyVec <- solveWithSharedSolver sharedSolver demandVec
+            supplyVec <- solveWithSharedSolver sharedSolver (buildDemandVectorFromIndex (dbActivityIndex db) processId)
             let supplyList = toList supplyVec
-                totalSupply = sum [abs val | val <- supplyList]
-                threshold = totalSupply * (cutoffPercent / 100.0)
-
-            -- Step 2: Filter by cutoff to get significant activities
-            -- Build list of (ProcessId, cumulative value) for activities above threshold
-            -- Always include the root activity (processId) even if below threshold
-            let allSignificantActivities =
-                    [ (fromIntegral idx :: ProcessId, val)
-                    | (idx, val) <- zip [(0 :: Int) ..] supplyList
-                    , abs val > threshold
-                    ]
-                -- Ensure root activity is always included
-                significantActivities =
-                    if processId `elem` map fst allSignificantActivities
-                        then allSignificantActivities
-                        else
-                            let rootValue =
-                                    if fromIntegral processId < length supplyList
-                                        then supplyList !! fromIntegral processId
-                                        else 0.0
-                             in (processId, rootValue) : allSignificantActivities
-
-            -- Step 3: Build node ID mapping (ProcessId -> Int) for frontend efficiency
-            let nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0 ..] significantActivities]
-
-            -- Step 4: Extract direct connections from technosphere matrix
-            -- For each significant activity, find edges in dbTechnosphereTriples
-            let techTriples = dbTechnosphereTriples db
+                threshold = sum (map abs supplyList) * (cutoffPercent / 100.0)
+                significantActivities = selectSignificantActivities threshold processId supplyList
+                nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0 ..] significantActivities]
                 activities = dbActivities db
-                units = dbUnits db
-                flows = dbTechFlows db
-
-                -- Build edges: iterate through sparse triplets
                 edges =
-                    [ let sourceNodeId = M.lookup (fromIntegral row :: ProcessId) nodeIdMap
-                          targetNodeId = M.lookup (fromIntegral col :: ProcessId) nodeIdMap
-                          sourceActivity =
-                            if fromIntegral row < V.length activities
-                                then Just $ activities V.! fromIntegral row
-                                else Nothing
-                          targetProcessId = fromIntegral col :: ProcessId
-                          -- Get target activity UUID from process ID table
-                          targetActivityUUID = case processIdToUUIDs db targetProcessId of
-                            Just (actUUID, _prodUUID) -> Just actUUID
-                            Nothing -> Nothing
-                          -- Find the technosphere-input exchange that points to
-                          -- this target activity, so we can recover both the
-                          -- flow UUID and (if known) its name + unit.
-                          matchingExchange = do
-                            srcAct <- sourceActivity
-                            targetUUID <- targetActivityUUID
-                            L.find
-                                ( \ex -> case ex of
-                                    TechnosphereExchange{techRole = Input} ->
-                                        exchangeActivityLinkId ex == Just targetUUID
-                                    TechnosphereExchange{} -> False
-                                    BiosphereExchange{} -> False
-                                    -- Waste exchanges aren't traversed by the graph builder
-                                    -- (they don't form upstream tech edges).
-                                    WasteExchange{} -> False
-                                )
-                                (exchanges srcAct)
-                          flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
-                          -- When the supplier flow isn't in the tech map, the
-                          -- exchange UUID is the only debug handle we have.
-                          -- Surface it via the same sentinel shape as
-                          -- ExchangeWithUnit / ApiUnresolvedFlow so the graph
-                          -- doesn't silently mask a broken link.
-                          uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
-                          flowNameText = case (flowInfo, matchingExchange) of
-                            (Just f, _) -> tfName f
-                            (Nothing, Just ex) -> unresolvedFlowName (exchangeFlowId ex)
-                            (Nothing, Nothing) -> "<unresolved flow>"
-                       in case (sourceNodeId, targetNodeId) of
-                            (Just src, Just tgt) ->
-                                Just $ GraphEdge src tgt (realToFrac value) uName flowNameText
-                            _ -> Nothing
-                    | SparseTriple row col value <- U.toList techTriples
-                    , value /= 0.0
-                    ]
-
-                validEdges = [e | Just e <- edges]
-
-            -- Step 5: Build nodes
-            let nodes =
-                    [ let activity =
-                            if fromIntegral pid < V.length activities
-                                then activities V.! fromIntegral pid
-                                else error $ "Invalid ProcessId in graph: " ++ show pid
-                          processIdText = processIdToText db pid
-                       in GraphNode
-                            { gnNodeId = nodeId
-                            , gnLabel = activityName activity
-                            , gnValue = cumulativeVal
-                            , gnUnit = activityUnit activity
-                            , gnProcessId = processIdText
-                            , gnLocation = activityLocation activity
-                            }
-                    | (nodeId, (pid, cumulativeVal)) <- zip [0 ..] significantActivities
-                    ]
-
-            -- Step 6: Build unit groups for normalization
-            let unitGroups = buildUnitGroups [gnUnit n | n <- nodes]
-
-            return $ Right $ GraphExport nodes validEdges unitGroups
+                    mapMaybe
+                        (mkGraphEdgeFromTriple db activities (dbUnits db) (dbTechFlows db) nodeIdMap)
+                        (U.toList (dbTechnosphereTriples db))
+                nodes = zipWith (mkGraphNode db activities) [0 ..] significantActivities
+                unitGroups = buildUnitGroups (map gnUnit nodes)
+            pure $ Right $ GraphExport nodes edges unitGroups
 
 -- | Classify units into groups for edge width normalization
 buildUnitGroups :: [Text] -> M.Map Text Text
