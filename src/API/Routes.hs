@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
@@ -427,8 +427,9 @@ mkLCIABatchResult ::
     M.Map Text (M.Map Text Double) ->
     [ScoringSet] ->
     M.Map Text (M.Map Text ScoringIndicator) ->
+    [CutoffWasteFlow] ->
     LCIABatchResult
-mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators =
+mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators cutoffWaste =
     LCIABatchResult
         { lbrResults = results
         , lbrSingleScore = Nothing
@@ -438,6 +439,7 @@ mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicator
         , lbrScoringResults = scoringResults
         , lbrScoringUnits = M.fromList [(ssName ss, ssUnit ss) | ss <- scoringSets]
         , lbrScoringIndicators = scoringIndicators
+        , lbrCutoffWaste = cutoffWaste
         }
 
 -- | Per-category single-line log within a batch.
@@ -760,7 +762,7 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
     let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
     (scoringResults, scoringIndicators) <-
         computeAllScoringSets (mcScoringSets collection) rawScoreMap
-    pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators)
+    pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators (Service.buildCutoffWaste db activity))
 
 {- | Top-level LCIA batch entry point — AppM-returning. Used by the Servant
 routes (via thin where-aliases) and by API.BatchImpacts.
@@ -823,7 +825,7 @@ activityLCIABatchH dbName processIdText collectionName mSub = do
                         <> T.unpack name
                         <> "': "
                         <> intercalate ", " [T.unpack k <> "=" <> showFFloat (Just 6) v "" | (k, v) <- M.toList scores]
-    pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators)
+    pure (mkLCIABatchResult results mNW nwSets scoringResults scoringSets scoringIndicators (Service.buildCutoffWaste db activity))
 
 {- | Top-level multi-activity batch impacts. One MUMPS multi-RHS solve for all
 valid PIDs, parallel characterization. Used by the Servant POST route and

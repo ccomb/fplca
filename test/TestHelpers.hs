@@ -17,6 +17,7 @@ import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
@@ -117,6 +118,7 @@ linkDatabases consumerDb supplierDb supplierName coeff =
             CrossDBLink
                 { cdlConsumerActUUID = consumerAct
                 , cdlConsumerProdUUID = consumerProd
+                , cdlConsumerFlowId = UUID.nil
                 , cdlSupplierActUUID = supplierAct
                 , cdlSupplierProdUUID = supplierProd
                 , cdlCoefficient = coeff

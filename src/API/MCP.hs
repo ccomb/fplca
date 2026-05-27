@@ -34,7 +34,8 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.MCP.Enrich (addWebUrl, encodeSegment, filterScoringSets, filterScoringSetsBatch, scoreActivityWebUrl, slimLCIAPanel, summarizeBatchResults)
+import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
+import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless)
 import qualified Data.List as L
@@ -114,8 +115,8 @@ newtype McpState = McpState
     { mcpSessionId :: Text
     }
 
-mcpApp :: DatabaseManager -> [ClassificationPreset] -> IO Application
-mcpApp dbManager presets = do
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> IO Application
+mcpApp dbManager presets hasFrontend = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState{mcpSessionId = sessionId}
@@ -123,7 +124,12 @@ mcpApp dbManager presets = do
         let method = requestMethod req
             hdrs = requestHeaders req
             hostHeader = fromMaybe "localhost" $ lookup hHost hdrs
-            baseUrl = "http://" <> TE.decodeUtf8 hostHeader
+            -- Only emit 'web_url' when the SPA is bundled to serve those
+            -- routes; otherwise the link would point at a 404.
+            mBaseUrl =
+                if hasFrontend
+                    then Just ("http://" <> TE.decodeUtf8 hostHeader)
+                    else Nothing
             acceptHdr = fromMaybe "" $ lookup hAccept hdrs
             wantsSse = "text/event-stream" `BS.isInfixOf` acceptHdr
         st <- readIORef stateRef
@@ -146,7 +152,7 @@ mcpApp dbManager presets = do
                     Left err ->
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
-                        resp <- handleRpc dbManager presets baseUrl st rpcReq
+                        resp <- handleRpc dbManager presets mBaseUrl st rpcReq
                         case resp of
                             Nothing ->
                                 respond $
@@ -189,12 +195,12 @@ mcpApp dbManager presets = do
 -- RPC dispatch
 -- ---------------------------------------------------------------------------
 
-handleRpc :: DatabaseManager -> [ClassificationPreset] -> Text -> McpState -> RpcRequest -> IO (Maybe Value)
-handleRpc dbManager presets baseUrl _st req = case rpcMethod req of
+handleRpc :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
+handleRpc dbManager presets mBaseUrl _st req = case rpcMethod req of
     "initialize" -> Just <$> handleInitialize req
     "notifications/initialized" -> return Nothing -- notification, no response
     "tools/list" -> return $ Just $ handleToolsList req
-    "tools/call" -> Just <$> handleToolsCall dbManager presets baseUrl req
+    "tools/call" -> Just <$> handleToolsCall dbManager presets mBaseUrl req
     "ping" -> return $ Just $ rpcResult (rid req) (object [])
     other ->
         return $
@@ -231,6 +237,7 @@ handleInitialize req =
                         , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
                         , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
                         , "Use list_methods for available LCIA methods."
+                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field as a clickable markdown link whenever it is present. If 'web_url' is absent (backend-only deployment), show the activity name and 'process_id' as plain text instead — never invent a link."
                         ]
                 ]
 
@@ -310,12 +317,12 @@ paramsToSchema ps =
 -- tools/call dispatch
 -- ---------------------------------------------------------------------------
 
-handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> Text -> RpcRequest -> IO Value
-handleToolsCall dbManager presets baseUrl req = do
+handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> RpcRequest -> IO Value
+handleToolsCall dbManager presets mBaseUrl req = do
     let rid = fromMaybe Null (rpcId req)
     case rpcParams req >>= parseCallParams of
         Nothing -> return $ rpcError rid (-32602) "Invalid params: expected {name, arguments}"
-        Just (toolName, args) -> callTool dbManager presets baseUrl rid toolName args
+        Just (toolName, args) -> callTool dbManager presets mBaseUrl rid toolName args
 
 parseCallParams :: Value -> Maybe (Text, KeyMap Value)
 parseCallParams (Object o) = do
@@ -326,8 +333,8 @@ parseCallParams (Object o) = do
     return (name, args)
 parseCallParams _ = Nothing
 
-callTool :: DatabaseManager -> [ClassificationPreset] -> Text -> Value -> Text -> KeyMap Value -> IO Value
-callTool dbManager presets baseUrl rid name args = case name of
+callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
+callTool dbManager presets mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "list_presets" -> callListPresets presets rid
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
@@ -336,20 +343,20 @@ callTool dbManager presets baseUrl rid name args = case name of
     "get_supply_chain" -> callGetSupplyChain dbManager rid args
     "aggregate" -> withDb dbManager rid args $ callAggregate dbManager rid args
     "get_inventory" -> callGetInventory dbManager rid args
-    "get_impacts" -> callGetImpacts dbManager baseUrl rid args
-    "compute_sensitivity" -> callComputeSensitivity dbManager baseUrl rid args
+    "get_impacts" -> callGetImpacts dbManager mBaseUrl rid args
+    "compute_sensitivity" -> callComputeSensitivity dbManager mBaseUrl rid args
     "list_methods" -> callListMethods dbManager rid
     "get_flow_mapping" -> callGetFlowMapping dbManager rid args
     "get_characterization" -> callGetCharacterization dbManager rid args
-    "get_contributing_flows" -> callGetContributingFlows dbManager baseUrl rid args
-    "get_contributing_activities" -> callGetContributingActivities dbManager baseUrl rid args
+    "get_contributing_flows" -> callGetContributingFlows dbManager mBaseUrl rid args
+    "get_contributing_activities" -> callGetContributingActivities dbManager mBaseUrl rid args
     "list_geographies" -> callListGeographies dbManager rid args
     "list_classifications" -> withDb dbManager rid args $ callListClassifications rid args
     "get_path_to" -> withDb dbManager rid args $ callGetPathTo rid args
     "get_consumers" -> withDb dbManager rid args $ callGetConsumers presets rid args
     "compare_impacts" -> callCompareImpacts dbManager rid args
-    "score_activity" -> callScoreActivity dbManager baseUrl rid args
-    "score_activities" -> callScoreActivities dbManager baseUrl rid args
+    "score_activity" -> callScoreActivity dbManager mBaseUrl rid args
+    "score_activities" -> callScoreActivities dbManager mBaseUrl rid args
     "list_scoring_sets" -> callListScoringSets dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
@@ -573,13 +580,28 @@ callGetActivity rid args (db, _) =
             Right _ ->
                 case Service.getActivityInfo defaultUnitConfig db pid of
                     Left err -> return $ toolError rid (T.pack $ show err)
-                    Right val
-                        | noFilters -> return $ toolSuccessJson rid val
-                        | otherwise -> case fromJSON val of
-                            Error _ -> return $ toolSuccessJson rid val
-                            Success ai ->
-                                let filtered = ai{piActivity = (piActivity ai){pfaExchanges = filter matchExchange (pfaExchanges (piActivity ai))}}
-                                 in return $ toolSuccessJson rid (toJSON filtered)
+                    Right val -> case fromJSON val of
+                        -- 'val' was built from an 'ActivityInfo' upstream, so a
+                        -- decode failure is genuinely defensive — pass it
+                        -- through unchanged, hint-less.
+                        Error _ -> return $ toolSuccessJson rid val
+                        Success ai ->
+                            -- Single resolve: take the activity name from the
+                            -- 'ActivityInfo' already in hand instead of asking
+                            -- the engine to resolve the PID again.
+                            let attach = attachMarketHintByName (pfaName (piActivity ai))
+                                payload
+                                    | noFilters = val
+                                    | otherwise =
+                                        toJSON
+                                            ai
+                                                { piActivity =
+                                                    (piActivity ai)
+                                                        { pfaExchanges =
+                                                            filter matchExchange (pfaExchanges (piActivity ai))
+                                                        }
+                                                }
+                             in return $ toolSuccessJson rid (attach payload)
   where
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
@@ -989,8 +1011,8 @@ Historically named 'get_lcia' — the MCP surface now uses 'impacts'
 per the naming audit; internal Haskell types keep the 'LCIA' acronym
 (LCIAResult, computeLCIAScore) since they're the domain term of art.
 -}
-callGetImpacts :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callGetImpacts dbManager baseUrl rid args =
+callGetImpacts :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callGetImpacts dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1011,7 +1033,7 @@ callGetImpacts dbManager baseUrl rid args =
                             <> irRefProductName ir
                     contribs = irContribs ir
                     topFlows = take topN contribs
-                    webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                    webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                     hasNeg = any (\(_, _, c) -> c < 0) contribs
                     unknownUuids = irUnknownUuids ir
                 liftIO $
@@ -1034,30 +1056,31 @@ callGetImpacts dbManager baseUrl rid args =
                         ]
                 pure $
                     toolSuccessJson rid $
-                        object $
-                            [ "method" .= methodName method
-                            , "category" .= methodCategory method
-                            , "score" .= score
-                            , "unit" .= methodUnit method
-                            , "functional_unit" .= functionalUnit
-                            , "mapped_flows" .= (msTotal stats - msUnmatched stats)
-                            , "has_negative_contributions" .= hasNeg
-                            , "web_url" .= webUrl
-                            , "top_flows"
-                                .= [ object
-                                        [ "flow_name" .= bfName f
-                                        , "contribution" .= c
-                                        , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-                                        , "flow_id" .= UUID.toText (bfId f)
-                                        , "category" .= bfCompartmentName f
-                                        , "compartment" .= bfCompartmentSub f
-                                        , "cf_value" .= cfVal
-                                        , "flow_unit" .= getUnitNameForBioFlow mUnits f
-                                        ]
-                                   | (f, cfVal, c) <- topFlows
-                                   ]
-                            ]
-                                ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
+                        attachMarketHintByName (activityName (raActivity ra)) $
+                            object $
+                                [ "method" .= methodName method
+                                , "category" .= methodCategory method
+                                , "score" .= score
+                                , "unit" .= methodUnit method
+                                , "functional_unit" .= functionalUnit
+                                , "mapped_flows" .= (msTotal stats - msUnmatched stats)
+                                , "has_negative_contributions" .= hasNeg
+                                , "top_flows"
+                                    .= [ object
+                                            [ "flow_name" .= bfName f
+                                            , "contribution" .= c
+                                            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+                                            , "flow_id" .= UUID.toText (bfId f)
+                                            , "category" .= bfCompartmentName f
+                                            , "compartment" .= bfCompartmentSub f
+                                            , "cf_value" .= cfVal
+                                            , "flow_unit" .= getUnitNameForBioFlow mUnits f
+                                            ]
+                                       | (f, cfVal, c) <- topFlows
+                                       ]
+                                ]
+                                    ++ webUrlPair
+                                    ++ (if fromMaybe False (boolArg "include_diagnostics" args) then diagnosticsFields else [])
             )
 
 {- | Handler for the 'compute_sensitivity' MCP tool. Mirrors the REST
@@ -1067,8 +1090,8 @@ for each. Uses 'computeLCIAScoreAuto' so regionalized methods route through the
 location-hierarchy walk; non-regionalized methods stay on the classic
 'computeLCIAScoreFromTables' path.
 -}
-callComputeSensitivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callComputeSensitivity dbManager baseUrl rid args =
+callComputeSensitivity :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callComputeSensitivity dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1106,7 +1129,7 @@ callComputeSensitivity dbManager baseUrl rid args =
                 baselineScore <- case scoreOf baselineX of
                     Right s -> pure s
                     Left e -> throwE ("baseline scoring failed: " <> e)
-                let webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                let webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                     pertEntry (p, eitherX) =
                         let base =
                                 [ "perturbation"
@@ -1131,14 +1154,14 @@ callComputeSensitivity dbManager baseUrl rid args =
                                             )
                 pure $
                     toolSuccessJson rid $
-                        object
+                        object $
                             [ "method" .= methodName method
                             , "category" .= methodCategory method
                             , "unit" .= methodUnit method
                             , "baseline_score" .= baselineScore
                             , "perturbed" .= map pertEntry perResults
-                            , "web_url" .= webUrl
                             ]
+                                ++ webUrlPair
             )
 
 {- | Cross-database impact comparison for mapping audits.
@@ -1465,8 +1488,8 @@ mkMcpCrossDBEntry ::
     DatabaseManager ->
     -- | root DB name
     Text ->
-    -- | base URL
-    Text ->
+    -- | base URL (Nothing when no frontend is bundled)
+    Maybe Text ->
     -- | method collection name
     Text ->
     -- | method UUID text
@@ -1477,7 +1500,7 @@ mkMcpCrossDBEntry ::
     Double ->
     ((Text, ProcessId), Double) ->
     IO Value
-mkMcpCrossDBEntry dbManager rootDbName baseUrl colName methodIdText flowDB unitDB score ((depDbName, pid), c) = do
+mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unitDB score ((depDbName, pid), c) = do
     mLd <- getDatabase dbManager depDbName
     let (actName, actLoc, prodName, pidText) = case mLd of
             Just ld ->
@@ -1492,26 +1515,28 @@ mkMcpCrossDBEntry dbManager rootDbName baseUrl colName methodIdText flowDB unitD
                  in (maybe "" activityName mAct, maybe "" activityLocation mAct, pn, txt)
             Nothing ->
                 ("", "", "", depDbName <> "::<unloaded>")
-        procWebUrl =
-            baseUrl
-                <> "/db/"
-                <> rootDbName
-                <> "/activity/"
-                <> pidText
-                <> "/contributing-activities/"
-                <> encodeSegment colName
-                <> "/"
-                <> methodIdText
+        webUrlPair =
+            webUrlField
+                mBaseUrl
+                ( "/db/"
+                    <> rootDbName
+                    <> "/activity/"
+                    <> pidText
+                    <> "/contributing-activities/"
+                    <> encodeSegment colName
+                    <> "/"
+                    <> methodIdText
+                )
     pure $
-        object
+        object $
             [ "process_id" .= pidText
             , "activity_name" .= actName
             , "product_name" .= prodName
             , "location" .= actLoc
             , "contribution" .= c
             , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
-            , "web_url" .= procWebUrl
             ]
+                ++ webUrlPair
 
 -- | Helper: resolve method from UUID text, also returning its collection name
 resolveMethod :: DatabaseManager -> Text -> IO (Either Text (Text, Method))
@@ -1597,8 +1622,8 @@ ensureLinked dbName op db =
                         <> op
                         <> "."
 
-callGetContributingFlows :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callGetContributingFlows dbManager baseUrl rid args =
+callGetContributingFlows :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callGetContributingFlows dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1609,7 +1634,7 @@ callGetContributingFlows dbManager baseUrl rid args =
                     dbName = lrDbName req
                     ra = lrResolved req
                     lim = fromMaybe 20 (intArg "limit" args)
-                    webUrl = baseUrl <> "/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req
+                    webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
                 ExceptT $ pure $ ensureLinked dbName "computing contributions" db
                 unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                 (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
@@ -1670,7 +1695,6 @@ callGetContributingFlows dbManager baseUrl rid args =
                             , "unit" .= methodUnit method
                             , "total_score" .= score
                             , "has_negative_contributions" .= hasNeg
-                            , "web_url" .= webUrl
                             , "top_flows"
                                 .= [ object
                                         [ "flow_name" .= bfName f
@@ -1684,11 +1708,12 @@ callGetContributingFlows dbManager baseUrl rid args =
                                    | (f, cfVal, c) <- top
                                    ]
                             ]
+                                ++ webUrlPair
                                 ++ diagnosticsFields
             )
 
-callGetContributingActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callGetContributingActivities dbManager baseUrl rid args =
+callGetContributingActivities :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callGetContributingActivities dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1720,7 +1745,7 @@ callGetContributingActivities dbManager baseUrl rid args =
                     sorted = L.sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
                     top = take lim sorted
                     hasNeg = any (\(_, c) -> c < 0) top
-                rows <- liftIO $ mapM (mkMcpCrossDBEntry dbManager dbName baseUrl (lrCollection req) (lrMethodIdText req) mFlows mUnits score) top
+                rows <- liftIO $ mapM (mkMcpCrossDBEntry dbManager dbName mBaseUrl (lrCollection req) (lrMethodIdText req) mFlows mUnits score) top
                 pure $
                     toolSuccessJson rid $
                         object
@@ -1806,8 +1831,8 @@ per-method @web_url@s are not emitted: the panel link covers the same
 ground at a fraction of the bytes. Replaces the @N@ round-trips of
 'get_impacts' a comparative study used to need.
 -}
-callScoreActivity :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callScoreActivity dbManager baseUrl rid args =
+callScoreActivity :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callScoreActivity dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1822,29 +1847,53 @@ callScoreActivity dbManager baseUrl rid args =
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
                     Right lbr -> do
                         configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        let topUrl = scoreActivityWebUrl baseUrl dbName pidText coll
+                        mActName <- liftIO $ lookupActivityName dbManager dbName pidText
+                        let mTopUrl = scoreActivityWebUrl mBaseUrl dbName pidText coll
                             enriched =
-                                addWebUrl
-                                    topUrl
-                                    (slimLCIAPanel (toJSON lbr))
+                                maybe id attachMarketHintByName mActName $
+                                    addWebUrlMaybe
+                                        mTopUrl
+                                        (slimLCIAPanel (toJSON lbr))
                         ExceptT $ pure (toolSuccessJson rid <$> filterScoringSets configured wantedSets enriched)
             )
+
+{- | Resolve the activity name for a (db, processId) pair. 'Nothing' when
+the database is not loaded or the PID does not resolve — callers fold
+this through 'maybe id attachMarketHintByName', so a missing name
+simply skips the hint without making up a default.
+-}
+lookupActivityName :: DatabaseManager -> Text -> Text -> IO (Maybe Text)
+lookupActivityName dbManager dbName pidText = do
+    mLd <- getDatabase dbManager dbName
+    pure $ case mLd of
+        Just ld -> case Service.resolveActivityAndProcessId (ldDatabase ld) pidText of
+            Right (_, act) -> Just (activityName act)
+            Left _ -> Nothing
+        Nothing -> Nothing
+
+{- | Return every 'ScoringSet' configured on a collection (full record, not
+just names). Empty list when the collection is not loaded — the same
+defensive shape as 'configuredScoringSetNames'.
+-}
+configuredScoringSets :: DatabaseManager -> Text -> IO [ScoringSet]
+configuredScoringSets dbm collName = do
+    loaded <- readTVarIO (dmLoadedMethods dbm)
+    pure $ maybe [] mcScoringSets (M.lookup collName loaded)
 
 {- | Handler for the 'score_activities' MCP tool.
 
 Ranks N activities against every method in a collection in one
-multi-RHS MUMPS solve plus parallel characterization, then strips each
-entry's @impacts@ subtree to its aggregates (single score,
-@scoringResults@, @scoringIndicators@, @scoringUnits@, hoisted
-@functionalUnit@). The per-method @results@ array is not emitted —
-callers needing per-method drill-down call 'score_activity' on a
-specific process_id. Each successful entry carries a top-level
-@web_url@ to its impacts page; the same URL is replicated inside the
-@impacts@ subtree. Unresolved process IDs land in @not_found@ /
-@invalid@ of the response, not as a 'BatchError'.
+multi-RHS MUMPS solve plus parallel characterization, then projects the
+result against a single 'ScoringSet' into a columnar JSON payload
+(@{scoringSet, scoringUnit, functionalUnit, columns, rows}@). The shape
+hoists the constant metadata once and packs each activity as a flat
+array of scalars — typically ~6× smaller than a row-shaped JSON for a
+batch of 24+ activities. Unresolved process IDs land in
+@notFound@ \/ @invalid@. The chosen scoring set is required to be
+unambiguous; see 'resolveSingleScoringSet' for the rules.
 -}
-callScoreActivities :: DatabaseManager -> Text -> Value -> KeyMap Value -> IO Value
-callScoreActivities dbManager baseUrl rid args =
+callScoreActivities :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callScoreActivities dbManager mBaseUrl rid args =
     either (toolError rid) id
         <$> runExceptT
             ( do
@@ -1852,13 +1901,13 @@ callScoreActivities dbManager baseUrl rid args =
                 coll <- ExceptT $ pure (requireText "collection" args)
                 pids <- ExceptT $ pure (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
                 wantedSets <- ExceptT $ pure (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
+                let summaryOnly = fromMaybe False (boolArg "summary_only" args)
+                configured <- liftIO $ configuredScoringSets dbManager coll
+                chosen <- ExceptT $ pure (resolveSingleScoringSet wantedSets configured)
                 res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing pids
                 case res of
                     Left e -> ExceptT $ pure (Left (batchErrorMsg e))
-                    Right bir -> do
-                        configured <- liftIO $ configuredScoringSetNames dbManager coll
-                        let summarized = summarizeBatchResults baseUrl dbName coll (toJSON bir)
-                        ExceptT $ pure (toolSuccessJson rid <$> filterScoringSetsBatch configured wantedSets summarized)
+                    Right bir -> pure (toolSuccessJson rid (toColumnarBatch summaryOnly mBaseUrl dbName coll chosen bir))
             )
 
 {- | Handler for the 'list_scoring_sets' MCP tool.

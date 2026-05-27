@@ -41,6 +41,8 @@ indexedWith name n =
         { idbName = name
         , idbByProductName = M.fromList [(name <> "-" <> k, []) | k <- take n keys]
         , idbBySynonymGroup = M.empty
+        , idbWasteTreatmentByFlowUUID = M.empty
+        , idbWasteTreatmentByCanonicalName = M.empty
         }
   where
     keys :: [Text]

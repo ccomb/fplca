@@ -63,6 +63,7 @@ library
                      , API.Auth
                      , API.MCP
                      , API.MCP.Enrich
+                     , API.MCP.Columnar
                      , API.OpenApi
                      , API.Resources
                      , API.Licenses
@@ -167,6 +168,8 @@ executable volca
                      , http-client
                      , optparse-applicative
                      , aeson
+                     , directory
+                     , filepath
 
   default-language:    Haskell2010
 
@@ -223,6 +226,7 @@ test-suite lca-tests
                      , MCPSchemaSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec
+                     , MCPColumnarSpec
                      , NormalizeSpec
                      , BM25Spec
                      , FuzzySpec

@@ -15,21 +15,27 @@ from __future__ import annotations
 from volca.types import (
     BiosphereExchange,
     TechnosphereExchange,
+    WasteExchange,
     parse_exchange,
     parse_exchange_detail,
 )
 
 
+def _inner(tag: str) -> dict:
+    """Variant-specific inner-exchange skeleton (no comment yet)."""
+    base: dict = {"tag": tag, "amount": 1.0}
+    if tag == "TechnosphereExchange":
+        base["role"] = "Input"
+    elif tag == "BiosphereExchange":
+        base["direction"] = "Resource"
+    elif tag == "WasteExchange":
+        base["isInput"] = False
+    return base
+
+
 def _ewu(tag: str, *, ex_comment: str | None, inner_comment: str | None) -> dict:
     """Build a minimal ExchangeWithUnit payload."""
-    inner: dict = {
-        "tag": tag,
-        "amount": 1.0,
-    }
-    if tag == "TechnosphereExchange":
-        inner["role"] = "Input"
-    else:
-        inner["direction"] = "Resource"
+    inner = _inner(tag)
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
@@ -49,14 +55,7 @@ def _ewu(tag: str, *, ex_comment: str | None, inner_comment: str | None) -> dict
 
 def _ed(tag: str, *, inner_comment: str | None, ex_comment: str | None = None) -> dict:
     """Build a minimal ExchangeDetail payload."""
-    inner: dict = {
-        "tag": tag,
-        "amount": 1.0,
-    }
-    if tag == "TechnosphereExchange":
-        inner["role"] = "Input"
-    else:
-        inner["direction"] = "Resource"
+    inner = _inner(tag)
     if inner_comment is not None:
         inner["comment"] = inner_comment
     out: dict = {
@@ -65,8 +64,10 @@ def _ed(tag: str, *, inner_comment: str | None, ex_comment: str | None = None) -
     }
     if tag == "TechnosphereExchange":
         out["flow"] = {"kind": "technosphere", "flow": {"name": "wheat"}}
-    else:
+    elif tag == "BiosphereExchange":
         out["flow"] = {"kind": "biosphere", "flow": {"name": "wheat", "compartment": {"name": "air", "sub": None}}}
+    elif tag == "WasteExchange":
+        out["flow"] = {"kind": "waste", "flow": {"name": "wheat"}}
     if ex_comment is not None:
         out["exComment"] = ex_comment
     return out
@@ -82,6 +83,11 @@ class TestExchangeWithUnitComment:
         ex = parse_exchange(_ewu("BiosphereExchange", ex_comment="measured", inner_comment=None))
         assert isinstance(ex, BiosphereExchange)
         assert ex.comment == "measured"
+
+    def test_flat_excomment_is_picked_up_on_waste(self):
+        ex = parse_exchange(_ewu("WasteExchange", ex_comment="landfill", inner_comment=None))
+        assert isinstance(ex, WasteExchange)
+        assert ex.comment == "landfill"
 
     def test_falls_back_to_inner_comment_when_flat_absent(self):
         ex = parse_exchange(_ewu("TechnosphereExchange", ex_comment=None, inner_comment="legacy"))
@@ -106,6 +112,11 @@ class TestExchangeDetailComment:
         ex = parse_exchange_detail(_ed("BiosphereExchange", inner_comment="measured"))
         assert isinstance(ex, BiosphereExchange)
         assert ex.comment == "measured"
+
+    def test_inner_comment_is_picked_up_on_waste(self):
+        ex = parse_exchange_detail(_ed("WasteExchange", inner_comment="landfill"))
+        assert isinstance(ex, WasteExchange)
+        assert ex.comment == "landfill"
 
     def test_none_when_inner_absent(self):
         ex = parse_exchange_detail(_ed("TechnosphereExchange", inner_comment=None))

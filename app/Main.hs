@@ -14,8 +14,10 @@ import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Foreign.C.Types (CInt (..))
 import Options.Applicative
+import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.Exit (die, exitFailure)
+import System.FilePath ((</>))
 import System.IO (hFlush, stderr, stdout)
 import Text.Read (readMaybe)
 
@@ -227,7 +229,13 @@ overrideLoad dbNames dbConfig =
 -- | Create a Wai application with DatabaseManager
 createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO Application
 createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets = do
-    mcp <- mcpApp dbManager filterPresets
+    -- The MCP @web_url@ deep links point at Elm SPA routes served from
+    -- 'staticDir'. When the SPA is not bundled (backend-only image), those
+    -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
+    hasFrontend <- doesFileExist (staticDir </> "index.html")
+    unless (desktopMode || hasFrontend) $
+        reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
+    mcp <- mcpApp dbManager filterPresets hasFrontend
     let openApiJson = encode volcaOpenApi
         swaggerHtml =
             "<!DOCTYPE html><html><head><title>volca API</title>\

@@ -13,13 +13,15 @@ module MCPEnrichSpec (spec) where
 
 import API.MCP.Enrich (
     addWebUrl,
+    addWebUrlMaybe,
+    attachMarketHintByName,
     encodeSegment,
     filterScoringSets,
-    filterScoringSetsBatch,
+    isMarketActivityName,
     scoreActivityWebUrl,
     slimLCIAPanel,
-    summarizeBatchResults,
     summarizeLCIAPanel,
+    webUrlField,
  )
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, (.=))
@@ -70,29 +72,6 @@ sampleLBR =
                 ]
         ]
 
-{- | Minimal BatchImpactsResponse-shaped Value: two entries with
-impacts, one entry without impacts (defensive — see summarizeBatchResults).
--}
-sampleBatch :: Value
-sampleBatch =
-    object
-        [ "results"
-            .= [ object
-                    [ "processId" .= ("pidA" :: Text)
-                    , "impacts" .= sampleLBR
-                    ]
-               , object
-                    [ "processId" .= ("pidB" :: Text)
-                    , "impacts" .= sampleLBR
-                    ]
-               , object
-                    -- malformed: no impacts subtree
-                    ["processId" .= ("pidC" :: Text)]
-               ]
-        , "not_found" .= ([] :: [Text])
-        , "invalid" .= ([] :: [Text])
-        ]
-
 -- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
@@ -101,12 +80,15 @@ spec :: Spec
 spec = do
     describe "scoreActivityWebUrl" $ do
         it "encodes every dynamic segment (no raw slashes leak through)" $
-            scoreActivityWebUrl "https://volca.run" "db/with-slash" "pid/with-slash" "EF 3.1"
-                `shouldBe` "https://volca.run/db/db%2Fwith-slash/activity/pid%2Fwith-slash/impacts/EF%203.1"
+            scoreActivityWebUrl (Just "https://volca.run") "db/with-slash" "pid/with-slash" "EF 3.1"
+                `shouldBe` Just "https://volca.run/db/db%2Fwith-slash/activity/pid%2Fwith-slash/impacts/EF%203.1"
 
         it "round-trips ASCII-safe segments unchanged" $
-            scoreActivityWebUrl "https://x" "agribalyse" "abc_def" "EF31"
-                `shouldBe` "https://x/db/agribalyse/activity/abc_def/impacts/EF31"
+            scoreActivityWebUrl (Just "https://x") "agribalyse" "abc_def" "EF31"
+                `shouldBe` Just "https://x/db/agribalyse/activity/abc_def/impacts/EF31"
+
+        it "yields Nothing when no base URL is configured (no frontend)" $
+            scoreActivityWebUrl Nothing "agribalyse" "abc_def" "EF31" `shouldBe` Nothing
 
     describe "encodeSegment" $
         it "percent-encodes unsafe URL characters" $ do
@@ -126,6 +108,23 @@ spec = do
             addWebUrl "https://x" (Number 42) `shouldBe` Number 42
             addWebUrl "https://x" (Bool True) `shouldBe` Bool True
             addWebUrl "https://x" Null `shouldBe` Null
+
+    describe "addWebUrlMaybe" $ do
+        it "inserts web_url when Just" $
+            addWebUrlMaybe (Just "https://x") (object ["a" .= (1 :: Int)])
+                `shouldBe` object ["a" .= (1 :: Int), "web_url" .= ("https://x" :: Text)]
+
+        it "is a no-op when Nothing" $
+            addWebUrlMaybe Nothing (object ["a" .= (1 :: Int)])
+                `shouldBe` object ["a" .= (1 :: Int)]
+
+    describe "webUrlField" $ do
+        it "yields a single web_url pair when a base URL is configured" $
+            object (webUrlField (Just "https://x") "/db/foo/activity/bar/impacts/EF31")
+                `shouldBe` object ["web_url" .= ("https://x/db/foo/activity/bar/impacts/EF31" :: Text)]
+
+        it "yields an empty pair list when no base URL is configured" $
+            webUrlField Nothing "/anything" `shouldBe` []
 
     describe "slimLCIAPanel" $ do
         let panelWithFnUnit =
@@ -223,41 +222,6 @@ spec = do
             KM.lookup (fromText "functionalUnit") km `shouldBe` Nothing
             KM.lookup (fromText "results") km `shouldBe` Nothing
 
-    describe "summarizeBatchResults" $ do
-        it "adds web_url at the entry level (the documented shape)" $ do
-            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
-                Just (Array rs) = KM.lookup (fromText "results") km
-                [Object e0, _, _] = V.toList rs
-            KM.lookup (fromText "web_url") e0
-                `shouldBe` Just (String "https://x/db/agribalyse/activity/pidA/impacts/EF31")
-
-        it "also adds web_url inside the entry's impacts subtree" $ do
-            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
-                Just (Array rs) = KM.lookup (fromText "results") km
-                [Object e0, _, _] = V.toList rs
-                Just (Object impacts) = KM.lookup (fromText "impacts") e0
-            KM.lookup (fromText "web_url") impacts
-                `shouldBe` Just (String "https://x/db/agribalyse/activity/pidA/impacts/EF31")
-
-        it "drops impacts.results from every entry (summary, not drill-down)" $ do
-            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
-                Just (Array rs) = KM.lookup (fromText "results") km
-                [Object e0, Object e1, _] = V.toList rs
-            forM_ [e0, e1] $ \entry -> case KM.lookup (fromText "impacts") entry of
-                Just (Object impacts) ->
-                    KM.lookup (fromText "results") impacts `shouldBe` Nothing
-                other ->
-                    expectationFailure ("expected an impacts object, got " <> show other)
-
-        it "does NOT materialise an empty impacts object for entries that lack one" $ do
-            let Object km = summarizeBatchResults "https://x" "agribalyse" "EF31" sampleBatch
-                Just (Array rs) = KM.lookup (fromText "results") km
-                [_, _, Object e2] = V.toList rs
-            -- Entry without impacts should still gain web_url but not a fake impacts: {}
-            KM.lookup (fromText "web_url") e2
-                `shouldBe` Just (String "https://x/db/agribalyse/activity/pidC/impacts/EF31")
-            KM.lookup (fromText "impacts") e2 `shouldBe` Nothing
-
     describe "filterScoringSets" $ do
         it "is a no-op when requested is empty" $
             filterScoringSets ["PEF", "ECS"] [] sampleLBR `shouldBe` Right sampleLBR
@@ -289,36 +253,7 @@ spec = do
                         `shouldBe` Just (object ["PEF" .= object []])
                 _ -> expectationFailure "expected an Object"
 
-    describe "filterScoringSetsBatch" $ do
-        it "validates against configured even when results is empty" $ do
-            -- The fix: a score_activities call where every PID is unresolved
-            -- still surfaces an unknown-name filter error instead of silently
-            -- returning a zero-entry response.
-            let emptyBatch = object ["results" .= ([] :: [Value])]
-            filterScoringSetsBatch ["PEF"] ["typo"] emptyBatch
-                `shouldBe` Left "Unknown scoring set(s): typo. Configured on this collection: PEF"
-
-        it "is a no-op when requested is empty" $
-            filterScoringSetsBatch ["PEF"] [] sampleBatch `shouldBe` Right sampleBatch
-
-        it "restricts the impacts subtree of each entry" $ do
-            case filterScoringSetsBatch ["PEF", "ECS", "FAILED"] ["PEF"] sampleBatch of
-                Right (Object km) -> case KM.lookup (fromText "results") km of
-                    Just (Array rs) -> case V.toList rs of
-                        Object e0 : _ -> case KM.lookup (fromText "impacts") e0 of
-                            Just (Object impacts) ->
-                                KM.lookup (fromText "scoringResults") impacts
-                                    `shouldBe` Just (object ["PEF" .= object ["score" .= (1.0 :: Double)]])
-                            _ -> expectationFailure "expected impacts to be an object"
-                        _ -> expectationFailure "expected entries"
-                    _ -> expectationFailure "expected results array"
-                Left e -> expectationFailure ("unexpected Left: " <> show e)
-                _ -> expectationFailure "expected an object"
-
-    -- ----------------------------------------------------------------------
-    -- Regression: PR #79 edge cases the original suite didn't cover.
-    -- ----------------------------------------------------------------------
-    describe "PR #79 — slimLCIAPanel / summarizeBatchResults edge cases" $ do
+    describe "PR #79 — slimLCIAPanel NaN-score edge case" $ do
         let panelWithNaNScore =
                 object
                     [ "results"
@@ -346,22 +281,38 @@ spec = do
                     _ -> expectationFailure "expected one entry"
                 _ -> expectationFailure "expected results array"
 
-        it "summarizeBatchResults is a no-op on an empty results array" $ do
-            let emptyBatch = object ["results" .= ([] :: [Value])]
-                Object km = summarizeBatchResults "https://x" "db" "EF31" emptyBatch
-            KM.lookup (fromText "results") km `shouldBe` Just (Array (V.fromList []))
+    describe "isMarketActivityName" $ do
+        it "matches the canonical ecoinvent prefix" $
+            isMarketActivityName "market for sawlog and veneer log, softwood, ..." `shouldBe` True
 
-        it "summarizeBatchResults pads an entry whose processId is missing (passes it through unchanged)" $ do
-            -- A defensive shape that BatchImpactsEntry should never produce in
-            -- practice, but the projection MUST NOT crash on it.
-            let weirdBatch =
-                    object
-                        [ "results"
-                            .= [ object ["unrelated" .= ("x" :: Text)]
-                               ]
-                        ]
-                Object km = summarizeBatchResults "https://x" "db" "EF31" weirdBatch
-                Just (Array rs) = KM.lookup (fromText "results") km
-                [Object e] = V.toList rs
-            KM.lookup (fromText "web_url") e `shouldBe` Nothing
-            KM.lookup (fromText "unrelated") e `shouldBe` Just (String "x")
+        it "is case-insensitive" $
+            isMarketActivityName "MARKET FOR something" `shouldBe` True
+
+        it "tolerates leading whitespace" $
+            isMarketActivityName "   market for X" `shouldBe` True
+
+        it "rejects producer activities" $ do
+            isMarketActivityName "hardwood forestry, oak, sustainable forest management" `shouldBe` False
+            isMarketActivityName "marketing services" `shouldBe` False
+
+    describe "attachMarketHintByName" $ do
+        it "adds hint to a market activity" $ do
+            let Object km =
+                    attachMarketHintByName
+                        "market for X"
+                        (object ["name" .= ("market for X" :: Text)])
+            case KM.lookup (fromText "hint") km of
+                Just (Object hk) ->
+                    KM.lookup (fromText "kind") hk `shouldBe` Just (String "market_activity")
+                other ->
+                    expectationFailure ("expected hint object, got " <> show other)
+
+        it "is a no-op on a producer activity" $
+            attachMarketHintByName
+                "softwood forestry, spruce"
+                (object ["name" .= ("softwood forestry, spruce" :: Text)])
+                `shouldBe` object ["name" .= ("softwood forestry, spruce" :: Text)]
+
+        it "passes non-objects through unchanged" $ do
+            attachMarketHintByName "market for X" (String "s") `shouldBe` String "s"
+            attachMarketHintByName "market for X" Null `shouldBe` Null

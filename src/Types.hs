@@ -1102,7 +1102,7 @@ Only essential state is stored; counts are derived via accessor functions.
 -}
 data CrossDBLinkingStats = CrossDBLinkingStats
     { cdlLinks :: ![CrossDBLink]
-    -- ^ Resolved cross-DB links
+    -- ^ Resolved cross-DB links (technosphere + waste)
     , cdlUnresolvedProducts :: !(M.Map Text (Int, LinkBlocker))
     -- ^ Product name -> (count, reason)
     , cdlUnknownUnits :: !(S.Set Text)
@@ -1113,6 +1113,12 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     -- ^ Inputs rejected by policy or with no candidate
     , cdlTotalInputs :: !Int
     -- ^ Total technosphere inputs at time of linking
+    , cdlWasteExactLinks :: !Int
+    -- ^ Orphan waste exchanges resolved by exact UUID / canonical-name match
+    , cdlWasteAmbiguous :: !Int
+    -- ^ Orphan waste exchanges with matches in 2+ databases (stayed orphan)
+    , cdlCutoffWasteCount :: !Int
+    -- ^ Orphan waste exchanges with no match in any DB (true cut-offs)
     }
     deriving (Generic, NFData, Store)
 
@@ -1129,12 +1135,15 @@ instance Semigroup CrossDBLinkingStats where
             , cdlLocationFallbacks = cdlLocationFallbacks s1 <> cdlLocationFallbacks s2
             , cdlLocationUnresolved = cdlLocationUnresolved s1 <> cdlLocationUnresolved s2
             , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
+            , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
+            , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
+            , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
             }
       where
         mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
 instance Monoid CrossDBLinkingStats where
-    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] 0
+    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 0
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
 deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]
@@ -1212,6 +1221,14 @@ data CrossDBLink = CrossDBLink
     -- ^ Consumer activity UUID (in this database)
     , cdlConsumerProdUUID :: !UUID
     -- ^ Consumer product UUID (in this database)
+    , cdlConsumerFlowId :: !UUID
+    {- ^ Consumer-side flow UUID that this link resolves. For technosphere
+    inputs this is the tech-flow UUID; for orphan waste outputs it is the
+    waste-flow UUID. Used as the keying discriminator on the API surface so
+    a tech "X" link and a waste "X" link on the same activity cannot
+    collide. 'UUID.nil' for synthetic substitution links built by
+    'mkVirtualLink', which never enter 'dbCrossDBLinks'.
+    -}
     , cdlSupplierActUUID :: !UUID
     -- ^ Supplier activity UUID (in another database)
     , cdlSupplierProdUUID :: !UUID

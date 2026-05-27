@@ -566,9 +566,29 @@ data LCIABatchResult = LCIABatchResult
     -- ^ Scoring set name → display unit (e.g., "Pts", "µPts PEF")
     , lbrScoringIndicators :: M.Map Text (M.Map Text ScoringIndicator)
     -- ^ Scoring set name → (variable name → indicator). One row per scoring variable.
+    , lbrCutoffWaste :: [CutoffWasteFlow]
+    -- ^ Orphan waste exchanges on the scored activity — flows the dataset author
+    -- left unmodelled. They contribute 0 to the score; surfacing them lets
+    -- consumers see what's excluded rather than silently undercounting.
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped LCIABatchResult)
+
+{- | A single orphan waste exchange on a scored activity: the dataset author
+declared this waste output but did not link it to a treatment activity,
+and no other loaded database provides an explicit match either. The score
+excludes it; this record makes that exclusion visible.
+-}
+data CutoffWasteFlow = CutoffWasteFlow
+    { cwfFlowId :: UUID
+    -- ^ Waste flow UUID — lets consumers programmatically address the
+    -- cut-off (e.g. to propose a treatment activity that would close it).
+    , cwfFlowName :: Text
+    , cwfAmount :: Double
+    , cwfUnit :: Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped CutoffWasteFlow)
 
 -- | Flow mapping status for a method
 data MappingStatus = MappingStatus
@@ -942,7 +962,8 @@ data ActivityMetadata = ActivityMetadata
     { pmTotalFlows :: Int -- Number of unique flows used
     , pmTechnosphereInputs :: Int -- Count of technosphere inputs
     , pmBiosphereExchanges :: Int -- Count of biosphere exchanges (strict: excludes waste)
-    , pmWasteExchanges :: Int -- Count of waste exchanges (third flow kind)
+    , pmWasteExchangesLinked :: Int -- Waste exchanges resolved to a treatment activity
+    , pmWasteExchangesOrphan :: Int -- Cut-off waste exchanges (no modelled treatment)
     , pmHasReferenceProduct :: Bool -- Whether activity has reference product
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     }
@@ -1056,6 +1077,8 @@ instance ToJSON EdgeType
 instance ToJSON FlowRole
 -- ToJSON / FromJSON / ToSchema for Unit are derived via Stripped alongside
 -- its data declaration in src/Types.hs.
+-- CutoffWasteFlow (added on main) derives via Stripped attached to its data
+-- declaration above.
 
 -- Custom ToJSON for PerturbedEntry: flatten the Either so success entries
 -- have impact+deltaImpact and error entries have error.

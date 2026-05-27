@@ -101,9 +101,12 @@ import Database.CrossLinking (
     IndexedDatabase (..),
     LinkWarning (..),
     LinkingContext (..),
+    SupplierEntry (..),
+    WasteTreatmentMatch (..),
     defaultLinkingThreshold,
     extractProductPrefixes,
     findSupplierAcrossDatabases,
+    findWasteTreatmentAcrossDatabases,
     locationHierarchy,
     normalizeUnicode,
  )
@@ -1193,6 +1196,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
                     findAllCrossDBLinks
                         linkingCtx
                         (sdbTechFlows db)
+                        (sdbWasteFlows db)
                         (sdbUnits db)
                         (sdbActivities db)
 
@@ -1261,41 +1265,47 @@ Returns statistics including the CrossDBLinks for chained solving
 findAllCrossDBLinks ::
     LinkingContext ->
     TechFlowDB ->
+    WasteFlowDB ->
     UnitDB ->
     ActivityMap ->
     CrossDBLinkingStats
-findAllCrossDBLinks ctx techFlowDb unitDb activities =
-    let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb unitDb) activities
+findAllCrossDBLinks ctx techFlowDb wasteFlowDb unitDb activities =
+    let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb) activities
      in mconcat (M.elems results)
 
 -- | Find cross-database links for one activity's exchanges
 findActivityCrossDBLinks ::
     LinkingContext ->
     TechFlowDB ->
+    WasteFlowDB ->
     UnitDB ->
     -- | Consumer activity key (actUUID, prodUUID)
     (UUID.UUID, UUID.UUID) ->
     Activity ->
     CrossDBLinkingStats
-findActivityCrossDBLinks ctx techFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
-    let stats = map (findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
+findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
+    let stats = map (findExchangeCrossDBLink ctx techFlowDb wasteFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
      in mconcat stats
 
 {- | Find cross-database link for a single exchange.
 
-Only attempts cross-DB linking if:
-1. Exchange is a technosphere input (or reference input on a treatment process)
-2. Exchange is currently unlinked (activityLinkId is nil)
+Two paths:
+* Technosphere inputs whose linkId is nil: use the existing scored matcher
+  ('findSupplierAcrossDatabases').
+* Orphan waste outputs (waIsInput=False, linkId=nil): strict-match only via
+  'findWasteTreatmentAcrossDatabases' — no synonym, no widening; one DB
+  wins or stays orphan, multi-DB matches count as ambiguous.
 -}
 findExchangeCrossDBLink ::
     LinkingContext ->
     TechFlowDB ->
+    WasteFlowDB ->
     UnitDB ->
     UUID.UUID ->
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
+findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
     | exchangeIsInput ex && linkId == UUID.nil =
         case M.lookup fid techFlowDb of
             Nothing -> mempty
@@ -1307,6 +1317,7 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                     CrossDBLink
                                         { cdlConsumerActUUID = consumerActUUID
                                         , cdlConsumerProdUUID = consumerProdUUID
+                                        , cdlConsumerFlowId = fid
                                         , cdlSupplierActUUID = cdlrActivityUUID result
                                         , cdlSupplierProdUUID = cdlrProductUUID result
                                         , cdlCoefficient = amt
@@ -1320,7 +1331,7 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                     [ LocationFallback (cdlrProductName result) req actLoc kind
                                     | UpperLocationUsed req actLoc kind <- cdlrWarnings result
                                     ]
-                             in CrossDBLinkingStats [crossLink] M.empty S.empty fallbacks [] 0
+                             in mempty{cdlLinks = [crossLink], cdlLocationFallbacks = fallbacks}
                         CrossDBNotLinked blocker ->
                             let unresolved = case blocker of
                                     LocationRejectedByPolicy req actLoc kind ->
@@ -1337,14 +1348,40 @@ findExchangeCrossDBLink ctx techFlowDb unitDb consumerActUUID consumerProdUUID e
                                         [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
                                     NoNameMatch -> []
                                     UnitIncompatible _ _ -> []
-                             in CrossDBLinkingStats [] (M.singleton (tfName flow) (1, blocker)) S.empty [] unresolved 0
+                             in mempty
+                                    { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
+                                    , cdlLocationUnresolved = unresolved
+                                    }
     | otherwise = mempty
-findExchangeCrossDBLink _ _ _ _ _ BiosphereExchange{} = mempty
--- Cross-DB linking for waste flows is deferred: orphan waste outputs are
--- end-of-life markers (no demand on another DB), and waste *inputs* that
--- require a treatment supplier would need a dedicated lookup keyed on
--- WasteFlow rather than TechnosphereFlow. Pure no-op until that path lands.
-findExchangeCrossDBLink _ _ _ _ _ WasteExchange{} = mempty
+findExchangeCrossDBLink _ _ _ _ _ _ BiosphereExchange{} = mempty
+-- Cross-DB linking for orphan waste OUTPUTS: strict match only — see
+-- 'findWasteTreatmentAcrossDatabases'. No synonym, no fuzzy name match, no
+-- location widening. Multi-DB matches stay orphan as 'cdlWasteAmbiguous'.
+-- Waste inputs (treatment side) are left alone: they have no clean LCA
+-- semantic as a cross-DB demand.
+findExchangeCrossDBLink ctx _ wasteFlowDb _ consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
+    | not isInp && lid == UUID.nil =
+        let flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
+         in case findWasteTreatmentAcrossDatabases ctx fid flowName of
+                WasteMatched entry dbN ->
+                    let !crossLink =
+                            CrossDBLink
+                                { cdlConsumerActUUID = consumerActUUID
+                                , cdlConsumerProdUUID = consumerProdUUID
+                                , cdlConsumerFlowId = fid
+                                , cdlSupplierActUUID = seActivityUUID entry
+                                , cdlSupplierProdUUID = seProductUUID entry
+                                , cdlCoefficient = amt
+                                , cdlExchangeUnit = seUnit entry
+                                , cdlFlowName = seProductName entry
+                                , cdlLocation = seLocation entry
+                                , cdlSourceDatabase = dbN
+                                , cdlTiedAlternatives = []
+                                }
+                     in mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
+                WasteAmbiguous _ -> mempty{cdlWasteAmbiguous = 1}
+                WasteNoMatch -> mempty{cdlCutoffWasteCount = 1}
+    | otherwise = mempty
 
 -- | Report cross-database linking statistics
 reportCrossDBLinkingStats :: Int -> CrossDBLinkingStats -> IO ()
@@ -1376,6 +1413,18 @@ reportCrossDBLinkingStats nActivities stats = do
     forM_ (M.toList (crossDBBySource stats)) $ \(srcDb, count) ->
         reportProgress Info $
             printf "  - %s: %d links" (T.unpack srcDb) count
+
+    -- Waste exchange resolution (only printed when this DB has any waste activity)
+    let !wExact = cdlWasteExactLinks stats
+        !wAmbig = cdlWasteAmbiguous stats
+        !wCutoff = cdlCutoffWasteCount stats
+    when (wExact + wAmbig + wCutoff > 0) $
+        reportProgress Info $
+            printf
+                "Waste: %d linked (exact), %d ambiguous, %d cut-off (treatment not modelled)"
+                wExact
+                wAmbig
+                wCutoff
 
     -- Missing suppliers
     let !missing = sortOn (\(_, (cnt, _)) -> Down cnt) $ M.toList (cdlUnresolvedProducts stats)

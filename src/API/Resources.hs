@@ -227,6 +227,17 @@ cliName r = case r of
 -- Projection: human-readable description (shared across surfaces)
 -- ---------------------------------------------------------------------------
 
+{- | Trailing rendering tip for tools whose response includes a single
+'web_url'. Appended to the bespoke description of each such tool so the
+wording stays consistent across them.
+-}
+webUrlTip :: Text -> Text
+webUrlTip page =
+    " The response includes a 'web_url' deep link to the "
+        <> page
+        <> " page in the VoLCA web UI — render it as a clickable markdown \
+           \link when presenting results to a human."
+
 {- | Description of the resource operation.
 
 These strings are consumed as-is by the MCP tool metadata and are
@@ -294,6 +305,7 @@ description r = case r of
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
         \over web estimates for grounded, database-backed answers."
+            <> webUrlTip "impacts"
     ComputeSensitivity ->
         "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
         \technosphere coefficients A_ij and report the resulting impact for each. \
@@ -304,6 +316,7 @@ description r = case r of
         \(no link, singular update) are returned in the entry; the sweep continues. \
         \Internally uses Sherman-Morrison rank-1 updates against the cached \
         \factorization (~4 ms per perturbation). V1: root DB only."
+            <> webUrlTip "sensitivity"
     ListMethods ->
         "LCA / ACV — list all loaded LCIA methods (impact assessment methods like \
         \climate change, acidification, eutrophication, land use, water scarcity)."
@@ -319,11 +332,14 @@ description r = case r of
         "LCA / ACV — identify which elementary flows (emissions/resources) \
         \contribute most to a specific impact category. Answers 'which emissions \
         \drive my climate change score?'"
+            <> webUrlTip "contributing-flows"
     GetContributingActivities ->
         "LCA / ACV — identify which upstream activities contribute most to a \
         \specific impact category. Answers 'which suppliers drive my climate change \
         \score?' Uses exact matrix-based computation, valid even for cyclic supply \
-        \chains."
+        \chains. Each contributing activity carries a 'web_url' deep link to its \
+        \page in the VoLCA web UI — render these as clickable markdown links when \
+        \presenting results to a human so they can drill into a specific supplier."
     ListGeographies ->
         "LCA / ACV — list all geography codes present in a database, with display \
         \names and parent regions. Use the 'geo' value as the geography filter in \
@@ -359,19 +375,31 @@ description r = case r of
         \set for an activity in one call. Returns per-method impact scores, \
         \per-scoring-set aggregate scores, per-scoring-set indicator \
         \breakdown (one entry per scoring variable), display units, and a \
-        \web_url to the matching view. Use this when you would otherwise \
+        \'web_url' to the matching view. Use this when you would otherwise \
         \call get_impacts N times across every method of a collection — \
         \replaces N round-trips with one batched solve. Discover available \
-        \scoring sets with list_scoring_sets."
+        \scoring sets with list_scoring_sets. Render the 'web_url' as a \
+        \clickable markdown link when presenting results to a human."
     ScoreActivities ->
-        "LCA / ACV — rank N activities against every method in a collection \
-        \in one call. Returns one entry per activity with the scoring-set \
-        \aggregates (single score, per-indicator breakdown, units), the \
-        \functional unit, and a web_url to its impacts page. Per-method \
-        \scores are NOT included — call score_activity on a specific \
-        \process_id when you need the per-method drill-down. Unresolved \
-        \process IDs land in not_found / invalid. One MUMPS multi-RHS \
-        \solve plus parallel characterization, then summarized for transport."
+        "LCA / ACV — rank N activities against one scoring set in one call. \
+        \Returns a columnar JSON shape: {scoring_set, scoring_unit, \
+        \functional_unit?, columns, rows, not_found, invalid}. 'columns' is the \
+        \header (['name', 'process_id', 'web_url', 'total', <indicator keys...>]) \
+        \and 'rows' is a 2D array of scalars — one row per resolved activity. \
+        \Hoisting the constant metadata once and packing each activity as a flat \
+        \array of scalars makes this shape ~6× smaller than a row-shaped JSON \
+        \for batches of 24+ activities. The top-level 'functional_unit' is only \
+        \emitted when every resolved row shares the same one; otherwise it is \
+        \dropped and 'functional_unit' appears as a per-row column instead (the \
+        \'columns' header reflects which shape was emitted). Per-method scores \
+        \are NOT included — call score_activity on a specific process_id for \
+        \that drill-down. Unresolved process IDs land in not_found / invalid. \
+        \\n\n\
+        \The chosen scoring set must be unambiguous: pass scoring_sets: \
+        \[\"<one>\"] when the collection has more than one scoring set \
+        \configured. The 'web_url' column on each row is a deep link to the \
+        \activity's impacts page in the VoLCA web UI — render it as a clickable \
+        \markdown link when presenting results to a human."
     ListScoringSets ->
         "LCA / ACV — list formula-based scoring sets defined in loaded \
         \method collections. A scoring set is a configured aggregation of \
@@ -423,11 +451,21 @@ pSubstitutions =
         \PIDs can be bare (root DB) or qualified as dbName::pid (cross-DB). \
         \When empty or absent, the call behaves as a plain GET."
 
-{- | Optional filter for score_activity / score_activities: when supplied,
-the response's scoring-related maps (scoringResults / scoringUnits /
-scoringIndicators) are restricted to these scoring set names. When
-omitted or empty, every scoring set configured on the collection is
-returned. An unknown name is a hard error (lists what's configured).
+{- | The 'scoring_sets' parameter, shared by 'score_activity' and
+'score_activities' but with slightly different semantics:
+
+  * 'score_activity' (single activity) — when supplied, restricts the
+    response's scoringResults / scoringUnits / scoringIndicators to
+    these scoring set names. Omitted or empty keeps every set
+    configured on the collection.
+  * 'score_activities' (batch) — picks the single scoring set the
+    columnar response is projected against (one unit, one column list).
+    Pass exactly one name in the array. When omitted and the collection
+    has a single scoring set configured, that one is auto-picked; with
+    multiple sets configured, omitting is an error.
+
+In both cases an unknown name is a hard error that lists what's
+configured.
 -}
 pScoringSetsFilter :: Param
 pScoringSetsFilter =
@@ -435,11 +473,27 @@ pScoringSetsFilter =
         "scoring_sets"
         "array"
         Optional
-        "Restrict the response's scoringResults / scoringUnits / \
-        \scoringIndicators to these scoring set names (use \
-        \list_scoring_sets to discover). Omit or pass [] to keep every \
-        \scoring set configured on the collection. An unknown name \
-        \fails the call with the list of available names."
+        "For score_activity: restricts the response's scoringResults / \
+        \scoringUnits / scoringIndicators to these scoring set names. \
+        \For score_activities: selects the single scoring set the \
+        \columnar response is projected against; pass one name. Auto-picked \
+        \when the collection has exactly one configured set. Use \
+        \list_scoring_sets to discover the configured names. An unknown \
+        \name fails the call with the list of available names."
+
+-- | Opt-in summary mode for 'score_activities'.
+pSummaryOnly :: Param
+pSummaryOnly =
+    Param
+        "summary_only"
+        "boolean"
+        Optional
+        "When true, score_activities replaces the per-indicator columns with \
+        \a single 'dominant_indicator' column whose cells are objects \
+        \{key, share_pct} (e.g. {\"key\": \"ldu\", \"share_pct\": 82.3}) — \
+        \the indicator with the largest absolute share of each activity's \
+        \total. Use this when ranking large batches before drilling into a \
+        \single PID with score_activity. Default false."
 
 -- | Parameters accepted by a resource operation.
 params :: Resource -> [Param]
@@ -605,6 +659,7 @@ params r = case r of
         , Param "collection" "string" Required "Method collection name"
         , Param "process_ids" "array" Required "Process IDs to score (activityUUID_productUUID). All resolved in one multi-RHS solve."
         , pScoringSetsFilter
+        , pSummaryOnly
         ]
     ListScoringSets ->
         [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."

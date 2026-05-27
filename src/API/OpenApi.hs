@@ -58,6 +58,8 @@ instance ToSchema DatabaseSetupInfo where declareNamedSchema = genericDeclareNam
 -- their data declarations in src/API/Types.hs (NodeType/EdgeType/FlowRole
 -- via anyclass; ApiFlow has a custom instance there to keep the discriminated
 -- `kind` union representation).
+-- CutoffWasteFlow (added on main) derives ToSchema via Stripped alongside
+-- its data declaration in src/API/Types.hs.
 
 -- PerturbedEntry's custom schema moved to API.Types alongside its data decl.
 

@@ -37,10 +37,14 @@ module Database.CrossLinking (
     -- * Index Building
     buildIndexedDatabase,
     buildIndexedDatabaseFromDB,
+    buildSupplierEntries,
+    supplierLocations,
 
     -- * Main Functions
     findSupplierAcrossDatabases,
     findSupplierInIndexedDBs,
+    findWasteTreatmentAcrossDatabases,
+    WasteTreatmentMatch (..),
 
     -- * Scoring Functions
     matchProductName,
@@ -77,13 +81,16 @@ import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
 import Types (
     Activity (..),
     Database (..),
+    Exchange,
     GeographyPolicy (..),
     LinkBlocker (..),
     LocationKind (..),
     SimpleDatabase (..),
     TechnosphereFlow (..),
+    WasteFlow (..),
     exchangeFlowId,
     exchangeIsReference,
+    exchangeLocation,
     exchanges,
     getActivity,
  )
@@ -96,6 +103,12 @@ data IndexedDatabase = IndexedDatabase
     { idbName :: !Text
     , idbByProductName :: !(M.Map Text [SupplierEntry]) -- Normalized product name → suppliers
     , idbBySynonymGroup :: !(M.Map Int [SupplierEntry]) -- Synonym group ID → suppliers
+    , idbWasteTreatmentByFlowUUID :: !(M.Map UUID [SupplierEntry])
+    -- ^ Waste flow UUID → activities whose reference product is that waste
+    -- (treatment activities). Strict-matched only — no synonym, no scoring.
+    , idbWasteTreatmentByCanonicalName :: !(M.Map Text [SupplierEntry])
+    -- ^ normalizeText (wfName) → same set, for the name-based fallback when
+    -- two databases use different UUIDs for the same canonical waste flow.
     }
 
 {- | Entry in the supplier index
@@ -324,10 +337,15 @@ buildIndexedDatabase dbName synDB db =
                 | (prodName, entry) <- entries
                 , Just groupId <- [lookupSynonymGroup synDB (normalizeName prodName)]
                 ]
+        wasteEntries = buildWasteTreatmentEntries db
+        wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
+        wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
+            , idbWasteTreatmentByFlowUUID = wasteByUUID
+            , idbWasteTreatmentByCanonicalName = wasteByName
             }
 
 {- | Build supplier entries from a SimpleDatabase. Reference exchanges of
@@ -336,11 +354,26 @@ lives in `sdbTechFlows`.
 -}
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
     , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
+    , loc <- supplierLocations act ex
+    ]
+
+{- | Treatment-activity entries from a SimpleDatabase: an activity is a waste
+treatment supplier iff its reference exchange's flow is in 'sdbWasteFlows'
+(the dataset author declared a waste flow as the activity's reference
+product). One tuple per (waste flow UUID, waste flow name, entry).
+-}
+buildWasteTreatmentEntries :: SimpleDatabase -> [(UUID, Text, SupplierEntry)]
+buildWasteTreatmentEntries db =
+    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow))
+    | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
+    , ex <- exchanges act
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) (sdbWasteFlows db)]
     ]
 
 {- | Build an indexed database from a full Database (used when loading from cache)
@@ -366,10 +399,15 @@ buildIndexedDatabaseFromDB dbName synDB db =
                 | (prodName, entry) <- entries
                 , Just groupId <- [lookupSynonymGroup synDB (normalizeName prodName)]
                 ]
+        wasteEntries = buildWasteTreatmentEntriesFromDB db
+        wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
+        wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
+            , idbWasteTreatmentByFlowUUID = wasteByUUID
+            , idbWasteTreatmentByCanonicalName = wasteByName
             }
 
 {- | Build supplier entries from a full Database. Same invariant as
@@ -377,13 +415,99 @@ buildIndexedDatabaseFromDB dbName synDB db =
 -}
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
     , exchangeIsReference ex
     , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
+    , loc <- supplierLocations act ex
     ]
+
+{- | Locations under which an activity should be indexed as a supplier.
+
+Always includes 'activityLocation'. Adds the reference exchange's
+'techLocation' when it is non-empty and distinct — this surfaces SimaPro
+products whose Products row declares a wider geographic scope than the
+enclosing Process name (typically WFLDB: process @ /CH, product @ /GLO).
+
+Design note: the activity table stays at 'activityLocation' (honest about
+data-collection provenance); only the cross-DB lookup gets the alias.
+-}
+supplierLocations :: Activity -> Exchange -> [Text]
+supplierLocations act ex =
+    let actLoc = activityLocation act
+        exLoc = exchangeLocation ex
+     in if not (T.null exLoc) && exLoc /= actLoc
+            then [actLoc, exLoc]
+            else [actLoc]
+
+-- | Treatment-activity entries from a full Database. Mirrors 'buildWasteTreatmentEntries'.
+buildWasteTreatmentEntriesFromDB :: Database -> [(UUID, Text, SupplierEntry)]
+buildWasteTreatmentEntriesFromDB db =
+    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow))
+    | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
+    , Just act <- [getActivity db (fromIntegral pid)]
+    , ex <- exchanges act
+    , exchangeIsReference ex
+    , Just flow <- [M.lookup (exchangeFlowId ex) (dbWasteFlows db)]
+    ]
+
+{- | Outcome of a strict cross-DB waste-treatment lookup.
+
+The matcher is intentionally narrow: it succeeds only when the dataset
+author has provided an explicit alignment (same flow UUID, or — as a
+fallback — byte-exact normalized flow name) and exactly one database in
+the pool offers a candidate. Two databases offering a match resolves to
+'WasteAmbiguous', never to a first-wins auto-pick. There is no synonym
+graph, no compound-name extraction, no location widening, and no scoring
+threshold — those would cross from honoring explicit intent into
+fabricating links.
+-}
+data WasteTreatmentMatch
+    = WasteMatched !SupplierEntry !Text -- ^ entry + source database name
+    | WasteAmbiguous ![Text] -- ^ databases that all offered a candidate
+    | WasteNoMatch
+
+{- | Strict cross-DB waste-treatment lookup. Honors author-provided alignment
+only — see 'WasteTreatmentMatch' for the semantics.
+
+Resolution order: flow UUID first, then byte-exact normalized name. Within
+each tier, a match is accepted iff exactly one database in 'lcIndexedDatabases'
+contains a candidate. Multiple within-DB candidates count as one match for
+that database (treatment by region selection is the database author's
+choice; if it ships per-region treatments, we don't pick).
+-}
+findWasteTreatmentAcrossDatabases ::
+    LinkingContext ->
+    -- | Orphan waste flow UUID
+    UUID ->
+    -- | Canonical waste flow name (for the name-based fallback)
+    Text ->
+    WasteTreatmentMatch
+findWasteTreatmentAcrossDatabases LinkingContext{lcIndexedDatabases} flowUUID flowName =
+    case lookupSingleDB (M.lookup flowUUID . idbWasteTreatmentByFlowUUID) of
+        match@WasteMatched{} -> match
+        WasteAmbiguous dbs -> WasteAmbiguous dbs
+        WasteNoMatch ->
+            let normalized = normalizeText flowName
+             in if T.null normalized
+                    then WasteNoMatch
+                    else lookupSingleDB (M.lookup normalized . idbWasteTreatmentByCanonicalName)
+  where
+    lookupSingleDB :: (IndexedDatabase -> Maybe [SupplierEntry]) -> WasteTreatmentMatch
+    lookupSingleDB lookupKey =
+        let perDB =
+                [ (idbName idb, entries)
+                | idb <- lcIndexedDatabases
+                , Just entries <- [lookupKey idb]
+                , not (null entries)
+                ]
+         in case perDB of
+                [(dbN, [entry])] -> WasteMatched entry dbN
+                [_] -> WasteNoMatch -- single DB with multiple candidates: stay orphan
+                [] -> WasteNoMatch
+                manyDbs -> WasteAmbiguous (map fst manyDbs)
 
 {- | Find a supplier across all loaded databases (using pre-built indexes)
 This is the fast O(1) lookup version
