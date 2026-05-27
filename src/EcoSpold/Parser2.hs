@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
@@ -12,7 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement)
+import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement)
 import Progress (ProgressLevel (..), reportProgress)
 import System.FilePath (takeBaseName)
 import Types
@@ -146,6 +147,8 @@ data ParseState = ParseState
     , psClassifications :: !(M.Map Text Text) -- Classification system -> value
     , psPendingClassSystem :: !Text -- Current classification system name
     , psPendingCommentLang :: !Text -- xml:lang on the currently-open <comment>
+    , psActivityType :: !(Maybe Int) -- ecospold2 <activity activityType="1..8"> attribute
+    , psSpecialActivityType :: !(Maybe Int) -- ecospold2 <activity specialActivityType="…"> attribute
     }
 
 -- | Initial parsing state
@@ -170,7 +173,56 @@ initialParseState =
         , psClassifications = M.empty
         , psPendingClassSystem = ""
         , psPendingCommentLang = ""
+        , psActivityType = Nothing
+        , psSpecialActivityType = Nothing
         }
+
+{- | Build the source-native activity-type record from the ecospold2
+@activityType@ and @specialActivityType@ attribute values, both verbatim
+integers from the XML. Returns 'Nothing' when the primary @activityType@
+attribute is absent (we never fabricate a value).
+
+Labels are the ecoinvent v3 schema's documented strings. Unknown codes
+keep the integer and yield an empty label rather than a guess.
+-}
+ecoSpoldNativeType :: Maybe Int -> Maybe Int -> Maybe NativeActivityType
+ecoSpoldNativeType Nothing _ = Nothing
+ecoSpoldNativeType (Just code) special =
+    Just
+        EcoSpoldActivityType
+            { eatCode = code
+            , eatLabel = ecoSpoldActivityTypeLabel code
+            , eatSpecialCode = special
+            , eatSpecialLabel = ecoSpoldSpecialActivityTypeLabel <$> special
+            }
+
+-- | ecospold2 activityType enum labels (v3 schema). Unknown codes yield an
+-- explicit "Unknown (code N)" sentinel so a future spec extension or a
+-- parser bug is visible to consumers, not silently empty.
+ecoSpoldActivityTypeLabel :: Int -> Text
+ecoSpoldActivityTypeLabel = \case
+    1 -> "Ordinary transforming activity"
+    2 -> "Market activity"
+    3 -> "IO activity"
+    4 -> "Residual activity"
+    5 -> "Production mix"
+    6 -> "Import activity"
+    7 -> "Correction activity"
+    8 -> "Market group"
+    n -> "Unknown (code " <> T.pack (show n) <> ")"
+
+-- | ecospold2 specialActivityType enum labels (v3 schema). Same unknown-code
+-- treatment as 'ecoSpoldActivityTypeLabel'.
+ecoSpoldSpecialActivityTypeLabel :: Int -> Text
+ecoSpoldSpecialActivityTypeLabel = \case
+    0 -> "Default"
+    1 -> "Hard link"
+    2 -> "Pre-aggregation"
+    3 -> "Combined production with byproducts"
+    4 -> "Combined production without byproducts"
+    5 -> "Combined production"
+    6 -> "Import activity"
+    n -> "Unknown (code " <> T.pack (show n) <> ")"
 
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
@@ -242,7 +294,19 @@ parseWithXeno xmlContent processId =
                 InGeneralCommentText _ ->
                     let idx = if isElement name "index" then bsToInt value else 0
                      in withLang state{psContext = InGeneralCommentText idx}
-                _ -> withLang state
+                _ ->
+                    -- Attributes on the <activity> opening tag carry the
+                    -- ecospold2 activityType and specialActivityType enums.
+                    let onActivity = case psPath state of
+                            (current : _) -> isElement current "activity"
+                            [] -> False
+                        captured
+                            | onActivity && isElement name "activityType" =
+                                state{psActivityType = bsToIntMaybe value}
+                            | onActivity && isElement name "specialActivityType" =
+                                state{psSpecialActivityType = bsToIntMaybe value}
+                            | otherwise = state
+                     in withLang captured
 
     -- End of opening tag - no action needed for SAX
     endOpen state _tagName = state
@@ -617,8 +681,9 @@ parseWithXeno xmlContent processId =
             location = fromMaybe "GLO" (psLocation st)
             description = reverse (psDescription st) -- Reverse to get correct order
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
+            nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
+            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing nativeType
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

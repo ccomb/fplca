@@ -402,6 +402,37 @@ getUnitNameForWasteFlow :: UnitDB -> WasteFlow -> Text
 getUnitNameForWasteFlow unitDB f =
     maybe "unknown" unitName (getUnitForWasteFlow unitDB f)
 
+{- | Native activity-type metadata captured verbatim from the source database.
+
+Three variants matching the three supported source formats. Each variant carries
+only the fields the source format actually provides — no cross-format
+normalisation, no heuristic on names. The sum type makes it impossible to
+attach (for example) an ecospold integer code to a SimaPro activity.
+
+Wire-layer JSON flattens these three variants into a single unified record
+\{source, label, code?, special_label?, special_code?\} for consumer simplicity
+(see ToJSON instance in API.Types).
+-}
+data NativeActivityType
+    = -- | ecospold 2 @\<activity@ @activityType@ attribute (1..8) and optional
+      -- @specialActivityType@. Codes are the spec's enumeration; labels are
+      -- the spec's documented strings.
+      EcoSpoldActivityType
+        { eatCode :: !Int
+        , eatLabel :: !Text
+        , eatSpecialCode :: !(Maybe Int)
+        , eatSpecialLabel :: !(Maybe Text)
+        }
+    | -- | SimaPro CSV @Type@ header (\"Unit process\" / \"System\").
+      SimaProProcessType
+        { sptLabel :: !Text
+        }
+    | -- | ILCD @\<processType@ XML element value.
+      ILCDProcessType
+        { iptLabel :: !Text
+        }
+    deriving (Show, Eq, Generic, NFData, Store)
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
@@ -417,6 +448,7 @@ data Activity = Activity
     , activityParamExprs :: !(M.Map Text Text) -- Raw SimaPro parameter expressions (for re-evaluation)
     , activityAllocationPercent :: !(Maybe Double) -- SimaPro multi-product allocation fraction (%, 0..100); Nothing for non-allocated bases
     , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
+    , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
     }
     deriving (Generic, NFData, Store)
 

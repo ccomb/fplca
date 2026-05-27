@@ -436,7 +436,7 @@ parseWithXeno xmlContent =
                     filter
                         (not . T.null . snd)
                         [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
+            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
@@ -785,7 +785,7 @@ parseAllWithXeno xmlContent =
                     filter
                         (not . T.null . snd)
                         [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
+            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

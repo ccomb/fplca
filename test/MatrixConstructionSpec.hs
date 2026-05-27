@@ -167,6 +167,7 @@ spec = do
                         , activityParamExprs = M.empty
                         , activityAllocationPercent = Nothing
                         , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
@@ -237,6 +238,7 @@ spec = do
                         , activityParamExprs = M.empty
                         , activityAllocationPercent = Nothing
                         , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
