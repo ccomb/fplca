@@ -10,7 +10,7 @@ import CLI.Types (DebugMatricesOptions (..))
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
-import Control.Monad (foldM)
+import Control.Monad (foldM, guard)
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT)
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Either (fromRight, lefts, rights)
@@ -904,67 +904,59 @@ nameFilterSet db mq = do
     q <- mq
     if T.null (T.strip q) then Nothing else bm25MatchingPids db q
 
+{- | BM25 retrieval applies only when the user provided a non-empty name
+query, didn't request exact matching, and didn't pick an explicit sort
+column. Returns 'Nothing' otherwise so the caller falls back to lex-sorted
+field matching.
+-}
+tryBm25Retrieve :: Database -> SearchFilter -> Maybe [(ProcessId, Activity)]
+tryBm25Retrieve db (SearchFilter core exactMatch) = do
+    q <- afcName core
+    guard (not exactMatch)
+    guard (afcSort core /= Just "name" && afcSort core /= Just "location")
+    guard (not (T.null (T.strip q)))
+    bm25Retrieve db q
+
+{- | Lex-comparator for activity rows. Defaults to name; 'Just "location"'
+picks the location key.
+-}
+activityRowComparator :: Maybe Text -> (ProcessId, Activity) -> (ProcessId, Activity) -> Ordering
+activityRowComparator (Just "location") (_, a) (_, b) = compare (activityLocation a) (activityLocation b)
+activityRowComparator _ (_, a) (_, b) = compare (activityName a) (activityName b)
+
+{- | Apply pagination (offset / limit, defaulting limit to 20) and emit a
+'SearchResults' wrapping the projected page. Pure modulo the supplied
+@searchTimeMs@.
+-}
+paginateSearchResults :: Maybe Int -> Maybe Int -> Double -> ((ProcessId, Activity) -> a) -> [(ProcessId, Activity)] -> SearchResults a
+paginateSearchResults offsetParam limitParam searchTimeMs project xs =
+    let offset = maybe 0 (max 0) offsetParam
+        limit = fromMaybe 20 limitParam
+        total = length xs
+        page = map project (take limit (drop offset xs))
+        hasMore = offset + limit < total
+     in SearchResults page total offset limit hasMore searchTimeMs
+
 {- | Search activities (returns same format as API). The exact-match toggle is
 carried on 'SearchFilter' itself, so there is no separate positional flag.
 -}
 searchActivities :: Database -> SearchFilter -> IO (Either ServiceError Value)
-searchActivities db (SearchFilter core exactMatch) = do
-    let nameParam = afcName core
-        geoParam = afcLocation core
-        productParam = afcProduct core
-        classFilters = afcClassifications core
-        limitParam = afcLimit core
-        offsetParam = afcOffset core
-        sortParam = afcSort core
-        orderParam = afcOrder core
+searchActivities db sFilter@(SearchFilter core exactMatch) = do
     startTime <- getCurrentTime
-    let isDesc = orderParam == Just "desc"
-        explicitSort = sortParam == Just "name" || sortParam == Just "location"
-        -- BM25 retrieval applies only when the user provided a non-empty name
-        -- query, didn't request exact matching, and didn't pick a sort column.
-        bm25Retrieved = case nameParam of
-            Just q
-                | not exactMatch
-                , not explicitSort
-                , not (T.null (T.strip q)) ->
-                    bm25Retrieve db q
-            _ -> Nothing
-        actCmp = case sortParam of
-            Just "location" -> \(_, a) (_, b) -> compare (activityLocation a) (activityLocation b)
-            _ -> \(_, a) (_, b) -> compare (activityName a) (activityName b)
-        allResults = case bm25Retrieved of
+    let allResults = case tryBm25Retrieve db sFilter of
             Just ranked ->
                 -- BM25 path: ranked candidates → structured filters → preserve score order.
-                applyStructuredFilters db geoParam productParam classFilters False ranked
+                applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core) False ranked
             Nothing ->
                 -- Non-BM25 path: AND-of-tokens name filter + lex sort.
-                let rawResults = findActivitiesByFields db nameParam geoParam productParam classFilters exactMatch
-                 in L.sortBy (if isDesc then flip actCmp else actCmp) rawResults
-        offset = maybe 0 (max 0) offsetParam
-        limit = fromMaybe 20 limitParam
-        total = length allResults
-        pagedResults = take limit $ drop offset allResults
-        hasMore = offset + limit < total
-        activityResults =
-            map
-                ( \(processId, activity) ->
-                    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
-                     in ActivitySummary
-                            { prsProcessId = processIdToText db processId
-                            , prsName = activityName activity
-                            , prsLocation = activityLocation activity
-                            , prsProduct = prodName
-                            , prsProductAmount = prodAmount
-                            , prsProductUnit = prodUnit
-                            , prsAllocationPercent = activityAllocationPercent activity
-                            , prsAllocationFormula = activityAllocationFormula activity
-                            , prsNativeType = activityNativeType activity
-                            }
-                )
-                pagedResults
+                let cmp = activityRowComparator (afcSort core)
+                    ordered = if afcOrder core == Just "desc" then flip cmp else cmp
+                    raw = findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch
+                 in L.sortBy ordered raw
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
-    return $ Right $ toJSON $ SearchResults activityResults total offset limit hasMore searchTimeMs
+        results = paginateSearchResults (afcOffset core) (afcLimit core) searchTimeMs (uncurry (mkActivitySummary db)) allResults
+    pure $ Right $ toJSON results
 
 -- | List all classification systems and their distinct values for a database
 getClassifications :: Database -> [ClassificationSystem]
@@ -1232,49 +1224,62 @@ getReferenceProductInfo flows units activity =
              in (name, amount, uName)
         [] -> ("", 1.0, "")
 
--- | Get all products (ProcessIds) for an activity UUID using the products index
+{- | Build an 'ActivitySummary' from a (ProcessId, Activity) pair. Encapsulates
+the reference-product + allocation + native-type projection shared by
+search results, supply-chain entries, inventory metadata, and exchange-target
+navigation. Uses @dbUnits db@ for the unit DB — callers needing a merged
+cross-DB unit DB build the record by hand.
+-}
+mkActivitySummary :: Database -> ProcessId -> Activity -> ActivitySummary
+mkActivitySummary db processId activity =
+    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
+     in ActivitySummary
+            { prsProcessId = processIdToText db processId
+            , prsName = activityName activity
+            , prsLocation = activityLocation activity
+            , prsProduct = prodName
+            , prsProductAmount = prodAmount
+            , prsProductUnit = prodUnit
+            , prsAllocationPercent = activityAllocationPercent activity
+            , prsAllocationFormula = activityAllocationFormula activity
+            , prsNativeType = activityNativeType activity
+            }
+
+{- | Placeholder summary surfaced when the products index points at a
+ProcessId that no longer resolves to an Activity. Carries the raw pid so the
+consumer can debug, rather than silently dropping the entry.
+-}
+unknownActivitySummary :: Database -> ProcessId -> ActivitySummary
+unknownActivitySummary db pid =
+    ActivitySummary
+        { prsProcessId = processIdToText db pid
+        , prsName = "Unknown"
+        , prsLocation = ""
+        , prsProduct = "Unknown"
+        , prsProductAmount = 1.0
+        , prsProductUnit = ""
+        , prsAllocationPercent = Nothing
+        , prsAllocationFormula = Nothing
+        , prsNativeType = Nothing
+        }
+
+-- | Get all products (ProcessIds) for an activity UUID using the products index.
 getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
 getAllProductsForActivity db activityUUID =
     case M.lookup activityUUID (dbActivityProductsIndex db) of
+        Nothing -> []
         Just processIds ->
-            [ let mAct = findActivityByProcessId db pid
-                  (prodName, prodAmount, prodUnit) = case mAct of
-                    Just a -> getReferenceProductInfo (dbTechFlows db) (dbUnits db) a
-                    Nothing -> ("Unknown", 1.0, "")
-               in ActivitySummary
-                    { prsProcessId = processIdToText db pid
-                    , prsName = maybe "Unknown" activityName mAct
-                    , prsLocation = maybe "" activityLocation mAct
-                    , prsProduct = prodName
-                    , prsProductAmount = prodAmount
-                    , prsProductUnit = prodUnit
-                    , prsAllocationPercent = mAct >>= activityAllocationPercent
-                    , prsAllocationFormula = mAct >>= activityAllocationFormula
-                    , prsNativeType = mAct >>= activityNativeType
-                    }
+            [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)
             | pid <- processIds
             ]
-        Nothing -> []
 
--- | Get target activity for technosphere navigation
+-- | Get target activity for technosphere navigation.
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
 getTargetActivity db exchange = do
     targetId <- exchangeActivityLinkId exchange
     targetActivity <- findActivityByActivityUUID db targetId
     processId <- findProcessIdForActivity db targetActivity
-    let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) targetActivity
-    return $
-        ActivitySummary
-            { prsProcessId = processIdToText db processId
-            , prsName = activityName targetActivity
-            , prsLocation = activityLocation targetActivity
-            , prsProduct = prodName
-            , prsProductAmount = prodAmount
-            , prsProductUnit = prodUnit
-            , prsAllocationPercent = activityAllocationPercent targetActivity
-            , prsAllocationFormula = activityAllocationFormula targetActivity
-            , prsNativeType = activityNativeType targetActivity
-            }
+    pure (mkActivitySummary db processId targetActivity)
 
 {- | Get reference product as FlowDetail (if exists). Reference products are
 technosphere by definition.
@@ -1289,29 +1294,17 @@ getActivityReferenceProductDetail db activity = do
     let uName = getUnitNameForTechFlow (dbUnits db) flow
     return $ FlowDetail (ApiTechFlow flow) uName usageCount
 
--- | Get activities that use a specific flow as ActivitySummary list
+-- | Get activities that use a specific flow as ActivitySummary list.
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
 getActivitiesUsingFlow db flowUUID =
     case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
         Nothing -> []
         Just activityUUIDs ->
-            let uniqueUUIDs = S.toList $ S.fromList activityUUIDs -- Deduplicate activity UUIDs
-             in [ let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) proc
-                   in ActivitySummary
-                        { prsProcessId = processIdToText db processId
-                        , prsName = activityName proc
-                        , prsLocation = activityLocation proc
-                        , prsProduct = prodName
-                        , prsProductAmount = prodAmount
-                        , prsProductUnit = prodUnit
-                        , prsAllocationPercent = activityAllocationPercent proc
-                        , prsAllocationFormula = activityAllocationFormula proc
-                        , prsNativeType = activityNativeType proc
-                        }
-                | procUUID <- uniqueUUIDs
-                , Just proc <- [findActivityByActivityUUID db procUUID]
-                , Just processId <- [findProcessIdForActivity db proc]
-                ]
+            [ mkActivitySummary db processId proc
+            | procUUID <- S.toList (S.fromList activityUUIDs)
+            , Just proc <- [findActivityByActivityUUID db procUUID]
+            , Just processId <- [findProcessIdForActivity db proc]
+            ]
 
 {- | Sentinel returned only when an exchange's unit UUID failed to resolve.
 The exchange unit-name field already surfaces the same gap via
