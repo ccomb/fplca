@@ -49,6 +49,10 @@ class Server:
 
     @property
     def base_url(self) -> str:
+        """``http://localhost:<port>`` — pass to :class:`Client(base_url=…)`.
+
+        Always loopback: the managed server only listens locally.
+        """
         return f"http://localhost:{self.port}"
 
     def _read_config(self) -> dict:

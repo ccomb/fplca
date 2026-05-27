@@ -118,10 +118,13 @@ class TestSearchResultsIteration:
                 parse=Activity.from_json,
             )
 
-    def test_iteration_stops_on_empty_page_with_has_more(self):
-        """Server claims hasMore=True but returns no items — iteration must terminate, not loop."""
+    def test_iteration_raises_on_empty_page_with_has_more(self):
+        """Server claims hasMore=True but returns no items — surface the broken
+        pagination contract loudly. Silently stopping would let callers consume
+        an incomplete result set without ever learning the engine misbehaved.
+        """
         def fetch(offset: int, limit: int | None) -> dict:
-            # Buggy server: keeps saying hasMore but never advances.
+            # Buggy server: claims hasMore but returns nothing.
             return {
                 "results": [],
                 "total": 100,
@@ -136,8 +139,8 @@ class TestSearchResultsIteration:
             parse=Activity.from_json,
             fetch=fetch,
         )
-        # Must terminate after the in-memory page rather than spin.
-        assert [a.name for a in sr] == ["a", "b"]
+        with pytest.raises(RuntimeError, match="Pagination contract broken"):
+            list(sr)
 
     def test_reiteration_replays_from_cache(self):
         """A second iteration must not re-hit the server — fetched pages are cached."""

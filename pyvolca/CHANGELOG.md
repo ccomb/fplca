@@ -18,6 +18,91 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.5.0] - 2026-05-27
+
+Three convergent themes: surface pagination truthfully (no silent
+truncation), wire enums as enums, and type the high-traffic dicts. Every
+public method now returns a typed dataclass, every paginated endpoint
+exposes the envelope, and every enum-shaped string is an enum.
+
+If you need a brand-new engine field that pyvolca doesn't model yet, use
+the escape hatch ``c.call("operation_id", ...)`` — returns the raw JSON
+dict.
+
+### Breaking changes — pagination surfacing
+
+- **`SupplyChain.has_more`** is a new derived property. When
+  ``len(entries) < filtered_activities`` the server truncated the
+  result; downstream LCA work on a truncated chain would be silently
+  wrong. Callers should check this flag.
+- **`get_characterization`** now returns a typed
+  ``CharacterizationResult`` with ``matches`` / ``shown`` / ``has_more``
+  derived. Previously returned a bare dict.
+- **`SearchResults.from_raw`** is strict when a fetch callback is
+  wired: missing wire keys (``total``, ``offset``, ``limit``,
+  ``hasMore``) raise instead of silently defaulting to a truncated
+  total. Test fixtures (``fetch=None``) keep permissive defaults.
+- **`SearchResults.__iter__`** now raises ``RuntimeError`` when the
+  server returns ``hasMore=True`` with no items — previously it
+  silently stopped, which let callers consume an incomplete result set
+  without learning the engine's pagination contract was broken.
+
+### Breaking changes — StrEnums (renamed string fields)
+
+All stringly-typed enum-shaped fields are now ``str`` subclasses so
+equality with the raw wire string still works, but typos fail at
+construction.
+
+- **`DatabaseStatus`**: ``DatabaseInfo.status`` is now
+  ``DatabaseStatus.LOADED`` / ``UNLOADED`` / ``PARTIALLY_LINKED``.
+- **`TechRole`** (was ``Literal``): ``TechnosphereExchange.role`` is
+  now ``TechRole.INPUT`` / ``REFERENCE_PRODUCT`` / etc.
+- **`BioDirection`** (was ``Literal``): ``BiosphereExchange.direction``
+  is now ``BioDirection.RESOURCE`` / ``EMISSION``.
+- **`AggregateScope`**: ``AggregateResult.scope`` and the
+  ``aggregate(scope=)`` argument are now ``AggregateScope.DIRECT`` /
+  ``SUPPLY_CHAIN`` / ``BIOSPHERE``. Raw strings still accepted on the
+  argument for one-liners, but the return value is always the enum.
+- **`AggregateOp`**: ``aggregate(aggregate=)`` is now
+  ``AggregateOp.SUM_QUANTITY`` / ``COUNT`` / ``SHARE``.
+
+### Breaking changes — typed list returns
+
+Previously bare ``dict`` / ``list[dict]`` returns, now typed dataclasses.
+
+- **`Client.list_methods`** → ``list[Method]`` (carries ``id``,
+  ``name``, ``category``, ``unit``, ``factor_count``, ``collection``).
+- **`Client.list_classifications`** → ``list[ClassificationSystem]``.
+- **`Client.list_presets`** → ``list[Preset]`` with structured
+  ``filters: list[PresetFilter]``.
+- **`Client.get_version`** → ``ServerVersion``.
+- **`Client.get_inventory`** → ``InventoryResult`` with ``root``,
+  ``flows: list[InventoryFlow]``, ``statistics: InventoryStatistics``.
+- **`Client.get_flow_mapping`** → ``FlowMapping`` with derived
+  ``coverage_pct``.
+- **`Client.get_contributing_flows`** → ``ContributingFlows``.
+- **`Client.get_contributing_activities`** → ``ContributingActivities``.
+
+Caveat: the engine does not report a total count for the contributing
+endpoints, so pyvolca cannot derive ``has_more`` for them. Pass a
+generous ``limit`` if exhaustive coverage matters.
+
+### Breaking changes — typed substitutions
+
+- **`Substitution`** is a new frozen dataclass replacing the
+  ``{"from", "to", "consumer"}`` dict form. ``get_supply_chain``,
+  ``get_inventory``, ``get_impacts``, and ``get_impacts_batch`` now
+  accept ``list[Substitution]`` (preferred) or the legacy dict (for
+  back-compat one-liners). The dict form validates the three required
+  keys locally — typos like ``"comsumer"`` raise before hitting the
+  engine.
+
+### Other notes
+
+- **`Client.use(db_name)`** is now implemented via ``__dict__.copy()``
+  so attributes added to ``__init__`` propagate automatically (no
+  manual mirror to keep in sync).
+
 ## [0.4.0] - 2026-05-26
 
 Engine wire format changed in three independent PRs since 0.3.1 — this
