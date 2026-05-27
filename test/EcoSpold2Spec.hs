@@ -106,6 +106,86 @@ spec = describe "per-exchange comments" $ do
         it "returns Left on well-formed XML that is not an EcoSpold dataset" $
             runOnBytes "<?xml version=\"1.0\"?><root><child>hello</child></root>" >>= shouldBeLeft
 
+    -- -----------------------------------------------------------------------
+    -- Native activity-type capture: ecospold2's <activity activityType="…"
+    -- specialActivityType="…"> attributes are the authoritative discriminator
+    -- between markets, ordinary transforming activities, market groups, etc.
+    -- We expose them verbatim with the spec's documented labels.
+    -- -----------------------------------------------------------------------
+    describe "native activityType / specialActivityType capture" $ do
+        let runOnBytes bytes = withSystemTempDirectory "es2-attr" $ \dir -> do
+                let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+                BS.writeFile path bytes
+                streamParseActivityAndFlowsFromFile path
+
+        it "captures activityType=2 as Market activity with code+label" $ do
+            result <- runOnBytes (activityTypeFixtureXml "2" (Just "1"))
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) ->
+                    activityNativeType act
+                        `shouldBe` Just
+                            EcoSpoldActivityType
+                                { eatCode = 2
+                                , eatLabel = "Market activity"
+                                , eatSpecialCode = Just 1
+                                , eatSpecialLabel = Just "Hard link"
+                                }
+
+        it "captures activityType=1 as Ordinary transforming activity, no special" $ do
+            result <- runOnBytes (activityTypeFixtureXml "1" Nothing)
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) ->
+                    activityNativeType act
+                        `shouldBe` Just
+                            EcoSpoldActivityType
+                                { eatCode = 1
+                                , eatLabel = "Ordinary transforming activity"
+                                , eatSpecialCode = Nothing
+                                , eatSpecialLabel = Nothing
+                                }
+
+        it "returns Nothing when no activityType attribute is present" $ do
+            result <- runOnBytes wastePatternsXml -- existing fixture has no activityType
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) ->
+                    activityNativeType act `shouldBe` Nothing
+
+{- | Synthetic ecospold2 dataset parameterised on the activityType code and
+optional specialActivityType code. One reference output, no other exchanges.
+-}
+activityTypeFixtureXml :: BS.ByteString -> Maybe BS.ByteString -> BS.ByteString
+activityTypeFixtureXml actType mSpec =
+    let specAttr = case mSpec of
+            Just s -> " specialActivityType=\"" <> s <> "\""
+            Nothing -> ""
+     in "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+        \  <activityDataset>\n\
+        \    <activityDescription>\n\
+        \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"attr-test\""
+        <> " activityType=\""
+        <> actType
+        <> "\""
+        <> specAttr
+        <> ">\n\
+           \        <activityName xml:lang=\"en\">attr test activity</activityName>\n\
+           \      </activity>\n\
+           \      <geography geographyId=\"TEST\"><shortname xml:lang=\"en\">TEST</shortname></geography>\n\
+           \    </activityDescription>\n\
+           \    <flowData>\n\
+           \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
+           \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+           \        <name xml:lang=\"en\">attr test product</name>\n\
+           \        <unitName xml:lang=\"en\">kg</unitName>\n\
+           \        <outputGroup>0</outputGroup>\n\
+           \      </intermediateExchange>\n\
+           \    </flowData>\n\
+           \  </activityDataset>\n\
+           \</ecoSpold>\n"
+
 withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
