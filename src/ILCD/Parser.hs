@@ -474,7 +474,7 @@ parseProcessXML bytes =
         | isElement tag "classification" =
             s{psPendingClassName = "", psTextAccum = []}
         | isElement tag "processType" && not (psInExchange s) && T.null (psProcessType s) =
-            -- ILCD <processType> lives at <processInformation><dataSetInformation><processType>.
+            -- ILCD <processType> lives at <modellingAndValidation><LCIMethodAndAllocation><processType>.
             -- Guard psInExchange just in case a future ILCD revision reuses the tag name
             -- elsewhere; first occurrence wins to be deterministic.
             s{psProcessType = accum s, psTextAccum = []}
