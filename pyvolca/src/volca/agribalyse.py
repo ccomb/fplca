@@ -25,6 +25,7 @@ from .types import (
     ActivityDetail,
     ClassificationFilter,
     Exchange,
+    MatchMode,
     SupplyChainEntry,
     TechnosphereExchange,
 )
@@ -257,7 +258,7 @@ def _find_layered_operations(
         process_id,
         max_depth=1,
         classification_filters=[
-            ClassificationFilter("Category type", "processing", "exact"),
+            ClassificationFilter("Category type", "processing", MatchMode.EXACT),
         ],
     ).entries
     real = [e for e in ops if not e.name.startswith("[Dummy]")]
