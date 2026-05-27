@@ -795,7 +795,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaReferenceProductUnit :: Maybe Text -- Unit of reference product
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
-    , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type, surfaced flat in JSON (see NativeActivityType ToJSON instance)
+    , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type
     }
     deriving (Generic)
 
