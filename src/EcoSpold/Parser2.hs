@@ -196,7 +196,9 @@ ecoSpoldNativeType (Just code) special =
             , eatSpecialLabel = ecoSpoldSpecialActivityTypeLabel <$> special
             }
 
--- | ecospold2 activityType enum labels (v3 schema).
+-- | ecospold2 activityType enum labels (v3 schema). Unknown codes yield an
+-- explicit "Unknown (code N)" sentinel so a future spec extension or a
+-- parser bug is visible to consumers, not silently empty.
 ecoSpoldActivityTypeLabel :: Int -> Text
 ecoSpoldActivityTypeLabel = \case
     1 -> "Ordinary transforming activity"
@@ -207,9 +209,10 @@ ecoSpoldActivityTypeLabel = \case
     6 -> "Import activity"
     7 -> "Correction activity"
     8 -> "Market group"
-    _ -> ""
+    n -> "Unknown (code " <> T.pack (show n) <> ")"
 
--- | ecospold2 specialActivityType enum labels (v3 schema).
+-- | ecospold2 specialActivityType enum labels (v3 schema). Same unknown-code
+-- treatment as 'ecoSpoldActivityTypeLabel'.
 ecoSpoldSpecialActivityTypeLabel :: Int -> Text
 ecoSpoldSpecialActivityTypeLabel = \case
     0 -> "Default"
@@ -219,7 +222,7 @@ ecoSpoldSpecialActivityTypeLabel = \case
     4 -> "Combined production without byproducts"
     5 -> "Combined production"
     6 -> "Import activity"
-    _ -> ""
+    n -> "Unknown (code " <> T.pack (show n) <> ")"
 
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
