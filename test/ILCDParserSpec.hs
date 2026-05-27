@@ -267,6 +267,14 @@ spec = do
                 Nothing -> return ()
                 Just _ -> expectationFailure "expected Nothing when baseName missing"
 
+        it "captures <processType> element verbatim" $
+            fmap iprProcessType (parseProcessXML ilcdProcessWithProcessType)
+                `shouldBe` Just "Unit process, single operation"
+
+        it "leaves iprProcessType empty when <processType> is absent" $
+            fmap iprProcessType (parseProcessXML ilcdProcessWithClassification)
+                `shouldBe` Just ""
+
     describe "parseProcessXML exchange fields" $ do
         it "parses single exchange flow ref" $ do
             let Just raw = parseProcessXML ilcdProcessWithClassification
@@ -453,6 +461,35 @@ ilcdProcessNoClassification =
     \<referenceToReferenceFlow>0</referenceToReferenceFlow>\
     \</quantitativeReference>\
     \</processInformation>\
+    \<exchanges>\
+    \<exchange dataSetInternalID=\"0\">\
+    \<referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
+    \<exchangeDirection>Output</exchangeDirection>\
+    \<resultingAmount>1.0</resultingAmount>\
+    \</exchange>\
+    \</exchanges>\
+    \</processDataSet>"
+
+ilcdProcessWithProcessType :: BS.ByteString
+ilcdProcessWithProcessType =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+    \<processDataSet xmlns=\"http://lca.jrc.it/ILCD/Process\" \
+    \xmlns:common=\"http://lca.jrc.it/ILCD/Common\">\
+    \<processInformation>\
+    \<dataSetInformation>\
+    \<common:UUID>42345678-1234-1234-1234-123456789abc</common:UUID>\
+    \<name><baseName>Test Process With ProcessType</baseName></name>\
+    \</dataSetInformation>\
+    \<geography location=\"FR\"/>\
+    \<quantitativeReference>\
+    \<referenceToReferenceFlow>0</referenceToReferenceFlow>\
+    \</quantitativeReference>\
+    \</processInformation>\
+    \<modellingAndValidation>\
+    \<LCIMethodAndAllocation>\
+    \<processType>Unit process, single operation</processType>\
+    \</LCIMethodAndAllocation>\
+    \</modellingAndValidation>\
     \<exchanges>\
     \<exchange dataSetInternalID=\"0\">\
     \<referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\

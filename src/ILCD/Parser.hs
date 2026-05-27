@@ -45,6 +45,7 @@ data ILCDProcessRaw = ILCDProcessRaw
     , iprRefFlowIdx :: !Int -- dataSetInternalID of reference exchange
     , iprExchanges :: ![ILCDExchangeRaw]
     , iprClassifications :: !(M.Map Text Text)
+    , iprProcessType :: !Text -- ILCD <processType> element value (e.g. "Unit process, single operation"); "" when absent
     }
 
 {- | Update a comment slot with a newly-seen `<common:generalComment>`.
@@ -347,6 +348,7 @@ data ProcState = ProcState
     , psClassifications :: !(M.Map Text Text)
     , psPendingClassName :: !Text
     , psInClass :: !Bool
+    , psProcessType :: !Text -- ILCD <processType> element text (empty when absent)
     }
 
 parseProcessXML :: BS.ByteString -> Maybe ILCDProcessRaw
@@ -377,6 +379,7 @@ parseProcessXML bytes =
             , psClassifications = M.empty
             , psPendingClassName = ""
             , psInClass = False
+            , psProcessType = ""
             }
         )
         bytes of
@@ -470,6 +473,11 @@ parseProcessXML bytes =
                     }
         | isElement tag "classification" =
             s{psPendingClassName = "", psTextAccum = []}
+        | isElement tag "processType" && not (psInExchange s) && T.null (psProcessType s) =
+            -- ILCD <processType> lives at <processInformation><dataSetInformation><processType>.
+            -- Guard psInExchange just in case a future ILCD revision reuses the tag name
+            -- elsewhere; first occurrence wins to be deterministic.
+            s{psProcessType = accum s, psTextAccum = []}
         | isElement tag "exchange" =
             let ex =
                     ILCDExchangeRaw
@@ -501,6 +509,7 @@ parseProcessXML bytes =
                         , iprRefFlowIdx = psRefFlowIdx s
                         , iprExchanges = reverse (psExchanges s)
                         , iprClassifications = psClassifications s
+                        , iprProcessType = psProcessType s
                         }
 
 -- | Parse process files in parallel using worker pattern
@@ -556,7 +565,10 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
         , activityParamExprs = M.empty
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
-        , activityNativeType = Nothing
+        , activityNativeType =
+            if T.null (iprProcessType p)
+                then Nothing
+                else Just (ILCDProcessType{iptLabel = iprProcessType p})
         }
   where
     -- Look up the reference exchange's flow unit. Reference exchange is typically
