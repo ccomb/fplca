@@ -426,6 +426,7 @@ mkActivityAt loc =
         , activityParamExprs = M.empty
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
+        , activityNativeType = Nothing
         }
 
 mkRefExchangeAt :: Text -> Exchange

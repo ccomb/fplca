@@ -6,6 +6,7 @@ module EcoSpold.Common (
     decodeXmlEntities,
     bsToDouble,
     bsToInt,
+    bsToIntMaybe,
     isElement,
     distributeFiles,
     nonEmptyText,
@@ -48,6 +49,14 @@ bsToInt :: BS.ByteString -> Int
 bsToInt bs = case TR.decimal (bsToText bs) of
     Right (val, _) -> val
     Left _ -> error $ "Failed to parse int from: " ++ show bs
+
+-- | ByteString to Int conversion that returns Nothing on parse failure.
+-- Use for attribute values that are user-controlled or optional and where
+-- crashing the parser on malformed input is not acceptable.
+bsToIntMaybe :: BS.ByteString -> Maybe Int
+bsToIntMaybe bs = case TR.decimal (bsToText bs) of
+    Right (val, _) -> Just val
+    Left _ -> Nothing
 
 {- | Check if element name matches (with or without namespace prefix)
 Handles both "tagName" and "prefix:tagName" forms

@@ -109,6 +109,7 @@ mkActivity _ loc =
         , activityParamExprs = M.empty
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
+        , activityNativeType = Nothing
         }
 
 emptyIndexes :: Indexes

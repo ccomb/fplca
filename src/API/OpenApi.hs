@@ -63,6 +63,12 @@ instance ToSchema DatabaseSetupInfo where declareNamedSchema = genericDeclareNam
 
 -- PerturbedEntry's custom schema moved to API.Types alongside its data decl.
 
+-- ToSchema for NativeActivityType lives alongside its ToJSON/FromJSON
+-- siblings in src/API/Types.hs — moved out of this module so DerivingVia
+-- clauses for record types that contain a NativeActivityType field
+-- (ActivitySummary, ActivityForAPI) can resolve the instance at API.Types
+-- compile time without forming a circular dependency on API.OpenApi.
+
 instance ToSchema BinaryContent where
     declareNamedSchema _ =
         pure $

@@ -76,7 +76,7 @@ with Server(config="volca.toml") as srv:
     c = Client(base_url=srv.base_url, db="agribalyse-3.2", password=srv.password)
     plants = c.search_activities(name="wheat flour, at plant", limit=5)
     chain = c.get_supply_chain(plants[0].process_id, name="at farm")
-    score = c.get_impacts(plants[0].process_id, method_id=c.list_methods()[0]["id"])
+    score = c.get_impacts(plants[0].process_id, method_id=c.list_methods()[0].id)
 ```
 
 This example starts a local engine process from Python. `Server` reads `port` and `password` from the TOML config. The engine self-stops after `idle_timeout` seconds without traffic (default 5 min).
@@ -92,7 +92,7 @@ for db in c.list_databases():
     print(f"  {db.name} [{db.status}]: {db.activity_count} activities")
 
 for m in c.list_methods()[:5]:
-    print(f"  {m['id']}  {m['name']} [{m['unit']}]")
+    print(f"  {m.id}  {m.name} [{m.unit}]")
 ```
 
 Other listings: `c.list_classifications()` returns the classification systems and their values for the current database; `c.list_presets()` returns named filter presets configured in the engine. Use `c.load_database(name)` / `c.unload_database(name)` to manage memory if a database isn't auto-loaded.
@@ -153,11 +153,14 @@ Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[Consum
 
 ```python
 inv = c.get_inventory(plants[0].process_id, limit=20)
-# inv is a raw dict — see the OpenAPI spec for the full shape.
+for f in inv.flows[:5]:
+    print(f"  {f.quantity:.4g} {f.unit_name}  {f.flow_name}")
+print(f"  {inv.statistics.emission_quantity:.4g} emissions / "
+      f"{inv.statistics.resource_quantity:.4g} resources")
 # Substitutions are accepted: c.get_inventory(pid, substitutions=[...])
 ```
 
-The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead — same data, summarized.
+`InventoryResult` carries the typed `flows` list (one `InventoryFlow` per row) plus a `statistics` roll-up with per-direction totals and `top_categories`. The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead — same data, summarized.
 
 ## Compute environmental impacts (LCIA)
 
@@ -196,13 +199,19 @@ flows = c.get_contributing_flows(
     method_id="EF3.1-climate-change",
     limit=10,
 )
+for f in flows.top_flows:
+    print(f"  {f.share_pct:.1f}%  {f.flow_name}")
+
 acts = c.get_contributing_activities(
     plants[0].process_id,
     method_id="EF3.1-climate-change",
     limit=10,
 )
-# Both return raw dicts — the shape is documented in the OpenAPI spec.
+for a in acts.activities:
+    print(f"  {a.share_pct:.1f}%  {a.activity_name} ({a.location})")
 ```
+
+`ContributingFlows.top_flows` and `ContributingActivities.activities` are typed lists; both carriers also expose `method`, `unit`, and `total_score`. Note: the engine doesn't report a total count for these endpoints, so neither result derives a `has_more` flag — pass a generous `limit` and inspect the `share_pct` totals if you need exhaustive coverage.
 
 > *Which characterization factors does a method apply, and to which database flows?*
 
@@ -300,10 +309,38 @@ Pyvolca dispatches dynamically against the engine's OpenAPI spec, so it ships wi
 ## API reference
 
 <!-- BEGIN: api-reference -->
-
 _This reference is generated from the installed package. Run `python scripts/gen_api_md.py` to regenerate._
 
 ## Classes
+
+### `AggregateOp`
+
+How values are reduced within a bucket.
+
+``SUM_QUANTITY`` — sum of quantities (default). ``COUNT`` — number of
+matching entries. ``SHARE`` — each bucket's percentage of the filtered
+total (0..100).
+
+**Constructor**: `AggregateOp(*values)`
+
+### `AggregateScope`
+
+What the ``/aggregate`` primitive groups over.
+
+``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
+upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
+biosphere flows in the supply chain.
+
+**Constructor**: `AggregateScope(*values)`
+
+### `BioDirection`
+
+Direction of a biosphere exchange.
+
+``RESOURCE`` — extraction from the environment (input).
+``EMISSION`` — release to the environment (output).
+
+**Constructor**: `BioDirection(*values)`
 
 ### `Client`
 
@@ -324,35 +361,314 @@ supplier — fast::
 
 **Constructor**: `Client(base_url: str = 'http://localhost:8080', db: str = '', password: str = '')`
 
-**Methods**:
+#### Methods
 
-- `aggregate(process_id: str, scope: str, *, is_input: bool | None = None, max_depth: int | None = None, filter_name: str | None = None, filter_name_not: list[str] | str | None = None, filter_unit: str | None = None, preset: str | None = None, filter_classification: list[ClassificationFilter] | None = None, filter_target_name: str | None = None, filter_is_reference: bool | None = None, group_by: str | None = None, aggregate: str | None = None) -> AggregateResult` — SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
-- `call(operation_id: str, **kwargs) -> Any` — Escape hatch: call any OpenAPI operation by operationId.
-- `get_activity(process_id: str) -> ActivityDetail` — Fetch an activity's full detail.
-- `get_characterization(method_id: str, *, flow: str | None = None, limit: int | None = None) -> dict` — Look up characterization factors for a method matched to database flows.
-- `get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, include_edges: bool = False) -> ConsumersResponse` — Find all activities that transitively consume this supplier.
-- `get_contributing_activities(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> dict` — Which upstream activities drive a given impact category.
-- `get_contributing_flows(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> dict` — Which elementary flows drive a given impact category.
-- `get_flow_mapping(method_id: str) -> dict` — Get the characterization-factor-to-database-flow mapping coverage.
-- `get_impacts(process_id: str, method_id: str, *, collection: str = 'methods', top_flows: int | None = None, substitutions: list[dict] | None = None) -> LCIAResult` — Compute the LCIA score for a single impact category on an activity.
-- `get_impacts_batch(process_id: str, *, collection: str = 'methods', substitutions: list[dict] | None = None) -> LCIABatchResult` — Compute LCIA for every impact category in a collection, in one call.
-- `get_inputs(process_id: str) -> list[Exchange]` — Return the input exchanges of an activity (richer metadata than ``get_activity``).
-- `get_inventory(process_id: str, *, flow: str | None = None, limit: int | None = None, substitutions: list[dict] | None = None) -> dict` — Compute the life-cycle inventory (cumulative biosphere flows) for an activity.
-- `get_outputs(process_id: str) -> list[Exchange]` — Return the output exchanges of an activity. See :meth:`get_inputs` for notes.
-- `get_path_to(process_id: str, target: str) -> PathResult` — Find the shortest upstream path from process to first activity whose name matches target.
-- `get_supply_chain(process_id: str, *, name: str | None = None, location: str | None = None, limit: int | None = None, min_quantity: float | None = None, max_depth: int | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, substitutions: list[dict] | None = None, include_edges: bool | None = None) -> SupplyChain` — Get the flat supply chain of an activity.
-- `get_tree(process_id: str) -> dict` — Fetch the recursive activity tree used by the analysis SPA.
-- `get_version()` — Return server version info (version, gitHash, gitTag, buildTarget).
-- `list_classifications()` — List classification systems and their values for the current database.
-- `list_databases()` — List every database declared in the engine config.
-- `list_methods()` — List every LCIA method available in the engine.
-- `list_presets()` — List classification presets configured in this instance.
-- `load_database(db_name: str) -> dict` — Load a database into memory so it answers queries.
-- `refresh_stubs()` — Fetch the OpenAPI spec from the server and refresh the dispatch table.
-- `search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]` — Search activities in the current database.
-- `search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None) -> SearchResults[Flow]` — Search flows (technosphere products and biosphere flows) in the current database.
-- `unload_database(db_name: str) -> dict` — Unload a database from memory to free RAM. The disk copy is kept.
-- `use(db_name: str) -> 'Client'` — Return a new client targeting a different database (shares session).
+##### `Client.aggregate(process_id: str, scope: AggregateScope | str, *, is_input: bool | None = None, max_depth: int | None = None, filter_name: str | None = None, filter_name_not: list[str] | str | None = None, filter_unit: str | None = None, preset: str | None = None, filter_classification: list[ClassificationFilter] | None = None, filter_target_name: str | None = None, filter_is_reference: bool | None = None, group_by: str | None = None, aggregate: AggregateOp | str | None = None) -> AggregateResult`
+
+SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
+
+Args:
+    scope: :class:`AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
+        / ``BIOSPHERE``) or the equivalent wire string. Strings are
+        accepted for one-liner ergonomics but bypass static checking.
+    group_by: omit for a single-bucket result (just the totals).
+        Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
+        ``"unit"``, ``"location"``, ``"target_name"``,
+        ``"classification.<system>"``.
+    aggregate: :class:`AggregateOp` member or wire string
+        (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
+
+##### `Client.call(operation_id: str, **kwargs) -> Any`
+
+Escape hatch: call any OpenAPI operation by operationId.
+
+Returns the raw JSON (no dataclass wrapping). Use this for
+operations that don't have an ergonomic wrapper yet, or for new
+endpoints added after the installed pyvolca was released.
+
+##### `Client.get_activity(process_id: str) -> ActivityDetail`
+
+Fetch an activity's full detail.
+
+Returns a typed ActivityDetail. Use ``act.inputs`` / ``act.outputs`` /
+``act.technosphere_inputs`` to filter exchanges instead of walking
+``act.exchanges`` directly.
+
+##### `Client.get_characterization(method_id: str, *, flow: str | None = None, limit: int | None = None) -> CharacterizationResult`
+
+Look up characterization factors for a method matched to database flows.
+
+Returns a :class:`CharacterizationResult` carrying ``matches`` (total
+rows the filter selected) and ``shown`` (rows actually returned under
+``limit``). Check ``result.has_more`` to detect truncation.
+
+##### `Client.get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, include_edges: bool = False) -> ConsumersResponse`
+
+Find all activities that transitively consume this supplier.
+
+Args:
+    max_depth: Max hops from supplier. 1 = direct consumers only.
+    classification_filters: ClassificationFilter entries restricting
+        the results. Multiple filters are AND-combined by the server.
+        Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
+    include_edges: When True, the response carries every technosphere
+        edge whose endpoints are both reachable from the supplier.
+        Callers can walk these to reconstruct supplier→consumer paths
+        without a second ``get_path_to`` round-trip.
+
+Returns a :class:`ConsumersResponse` whose ``consumers`` attribute is
+a :class:`SearchResults[ConsumerResult]` (iterate it to walk every
+consumer across all pages) and whose ``edges`` attribute carries
+the traversal subgraph (empty by default).
+
+##### `Client.get_contributing_activities(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> ContributingActivities`
+
+Which upstream activities drive a given impact category.
+
+Same engine-side limitation as :meth:`get_contributing_flows`: no
+total exposed, so ``has_more`` cannot be derived. Inspect
+``share_pct`` totals to gauge coverage.
+
+##### `Client.get_contributing_flows(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> ContributingFlows`
+
+Which elementary flows drive a given impact category.
+
+Returns a :class:`ContributingFlows`. Caveat: the engine does not
+report the total flow count, so pyvolca cannot derive ``has_more``
+from the response. Pass a generous ``limit`` if you need exhaustive
+coverage and inspect ``share_pct`` totals.
+
+##### `Client.get_flow_mapping(method_id: str) -> FlowMapping`
+
+Get the characterization-factor-to-database-flow mapping coverage.
+
+:class:`FlowMapping.coverage_pct` summarises how many of the DB's
+biosphere flows the method has a CF for; ``flows`` is the per-flow
+breakdown including unmatched rows (``cf_value=None``).
+
+##### `Client.get_impacts(process_id: str, method_id: str, *, collection: str = 'methods', top_flows: int | None = None, substitutions: list[SubstitutionLike] | None = None) -> LCIAResult`
+
+Compute the LCIA score for a single impact category on an activity.
+
+Use :meth:`get_impacts_batch` to retrieve every category in a method
+collection at once (and any configured scoring sets).
+
+Args:
+    collection: Method collection name. Defaults to ``"methods"`` for
+        single-method calls; most engines expose methods under a
+        single collection.
+    top_flows: Max top contributing flows to return (default 5).
+
+##### `Client.get_impacts_batch(process_id: str, *, collection: str = 'methods', substitutions: list[SubstitutionLike] | None = None) -> LCIABatchResult`
+
+Compute LCIA for every impact category in a collection, in one call.
+
+The response carries the per-method :class:`LCIAResult` list plus any
+formula-based scoring sets declared in the engine config (PEF, ECS…).
+``scoring_indicators`` gives the per-variable breakdown of each
+scoring set, pre-multiplied by the set's ``displayMultiplier``.
+
+Uses a direct HTTP call: the batch endpoint has no operationId in the
+OpenAPI spec (the dispatcher primary is the single-method variant), so
+this wrapper bypasses ``_call`` and builds the URL itself.
+
+##### `Client.get_inputs(process_id: str) -> list[Exchange]`
+
+Return the input exchanges of an activity (richer metadata than ``get_activity``).
+
+Uses a direct HTTP call because ``/inputs`` has no operationId
+(it's a non-Resources auxiliary endpoint).
+
+##### `Client.get_inventory(process_id: str, *, flow: str | None = None, limit: int | None = None, substitutions: list[SubstitutionLike] | None = None) -> InventoryResult`
+
+Compute the life-cycle inventory (cumulative biosphere flows) for an activity.
+
+Returns an :class:`InventoryResult` with the per-elementary-flow
+totals scaled to one functional unit of the activity's reference
+product. Use :meth:`get_impacts` to apply a characterization method
+to the inventory; use :meth:`aggregate` with ``scope="biosphere"``
+for grouped views.
+
+Args:
+    flow: Substring filter on flow name.
+    limit: Cap on returned flow rows. (Server returns full inventory
+        otherwise — the engine doesn't paginate this endpoint.)
+    substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
+
+##### `Client.get_outputs(process_id: str) -> list[Exchange]`
+
+Return the output exchanges of an activity. See :meth:`get_inputs` for notes.
+
+##### `Client.get_path_to(process_id: str, target: str) -> PathResult`
+
+Find the shortest upstream path from process to first activity whose name matches target.
+
+Returns a PathResult whose path is ordered root → target. Each step
+includes cumulative_quantity, scaling_factor, and (except the root)
+local_step_ratio.
+
+##### `Client.get_supply_chain(process_id: str, *, name: str | None = None, location: str | None = None, limit: int | None = None, min_quantity: float | None = None, max_depth: int | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, substitutions: list[SubstitutionLike] | None = None, include_edges: bool | None = None) -> SupplyChain`
+
+Get the flat supply chain of an activity.
+
+Returns a :class:`SupplyChain`. Check ``result.has_more`` to detect
+when ``limit`` truncated ``entries`` below ``filtered_activities`` —
+further downstream analysis on a truncated chain would be wrong
+without flagging the gap.
+
+Args:
+    max_depth: Max hops from root. 1 = direct inputs only.
+    classification_filters: Restrict entries to those matching any
+        of the given ClassificationFilter triples. Multiple filters
+        are AND-combined by the server.
+    substitutions: When provided, the call is upgraded to POST and
+        the scaling vector is recomputed with the substituted
+        suppliers. Accepts :class:`Substitution` (preferred) or the
+        legacy ``{"from", "to", "consumer"}`` dict form.
+
+##### `Client.get_tree(process_id: str) -> dict`
+
+Fetch the recursive activity tree used by the analysis SPA.
+
+``/tree`` has no operationId in the OpenAPI spec — it's kept for the
+SPA's lazy-expanding graph widget and intentionally not exposed as
+a Resource. Included here as a direct HTTP call for scripts that
+need the same shape.
+
+##### `Client.get_version()`
+
+Return server build metadata: version, git hash/tag, build target.
+
+Uses a direct HTTP call — ``/api/v1/version`` has no operationId
+since it predates the Resources ADT.
+
+##### `Client.list_classifications()`
+
+List classification systems and their values for the current database.
+
+``ClassificationSystem.activity_count`` tells how widely each system
+is populated — useful for picking a filter dimension with enough
+signal.
+
+##### `Client.list_databases()`
+
+List every database declared in the engine config.
+
+The typed entries carry ``depends_on``, so callers can derive
+cross-DB dependency sets from declared topology rather than
+hardcoding allowlists.
+
+##### `Client.list_methods()`
+
+List every LCIA method available in the engine.
+
+Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
+``factor_count``, and the parent ``collection``. Pass ``m.id`` to
+:meth:`get_impacts` as ``method_id``.
+
+##### `Client.list_presets()`
+
+List classification presets configured in this instance.
+
+Each :class:`Preset` carries its ``filters`` (list of
+:class:`PresetFilter` triples). Apply by passing ``preset=p.name``
+to filtering endpoints.
+
+##### `Client.load_database(db_name: str) -> dict`
+
+Load a database into memory so it answers queries.
+
+Has no effect if the database is already loaded.
+
+##### `Client.refresh_stubs()`
+
+Fetch the OpenAPI spec from the server and refresh the dispatch table.
+
+Also regenerates the `.pyi` type stubs in the installed pyvolca
+package directory so IDE autocomplete reflects the current engine.
+Useful when the engine is upgraded without reinstalling pyvolca.
+
+##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
+
+Search activities in the current database.
+
+All filters are AND-combined and case-insensitive. ``name`` and
+``product`` match by substring unless ``exact=True``.
+
+Returns a paginated :class:`SearchResults` — iterate it to walk
+every match across all pages (subsequent pages fetched on demand),
+or use ``.page(n)`` for explicit page access. ``len(results)`` is
+the server-reported total across all pages.
+
+Args:
+    name: Substring (or exact match) on activity name.
+    geo: Geography code (``"FR"``, ``"GLO"``, ``"RoW"``…).
+    product: Substring on the reference product name.
+    preset: Apply a named classification preset configured in the engine.
+    classification: System name (``"ISIC rev.4 ecoinvent"``).
+    classification_value: Substring within that system's value.
+    page: 1-based page number. Must be paired with ``page_size`` —
+        offset cannot be derived from page alone.
+    page_size: Items per page (becomes the wire-level ``limit``).
+        Alone (no ``page``) means "page 1 with this size".
+    limit: Wire-level cap on returned items. Prefer ``page_size``.
+    offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
+    exact: When True, ``name`` and ``product`` are matched exactly.
+
+Returns:
+    :class:`SearchResults[Activity]` — iterable across all pages.
+
+##### `Client.search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None) -> SearchResults[Flow]`
+
+Search flows (technosphere products and biosphere flows) in the current database.
+
+Returns a paginated :class:`SearchResults[Flow]` — iterate to walk
+every match across all pages, or use ``.page(n)`` for explicit
+access. See :meth:`search_activities` for the pagination contract.
+
+Args:
+    query: Substring matched case-insensitively against flow names.
+    page / page_size: Web-style pagination; convert to wire-level
+        ``offset`` / ``limit``.
+    limit / offset: Wire-level escape hatch.
+
+##### `Client.unload_database(db_name: str) -> dict`
+
+Unload a database from memory to free RAM. The disk copy is kept.
+
+##### `Client.use(db_name: str) -> 'Client'`
+
+Return a new client targeting a different database.
+
+Shares the underlying HTTP session, dispatch table, and any other
+Client-level state with the original — only ``db`` is overridden.
+New fields added to :meth:`Client.__init__` propagate automatically
+(no manual mirror to keep in sync).
+
+### `DatabaseStatus`
+
+Lifecycle state of a database in the engine.
+
+``UNLOADED`` — declared in the engine config but not yet loaded.
+``PARTIALLY_LINKED`` — loaded, but some cross-DB flow references could
+not be resolved against currently-loaded dependencies.
+``LOADED`` — loaded and fully linked.
+
+Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
+serialises as the bare wire string.
+
+**Constructor**: `DatabaseStatus(*values)`
+
+### `MatchMode`
+
+How a :class:`ClassificationFilter` value is compared against the entry.
+
+``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
+substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
+and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
+string ``"exact"`` / ``"contains"``.
+
+**Constructor**: `MatchMode(*values)`
 
 ### `Server`
 
@@ -366,15 +682,46 @@ Usage::
 
 **Constructor**: `Server(config: str = 'volca.toml', port: int = 0, binary: str = 'volca')`
 
-**Properties**:
+#### Properties
 
-- `base_url` — (no docstring)
+##### `base_url`
 
-**Methods**:
+``http://localhost:<port>`` — pass to :class:`Client(base_url=…)`.
 
-- `is_alive()` — Health check — GET /api/v1/db, return True if 200.
-- `start(idle_timeout: int = 300, wait_timeout: int = 120) -> None` — Spawn the engine process if it is not already serving, and wait until ready.
-- `stop()` — Stop the server via shutdown endpoint, then terminate process.
+Always loopback: the managed server only listens locally.
+
+#### Methods
+
+##### `Server.is_alive()`
+
+Health check — GET /api/v1/db, return True if 200.
+
+##### `Server.start(idle_timeout: int = 300, wait_timeout: int = 120) -> None`
+
+Spawn the engine process if it is not already serving, and wait until ready.
+
+Args:
+    idle_timeout: Seconds without an HTTP request before the engine
+        shuts itself down. Default 5 min.
+    wait_timeout: How long to poll for the server to become healthy
+        before raising :class:`TimeoutError`.
+
+No-op if a healthy server is already reachable on ``base_url``.
+
+##### `Server.stop()`
+
+Stop the server via shutdown endpoint, then terminate process.
+
+### `TechRole`
+
+Role a technosphere exchange plays within its host activity.
+
+``REFERENCE_PRODUCT`` — the activity's reference output product.
+``COPRODUCT`` — a secondary output (in allocated activities).
+``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
+``INPUT`` — any other technosphere input.
+
+**Constructor**: `TechRole(*values)`
 
 ## Exceptions
 
@@ -392,6 +739,17 @@ Error from the VoLCA API.
 
 ### `Activity`
 
+One activity in a database — the row returned by /activities search.
+
+``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
+and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
+:meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …). ``name`` is
+the activity name (e.g. ``"wheat flour, at plant"``); ``product`` is the
+reference output product (e.g. ``"wheat flour"``); ``product_amount`` and
+``product_unit`` describe the functional unit (typically ``1.0`` of
+``"kg"`` / ``"MJ"`` / etc.). ``location`` is the geography code
+(``"FR"``, ``"GLO"``, ``"RoW"``…).
+
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
@@ -400,6 +758,22 @@ Error from the VoLCA API.
 | `product` | `str` | — |
 | `product_amount` | `float` | — |
 | `product_unit` | `str` | — |
+
+### `ActivityContribution`
+
+One upstream activity's contribution to an LCIA score.
+
+Returned in :class:`ContributingActivities.activities`. ``share_pct`` is
+the percentage of the total impact this activity contributes (0..100).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `process_id` | `str` | — |
+| `activity_name` | `str` | — |
+| `product_name` | `str` | — |
+| `location` | `str` | — |
+| `contribution` | `float` | — |
+| `share_pct` | `float` | — |
 
 ### `ActivityDetail`
 
@@ -467,7 +841,7 @@ was set; empty otherwise.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `scope` | `str` | — |
+| `scope` | `AggregateScope` | — |
 | `filtered_total` | `float` | — |
 | `filtered_unit` | `str \| None` | — |
 | `filtered_count` | `int` | — |
@@ -483,38 +857,76 @@ An exchange with the environment (resource extraction or emission).
 | `compartment` | `Compartment \| None` | — |
 | `amount` | `float` | — |
 | `unit` | `str` | — |
-| `direction` | `Literal['Resource', 'Emission']` | — |
+| `direction` | `BioDirection` | — |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
 | `is_waste` | `bool` | False |
 
+### `CharacterizationFactor`
+
+One characterization factor matched against a database biosphere flow.
+
+Returned in the ``factors`` list of :class:`CharacterizationResult`.
+``match_strategy`` records how the CF was matched to the DB flow
+(``"uuid"``, ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method_flow_name` | `str` | — |
+| `cf_value` | `float` | — |
+| `cf_unit` | `str` | — |
+| `direction` | `str` | — |
+| `db_flow_name` | `str` | — |
+| `flow_id` | `str` | — |
+| `flow_unit` | `str` | — |
+| `category` | `str` | — |
+| `match_strategy` | `str` | — |
+| `compartment` | `str \| None` | None |
+
+### `CharacterizationResult`
+
+Result of :meth:`Client.get_characterization`.
+
+The engine truncates ``factors`` to ``shown`` rows (server-side ``limit``).
+``matches`` is the unfiltered total: use :attr:`has_more` to detect when
+the slice is incomplete.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method` | `str` | — |
+| `unit` | `str` | — |
+| `matches` | `int` | — |
+| `shown` | `int` | — |
+| `factors` | `list[CharacterizationFactor]` | list() |
+
 ### `ClassificationFilter`
 
 Filter a supply-chain/consumers query by a classification (system, value, mode).
-Frozen and hashable. The constructor accepts either the enum member or its
-string form — the field is normalised to `MatchMode` after construction:
 
-```python
-ClassificationFilter("Category", "Agricultural\\Food", MatchMode.EXACT)
-ClassificationFilter("Category", "Agricultural\\Food", "exact")  # equivalent
-```
-
+Matches one classification system entry, e.g.
+``ClassificationFilter("Category", "Agricultural\\Food", "exact")`` or
+``ClassificationFilter("Category", "Agricultural\\Food", MatchMode.EXACT)``.
 Multiple filters are AND-combined by the server.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `system` | `str` | — |
 | `value` | `str` | — |
-| `mode` | `MatchMode` (accepts `MatchMode \| Literal["exact","contains"]` at construction) | `MatchMode.CONTAINS` |
+| `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
 
-### `MatchMode`
+### `ClassificationSystem`
 
-Sum type for `ClassificationFilter.mode`. `MatchMode.EXACT` is
-case-insensitive equality; `MatchMode.CONTAINS` is case-insensitive substring.
-Pyright autocompletes both `MatchMode.EXACT` and the literal `"exact"`, and
-rejects typos (`"exct"`, `"Exact"`) statically. Inherits from `str`, so
-`json.dumps(MatchMode.EXACT)` and `dataclasses.asdict(filter)["mode"]` both
-serialise as the bare string `"exact"`.
+One classification system declared by a database.
+
+``values`` are the distinct entries in this system; ``activity_count`` is
+how many activities carry at least one classification under this system
+(helps callers pick a worthwhile filter dimension).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `name` | `str` | — |
+| `values` | `list[str]` | list() |
+| `activity_count` | `int` | 0 |
 
 ### `Compartment`
 
@@ -558,6 +970,37 @@ when ``include_edges=True``.
 | `consumers` | `SearchResults[ConsumerResult]` | — |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
+### `ContributingActivities`
+
+Top upstream activities driving an LCIA score.
+
+Same engine-side limitation as :class:`ContributingFlows`: the server
+reports no total, so pyvolca cannot derive ``has_more``. Pass a generous
+``limit`` and inspect ``share_pct`` if exhaustive coverage matters.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method` | `str` | — |
+| `unit` | `str` | — |
+| `total_score` | `float` | — |
+| `activities` | `list[ActivityContribution]` | list() |
+
+### `ContributingFlows`
+
+Top elementary flows driving an LCIA score.
+
+Note: the engine does not report a total — ``top_flows`` is whatever the
+server returned under ``limit``, but pyvolca cannot tell whether more
+flows were truncated. If you need exhaustive coverage, pass a generous
+``limit`` and inspect ``share_pct`` totals.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method` | `str` | — |
+| `unit` | `str` | — |
+| `total_score` | `float` | — |
+| `top_flows` | `list[FlowContribution]` | list() |
+
 ### `DatabaseInfo`
 
 One entry of :meth:`Client.list_databases`.
@@ -570,7 +1013,7 @@ endpoint. Derived from the engine's declared topology, not runtime state.
 |-------|------|---------|
 | `name` | `str` | — |
 | `display_name` | `str` | — |
-| `status` | `str` | — |
+| `status` | `DatabaseStatus` | — |
 | `path` | `str` | — |
 | `load_at_startup` | `bool` | False |
 | `is_uploaded` | `bool` | False |
@@ -611,6 +1054,40 @@ Emitted inside ``LCIAResult.top_contributors``.
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
 
+### `FlowMapping`
+
+CF-coverage report for one method against the current database.
+
+``matched_flows / total_flows`` is the coverage ratio: how many of the
+database's biosphere flows have a CF in this method. Mirrors the engine
+response of :meth:`Client.get_flow_mapping`.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method_name` | `str` | — |
+| `method_unit` | `str` | — |
+| `total_flows` | `int` | — |
+| `matched_flows` | `int` | — |
+| `flows` | `list[FlowMappingEntry]` | list() |
+
+### `FlowMappingEntry`
+
+One DB biosphere flow and the CF (if any) assigned to it.
+
+``cf_value`` is ``None`` when this DB flow has no characterization factor
+in the method — that flow contributes 0 to the score for the method.
+``match_strategy`` records how the mapping was resolved (``"uuid"``,
+``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow_id` | `str` | — |
+| `flow_name` | `str` | — |
+| `flow_category` | `str` | — |
+| `cf_value` | `float \| None` | None |
+| `cf_flow_name` | `str \| None` | None |
+| `match_strategy` | `str \| None` | None |
+
 ### `Installed`
 
 Result of :func:`download`.
@@ -621,6 +1098,61 @@ Result of :func:`download`.
 | `data_dir` | `Path` | — |
 | `version` | `str` | — |
 | `data_version` | `str` | — |
+
+### `InventoryFlow`
+
+One row of an inventory: a biosphere flow scaled to the functional unit.
+
+``is_emission`` distinguishes outputs (releases) from inputs (resource
+extraction). ``flow_id`` is the database UUID; ``compartment`` is the
+medium label (e.g. ``"air/urban air"``) when the source dataset declared
+one. ``category`` is the engine-normalised category used for grouping.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow_id` | `str` | — |
+| `flow_name` | `str` | — |
+| `quantity` | `float` | — |
+| `unit_name` | `str` | — |
+| `is_emission` | `bool` | — |
+| `category` | `str` | — |
+| `compartment` | `str \| None` | None |
+
+### `InventoryResult`
+
+Life-cycle inventory of an activity: cumulative biosphere flows.
+
+Returned by :meth:`Client.get_inventory`. The engine does not paginate —
+``flows`` is the full inventory (filtered by ``flow=`` substring when
+requested). ``statistics`` carries the per-direction roll-ups and the
+most-populated categories.
+
+``root`` is the activity the inventory was computed for. ``total_flows``,
+``emission_flows``, ``resource_flows`` mirror the engine's metadata block.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `root` | `Activity` | — |
+| `total_flows` | `int` | — |
+| `emission_flows` | `int` | — |
+| `resource_flows` | `int` | — |
+| `flows` | `list[InventoryFlow]` | — |
+| `statistics` | `InventoryStatistics` | — |
+
+### `InventoryStatistics`
+
+Roll-up totals of an inventory result.
+
+``emission_quantity`` and ``resource_quantity`` are sums by direction;
+``total_quantity`` is the sum of absolute values. ``top_categories``
+lists ``(category_name, flow_count)`` pairs ordered by frequency.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `total_quantity` | `float` | — |
+| `emission_quantity` | `float` | — |
+| `resource_quantity` | `float` | — |
+| `top_categories` | `list[tuple[str, int]]` | list() |
 
 ### `LCIABatchResult`
 
@@ -668,6 +1200,23 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 | `weighted_score` | `float \| None` | None |
 | `top_contributors` | `list[FlowContribution]` | list() |
 
+### `Method`
+
+One LCIA method, returned by :meth:`Client.list_methods`.
+
+Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
+is the parent method collection (e.g. ``"ef-31"``) — load it with
+:meth:`Client.load_method_collection` if not already loaded.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `id` | `str` | — |
+| `name` | `str` | — |
+| `category` | `str` | — |
+| `unit` | `str` | — |
+| `factor_count` | `int` | — |
+| `collection` | `str` | — |
+
 ### `PathResult`
 
 Shortest upstream path from a root process to a matching activity.
@@ -696,6 +1245,30 @@ the engine's stripLowerPrefix transform.
 | `scaling_factor` | `float` | — |
 | `local_step_ratio` | `float \| None` | None |
 
+### `Preset`
+
+A named classification preset declared in the engine config.
+
+Apply by passing ``preset=preset.name`` to filtering endpoints (the engine
+expands it server-side into the ``filters`` triples).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `name` | `str` | — |
+| `label` | `str` | — |
+| `description` | `str \| None` | — |
+| `filters` | `list[PresetFilter]` | list() |
+
+### `PresetFilter`
+
+One filter triple inside a :class:`Preset`.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `system` | `str` | — |
+| `value` | `str` | — |
+| `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
+
 ### `ScoringIndicator`
 
 One per-variable entry inside ``LCIABatchResult.scoring_indicators``.
@@ -722,6 +1295,10 @@ Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
 ``search_time_ms``) mirror the server type exactly. Page-style helpers
 (``page_size``, ``page(n)``) are client conveniences computed from them.
 
+Pages fetched during iteration are cached on the instance — re-iterating
+replays the cache without hitting the server. Wrap in ``list(...)`` to
+materialise eagerly if you prefer.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `results` | `list[~T]` | — |
@@ -730,10 +1307,53 @@ Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
 | `limit` | `int` | — |
 | `has_more` | `bool` | — |
 | `search_time_ms` | `float` | — |
-| `_fetch` | `Optional[Callable[[int, int], dict]]` | None |
+| `_fetch` | `Optional[Callable[[int, int \| None], dict]]` | None |
 | `_parse` | `Optional[Callable[[dict], ~T]]` | None |
+| `_fetched` | `list[~T]` | list() |
+| `_exhausted` | `bool` | False |
+
+### `ServerVersion`
+
+Server build metadata returned by :meth:`Client.get_version`.
+
+``git_tag`` is None for untagged dev builds. ``build_target`` names the
+platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `version` | `str` | — |
+| `git_hash` | `str` | — |
+| `git_tag` | `str \| None` | — |
+| `build_target` | `str` | — |
+
+### `Substitution`
+
+Replace one supplier with another in the upstream supply chain.
+
+All three fields are process_ids. ``consumer`` identifies which downstream
+consumer's input to rewrite (substitutions are scoped, not global) — the
+same upstream supplier can be replaced by different alternatives in
+different parts of the tree.
+
+Frozen so callers can put it in a set / dict key and re-use the same
+substitution across multiple calls without aliasing risk.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `from_pid` | `str` | — |
+| `to_pid` | `str` | — |
+| `consumer` | `str` | — |
 
 ### `SupplyChain`
+
+Flat supply chain of an activity.
+
+``total_activities`` is the unfiltered upstream count; ``filtered_activities``
+is what remains after the server applies ``classification_filters`` /
+``min_quantity`` / ``preset``. ``entries`` is the slice the server actually
+returned — it may be shorter than ``filtered_activities`` when ``limit``
+truncates. Use :attr:`has_more` to detect that case rather than comparing
+lengths by hand.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -755,6 +1375,16 @@ Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
 
 ### `SupplyChainEntry`
 
+One activity in a :class:`SupplyChain.entries` list.
+
+``quantity`` is the cumulative amount of this activity's reference
+product consumed per functional unit of the root activity, in ``unit``.
+``scaling_factor`` is the multiplier the solver applied to this
+activity to produce ``quantity`` — i.e. ``quantity = ref_output * scaling_factor``.
+``classifications`` mirrors the producing activity's classifications
+(ISIC, CPC, Category, …) so callers can filter by taxonomy without a
+second :meth:`Client.get_activity` round trip.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
@@ -775,7 +1405,7 @@ producing activity's classifications describe the product taxonomy.
 | `flow_name` | `str` | — |
 | `amount` | `float` | — |
 | `unit` | `str` | — |
-| `role` | `Literal['ReferenceProduct', 'Coproduct', 'ReferenceInput', 'Input']` | — |
+| `role` | `TechRole` | — |
 | `target_activity` | `str \| None` | — |
 | `target_location` | `str \| None` | — |
 | `target_process_id` | `str \| None` | — |
@@ -840,11 +1470,6 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
-
-### `TechRole`
-
-Type alias: `Literal['ReferenceProduct', 'Coproduct', 'ReferenceInput', 'Input']`.
-
 
 <!-- END: api-reference -->
 

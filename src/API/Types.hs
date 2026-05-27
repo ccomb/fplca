@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -15,7 +16,7 @@ import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import qualified Data.Map as M
-import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), declareSchemaRef, enum_, format, properties, required, type_)
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), declareSchemaRef, enum_, format, nullable, properties, required, type_)
 import qualified Data.OpenApi.Lens as OA
 import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
@@ -23,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -180,6 +181,7 @@ data ActivitySummary = ActivitySummary
     , prsProductUnit :: Text -- Reference product unit name
     , prsAllocationPercent :: Maybe Double -- SimaPro coproduct allocation (%, 0..100); Nothing for non-allocated bases
     , prsAllocationFormula :: Maybe Text -- Raw SimaPro allocation formula; Nothing if purely numeric
+    , prsNativeType :: Maybe NativeActivityType -- Source-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source lacks the field
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivitySummary)
@@ -943,6 +945,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaReferenceProductUnit :: Maybe Text -- Unit of reference product
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
+    , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityForAPI)
@@ -1072,6 +1075,123 @@ data AggregationGroup = AggregationGroup
 -- Sum-only types (NodeType, EdgeType, FlowRole) keep default derivation.
 -- ToJSON / FromJSON / ToSchema for SearchResults a are standalone-derived
 -- alongside the data declaration above (line ~169).
+-- ConsumerResult, ConsumersResponse, ClassificationEntryInfo,
+-- ClassificationPresetInfo, ClassificationSystem, Aggregation,
+-- AggregationGroup, ActivitySummary, FlowSearchResult, InventoryMetadata,
+-- InventoryStatistics, TreeExport, TreeMetadata, ExportNode now derive
+-- ToJSON / FromJSON via Stripped attached to their data declarations.
+
+{- | NativeActivityType is a sum type internally but serialises to a single
+flat record so MCP / pyvolca consumers see one uniform shape regardless of
+which source database produced the activity. Discriminator is the 'source'
+field; format-specific fields (code, special_*) are null when irrelevant.
+
+Hand-rolled (kept out of the Stripped DerivingVia path) because Stripped is
+for records only; this is a sum-of-records flattened to one wire record.
+-}
+instance ToJSON NativeActivityType where
+    toJSON = \case
+        EcoSpoldActivityType code label specCode specLabel ->
+            object
+                [ "source" .= ("ecospold2" :: Text)
+                , "label" .= label
+                , "code" .= code
+                , "special_code" .= specCode
+                , "special_label" .= specLabel
+                ]
+        SimaProProcessType label ->
+            object
+                [ "source" .= ("simapro" :: Text)
+                , "label" .= label
+                , "code" .= Null
+                , "special_code" .= Null
+                , "special_label" .= Null
+                ]
+        ILCDProcessType label ->
+            object
+                [ "source" .= ("ilcd" :: Text)
+                , "label" .= label
+                , "code" .= Null
+                , "special_code" .= Null
+                , "special_label" .= Null
+                ]
+    toEncoding = \case
+        EcoSpoldActivityType code label specCode specLabel ->
+            pairs
+                ( "source" .= ("ecospold2" :: Text)
+                    <> "label" .= label
+                    <> "code" .= code
+                    <> "special_code" .= specCode
+                    <> "special_label" .= specLabel
+                )
+        SimaProProcessType label ->
+            pairs
+                ( "source" .= ("simapro" :: Text)
+                    <> "label" .= label
+                    <> "code" .= Null
+                    <> "special_code" .= Null
+                    <> "special_label" .= Null
+                )
+        ILCDProcessType label ->
+            pairs
+                ( "source" .= ("ilcd" :: Text)
+                    <> "label" .= label
+                    <> "code" .= Null
+                    <> "special_code" .= Null
+                    <> "special_label" .= Null
+                )
+
+-- | Inverse of the ToJSON instance: discriminate on the @source@ field.
+instance FromJSON NativeActivityType where
+    parseJSON = withObject "NativeActivityType" $ \o -> do
+        src <- o .: "source"
+        label <- o .: "label"
+        case (src :: Text) of
+            "ecospold2" ->
+                EcoSpoldActivityType
+                    <$> o .: "code"
+                    <*> pure label
+                    <*> o .:? "special_code"
+                    <*> o .:? "special_label"
+            "simapro" -> pure (SimaProProcessType label)
+            "ilcd" -> pure (ILCDProcessType label)
+            other -> fail $ "Unknown NativeActivityType source: " <> T.unpack other
+
+-- | Wire schema mirrors the flat ToJSON shape: a single object with a
+-- 'source' discriminator and source-specific fields that are null when
+-- irrelevant. Co-located with the JSON instances above so that downstream
+-- DerivingVia clauses (e.g. ToSchema for ActivitySummary, ActivityForAPI)
+-- can resolve the instance without forming a circular dep on API.OpenApi.
+instance ToSchema NativeActivityType where
+    declareNamedSchema _ = do
+        let sourceEnum =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_ ?~ [toJSON ("ecospold2" :: Text), toJSON ("simapro" :: Text), toJSON ("ilcd" :: Text)]
+            labelSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+            nullableIntSchema =
+                mempty
+                    & type_ ?~ OpenApiInteger
+                    & nullable ?~ True
+            nullableTextSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & nullable ?~ True
+        pure $
+            NamedSchema (Just "NativeActivityType") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("source", Inline sourceEnum)
+                            , ("label", Inline labelSchema)
+                            , ("code", Inline nullableIntSchema)
+                            , ("special_code", Inline nullableIntSchema)
+                            , ("special_label", Inline nullableTextSchema)
+                            ]
+                    & required .~ ["source", "label"]
 instance ToJSON NodeType
 instance ToJSON EdgeType
 instance ToJSON FlowRole
