@@ -491,16 +491,30 @@ An exchange with the environment (resource extraction or emission).
 ### `ClassificationFilter`
 
 Filter a supply-chain/consumers query by a classification (system, value, mode).
+Frozen and hashable. The constructor accepts either the enum member or its
+string form — the field is normalised to `MatchMode` after construction:
 
-Matches one classification system entry (e.g. ("Category", "Agricultural\\Food",
-"exact")). Mode is "exact" (case-insensitive equality) or "contains" (substring).
+```python
+ClassificationFilter("Category", "Agricultural\\Food", MatchMode.EXACT)
+ClassificationFilter("Category", "Agricultural\\Food", "exact")  # equivalent
+```
+
 Multiple filters are AND-combined by the server.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `system` | `str` | — |
 | `value` | `str` | — |
-| `mode` | `str` | 'contains' |
+| `mode` | `MatchMode` (accepts `MatchMode \| Literal["exact","contains"]` at construction) | `MatchMode.CONTAINS` |
+
+### `MatchMode`
+
+Sum type for `ClassificationFilter.mode`. `MatchMode.EXACT` is
+case-insensitive equality; `MatchMode.CONTAINS` is case-insensitive substring.
+Pyright autocompletes both `MatchMode.EXACT` and the literal `"exact"`, and
+rejects typos (`"exct"`, `"Exact"`) statically. Inherits from `str`, so
+`json.dumps(MatchMode.EXACT)` and `dataclasses.asdict(filter)["mode"]` both
+serialise as the bare string `"exact"`.
 
 ### `Compartment`
 

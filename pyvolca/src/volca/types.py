@@ -3,6 +3,7 @@
 import dataclasses
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, ClassVar, Generic, Iterator, Literal, TypeVar, Union
 
 
@@ -299,18 +300,59 @@ class LCIABatchResult:
         )
 
 
-@dataclass
+class MatchMode(str, Enum):
+    """How a :class:`ClassificationFilter` value is compared against the entry.
+
+    ``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
+    substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
+    and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
+    string ``"exact"`` / ``"contains"``.
+    """
+
+    EXACT = "exact"
+    CONTAINS = "contains"
+
+
+MatchModeLike = Union[MatchMode, Literal["exact", "contains"]]
+"""Internal alias: a :class:`MatchMode` member or its literal string form.
+
+Pyright autocompletes both shapes and rejects typos (``"exct"``, ``"Exact"``)
+statically; the constructor normalises to :class:`MatchMode` at runtime."""
+
+
+@dataclass(init=False, frozen=True)
 class ClassificationFilter:
     """Filter a supply-chain/consumers query by a classification (system, value, mode).
 
-    Matches one classification system entry (e.g. ("Category", "Agricultural\\\\Food",
-    "exact")). Mode is "exact" (case-insensitive equality) or "contains" (substring).
+    Matches one classification system entry, e.g.
+    ``ClassificationFilter("Category", "Agricultural\\\\Food", "exact")`` or
+    ``ClassificationFilter("Category", "Agricultural\\\\Food", MatchMode.EXACT)``.
     Multiple filters are AND-combined by the server.
     """
 
     system: str
     value: str
-    mode: str = "contains"
+    mode: MatchMode = MatchMode.CONTAINS
+
+    def __init__(
+        self,
+        system: str,
+        value: str,
+        mode: MatchModeLike = MatchMode.CONTAINS,
+    ):
+        if isinstance(mode, MatchMode):
+            resolved = mode
+        else:
+            try:
+                resolved = MatchMode(mode)
+            except ValueError:
+                valid = ", ".join(repr(m.value) for m in MatchMode)
+                raise ValueError(
+                    f"mode must be one of {valid} (or a MatchMode member); got {mode!r}"
+                ) from None
+        object.__setattr__(self, "system", system)
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "mode", resolved)
 
 
 @dataclass
