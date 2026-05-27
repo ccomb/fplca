@@ -175,9 +175,11 @@ def readme_namespace() -> dict[str, Any]:
         Compartment,
         ConsumerResult,
         ConsumersResponse,
+        Flow,
         FlowContribution,
         LCIABatchResult,
         LCIAResult,
+        SearchResults,
         SupplyChain,
         SupplyChainEntry,
         TechnosphereExchange,
@@ -245,23 +247,24 @@ def readme_namespace() -> dict[str, Any]:
             ),
         ],
     )
+    consumer_b = ConsumerResult(
+        process_id=activity_b.process_id,
+        name="Sandwich bread, sliced, at plant",
+        location="FR",
+        product="bread",
+        product_amount=1.0,
+        product_unit="kg",
+        depth=1,
+    )
     consumers = ConsumersResponse(
-        consumers=[
-            ConsumerResult(
-                process_id=activity_b.process_id,
-                name="Sandwich bread, sliced, at plant",
-                location="FR",
-                product="bread",
-                product_amount=1.0,
-                product_unit="kg",
-                depth=1,
-            ),
-        ],
-        total=1,
-        offset=0,
-        limit=10,
-        has_more=False,
-        search_time_ms=0.5,
+        consumers=SearchResults(
+            results=[consumer_b],
+            total=1,
+            offset=0,
+            limit=10,
+            has_more=False,
+            search_time_ms=0.5,
+        ),
     )
     lcia_result = LCIAResult(
         method_id="EF3.1-climate-change",
@@ -303,10 +306,29 @@ def readme_namespace() -> dict[str, Any]:
     from volca import DatabaseInfo
 
     c = MagicMock(spec=Client)
-    c.search_activities.return_value = [activity_a, activity_b]
-    c.search_flows.return_value = [
-        {"flow_id": "ef-co2-fossil", "name": "Carbon dioxide, fossil", "unit": "kg", "category": "air"},
-    ]
+    c.search_activities.return_value = SearchResults(
+        results=[activity_a, activity_b],
+        total=2,
+        offset=0,
+        limit=20,
+        has_more=False,
+        search_time_ms=0.3,
+    )
+    c.search_flows.return_value = SearchResults(
+        results=[
+            Flow(
+                id="ef-co2-fossil",
+                name="Carbon dioxide, fossil",
+                category="air",
+                unit_name="kg",
+            ),
+        ],
+        total=1,
+        offset=0,
+        limit=50,
+        has_more=False,
+        search_time_ms=0.1,
+    )
     c.get_activity.return_value = activity_detail
     c.get_supply_chain.return_value = supply_chain
     c.get_consumers.return_value = consumers

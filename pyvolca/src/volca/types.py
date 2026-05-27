@@ -3,7 +3,7 @@
 import dataclasses
 import re
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal, Union
+from typing import Any, Callable, ClassVar, Generic, Iterator, Literal, TypeVar, Union
 
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
@@ -27,6 +27,114 @@ class FromJson:
     def from_json(cls, d: dict) -> Any:
         names = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in ((_to_snake(k), v) for k, v in d.items()) if k in names})
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class SearchResults(Generic[T]):
+    """Paginated wire envelope, mirrors Haskell ``SearchResults a``.
+
+    Carries one page of results plus pagination metadata. Iterating walks
+    every page lazily, fetching subsequent pages on demand via the
+    ``_fetch`` callback. ``len()`` returns ``total`` — the server-reported
+    count across *all* pages, not just the items currently held.
+
+    Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
+    ``search_time_ms``) mirror the server type exactly. Page-style helpers
+    (``page_size``, ``page(n)``) are client conveniences computed from them.
+    """
+
+    results: list[T]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+    search_time_ms: float
+
+    # Page fetcher: (offset, limit) -> raw JSON dict in the SearchResults
+    # wire shape. None for detached envelopes (e.g. test fixtures); .page()
+    # then raises and iteration stops after the in-memory page.
+    _fetch: Callable[[int, int], dict] | None = field(default=None, repr=False, compare=False)
+    _parse: Callable[[dict], T] | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def page_size(self) -> int:
+        """Server-applied limit (page size for further fetches)."""
+        return self.limit
+
+    def __len__(self) -> int:
+        return self.total
+
+    def __getitem__(self, i: int) -> T:
+        return self.results[i]
+
+    def __iter__(self) -> Iterator[T]:
+        """Yield items across all pages, fetching subsequent pages on demand.
+
+        First yields the items already held (page returned by the original
+        call). Then, while ``has_more`` is true, fetches the next page and
+        yields its items. Re-iterating triggers re-fetching pages 2..N —
+        wrap in ``list(...)`` if you need a stable snapshot.
+        """
+        yield from self.results
+        if not self.has_more or self._fetch is None or self._parse is None:
+            return
+        offset = self.offset + len(self.results)
+        limit = self.limit
+        while True:
+            raw = self._fetch(offset, limit)
+            items = [self._parse(x) for x in raw.get("results", [])]
+            yield from items
+            if not raw.get("hasMore", False):
+                return
+            offset = raw.get("offset", offset) + len(items)
+
+    def page(self, n: int, *, page_size: int | None = None) -> "SearchResults[T]":
+        """Fetch a specific page (1-based). Returns a fresh SearchResults.
+
+        ``page_size`` overrides the current ``limit`` for the fetched page;
+        the returned envelope's ``limit`` reflects what the server actually
+        applied.
+        """
+        if n < 1:
+            raise ValueError(f"page must be >= 1, got {n}")
+        if self._fetch is None or self._parse is None:
+            raise RuntimeError(
+                "SearchResults has no fetcher attached — cannot fetch additional pages. "
+                "This SearchResults was likely constructed in-memory (e.g. a test fixture)."
+            )
+        ps = page_size if page_size is not None else self.limit
+        offset = (n - 1) * ps
+        raw = self._fetch(offset, ps)
+        return SearchResults.from_raw(raw, parse=self._parse, fetch=self._fetch)
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: dict,
+        *,
+        parse: Callable[[dict], T],
+        fetch: Callable[[int, int], dict] | None = None,
+    ) -> "SearchResults[T]":
+        """Build from the wire envelope.
+
+        Wire keys: ``results``, ``total``, ``offset``, ``limit``, ``hasMore``,
+        ``searchTimeMs``. ``fetch`` is the callback used by iteration and
+        ``page(n)`` to retrieve further pages; omit for detached envelopes.
+        """
+        items = [parse(x) for x in raw.get("results", [])]
+        return cls(
+            results=items,
+            total=raw.get("total", len(items)),
+            offset=raw.get("offset", 0),
+            limit=raw.get("limit", len(items)),
+            has_more=raw.get("hasMore", False),
+            search_time_ms=raw.get("searchTimeMs", 0.0),
+            _fetch=fetch,
+            _parse=parse,
+        )
 
 
 @dataclass
@@ -183,6 +291,22 @@ class Activity(FromJson):
 
 
 @dataclass
+class Flow(FromJson):
+    """A technosphere product or biosphere flow as returned by /flows.
+
+    Mirrors the server's :code:`FlowSearchResult`. ``synonyms`` maps
+    language code → list of synonym strings (empty when the database
+    carries no synonym index).
+    """
+
+    id: str
+    name: str
+    category: str
+    unit_name: str
+    synonyms: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
 class ConsumerResult(FromJson):
     """Activity that consumes a given supplier, with BFS depth."""
     process_id: str
@@ -287,26 +411,39 @@ class ConsumersResponse:
     """Reverse supply chain (/consumers) — paginated consumer list plus
     optional edge set. Mirrors :class:`SupplyChain` so callers have a
     uniform {entries, edges} shape in both traversal directions.
-    ``edges`` is populated only when ``include_edges=True``.
+
+    ``consumers`` is a :class:`SearchResults[ConsumerResult]` — iterate it
+    to walk every consumer across all pages. ``edges`` is populated only
+    when ``include_edges=True``.
     """
-    consumers: list[ConsumerResult]
-    total: int
-    offset: int
-    limit: int
-    has_more: bool
-    search_time_ms: float
+    consumers: "SearchResults[ConsumerResult]"
     edges: list[SupplyChainEdge] = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, d: dict) -> "ConsumersResponse":
-        results = d["results"]
+    def from_json(
+        cls,
+        d: dict,
+        *,
+        fetch: Callable[[int, int | None], dict] | None = None,
+    ) -> "ConsumersResponse":
+        """Parse the /consumers wire envelope.
+
+        ``fetch`` is a page fetcher returning the inner ``results`` envelope
+        for ``(offset, limit)`` — used by ``SearchResults`` for lazy
+        iteration. The client wires this so users get pagination for free;
+        callers building ConsumersResponse manually (e.g. tests) can omit
+        it and the resulting SearchResults is "detached" (one page only).
+        """
+        inner_fetch: Callable[[int, int | None], dict] | None
+        if fetch is None:
+            inner_fetch = None
+        else:
+            def inner_fetch(o: int, l: int | None) -> dict:
+                return fetch(o, l)["results"]
         return cls(
-            consumers=[ConsumerResult.from_json(c) for c in results["results"]],
-            total=results["total"],
-            offset=results["offset"],
-            limit=results["limit"],
-            has_more=results["hasMore"],
-            search_time_ms=results.get("searchTimeMs", 0.0),
+            consumers=SearchResults.from_raw(
+                d["results"], parse=ConsumerResult.from_json, fetch=inner_fetch,
+            ),
             edges=[SupplyChainEdge.from_json(e) for e in d.get("edges", [])],
         )
 

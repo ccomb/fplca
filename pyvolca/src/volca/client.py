@@ -52,9 +52,11 @@ from .types import (
     ConsumersResponse,
     DatabaseInfo,
     Exchange,
+    Flow,
     LCIABatchResult,
     LCIAResult,
     PathResult,
+    SearchResults,
     SupplyChain,
     parse_exchange_detail,
 )
@@ -120,6 +122,38 @@ def _format_query_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_format_query_value(v) for v in value]
     return str(value)
+
+
+def _resolve_page_args(
+    page: int | None,
+    page_size: int | None,
+    limit: int | None,
+    offset: int | None,
+) -> tuple[int | None, int]:
+    """Reconcile the page/page_size convenience kwargs with wire-level limit/offset.
+
+    Returns ``(wire_limit, wire_offset)``. ``wire_limit`` may be None — that
+    leaves it off the request entirely so the engine applies its own
+    default page size (matching what the web UI gets).
+
+    Raises VoLCAError if both pagination styles are mixed in a way that
+    would silently lose user intent.
+    """
+    page_style = page is not None or page_size is not None
+    wire_style = offset is not None  # bare `limit=N` is just a cap, not pagination
+    if page_style and wire_style:
+        raise VoLCAError(
+            "Mix of page-style (page=, page_size=) and wire-style (offset=) "
+            "pagination kwargs. Use one or the other."
+        )
+    if page is not None and page < 1:
+        raise VoLCAError(f"page must be >= 1, got {page}")
+    if page_size is not None and page_size < 1:
+        raise VoLCAError(f"page_size must be >= 1, got {page_size}")
+    if page_style:
+        ps = page_size if page_size is not None else 20  # mirror engine default
+        return ps, ((page or 1) - 1) * ps
+    return limit, offset or 0
 
 
 def _substitution_body(substitutions: list[dict]) -> dict:
@@ -496,14 +530,21 @@ class Client:
         preset: str | None = None,
         classification: str | None = None,
         classification_value: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
         limit: int | None = None,
-        offset: int = 0,
+        offset: int | None = None,
         exact: bool = False,
-    ) -> list[Activity]:
+    ) -> SearchResults[Activity]:
         """Search activities in the current database.
 
         All filters are AND-combined and case-insensitive. ``name`` and
         ``product`` match by substring unless ``exact=True``.
+
+        Returns a paginated :class:`SearchResults` — iterate it to walk
+        every match across all pages (subsequent pages fetched on demand),
+        or use ``.page(n)`` for explicit page access. ``len(results)`` is
+        the server-reported total across all pages.
 
         Args:
             name: Substring (or exact match) on activity name.
@@ -512,38 +553,62 @@ class Client:
             preset: Apply a named classification preset configured in the engine.
             classification: System name (``"ISIC rev.4 ecoinvent"``).
             classification_value: Substring within that system's value.
+            page: 1-based page number; combined with ``page_size`` to derive
+                the wire-level ``offset``. Mirrors the web UI's pagination.
+            page_size: Items per page (becomes the wire-level ``limit``).
+                Defaults to the engine's own default (20) when omitted.
+            limit: Wire-level cap on returned items. Prefer ``page_size``.
+            offset: Wire-level starting index. Prefer ``page``.
             exact: When True, ``name`` and ``product`` are matched exactly.
 
         Returns:
-            List of :class:`Activity`. Empty list if no match.
+            :class:`SearchResults[Activity]` — iterable across all pages.
         """
-        raw = self._call(
-            "search_activities",
+        wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
+        common: dict[str, Any] = dict(
             name=name,
             geo=geo,
             product=product,
             preset=preset,
             classification=classification,
             classification_value=classification_value,
-            limit=limit,
-            offset=offset,
             exact=exact,
         )
-        return [Activity.from_json(a) for a in raw["results"]]
 
-    def search_flows(self, query: str | None = None, *, limit: int | None = None) -> list[dict]:
+        def fetch(o: int, l: int | None) -> dict:
+            return self._call("search_activities", **common, limit=l, offset=o)
+
+        raw = fetch(wire_offset, wire_limit)
+        return SearchResults.from_raw(raw, parse=Activity.from_json, fetch=fetch)
+
+    def search_flows(
+        self,
+        query: str | None = None,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> SearchResults[Flow]:
         """Search flows (technosphere products and biosphere flows) in the current database.
+
+        Returns a paginated :class:`SearchResults[Flow]` — iterate to walk
+        every match across all pages, or use ``.page(n)`` for explicit
+        access. See :meth:`search_activities` for the pagination contract.
 
         Args:
             query: Substring matched case-insensitively against flow names.
-            limit: Cap on returned results.
-
-        Returns:
-            List of raw flow dicts (no typed wrapper yet — see
-            ``flow_id``, ``name``, ``unit``, ``category`` keys).
+            page / page_size: Web-style pagination; convert to wire-level
+                ``offset`` / ``limit``.
+            limit / offset: Wire-level escape hatch.
         """
-        raw = self._call("search_flows", q=query, limit=limit)
-        return raw["results"]
+        wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
+
+        def fetch(o: int, l: int | None) -> dict:
+            return self._call("search_flows", q=query, limit=l, offset=o)
+
+        raw = fetch(wire_offset, wire_limit)
+        return SearchResults.from_raw(raw, parse=Flow.from_json, fetch=fetch)
 
     def list_classifications(self) -> list[dict]:
         """List classification systems and their values for the current database."""
@@ -700,7 +765,10 @@ class Client:
         product: str | None = None,
         preset: str | None = None,
         classification_filters: list[ClassificationFilter] | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
         limit: int | None = None,
+        offset: int | None = None,
         max_depth: int | None = None,
         include_edges: bool = False,
     ) -> ConsumersResponse:
@@ -717,14 +785,15 @@ class Client:
                 without a second ``get_path_to`` round-trip.
 
         Returns a :class:`ConsumersResponse` whose ``consumers`` attribute is
-        the paginated consumer list and whose ``edges`` attribute carries the
-        traversal subgraph (empty by default).
+        a :class:`SearchResults[ConsumerResult]` (iterate it to walk every
+        consumer across all pages) and whose ``edges`` attribute carries
+        the traversal subgraph (empty by default).
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]
         classification_modes = [f.mode for f in classification_filters or []]
-        raw = self._call(
-            "get_consumers",
+        wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
+        common: dict[str, Any] = dict(
             process_id=process_id,
             name=name,
             location=location,
@@ -733,11 +802,15 @@ class Client:
             classification=classifications or None,
             classification_value=classification_values or None,
             classification_mode=classification_modes or None,
-            limit=limit,
             max_depth=max_depth,
             include_edges=include_edges,
         )
-        return ConsumersResponse.from_json(raw)
+
+        def fetch(o: int, l: int | None) -> dict:
+            return self._call("get_consumers", **common, limit=l, offset=o)
+
+        raw = fetch(wire_offset, wire_limit)
+        return ConsumersResponse.from_json(raw, fetch=fetch)
 
     def get_path_to(self, process_id: str, target: str) -> PathResult:
         """Find the shortest upstream path from process to first activity whose name matches target.

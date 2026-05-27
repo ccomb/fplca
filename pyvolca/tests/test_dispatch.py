@@ -145,6 +145,58 @@ class TestDispatcher:
         assert "geo" not in params
         assert "limit" not in params
 
+    def test_search_activities_page_kwargs_compute_offset(self, mocked_client, make_response):
+        """page=3 + page_size=20 must translate to offset=40, limit=20."""
+        client, session = mocked_client
+        session.get.return_value = make_response({"results": []})
+        client.search_activities(name="wheat", page=3, page_size=20)
+        params = dict(session.get.call_args[1]["params"])
+        assert params["limit"] == "20"
+        assert params["offset"] == "40"
+
+    def test_search_activities_returns_iterable_search_results(self, mocked_client, make_response):
+        """Iteration auto-fetches subsequent pages."""
+        from volca import SearchResults
+
+        client, session = mocked_client
+        page1 = {
+            "results": [
+                {"processId": "a", "name": "A", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+                {"processId": "b", "name": "B", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            ],
+            "total": 3,
+            "offset": 0,
+            "limit": 2,
+            "hasMore": True,
+            "searchTimeMs": 0.1,
+        }
+        page2 = {
+            "results": [
+                {"processId": "c", "name": "C", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            ],
+            "total": 3,
+            "offset": 2,
+            "limit": 2,
+            "hasMore": False,
+            "searchTimeMs": 0.1,
+        }
+        session.get.side_effect = [make_response(page1), make_response(page2)]
+        results = client.search_activities(page_size=2)
+        assert isinstance(results, SearchResults)
+        assert len(results) == 3
+        assert results.page_size == 2
+        assert results.has_more is True
+        names = [a.name for a in results]
+        assert names == ["A", "B", "C"]
+        # Page 2 was fetched lazily during iteration.
+        assert session.get.call_count == 2
+
+    def test_search_activities_mixing_page_and_offset_raises(self, mocked_client):
+        """Mixing page-style and wire-style pagination must raise."""
+        client, _ = mocked_client
+        with pytest.raises(VoLCAError, match="Mix of page-style"):
+            client.search_activities(page=2, offset=10)
+
     def test_kebab_case_query_param_translation(self, mocked_client, make_response):
         """``min_quantity`` Python → ``min-quantity`` wire."""
         client, session = mocked_client
