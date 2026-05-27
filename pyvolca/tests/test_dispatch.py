@@ -122,9 +122,9 @@ class TestDispatcher:
         called_url = session.get.call_args[0][0]
         assert called_url == "http://test.local/api/v1/db/testdb/activity/abc_def"
 
-    def test_search_activities_sends_query_params(self, mocked_client, make_response):
+    def test_search_activities_sends_query_params(self, mocked_client, make_response, empty_envelope):
         client, session = mocked_client
-        session.get.return_value = make_response({"results": []})
+        session.get.return_value = make_response(empty_envelope())
         client.search_activities(name="wheat", geo="FR", limit=5)
         called = session.get.call_args
         assert called[0][0] == "http://test.local/api/v1/db/testdb/activities"
@@ -136,19 +136,19 @@ class TestDispatcher:
         assert params["offset"] == "0"
         assert params["exact"] == "false"
 
-    def test_search_activities_drops_none_kwargs(self, mocked_client, make_response):
+    def test_search_activities_drops_none_kwargs(self, mocked_client, make_response, empty_envelope):
         client, session = mocked_client
-        session.get.return_value = make_response({"results": []})
+        session.get.return_value = make_response(empty_envelope())
         client.search_activities(name="wheat")  # geo, limit, etc. left at None
         params = dict(session.get.call_args[1]["params"])
         assert "name" in params
         assert "geo" not in params
         assert "limit" not in params
 
-    def test_search_activities_page_kwargs_compute_offset(self, mocked_client, make_response):
+    def test_search_activities_page_kwargs_compute_offset(self, mocked_client, make_response, empty_envelope):
         """page=3 + page_size=20 must translate to offset=40, limit=20."""
         client, session = mocked_client
-        session.get.return_value = make_response({"results": []})
+        session.get.return_value = make_response(empty_envelope())
         client.search_activities(name="wheat", page=3, page_size=20)
         params = dict(session.get.call_args[1]["params"])
         assert params["limit"] == "20"
@@ -336,17 +336,17 @@ class TestDispatcher:
         with pytest.raises(VoLCAError, match="unknown kwargs"):
             client.call("list_databases", nonsense_param="foo")
 
-    def test_auto_injects_db_name_from_instance(self, mocked_client, make_response):
+    def test_auto_injects_db_name_from_instance(self, mocked_client, make_response, empty_envelope):
         """Client(db='testdb') should inject db_name without the caller passing it."""
         client, session = mocked_client
-        session.get.return_value = make_response({"results": []})
+        session.get.return_value = make_response(empty_envelope())
         client.search_activities(name="x")
         called_url = session.get.call_args[0][0]
         assert "/db/testdb/" in called_url
 
-    def test_db_name_override(self, mocked_client, make_response):
+    def test_db_name_override(self, mocked_client, make_response, empty_envelope):
         client, session = mocked_client
-        session.get.return_value = make_response({"results": []})
+        session.get.return_value = make_response(empty_envelope())
         client.call("search_activities", db_name="other", name="x")
         called_url = session.get.call_args[0][0]
         assert "/db/other/" in called_url

@@ -94,12 +94,28 @@ def fixture_spec() -> dict[str, Any]:
                         {"name": "dbName", "in": "path", "required": True, "schema": {"type": "string"}},
                         {"name": "processId", "in": "path", "required": True, "schema": {"type": "string"}},
                         {"name": "scope", "in": "query", "required": False, "schema": {"type": "string"}},
+                        {"name": "aggregate", "in": "query", "required": False, "schema": {"type": "string"}},
+                        {"name": "group_by", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "is_input", "in": "query", "required": False, "schema": {"type": "boolean"}},
                         {"name": "max_depth", "in": "query", "required": False, "schema": {"type": "integer"}},
                         {"name": "filter_name", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "preset", "in": "query", "required": False, "schema": {"type": "string"}},
                     ],
                 },
+            },
+            "/api/v1/methods": {
+                "get": {"operationId": "list_methods", "parameters": []},
+            },
+            "/api/v1/db/{dbName}/classifications": {
+                "get": {
+                    "operationId": "list_classifications",
+                    "parameters": [
+                        {"name": "dbName", "in": "path", "required": True, "schema": {"type": "string"}},
+                    ],
+                },
+            },
+            "/api/v1/presets": {
+                "get": {"operationId": "list_presets", "parameters": []},
             },
         },
     }
@@ -140,6 +156,22 @@ def make_response() -> Callable[..., MagicMock]:
     return _make_response
 
 
+def _empty_envelope(limit: int = 20) -> dict:
+    """Wire-complete empty SearchResults envelope.
+
+    Pyvolca 0.5.0 rejects envelopes missing the pagination keys when a fetch
+    callback is wired (strict mode). Tests that only care about request
+    params, not the response, use this to satisfy the contract.
+    """
+    return {"results": [], "total": 0, "offset": 0, "limit": limit, "hasMore": False, "searchTimeMs": 0.0}
+
+
+@pytest.fixture()
+def empty_envelope() -> Callable[..., dict]:
+    """Factory for a wire-complete empty SearchResults envelope."""
+    return _empty_envelope
+
+
 # ---------------------------------------------------------------------------
 # Live spec for the drift test.
 # ---------------------------------------------------------------------------
@@ -166,22 +198,37 @@ def readme_namespace() -> dict[str, Any]:
     import volca
     from volca import (
         Activity,
+        ActivityContribution,
         ActivityDetail,
         ActivityDiff,
         AggregateGroup,
         AggregateResult,
+        AggregateScope,
+        BioDirection,
         BiosphereExchange,
+        CharacterizationFactor,
+        CharacterizationResult,
+        ClassificationSystem,
         Client,
         Compartment,
         ConsumerResult,
         ConsumersResponse,
+        ContributingActivities,
+        ContributingFlows,
+        DatabaseStatus,
         Flow,
         FlowContribution,
+        InventoryFlow,
+        InventoryResult,
+        InventoryStatistics,
         LCIABatchResult,
         LCIAResult,
+        Method,
         SearchResults,
+        ServerVersion,
         SupplyChain,
         SupplyChainEntry,
+        TechRole,
         TechnosphereExchange,
         VoLCAError,
     )
@@ -218,7 +265,7 @@ def readme_namespace() -> dict[str, Any]:
                 flow_name="soft wheat grain, conventional",
                 amount=1.31,
                 unit="kg",
-                role="Input",
+                role=TechRole.INPUT,
                 target_activity="Soft wheat grain production, FR",
                 target_location="FR",
                 target_process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
@@ -228,7 +275,7 @@ def readme_namespace() -> dict[str, Any]:
                 compartment=Compartment(name="air"),
                 amount=0.41,
                 unit="kg",
-                direction="Emission",
+                direction=BioDirection.EMISSION,
             ),
         ],
     )
@@ -293,7 +340,7 @@ def readme_namespace() -> dict[str, Any]:
         single_score_unit="Pt",
     )
     aggregate_result = AggregateResult(
-        scope="biosphere",
+        scope=AggregateScope.BIOSPHERE,
         filtered_total=1.42,
         filtered_unit="kg",
         filtered_count=18,
@@ -332,27 +379,79 @@ def readme_namespace() -> dict[str, Any]:
     c.get_activity.return_value = activity_detail
     c.get_supply_chain.return_value = supply_chain
     c.get_consumers.return_value = consumers
-    c.get_inventory.return_value = {
-        "flows": [
-            {"flow_id": "ef-co2-fossil", "name": "Carbon dioxide, fossil", "amount": 0.41, "unit": "kg"},
+    c.get_inventory.return_value = InventoryResult(
+        root=activity_a,
+        total_flows=18,
+        emission_flows=10,
+        resource_flows=8,
+        flows=[
+            InventoryFlow(
+                flow_id="ef-co2-fossil",
+                flow_name="Carbon dioxide, fossil",
+                quantity=0.41,
+                unit_name="kg",
+                is_emission=True,
+                category="air/urban air",
+            ),
         ],
-        "total_count": 18,
-    }
-    c.get_contributing_flows.return_value = {
-        "contributors": [
-            {"flow_id": "ef-co2-fossil", "name": "Carbon dioxide, fossil", "share_pct": 49.8},
+        statistics=InventoryStatistics(
+            total_quantity=1.42,
+            emission_quantity=0.42,
+            resource_quantity=1.0,
+            top_categories=[("air/urban air", 5), ("water/river", 3)],
+        ),
+    )
+    c.get_contributing_flows.return_value = ContributingFlows(
+        method="EF v3.1 — Climate change",
+        unit="kg CO2 eq",
+        total_score=0.823,
+        top_flows=[
+            FlowContribution(
+                flow_name="Carbon dioxide, fossil",
+                contribution=0.41,
+                share_pct=49.8,
+                flow_id="ef-co2-fossil",
+                category="air/urban air",
+            ),
         ],
-    }
-    c.get_contributing_activities.return_value = {
-        "contributors": [
-            {"process_id": "cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
-             "name": "Soft wheat grain, at farm", "share_pct": 38.2},
+    )
+    c.get_contributing_activities.return_value = ContributingActivities(
+        method="EF v3.1 — Climate change",
+        unit="kg CO2 eq",
+        total_score=0.823,
+        activities=[
+            ActivityContribution(
+                process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
+                activity_name="Soft wheat grain, at farm",
+                product_name="soft wheat grain",
+                location="FR",
+                contribution=0.31,
+                share_pct=38.2,
+            ),
         ],
-    }
-    c.get_characterization.return_value = {
-        "method_id": "EF3.1-climate-change",
-        "factors": [{"flow_id": "ef-co2-fossil", "cf": 1.0, "unit": "kg CO2 eq / kg"}],
-    }
+    )
+    c.get_characterization.return_value = CharacterizationResult(
+        method="EF v3.1 — Climate change",
+        unit="kg CO2 eq",
+        matches=1,
+        shown=1,
+        factors=[
+            CharacterizationFactor(
+                method_flow_name="Carbon dioxide, fossil",
+                cf_value=1.0,
+                cf_unit="kg CO2 eq / kg",
+                direction="Output",
+                db_flow_name="Carbon dioxide, fossil",
+                flow_id="ef-co2-fossil",
+                flow_unit="kg",
+                category="air",
+                match_strategy="uuid",
+            ),
+        ],
+    )
+    c.get_version.return_value = ServerVersion(
+        version="0.5.0", git_hash="abc1234", git_tag=None, build_target="x86_64-linux",
+    )
 
     def _impacts(process_id, *args, **kwargs):
         if process_id == "nonexistent-pid":
@@ -366,16 +465,27 @@ def readme_namespace() -> dict[str, Any]:
         DatabaseInfo(
             name="agribalyse-3.2",
             display_name="Agribalyse 3.2",
-            status="loaded",
+            status=DatabaseStatus.LOADED,
             path="/data/agribalyse-3.2",
             activity_count=2517,
         ),
     ]
     c.list_methods.return_value = [
-        {"id": "EF3.1-climate-change", "name": "Climate change", "unit": "kg CO2 eq"},
+        Method(
+            id="EF3.1-climate-change",
+            name="Climate change",
+            category="climate change",
+            unit="kg CO2 eq",
+            factor_count=420,
+            collection="ef-31",
+        ),
     ]
     c.list_classifications.return_value = [
-        {"system": "ISIC rev.4 ecoinvent", "values": ["1061", "1071", "0111"]},
+        ClassificationSystem(
+            name="ISIC rev.4 ecoinvent",
+            values=["1061", "1071", "0111"],
+            activity_count=2517,
+        ),
     ]
     c.list_presets.return_value = []
     c.load_database.return_value = {"status": "loaded"}

@@ -30,6 +30,20 @@ class FromJson:
         return cls(**{k: v for k, v in ((_to_snake(k), v) for k, v in d.items()) if k in names})
 
 
+class _StrEnum(str, Enum):
+    """Base for str-backed enums whose f-string form is the wire value.
+
+    Python 3.11 added :class:`enum.StrEnum`, but pyvolca still supports
+    3.10, so we mimic its behavior with explicit overrides. Subclasses
+    inherit equality with raw strings (from ``str``), JSON serialise as
+    their value (also from ``str``), and ``str(X.A)`` / ``f"{X.A}"``
+    return ``"a"`` instead of ``"X.A"``.
+    """
+
+    __str__ = str.__str__  # type: ignore[assignment]
+    __format__ = str.__format__  # type: ignore[assignment]
+
+
 T = TypeVar("T")
 
 
@@ -93,6 +107,11 @@ class SearchResults(Generic[T]):
         Yields the initial page, then any already-cached follow-up pages,
         then continues fetching until ``has_more`` is False. Subsequent
         iterations replay from the cache.
+
+        Raises :class:`RuntimeError` if the server returns ``hasMore=True``
+        with no items — that means the pagination contract is broken and
+        silently stopping would let callers consume an incomplete result
+        set without ever learning the engine misbehaved.
         """
         yield from self.results
         yield from self._fetched
@@ -105,10 +124,11 @@ class SearchResults(Generic[T]):
             raw = self._fetch(offset, limit)
             items = [self._parse(x) for x in raw.get("results", [])]
             if not items:
-                # Server claims hasMore but returned nothing — stop rather
-                # than loop forever on a broken pagination contract.
-                self._exhausted = True
-                return
+                raise RuntimeError(
+                    f"Server returned hasMore=True with no items at offset={offset}, "
+                    f"limit={limit}. Pagination contract broken — refusing to truncate "
+                    "silently. Report this to the engine team."
+                )
             self._fetched.extend(items)
             yield from items
             if not raw.get("hasMore", False):
@@ -150,10 +170,36 @@ class SearchResults(Generic[T]):
         ``page(n)`` to retrieve further pages. Omit only when the envelope
         is a single-page snapshot (``hasMore=False``) — otherwise iteration
         would silently truncate and the constructor raises.
+
+        When ``fetch`` is provided (the production path), every wire key is
+        required: missing fields would let pyvolca silently default to a
+        truncated total or page size, which is the exact silent-undercount
+        bug 0.5.0 set out to eliminate. When ``fetch`` is None (test
+        fixtures), missing fields fall back to permissive defaults so
+        callers can build small envelopes by hand.
         """
         items = [parse(x) for x in raw.get("results", [])]
+        if fetch is not None:
+            missing = {"total", "offset", "limit", "hasMore"} - set(raw)
+            if missing:
+                raise ValueError(
+                    f"SearchResults wire envelope is missing required keys: {sorted(missing)}. "
+                    "The engine's response shape changed or this isn't a SearchResults envelope."
+                )
+            return cls(
+                results=items,
+                total=raw["total"],
+                offset=raw["offset"],
+                limit=raw["limit"],
+                has_more=raw["hasMore"],
+                search_time_ms=raw.get("searchTimeMs", 0.0),
+                _fetch=fetch,
+                _parse=parse,
+            )
+        # Detached fixture: lenient defaults, but still refuse hasMore=True
+        # (would silently truncate during iteration).
         has_more = raw.get("hasMore", False)
-        if fetch is None and has_more:
+        if has_more:
             raise ValueError(
                 "SearchResults envelope reports hasMore=True but no fetch callback "
                 "was provided. Iteration would silently truncate. Pass fetch=, or "
@@ -164,11 +210,28 @@ class SearchResults(Generic[T]):
             total=raw.get("total", len(items)),
             offset=raw.get("offset", 0),
             limit=raw.get("limit", len(items)),
-            has_more=has_more,
+            has_more=False,
             search_time_ms=raw.get("searchTimeMs", 0.0),
-            _fetch=fetch,
+            _fetch=None,
             _parse=parse,
         )
+
+
+class DatabaseStatus(_StrEnum):
+    """Lifecycle state of a database in the engine.
+
+    ``UNLOADED`` — declared in the engine config but not yet loaded.
+    ``PARTIALLY_LINKED`` — loaded, but some cross-DB flow references could
+    not be resolved against currently-loaded dependencies.
+    ``LOADED`` — loaded and fully linked.
+
+    Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
+    serialises as the bare wire string.
+    """
+
+    UNLOADED = "unloaded"
+    PARTIALLY_LINKED = "partially_linked"
+    LOADED = "loaded"
 
 
 @dataclass
@@ -182,7 +245,7 @@ class DatabaseInfo(FromJson):
 
     name: str
     display_name: str
-    status: str  # "unloaded" | "partially_linked" | "loaded"
+    status: DatabaseStatus
     path: str
     load_at_startup: bool = False
     is_uploaded: bool = False
@@ -190,6 +253,13 @@ class DatabaseInfo(FromJson):
     description: str | None = None
     format: str | None = None
     depends_on: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "DatabaseInfo":
+        names = {f.name for f in dataclasses.fields(cls)}
+        kwargs = {k: v for k, v in ((_to_snake(k), v) for k, v in d.items()) if k in names}
+        kwargs["status"] = DatabaseStatus(kwargs["status"])
+        return cls(**kwargs)
 
 
 @dataclass
@@ -300,7 +370,7 @@ class LCIABatchResult:
         )
 
 
-class MatchMode(str, Enum):
+class MatchMode(_StrEnum):
     """How a :class:`ClassificationFilter` value is compared against the entry.
 
     ``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
@@ -357,6 +427,18 @@ class ClassificationFilter:
 
 @dataclass
 class Activity(FromJson):
+    """One activity in a database — the row returned by /activities search.
+
+    ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
+    and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
+    :meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …). ``name`` is
+    the activity name (e.g. ``"wheat flour, at plant"``); ``product`` is the
+    reference output product (e.g. ``"wheat flour"``); ``product_amount`` and
+    ``product_unit`` describe the functional unit (typically ``1.0`` of
+    ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the geography code
+    (``"FR"``, ``"GLO"``, ``"RoW"``…).
+    """
+
     process_id: str
     name: str
     location: str
@@ -396,6 +478,17 @@ class ConsumerResult(FromJson):
 
 @dataclass
 class SupplyChainEntry(FromJson):
+    """One activity in a :class:`SupplyChain.entries` list.
+
+    ``quantity`` is the cumulative amount of this activity's reference
+    product consumed per functional unit of the root activity, in ``unit``.
+    ``scaling_factor`` is the multiplier the solver applied to this
+    activity to produce ``quantity`` — i.e. ``quantity = ref_output * scaling_factor``.
+    ``classifications`` mirrors the producing activity's classifications
+    (ISIC, CPC, Category, …) so callers can filter by taxonomy without a
+    second :meth:`Client.get_activity` round trip.
+    """
+
     process_id: str
     name: str
     location: str
@@ -464,11 +557,31 @@ class SupplyChainEdge:
 
 @dataclass
 class SupplyChain:
+    """Flat supply chain of an activity.
+
+    ``total_activities`` is the unfiltered upstream count; ``filtered_activities``
+    is what remains after the server applies ``classification_filters`` /
+    ``min_quantity`` / ``preset``. ``entries`` is the slice the server actually
+    returned — it may be shorter than ``filtered_activities`` when ``limit``
+    truncates. Use :attr:`has_more` to detect that case rather than comparing
+    lengths by hand.
+    """
+
     root: Activity
     total_activities: int
     filtered_activities: int
     entries: list[SupplyChainEntry] = field(default_factory=list)
     edges: list[SupplyChainEdge] = field(default_factory=list)
+
+    @property
+    def has_more(self) -> bool:
+        """True when the server truncated ``entries`` below ``filtered_activities``.
+
+        Surfacing this lets callers detect silent truncation: if you passed
+        ``limit=100`` and ``filtered_activities`` is 500, downstream LCA work
+        would be wrong without flagging the gap.
+        """
+        return len(self.entries) < self.filtered_activities
 
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChain":
@@ -560,16 +673,27 @@ class Compartment:
         return cls(name=c.get("name", ""), sub=c.get("sub"))
 
 
-# Roles a technosphere exchange can play within its host activity.
-TechRole = Literal["ReferenceProduct", "Coproduct", "ReferenceInput", "Input"]
+class TechRole(_StrEnum):
+    """Role a technosphere exchange plays within its host activity.
+
+    ``REFERENCE_PRODUCT`` — the activity's reference output product.
+    ``COPRODUCT`` — a secondary output (in allocated activities).
+    ``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
+    ``INPUT`` — any other technosphere input.
+    """
+
+    REFERENCE_PRODUCT = "ReferenceProduct"
+    COPRODUCT = "Coproduct"
+    REFERENCE_INPUT = "ReferenceInput"
+    INPUT = "Input"
 
 
 def _role_is_input(role: TechRole) -> bool:
-    return role in ("Input", "ReferenceInput")
+    return role in (TechRole.INPUT, TechRole.REFERENCE_INPUT)
 
 
 def _role_is_reference(role: TechRole) -> bool:
-    return role in ("ReferenceProduct", "ReferenceInput")
+    return role in (TechRole.REFERENCE_PRODUCT, TechRole.REFERENCE_INPUT)
 
 
 @dataclass
@@ -592,10 +716,20 @@ class TechnosphereExchange:
 
     @property
     def is_input(self) -> bool:
+        """True for technosphere inputs (``role`` is ``INPUT`` or ``REFERENCE_INPUT``).
+
+        Lets callers split exchanges into inputs vs. outputs without
+        knowing the four-role taxonomy.
+        """
         return _role_is_input(self.role)
 
     @property
     def is_reference(self) -> bool:
+        """True for reference roles (``REFERENCE_PRODUCT`` / ``REFERENCE_INPUT``).
+
+        The reference exchange is the one that defines the activity's
+        functional unit — the basis the LCA result is normalised to.
+        """
         return _role_is_reference(self.role)
 
     @classmethod
@@ -605,7 +739,7 @@ class TechnosphereExchange:
             flow_name=ewu["flowName"],
             amount=inner["amount"],
             unit=ewu["unitName"],
-            role=inner["role"],
+            role=TechRole(inner["role"]),
             target_activity=ewu.get("targetActivity"),
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
@@ -613,11 +747,19 @@ class TechnosphereExchange:
         )
 
 
-BioDirection = Literal["Resource", "Emission"]
+class BioDirection(_StrEnum):
+    """Direction of a biosphere exchange.
+
+    ``RESOURCE`` — extraction from the environment (input).
+    ``EMISSION`` — release to the environment (output).
+    """
+
+    RESOURCE = "Resource"
+    EMISSION = "Emission"
 
 
 def _direction_is_input(direction: BioDirection) -> bool:
-    return direction == "Resource"
+    return direction is BioDirection.RESOURCE
 
 
 @dataclass
@@ -636,10 +778,20 @@ class BiosphereExchange:
 
     @property
     def is_input(self) -> bool:
+        """True for resource extractions (``direction`` is ``RESOURCE``).
+
+        Biosphere inputs are resource extractions; outputs are emissions
+        to the environment.
+        """
         return _direction_is_input(self.direction)
 
     @property
     def is_reference(self) -> bool:
+        """Always False — biosphere exchanges cannot be reference flows.
+
+        The reference flow defines the functional unit and is always a
+        technosphere product (see :class:`TechnosphereExchange.is_reference`).
+        """
         return False
 
     @classmethod
@@ -650,7 +802,7 @@ class BiosphereExchange:
             compartment=Compartment.from_json(ewu.get("compartment")),
             amount=inner["amount"],
             unit=ewu["unitName"],
-            direction=inner["direction"],
+            direction=BioDirection(inner["direction"]),
             comment=_exchange_comment(ewu, inner),
         )
 
@@ -679,6 +831,11 @@ class WasteExchange:
 
     @property
     def is_reference(self) -> bool:
+        """Always False — waste flows never define an activity's functional unit.
+
+        Treatment activities have a ``ReferenceInput`` instead, exposed
+        via :class:`TechnosphereExchange`.
+        """
         return False
 
     @classmethod
@@ -741,7 +898,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             flow_name=flow_payload.get("name", ""),
             amount=inner["amount"],
             unit=unit,
-            role=inner["role"],
+            role=TechRole(inner["role"]),
             target_activity=target.get("name"),
             target_location=target.get("location"),
             target_process_id=target.get("processId"),
@@ -757,7 +914,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             compartment=Compartment.from_json(flow_payload.get("compartment")),
             amount=inner["amount"],
             unit=unit,
-            direction=inner["direction"],
+            direction=BioDirection(inner["direction"]),
             comment=comment,
         )
     if tag == "WasteExchange":
@@ -823,14 +980,31 @@ class ActivityDetail:
 
     @property
     def inputs(self) -> list[Exchange]:
+        """Every input exchange — technosphere inputs and biosphere resources.
+
+        Equivalent to filtering :attr:`exchanges` by ``e.is_input``. Mixed
+        kinds: callers needing only one variant should use
+        :attr:`technosphere_inputs` or filter manually.
+        """
         return [e for e in self.exchanges if e.is_input]
 
     @property
     def outputs(self) -> list[Exchange]:
+        """Every output exchange — products and biosphere emissions.
+
+        Includes the reference product, coproducts (in allocated
+        activities), and all biosphere emissions.
+        """
         return [e for e in self.exchanges if not e.is_input]
 
     @property
     def technosphere_inputs(self) -> list[TechnosphereExchange]:
+        """Only the technosphere inputs (ingredients from other activities).
+
+        Excludes biosphere inputs (resource extractions) and waste
+        outputs. The common case when answering "what does this activity
+        consume from upstream?".
+        """
         return [
             e for e in self.exchanges
             if isinstance(e, TechnosphereExchange) and e.is_input
@@ -851,6 +1025,33 @@ class ActivityDetail:
 # Aggregation (for the /aggregate primitive)
 # ---------------------------------------------------------------------------
 
+
+class AggregateScope(_StrEnum):
+    """What the ``/aggregate`` primitive groups over.
+
+    ``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
+    upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
+    biosphere flows in the supply chain.
+    """
+
+    DIRECT = "direct"
+    SUPPLY_CHAIN = "supply_chain"
+    BIOSPHERE = "biosphere"
+
+
+class AggregateOp(_StrEnum):
+    """How values are reduced within a bucket.
+
+    ``SUM_QUANTITY`` — sum of quantities (default). ``COUNT`` — number of
+    matching entries. ``SHARE`` — each bucket's percentage of the filtered
+    total (0..100).
+    """
+
+    SUM_QUANTITY = "sum_quantity"
+    COUNT = "count"
+    SHARE = "share"
+
+
 @dataclass
 class AggregateGroup(FromJson):
     """One bucket inside an AggregateResult."""
@@ -869,7 +1070,7 @@ class AggregateResult:
     top-level number). ``groups`` is the per-bucket breakdown when ``group_by``
     was set; empty otherwise.
     """
-    scope: str
+    scope: AggregateScope
     filtered_total: float
     filtered_unit: str | None
     filtered_count: int
@@ -878,9 +1079,403 @@ class AggregateResult:
     @classmethod
     def from_json(cls, d: dict) -> "AggregateResult":
         return cls(
-            scope=d["scope"],
+            scope=AggregateScope(d["scope"]),
             filtered_total=d["filteredTotal"],
             filtered_unit=d.get("filteredUnit"),
             filtered_count=d["filteredCount"],
             groups=[AggregateGroup.from_json(g) for g in d.get("groups", [])],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Substitution (input for /supply-chain, /inventory, /impacts)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Substitution:
+    """Replace one supplier with another in the upstream supply chain.
+
+    All three fields are process_ids. ``consumer`` identifies which downstream
+    consumer's input to rewrite (substitutions are scoped, not global) — the
+    same upstream supplier can be replaced by different alternatives in
+    different parts of the tree.
+
+    Frozen so callers can put it in a set / dict key and re-use the same
+    substitution across multiple calls without aliasing risk.
+    """
+
+    from_pid: str  # the supplier being replaced (wire: ``from``)
+    to_pid: str  # the replacement supplier (wire: ``to``)
+    consumer: str  # the consumer whose input gets rewritten
+
+    def to_wire(self) -> dict:
+        """Serialise to the wire shape consumed by SubstitutionRequest."""
+        return {"subFrom": self.from_pid, "subTo": self.to_pid, "subConsumer": self.consumer}
+
+
+# ---------------------------------------------------------------------------
+# Method catalog & flow mapping
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Method(FromJson):
+    """One LCIA method, returned by :meth:`Client.list_methods`.
+
+    Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
+    is the parent method collection (e.g. ``"ef-31"``) — load it with
+    :meth:`Client.load_method_collection` if not already loaded.
+    """
+
+    id: str
+    name: str
+    category: str
+    unit: str
+    factor_count: int
+    collection: str
+
+
+@dataclass
+class ClassificationSystem(FromJson):
+    """One classification system declared by a database.
+
+    ``values`` are the distinct entries in this system; ``activity_count`` is
+    how many activities carry at least one classification under this system
+    (helps callers pick a worthwhile filter dimension).
+    """
+
+    name: str
+    values: list[str] = field(default_factory=list)
+    activity_count: int = 0
+
+
+@dataclass(frozen=True)
+class PresetFilter:
+    """One filter triple inside a :class:`Preset`."""
+
+    system: str
+    value: str
+    mode: MatchMode = MatchMode.CONTAINS
+
+    @classmethod
+    def from_json(cls, d: dict) -> "PresetFilter":
+        return cls(system=d["system"], value=d["value"], mode=MatchMode(d["mode"]))
+
+
+@dataclass
+class Preset:
+    """A named classification preset declared in the engine config.
+
+    Apply by passing ``preset=preset.name`` to filtering endpoints (the engine
+    expands it server-side into the ``filters`` triples).
+    """
+
+    name: str
+    label: str
+    description: str | None
+    filters: list[PresetFilter] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "Preset":
+        return cls(
+            name=d["name"],
+            label=d["label"],
+            description=d.get("description"),
+            filters=[PresetFilter.from_json(f) for f in d.get("filters", [])],
+        )
+
+
+@dataclass
+class ServerVersion:
+    """Server build metadata returned by :meth:`Client.get_version`.
+
+    ``git_tag`` is None for untagged dev builds. ``build_target`` names the
+    platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
+    """
+
+    version: str
+    git_hash: str
+    git_tag: str | None
+    build_target: str
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ServerVersion":
+        return cls(
+            version=d["version"],
+            git_hash=d["gitHash"],
+            git_tag=d.get("gitTag") or None,
+            build_target=d["buildTarget"],
+        )
+
+
+@dataclass
+class FlowMappingEntry(FromJson):
+    """One DB biosphere flow and the CF (if any) assigned to it.
+
+    ``cf_value`` is ``None`` when this DB flow has no characterization factor
+    in the method — that flow contributes 0 to the score for the method.
+    ``match_strategy`` records how the mapping was resolved (``"uuid"``,
+    ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
+    """
+
+    flow_id: str
+    flow_name: str
+    flow_category: str
+    cf_value: float | None = None
+    cf_flow_name: str | None = None
+    match_strategy: str | None = None
+
+
+@dataclass
+class FlowMapping:
+    """CF-coverage report for one method against the current database.
+
+    ``matched_flows / total_flows`` is the coverage ratio: how many of the
+    database's biosphere flows have a CF in this method. Mirrors the engine
+    response of :meth:`Client.get_flow_mapping`.
+    """
+
+    method_name: str
+    method_unit: str
+    total_flows: int
+    matched_flows: int
+    flows: list[FlowMappingEntry] = field(default_factory=list)
+
+    @property
+    def coverage_pct(self) -> float:
+        """Matched fraction expressed as 0..100. Returns 0 when total is 0."""
+        return 100.0 * self.matched_flows / self.total_flows if self.total_flows else 0.0
+
+    @classmethod
+    def from_json(cls, d: dict) -> "FlowMapping":
+        return cls(
+            method_name=d["methodName"],
+            method_unit=d["methodUnit"],
+            total_flows=d["totalFlows"],
+            matched_flows=d["matchedFlows"],
+            flows=[FlowMappingEntry.from_json(f) for f in d.get("flows", [])],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Characterization, contributing flows / activities
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CharacterizationFactor(FromJson):
+    """One characterization factor matched against a database biosphere flow.
+
+    Returned in the ``factors`` list of :class:`CharacterizationResult`.
+    ``match_strategy`` records how the CF was matched to the DB flow
+    (``"uuid"``, ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
+    """
+
+    method_flow_name: str
+    cf_value: float
+    cf_unit: str
+    direction: str  # "Input" | "Output"
+    db_flow_name: str
+    flow_id: str
+    flow_unit: str
+    category: str
+    match_strategy: str
+    compartment: str | None = None
+
+
+@dataclass
+class CharacterizationResult:
+    """Result of :meth:`Client.get_characterization`.
+
+    The engine truncates ``factors`` to ``shown`` rows (server-side ``limit``).
+    ``matches`` is the unfiltered total: use :attr:`has_more` to detect when
+    the slice is incomplete.
+    """
+
+    method: str
+    unit: str
+    matches: int  # total CFs matching the filter (before truncation)
+    shown: int  # rows actually returned in `factors`
+    factors: list[CharacterizationFactor] = field(default_factory=list)
+
+    @property
+    def has_more(self) -> bool:
+        """True when the server truncated below ``matches``."""
+        return self.shown < self.matches
+
+    @classmethod
+    def from_json(cls, d: dict) -> "CharacterizationResult":
+        return cls(
+            method=d["method"],
+            unit=d["unit"],
+            matches=d["matches"],
+            shown=d["shown"],
+            factors=[CharacterizationFactor.from_json(f) for f in d.get("factors", [])],
+        )
+
+
+@dataclass
+class ActivityContribution(FromJson):
+    """One upstream activity's contribution to an LCIA score.
+
+    Returned in :class:`ContributingActivities.activities`. ``share_pct`` is
+    the percentage of the total impact this activity contributes (0..100).
+    """
+
+    process_id: str
+    activity_name: str
+    product_name: str
+    location: str
+    contribution: float
+    share_pct: float
+
+
+@dataclass
+class ContributingFlows:
+    """Top elementary flows driving an LCIA score.
+
+    Note: the engine does not report a total — ``top_flows`` is whatever the
+    server returned under ``limit``, but pyvolca cannot tell whether more
+    flows were truncated. If you need exhaustive coverage, pass a generous
+    ``limit`` and inspect ``share_pct`` totals.
+    """
+
+    method: str
+    unit: str
+    total_score: float
+    top_flows: list[FlowContribution] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ContributingFlows":
+        return cls(
+            method=d["method"],
+            unit=d["unit"],
+            total_score=d["totalScore"],
+            top_flows=[FlowContribution.from_json(f) for f in d.get("topFlows", [])],
+        )
+
+
+@dataclass
+class ContributingActivities:
+    """Top upstream activities driving an LCIA score.
+
+    Same engine-side limitation as :class:`ContributingFlows`: the server
+    reports no total, so pyvolca cannot derive ``has_more``. Pass a generous
+    ``limit`` and inspect ``share_pct`` if exhaustive coverage matters.
+    """
+
+    method: str
+    unit: str
+    total_score: float
+    activities: list[ActivityContribution] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ContributingActivities":
+        return cls(
+            method=d["method"],
+            unit=d["unit"],
+            total_score=d["totalScore"],
+            activities=[ActivityContribution.from_json(a) for a in d.get("activities", [])],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Inventory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InventoryFlow:
+    """One row of an inventory: a biosphere flow scaled to the functional unit.
+
+    ``is_emission`` distinguishes outputs (releases) from inputs (resource
+    extraction). ``flow_id`` is the database UUID; ``compartment`` is the
+    medium label (e.g. ``"air/urban air"``) when the source dataset declared
+    one. ``category`` is the engine-normalised category used for grouping.
+    """
+
+    flow_id: str
+    flow_name: str
+    quantity: float
+    unit_name: str
+    is_emission: bool
+    category: str
+    compartment: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict) -> "InventoryFlow":
+        flow = d.get("flow") or {}
+        # The engine's BiosphereFlow.compartment is structured ({name, sub})
+        # under stripLowerPrefix; flatten to a display string for ergonomic use.
+        compartment_obj = flow.get("compartment")
+        if isinstance(compartment_obj, dict):
+            name = compartment_obj.get("name") or ""
+            sub = compartment_obj.get("sub")
+            compartment = f"{name}/{sub}" if (name and sub) else (name or None)
+        else:
+            compartment = None
+        return cls(
+            flow_id=flow.get("id", ""),
+            flow_name=flow.get("name", ""),
+            quantity=d["quantity"],
+            unit_name=d["unitName"],
+            is_emission=d["isEmission"],
+            category=d.get("category", ""),
+            compartment=compartment,
+        )
+
+
+@dataclass
+class InventoryStatistics:
+    """Roll-up totals of an inventory result.
+
+    ``emission_quantity`` and ``resource_quantity`` are sums by direction;
+    ``total_quantity`` is the sum of absolute values. ``top_categories``
+    lists ``(category_name, flow_count)`` pairs ordered by frequency.
+    """
+
+    total_quantity: float
+    emission_quantity: float
+    resource_quantity: float
+    top_categories: list[tuple[str, int]] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "InventoryStatistics":
+        # Wire shape is [[name, count], ...]; convert to tuples for hashability.
+        cats = [(c[0], c[1]) for c in d.get("topCategories", [])]
+        return cls(
+            total_quantity=d["totalQuantity"],
+            emission_quantity=d["emissionQuantity"],
+            resource_quantity=d["resourceQuantity"],
+            top_categories=cats,
+        )
+
+
+@dataclass
+class InventoryResult:
+    """Life-cycle inventory of an activity: cumulative biosphere flows.
+
+    Returned by :meth:`Client.get_inventory`. The engine does not paginate —
+    ``flows`` is the full inventory (filtered by ``flow=`` substring when
+    requested). ``statistics`` carries the per-direction roll-ups and the
+    most-populated categories.
+
+    ``root`` is the activity the inventory was computed for. ``total_flows``,
+    ``emission_flows``, ``resource_flows`` mirror the engine's metadata block.
+    """
+
+    root: Activity
+    total_flows: int
+    emission_flows: int
+    resource_flows: int
+    flows: list[InventoryFlow]
+    statistics: InventoryStatistics
+
+    @classmethod
+    def from_json(cls, d: dict) -> "InventoryResult":
+        meta = d["metadata"]
+        return cls(
+            root=Activity.from_json(meta["rootActivity"]),
+            total_flows=meta["totalFlows"],
+            emission_flows=meta["emissionFlows"],
+            resource_flows=meta["resourceFlows"],
+            flows=[InventoryFlow.from_json(f) for f in d.get("flows", [])],
+            statistics=InventoryStatistics.from_json(d["statistics"]),
         )

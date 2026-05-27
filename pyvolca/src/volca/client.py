@@ -39,6 +39,7 @@ variants in the Servant API.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 import requests
@@ -46,18 +47,30 @@ import requests
 from .types import (
     Activity,
     ActivityDetail,
+    AggregateOp,
     AggregateResult,
+    AggregateScope,
+    CharacterizationResult,
     ClassificationFilter,
+    ClassificationSystem,
     ConsumerResult,
     ConsumersResponse,
+    ContributingActivities,
+    ContributingFlows,
     DatabaseInfo,
     Exchange,
     Flow,
+    FlowMapping,
+    InventoryResult,
     LCIABatchResult,
     LCIAResult,
     MatchMode,
+    Method,
     PathResult,
+    Preset,
     SearchResults,
+    ServerVersion,
+    Substitution,
     SupplyChain,
     parse_exchange_detail,
 )
@@ -112,12 +125,16 @@ def _format_query_value(value: Any) -> Any:
     """Convert a Python value to a query-string-ready form.
 
     Booleans become ``"true"``/``"false"``. Lists remain lists (requests
-    encodes repeated keys for list values). Everything else is stringified.
+    encodes repeated keys for list values). :class:`enum.Enum` members are
+    serialised via their ``.value`` so StrEnums round-trip cleanly.
+    Everything else is stringified.
     """
     if value is None:
         return None
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, Enum):
+        return _format_query_value(value.value)
     if isinstance(value, _FORMATTED_SCALARS):
         return str(value)
     if isinstance(value, list):
@@ -165,18 +182,34 @@ def _resolve_page_args(
     return limit, offset or 0
 
 
-def _substitution_body(substitutions: list[dict]) -> dict:
+SubstitutionLike = Substitution | dict
+"""A :class:`Substitution` or a legacy ``{"from", "to", "consumer"}`` dict.
+
+The dict form is accepted for backwards-compat one-liner ergonomics; the
+typed form is preferred (catches typos at construction time)."""
+
+
+def _substitution_body(substitutions: list[SubstitutionLike]) -> dict:
     """Build the request body for substitution endpoints.
 
-    Accepts Python-style dicts with ``from``/``to``/``consumer`` keys and
-    rewrites them into the Servant ``SubstitutionRequest`` shape.
+    Accepts :class:`Substitution` instances or the legacy dict form with
+    ``from`` / ``to`` / ``consumer`` keys.
     """
-    return {
-        "srSubstitutions": [
-            {"subFrom": s["from"], "subTo": s["to"], "subConsumer": s["consumer"]}
-            for s in substitutions
-        ]
-    }
+
+    def coerce(s: SubstitutionLike) -> dict:
+        if isinstance(s, Substitution):
+            return s.to_wire()
+        # dict form — validate the three required keys here so typos like
+        # ``"comsumer"`` fail with a clear error rather than at the engine.
+        missing = {"from", "to", "consumer"} - set(s)
+        if missing:
+            raise VoLCAError(
+                f"Substitution dict missing keys: {sorted(missing)}. "
+                "Use a Substitution(from_pid=, to_pid=, consumer=) instead."
+            )
+        return {"subFrom": s["from"], "subTo": s["to"], "subConsumer": s["consumer"]}
+
+    return {"srSubstitutions": [coerce(s) for s in substitutions]}
 
 
 # ---------------------------------------------------------------------------
@@ -460,21 +493,27 @@ class Client:
     # -- Session state --
 
     def use(self, db_name: str) -> "Client":
-        """Return a new client targeting a different database (shares session)."""
-        c = Client.__new__(Client)
-        c.base_url = self.base_url
+        """Return a new client targeting a different database.
+
+        Shares the underlying HTTP session, dispatch table, and any other
+        Client-level state with the original — only ``db`` is overridden.
+        New fields added to :meth:`Client.__init__` propagate automatically
+        (no manual mirror to keep in sync).
+        """
+        c = object.__new__(Client)
+        c.__dict__ = self.__dict__.copy()
         c.db = db_name
-        c._session = self._session
-        c._operations = self._operations  # share the dispatch table
         return c
 
-    def get_version(self) -> dict:
-        """Return server version info (version, gitHash, gitTag, buildTarget).
+    def get_version(self) -> ServerVersion:
+        """Return server build metadata: version, git hash/tag, build target.
 
         Uses a direct HTTP call — ``/api/v1/version`` has no operationId
         since it predates the Resources ADT.
         """
-        return self._json(self._session.get(f"{self.base_url}/api/v1/version"))
+        return ServerVersion.from_json(
+            self._json(self._session.get(f"{self.base_url}/api/v1/version"))
+        )
 
     # ------------------------------------------------------------------
     # Typed wrappers
@@ -524,9 +563,14 @@ class Client:
         """Unload a database from memory to free RAM. The disk copy is kept."""
         return self._json(self._session.post(f"{self.base_url}/api/v1/db/{db_name}/unload"))
 
-    def list_presets(self) -> list[dict]:
-        """List classification presets configured in this instance."""
-        return self._call("list_presets")
+    def list_presets(self) -> list[Preset]:
+        """List classification presets configured in this instance.
+
+        Each :class:`Preset` carries its ``filters`` (list of
+        :class:`PresetFilter` triples). Apply by passing ``preset=p.name``
+        to filtering endpoints.
+        """
+        return [Preset.from_json(p) for p in self._call("list_presets")]
 
     # -- Search --
 
@@ -619,9 +663,14 @@ class Client:
         raw = fetch(wire_offset, wire_limit)
         return SearchResults.from_raw(raw, parse=Flow.from_json, fetch=fetch)
 
-    def list_classifications(self) -> list[dict]:
-        """List classification systems and their values for the current database."""
-        return self._call("list_classifications")
+    def list_classifications(self) -> list[ClassificationSystem]:
+        """List classification systems and their values for the current database.
+
+        ``ClassificationSystem.activity_count`` tells how widely each system
+        is populated — useful for picking a filter dimension with enough
+        signal.
+        """
+        return [ClassificationSystem.from_json(c) for c in self._call("list_classifications")]
 
     # -- Activity details --
 
@@ -669,10 +718,15 @@ class Client:
         max_depth: int | None = None,
         preset: str | None = None,
         classification_filters: list[ClassificationFilter] | None = None,
-        substitutions: list[dict] | None = None,
+        substitutions: list[SubstitutionLike] | None = None,
         include_edges: bool | None = None,
     ) -> SupplyChain:
         """Get the flat supply chain of an activity.
+
+        Returns a :class:`SupplyChain`. Check ``result.has_more`` to detect
+        when ``limit`` truncated ``entries`` below ``filtered_activities`` —
+        further downstream analysis on a truncated chain would be wrong
+        without flagging the gap.
 
         Args:
             max_depth: Max hops from root. 1 = direct inputs only.
@@ -681,7 +735,8 @@ class Client:
                 are AND-combined by the server.
             substitutions: When provided, the call is upgraded to POST and
                 the scaling vector is recomputed with the substituted
-                suppliers.
+                suppliers. Accepts :class:`Substitution` (preferred) or the
+                legacy ``{"from", "to", "consumer"}`` dict form.
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]
@@ -708,7 +763,7 @@ class Client:
     def aggregate(
         self,
         process_id: str,
-        scope: str,
+        scope: AggregateScope | str,
         *,
         is_input: bool | None = None,
         max_depth: int | None = None,
@@ -720,18 +775,23 @@ class Client:
         filter_target_name: str | None = None,
         filter_is_reference: bool | None = None,
         group_by: str | None = None,
-        aggregate: str | None = None,
+        aggregate: AggregateOp | str | None = None,
     ) -> AggregateResult:
         """SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
 
         Args:
-            scope: ``"direct"`` | ``"supply_chain"`` | ``"biosphere"``.
+            scope: :class:`AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
+                / ``BIOSPHERE``) or the equivalent wire string. Strings are
+                accepted for one-liner ergonomics but bypass static checking.
             group_by: omit for a single-bucket result (just the totals).
                 Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
                 ``"unit"``, ``"location"``, ``"target_name"``,
                 ``"classification.<system>"``.
-            aggregate: ``"sum_quantity"`` (default), ``"count"``, or ``"share"``.
+            aggregate: :class:`AggregateOp` member or wire string
+                (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
         """
+        scope_str = scope.value if isinstance(scope, AggregateScope) else scope
+        aggregate_str = aggregate.value if isinstance(aggregate, AggregateOp) else aggregate
         # filter_classification goes over the wire as "System=Value[:exact]" strings.
         if filter_classification:
             filter_strings = [
@@ -748,7 +808,7 @@ class Client:
         raw = self._call(
             "aggregate",
             process_id=process_id,
-            scope=scope,
+            scope=scope_str,
             is_input=is_input,
             max_depth=max_depth,
             filter_name=filter_name,
@@ -759,7 +819,7 @@ class Client:
             filter_target_name=filter_target_name,
             filter_is_reference=filter_is_reference,
             group_by=group_by,
-            aggregate=aggregate,
+            aggregate=aggregate_str,
         )
         return AggregateResult.from_json(raw)
 
@@ -856,26 +916,30 @@ class Client:
         *,
         flow: str | None = None,
         limit: int | None = None,
-        substitutions: list[dict] | None = None,
-    ) -> dict:
+        substitutions: list[SubstitutionLike] | None = None,
+    ) -> InventoryResult:
         """Compute the life-cycle inventory (cumulative biosphere flows) for an activity.
 
-        Returns the per-elementary-flow totals scaled to one functional unit
-        of the activity's reference product. Use :meth:`get_impacts` to apply
-        a characterization method to the inventory; use :meth:`aggregate` with
-        ``scope="biosphere"`` for grouped views.
+        Returns an :class:`InventoryResult` with the per-elementary-flow
+        totals scaled to one functional unit of the activity's reference
+        product. Use :meth:`get_impacts` to apply a characterization method
+        to the inventory; use :meth:`aggregate` with ``scope="biosphere"``
+        for grouped views.
 
         Args:
             flow: Substring filter on flow name.
-            limit: Cap on returned flow rows.
+            limit: Cap on returned flow rows. (Server returns full inventory
+                otherwise — the engine doesn't paginate this endpoint.)
             substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
         """
-        return self._call(
-            "get_inventory",
-            process_id=process_id,
-            flow=flow,
-            limit=limit,
-            substitutions=substitutions,
+        return InventoryResult.from_json(
+            self._call(
+                "get_inventory",
+                process_id=process_id,
+                flow=flow,
+                limit=limit,
+                substitutions=substitutions,
+            )
         )
 
     def get_impacts(
@@ -885,7 +949,7 @@ class Client:
         *,
         collection: str = "methods",
         top_flows: int | None = None,
-        substitutions: list[dict] | None = None,
+        substitutions: list[SubstitutionLike] | None = None,
     ) -> LCIAResult:
         """Compute the LCIA score for a single impact category on an activity.
 
@@ -914,7 +978,7 @@ class Client:
         process_id: str,
         *,
         collection: str = "methods",
-        substitutions: list[dict] | None = None,
+        substitutions: list[SubstitutionLike] | None = None,
     ) -> LCIABatchResult:
         """Compute LCIA for every impact category in a collection, in one call.
 
@@ -943,19 +1007,23 @@ class Client:
 
     # -- Methods --
 
-    def list_methods(self) -> list[dict]:
+    def list_methods(self) -> list[Method]:
         """List every LCIA method available in the engine.
 
-        Returns:
-            Raw method dicts; each carries ``id``, ``name``,
-            ``unit``, ``collection``, and the impact category metadata.
-            Pass any ``id`` value to :meth:`get_impacts` as ``method_id``.
+        Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
+        ``factor_count``, and the parent ``collection``. Pass ``m.id`` to
+        :meth:`get_impacts` as ``method_id``.
         """
-        return self._call("list_methods")
+        return [Method.from_json(m) for m in self._call("list_methods")]
 
-    def get_flow_mapping(self, method_id: str) -> dict:
-        """Get the characterization-factor-to-database-flow mapping coverage."""
-        return self._call("get_flow_mapping", method_id=method_id)
+    def get_flow_mapping(self, method_id: str) -> FlowMapping:
+        """Get the characterization-factor-to-database-flow mapping coverage.
+
+        :class:`FlowMapping.coverage_pct` summarises how many of the DB's
+        biosphere flows the method has a CF for; ``flows`` is the per-flow
+        breakdown including unmatched rows (``cf_value=None``).
+        """
+        return FlowMapping.from_json(self._call("get_flow_mapping", method_id=method_id))
 
     def get_characterization(
         self,
@@ -963,9 +1031,16 @@ class Client:
         *,
         flow: str | None = None,
         limit: int | None = None,
-    ) -> dict:
-        """Look up characterization factors for a method matched to database flows."""
-        return self._call("get_characterization", method_id=method_id, flow=flow, limit=limit)
+    ) -> CharacterizationResult:
+        """Look up characterization factors for a method matched to database flows.
+
+        Returns a :class:`CharacterizationResult` carrying ``matches`` (total
+        rows the filter selected) and ``shown`` (rows actually returned under
+        ``limit``). Check ``result.has_more`` to detect truncation.
+        """
+        return CharacterizationResult.from_json(
+            self._call("get_characterization", method_id=method_id, flow=flow, limit=limit)
+        )
 
     def get_contributing_flows(
         self,
@@ -974,14 +1049,22 @@ class Client:
         *,
         collection: str = "methods",
         limit: int | None = None,
-    ) -> dict:
-        """Which elementary flows drive a given impact category."""
-        return self._call(
-            "get_contributing_flows",
-            process_id=process_id,
-            collection=collection,
-            method_id=method_id,
-            limit=limit,
+    ) -> ContributingFlows:
+        """Which elementary flows drive a given impact category.
+
+        Returns a :class:`ContributingFlows`. Caveat: the engine does not
+        report the total flow count, so pyvolca cannot derive ``has_more``
+        from the response. Pass a generous ``limit`` if you need exhaustive
+        coverage and inspect ``share_pct`` totals.
+        """
+        return ContributingFlows.from_json(
+            self._call(
+                "get_contributing_flows",
+                process_id=process_id,
+                collection=collection,
+                method_id=method_id,
+                limit=limit,
+            )
         )
 
     def get_contributing_activities(
@@ -991,15 +1074,20 @@ class Client:
         *,
         collection: str = "methods",
         limit: int | None = None,
-    ) -> dict:
-        """Which upstream activities drive a given impact category."""
-        return self._call(
+    ) -> ContributingActivities:
+        """Which upstream activities drive a given impact category.
+
+        Same engine-side limitation as :meth:`get_contributing_flows`: no
+        total exposed, so ``has_more`` cannot be derived. Inspect
+        ``share_pct`` totals to gauge coverage.
+        """
+        return ContributingActivities.from_json(self._call(
             "get_contributing_activities",
             process_id=process_id,
             collection=collection,
             method_id=method_id,
             limit=limit,
-        )
+        ))
 
 
 def _resolve_wire_name(py_name: str, op: _Operation) -> str | None:
