@@ -159,11 +159,13 @@ class LCIABatchResult:
         )
 
 
-class MatchMode(Enum):
+class MatchMode(str, Enum):
     """How a :class:`ClassificationFilter` value is compared against the entry.
 
     ``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
-    substring. The ``.value`` is what travels over the wire.
+    substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
+    and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
+    string ``"exact"`` / ``"contains"``.
     """
 
     EXACT = "exact"
@@ -171,13 +173,13 @@ class MatchMode(Enum):
 
 
 MatchModeLike = Union[MatchMode, Literal["exact", "contains"]]
-"""Either a :class:`MatchMode` member or its literal string form.
+"""Internal alias: a :class:`MatchMode` member or its literal string form.
 
 Pyright autocompletes both shapes and rejects typos (``"exct"``, ``"Exact"``)
 statically; the constructor normalises to :class:`MatchMode` at runtime."""
 
 
-@dataclass(init=False)
+@dataclass(init=False, frozen=True)
 class ClassificationFilter:
     """Filter a supply-chain/consumers query by a classification (system, value, mode).
 
@@ -197,9 +199,19 @@ class ClassificationFilter:
         value: str,
         mode: MatchModeLike = MatchMode.CONTAINS,
     ):
-        self.system = system
-        self.value = value
-        self.mode = mode if isinstance(mode, MatchMode) else MatchMode(mode)
+        if isinstance(mode, MatchMode):
+            resolved = mode
+        else:
+            try:
+                resolved = MatchMode(mode)
+            except ValueError:
+                valid = ", ".join(repr(m.value) for m in MatchMode)
+                raise ValueError(
+                    f"mode must be one of {valid} (or a MatchMode member); got {mode!r}"
+                ) from None
+        object.__setattr__(self, "system", system)
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "mode", resolved)
 
 
 @dataclass
