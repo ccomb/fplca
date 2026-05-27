@@ -13,7 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement)
+import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement)
 import Progress (ProgressLevel (..), reportProgress)
 import System.FilePath (takeBaseName)
 import Types
@@ -299,9 +299,9 @@ parseWithXeno xmlContent processId =
                             [] -> False
                         captured
                             | onActivity && isElement name "activityType" =
-                                state{psActivityType = Just (bsToInt value)}
+                                state{psActivityType = bsToIntMaybe value}
                             | onActivity && isElement name "specialActivityType" =
-                                state{psSpecialActivityType = Just (bsToInt value)}
+                                state{psSpecialActivityType = bsToIntMaybe value}
                             | otherwise = state
                      in withLang captured
 
