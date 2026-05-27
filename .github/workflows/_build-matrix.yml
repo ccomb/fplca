@@ -129,7 +129,10 @@ jobs:
       # `build / <platform>` checks without paying the cold compile.
       - name: Pyvolca-only PR — skipping Haskell build
         if: needs.preflight.outputs.skip == 'true'
-        shell: bash
+        # POSIX `sh` here — bash is not preinstalled in the Alpine container
+        # used by the Linux matrix rows, and this skip step runs before
+        # setup-haskell-env (which apk-installs bash) had a chance to run.
+        shell: sh
         run: echo "::notice::Pyvolca-only diff (per preflight); reporting success without building."
 
       # GitHub's JavaScript actions (checkout, cache, …) ship a glibc-linked

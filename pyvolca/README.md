@@ -102,12 +102,13 @@ Other listings: `c.list_classifications()` returns the classification systems an
 > *Which activity in the database represents the product I want to assess?*
 
 ```python
-plants = c.search_activities(name="wheat flour, at plant", limit=5)
+plants = c.search_activities(name="wheat flour, at plant", page_size=5)
+print(f"{len(plants)} matches; showing page 1 ({plants.page_size} items)")
 for a in plants:
     print(f"{a.process_id}  {a.name} ({a.location})")
 ```
 
-Each `Activity` carries `process_id`, `name`, `location`, `product`, `product_amount`, `product_unit`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
+`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together — `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` carries `process_id`, `name`, `location`, `product`, `product_amount`, `product_unit`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
 
 ## Inspect an activity
 
@@ -139,12 +140,12 @@ For *"how exactly does this root reach a specific upstream supplier?"*, use `get
 > *Where is this supplier used? Which products depend on it?*
 
 ```python
-result = c.get_consumers(plants[0].process_id, max_depth=2, limit=10)
+result = c.get_consumers(plants[0].process_id, max_depth=2, page_size=10)
 for cons in result.consumers:
     print(f"  depth={cons.depth}  {cons.name} ({cons.location})")
 ```
 
-Returns a `ConsumersResponse` with `consumers`, pagination, and (when `include_edges=True`) the technosphere edges so callers can reconstruct supplier→consumer paths without a second round trip. Pass `classification_filters=[...]` to restrict to a category.
+Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[ConsumerResult]` — same paginated iterator semantics as `search_activities`. When `include_edges=True`, `result.edges` carries the technosphere edges so callers can reconstruct supplier→consumer paths without a second round trip. Pass `classification_filters=[...]` to restrict to a category.
 
 ## Compute the life-cycle inventory
 
@@ -329,7 +330,7 @@ supplier — fast::
 - `call(operation_id: str, **kwargs) -> Any` — Escape hatch: call any OpenAPI operation by operationId.
 - `get_activity(process_id: str) -> ActivityDetail` — Fetch an activity's full detail.
 - `get_characterization(method_id: str, *, flow: str | None = None, limit: int | None = None) -> dict` — Look up characterization factors for a method matched to database flows.
-- `get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, limit: int | None = None, max_depth: int | None = None, include_edges: bool = False) -> ConsumersResponse` — Find all activities that transitively consume this supplier.
+- `get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, include_edges: bool = False) -> ConsumersResponse` — Find all activities that transitively consume this supplier.
 - `get_contributing_activities(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> dict` — Which upstream activities drive a given impact category.
 - `get_contributing_flows(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> dict` — Which elementary flows drive a given impact category.
 - `get_flow_mapping(method_id: str) -> dict` — Get the characterization-factor-to-database-flow mapping coverage.
@@ -348,8 +349,8 @@ supplier — fast::
 - `list_presets()` — List classification presets configured in this instance.
 - `load_database(db_name: str) -> dict` — Load a database into memory so it answers queries.
 - `refresh_stubs()` — Fetch the OpenAPI spec from the server and refresh the dispatch table.
-- `search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, limit: int | None = None, offset: int = 0, exact: bool = False) -> list[Activity]` — Search activities in the current database.
-- `search_flows(query: str | None = None, *, limit: int | None = None) -> list[dict]` — Search flows (technosphere products and biosphere flows) in the current database.
+- `search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]` — Search activities in the current database.
+- `search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None) -> SearchResults[Flow]` — Search flows (technosphere products and biosphere flows) in the current database.
 - `unload_database(db_name: str) -> dict` — Unload a database from memory to free RAM. The disk copy is kept.
 - `use(db_name: str) -> 'Client'` — Return a new client targeting a different database (shares session).
 
@@ -419,7 +420,7 @@ instead of walking the raw exchanges list.
 | `reference_product_amount` | `float \| None` | — |
 | `reference_product_unit` | `str \| None` | — |
 | `all_products` | `list[Activity]` | — |
-| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange]]` | — |
+| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | — |
 
 ### `ActivityDiff`
 
@@ -485,6 +486,7 @@ An exchange with the environment (resource extraction or emission).
 | `direction` | `Literal['Resource', 'Emission']` | — |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
+| `is_waste` | `bool` | False |
 
 ### `ClassificationFilter`
 
@@ -546,16 +548,14 @@ Activity that consumes a given supplier, with BFS depth.
 Reverse supply chain (/consumers) — paginated consumer list plus
 optional edge set. Mirrors :class:`SupplyChain` so callers have a
 uniform {entries, edges} shape in both traversal directions.
-``edges`` is populated only when ``include_edges=True``.
+
+``consumers`` is a :class:`SearchResults[ConsumerResult]` — iterate it
+to walk every consumer across all pages. ``edges`` is populated only
+when ``include_edges=True``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `consumers` | `list[ConsumerResult]` | — |
-| `total` | `int` | — |
-| `offset` | `int` | — |
-| `limit` | `int` | — |
-| `has_more` | `bool` | — |
-| `search_time_ms` | `float` | — |
+| `consumers` | `SearchResults[ConsumerResult]` | — |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
 ### `DatabaseInfo`
@@ -578,6 +578,22 @@ endpoint. Derived from the engine's declared topology, not runtime state.
 | `description` | `str \| None` | None |
 | `format` | `str \| None` | None |
 | `depends_on` | `list[str]` | list() |
+
+### `Flow`
+
+A technosphere product or biosphere flow as returned by /flows.
+
+Mirrors the server's :code:`FlowSearchResult`. ``synonyms`` maps
+language code → list of synonym strings (empty when the database
+carries no synonym index).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `id` | `str` | — |
+| `name` | `str` | — |
+| `category` | `str` | — |
+| `unit_name` | `str` | — |
+| `synonyms` | `dict[str, list[str]]` | dict() |
 
 ### `FlowContribution`
 
@@ -693,6 +709,30 @@ One per-variable entry inside ``LCIABatchResult.scoring_indicators``.
 | `category` | `str` | — |
 | `value` | `float` | — |
 
+### `SearchResults`
+
+Paginated wire envelope, mirrors Haskell ``SearchResults a``.
+
+Carries one page of results plus pagination metadata. Iterating walks
+every page lazily, fetching subsequent pages on demand via the
+``_fetch`` callback. ``len()`` returns ``total`` — the server-reported
+count across *all* pages, not just the items currently held.
+
+Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
+``search_time_ms``) mirror the server type exactly. Page-style helpers
+(``page_size``, ``page(n)``) are client conveniences computed from them.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `results` | `list[~T]` | — |
+| `total` | `int` | — |
+| `offset` | `int` | — |
+| `limit` | `int` | — |
+| `has_more` | `bool` | — |
+| `search_time_ms` | `float` | — |
+| `_fetch` | `Optional[Callable[[int, int], dict]]` | None |
+| `_parse` | `Optional[Callable[[dict], ~T]]` | None |
+
 ### `SupplyChain`
 
 | Field | Type | Default |
@@ -741,6 +781,29 @@ producing activity's classifications describe the product taxonomy.
 | `target_process_id` | `str \| None` | — |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
+| `is_waste` | `bool` | False |
+
+### `WasteExchange`
+
+An exchange of a waste flow with a treatment activity.
+
+Shares the technosphere matrix with product flows but tracked as its own
+kind so callers can tell a "waste sent to landfill" output apart from a
+product input. Orphan waste (no linked treatment) contributes zero impact
+— same cut-off semantics as an orphan technosphere input.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow_name` | `str` | — |
+| `amount` | `float` | — |
+| `unit` | `str` | — |
+| `is_input` | `bool` | — |
+| `target_activity` | `str \| None` | — |
+| `target_location` | `str \| None` | — |
+| `target_process_id` | `str \| None` | — |
+| `comment` | `str \| None` | None |
+| `is_biosphere` | `bool` | False |
+| `is_waste` | `bool` | True |
 
 ## Functions
 
@@ -776,11 +839,12 @@ Returns:
 
 ### `Exchange`
 
-Type alias: `Union[TechnosphereExchange, BiosphereExchange]`.
+Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
 
 ### `TechRole`
 
 Type alias: `Literal['ReferenceProduct', 'Coproduct', 'ReferenceInput', 'Input']`.
+
 
 <!-- END: api-reference -->
 
