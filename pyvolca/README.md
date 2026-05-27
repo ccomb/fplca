@@ -108,7 +108,7 @@ for a in plants:
     print(f"{a.process_id}  {a.name} ({a.location})")
 ```
 
-`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages are fetched on demand); `len(results)` is the server-reported total. Use `results.page(n)` for explicit page access, or pass `page=` / `page_size=` to jump straight to a page. Each `Activity` carries `process_id`, `name`, `location`, `product`, `product_amount`, `product_unit`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
+`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together — `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` carries `process_id`, `name`, `location`, `product`, `product_amount`, `product_unit`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
 
 ## Inspect an activity
 

@@ -197,6 +197,12 @@ class TestDispatcher:
         with pytest.raises(VoLCAError, match="Mix of page-style"):
             client.search_activities(page=2, offset=10)
 
+    def test_search_activities_page_without_page_size_raises(self, mocked_client):
+        """page=N alone is ambiguous: we don't fabricate a page size to derive offset."""
+        client, _ = mocked_client
+        with pytest.raises(VoLCAError, match="page=N requires an explicit page_size"):
+            client.search_activities(page=2)
+
     def test_kebab_case_query_param_translation(self, mocked_client, make_response):
         """``min_quantity`` Python → ``min-quantity`` wire."""
         client, session = mocked_client

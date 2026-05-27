@@ -34,6 +34,7 @@ class TestSearchResultsBasics:
         sr = SearchResults.from_raw(
             _page(["a", "b"], offset=0, limit=2, total=42),
             parse=Activity.from_json,
+            fetch=lambda o, l: _page([], o, l or 2, 42),  # never called, just to satisfy from_raw
         )
         assert len(sr) == 42
 
@@ -56,8 +57,18 @@ class TestSearchResultsBasics:
         sr = SearchResults.from_raw(
             _page(["a", "b"], offset=0, limit=2, total=10),
             parse=Activity.from_json,
+            fetch=lambda o, l: _page([], o, l or 2, 10),  # never called, just to satisfy from_raw
         )
         assert sr.has_more is True
+
+    def test_getitem_supports_slice_on_current_page(self):
+        sr = SearchResults.from_raw(
+            _page(["a", "b", "c"], offset=0, limit=3, total=3),
+            parse=Activity.from_json,
+        )
+        sliced = sr[:2]
+        assert isinstance(sliced, list)
+        assert [a.name for a in sliced] == ["a", "b"]
 
     def test_search_time_ms_preserved(self):
         sr = SearchResults.from_raw(
@@ -99,13 +110,54 @@ class TestSearchResultsIteration:
         # Two follow-up fetches: offsets 2 and 4.
         assert calls == [(2, 2), (4, 2)]
 
-    def test_iteration_stops_when_no_fetcher_and_has_more(self):
-        """Detached SearchResults stops after the in-memory page even if has_more is True."""
+    def test_from_raw_rejects_detached_has_more(self):
+        """No fetcher + hasMore=True is unsafe (would silently truncate). Constructor refuses it."""
+        with pytest.raises(ValueError, match="hasMore=True but no fetch callback"):
+            SearchResults.from_raw(
+                _page(["a", "b"], offset=0, limit=2, total=10),
+                parse=Activity.from_json,
+            )
+
+    def test_iteration_stops_on_empty_page_with_has_more(self):
+        """Server claims hasMore=True but returns no items — iteration must terminate, not loop."""
+        def fetch(offset: int, limit: int | None) -> dict:
+            # Buggy server: keeps saying hasMore but never advances.
+            return {
+                "results": [],
+                "total": 100,
+                "offset": offset,
+                "limit": limit or 2,
+                "hasMore": True,
+                "searchTimeMs": 0.0,
+            }
+
         sr = SearchResults.from_raw(
-            _page(["a", "b"], offset=0, limit=2, total=10),
+            _page(["a", "b"], offset=0, limit=2, total=100),
             parse=Activity.from_json,
+            fetch=fetch,
         )
-        assert list(sr) == [a for a in sr.results]
+        # Must terminate after the in-memory page rather than spin.
+        assert [a.name for a in sr] == ["a", "b"]
+
+    def test_reiteration_replays_from_cache(self):
+        """A second iteration must not re-hit the server — fetched pages are cached."""
+        calls: list[tuple[int, int | None]] = []
+
+        def fetch(offset: int, limit: int | None) -> dict:
+            calls.append((offset, limit))
+            return _page(["c", "d"], offset=2, limit=2, total=4)
+
+        sr = SearchResults.from_raw(
+            _page(["a", "b"], offset=0, limit=2, total=4),
+            parse=Activity.from_json,
+            fetch=fetch,
+        )
+        first = [a.name for a in sr]
+        second = [a.name for a in sr]
+        assert first == ["a", "b", "c", "d"]
+        assert second == first
+        # Exactly one follow-up fetch — the second iteration replays the cache.
+        assert len(calls) == 1
 
 
 class TestPageMethod:

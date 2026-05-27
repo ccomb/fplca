@@ -136,8 +136,11 @@ def _resolve_page_args(
     leaves it off the request entirely so the engine applies its own
     default page size (matching what the web UI gets).
 
-    Raises VoLCAError if both pagination styles are mixed in a way that
-    would silently lose user intent.
+    Raises VoLCAError if the kwargs combination cannot map to a single
+    unambiguous ``(offset, limit)``. The page-style and wire-style families
+    cannot mix, and ``page=N`` without ``page_size`` is rejected: we refuse
+    to fabricate a page size, since assuming one would silently misalign
+    the offset whenever the engine's default differs.
     """
     page_style = page is not None or page_size is not None
     wire_style = offset is not None  # bare `limit=N` is just a cap, not pagination
@@ -146,13 +149,18 @@ def _resolve_page_args(
             "Mix of page-style (page=, page_size=) and wire-style (offset=) "
             "pagination kwargs. Use one or the other."
         )
+    if page is not None and page_size is None:
+        raise VoLCAError(
+            "page=N requires an explicit page_size=M — offset cannot be derived "
+            "from page alone without committing to a page size."
+        )
     if page is not None and page < 1:
         raise VoLCAError(f"page must be >= 1, got {page}")
     if page_size is not None and page_size < 1:
         raise VoLCAError(f"page_size must be >= 1, got {page_size}")
     if page_style:
-        ps = page_size if page_size is not None else 20  # mirror engine default
-        return ps, ((page or 1) - 1) * ps
+        # page_size alone (no page=) means "page 1 with this size".
+        return page_size, ((page or 1) - 1) * (page_size or 0)
     return limit, offset or 0
 
 
@@ -553,12 +561,12 @@ class Client:
             preset: Apply a named classification preset configured in the engine.
             classification: System name (``"ISIC rev.4 ecoinvent"``).
             classification_value: Substring within that system's value.
-            page: 1-based page number; combined with ``page_size`` to derive
-                the wire-level ``offset``. Mirrors the web UI's pagination.
+            page: 1-based page number. Must be paired with ``page_size`` —
+                offset cannot be derived from page alone.
             page_size: Items per page (becomes the wire-level ``limit``).
-                Defaults to the engine's own default (20) when omitted.
+                Alone (no ``page``) means "page 1 with this size".
             limit: Wire-level cap on returned items. Prefer ``page_size``.
-            offset: Wire-level starting index. Prefer ``page``.
+            offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
             exact: When True, ``name`` and ``product`` are matched exactly.
 
         Returns:
