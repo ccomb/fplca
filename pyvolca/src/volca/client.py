@@ -54,6 +54,7 @@ from .types import (
     Exchange,
     LCIABatchResult,
     LCIAResult,
+    MatchMode,
     PathResult,
     SupplyChain,
     parse_exchange_detail,
@@ -611,7 +612,7 @@ class Client:
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]
-        classification_modes = [f.mode for f in classification_filters or []]
+        classification_modes = [f.mode.value for f in classification_filters or []]
         raw = self._call(
             "get_supply_chain",
             process_id=process_id,
@@ -661,7 +662,7 @@ class Client:
         # filter_classification goes over the wire as "System=Value[:exact]" strings.
         if filter_classification:
             filter_strings = [
-                f"{f.system}={f.value}" + (":exact" if f.mode == "exact" else "")
+                f"{f.system}={f.value}" + (":exact" if f.mode is MatchMode.EXACT else "")
                 for f in filter_classification
             ]
         else:
@@ -710,7 +711,7 @@ class Client:
             max_depth: Max hops from supplier. 1 = direct consumers only.
             classification_filters: ClassificationFilter entries restricting
                 the results. Multiple filters are AND-combined by the server.
-                Mode is ``"exact"`` or ``"contains"``.
+                Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
             include_edges: When True, the response carries every technosphere
                 edge whose endpoints are both reachable from the supplier.
                 Callers can walk these to reconstruct supplier→consumer paths
@@ -722,7 +723,7 @@ class Client:
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]
-        classification_modes = [f.mode for f in classification_filters or []]
+        classification_modes = [f.mode.value for f in classification_filters or []]
         raw = self._call(
             "get_consumers",
             process_id=process_id,

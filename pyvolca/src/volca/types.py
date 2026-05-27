@@ -3,6 +3,7 @@
 import dataclasses
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, ClassVar, Literal, Union
 
 
@@ -158,18 +159,47 @@ class LCIABatchResult:
         )
 
 
-@dataclass
+class MatchMode(Enum):
+    """How a :class:`ClassificationFilter` value is compared against the entry.
+
+    ``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
+    substring. The ``.value`` is what travels over the wire.
+    """
+
+    EXACT = "exact"
+    CONTAINS = "contains"
+
+
+MatchModeLike = Union[MatchMode, Literal["exact", "contains"]]
+"""Either a :class:`MatchMode` member or its literal string form.
+
+Pyright autocompletes both shapes and rejects typos (``"exct"``, ``"Exact"``)
+statically; the constructor normalises to :class:`MatchMode` at runtime."""
+
+
+@dataclass(init=False)
 class ClassificationFilter:
     """Filter a supply-chain/consumers query by a classification (system, value, mode).
 
-    Matches one classification system entry (e.g. ("Category", "Agricultural\\\\Food",
-    "exact")). Mode is "exact" (case-insensitive equality) or "contains" (substring).
+    Matches one classification system entry, e.g.
+    ``ClassificationFilter("Category", "Agricultural\\\\Food", "exact")`` or
+    ``ClassificationFilter("Category", "Agricultural\\\\Food", MatchMode.EXACT)``.
     Multiple filters are AND-combined by the server.
     """
 
     system: str
     value: str
-    mode: str = "contains"
+    mode: MatchMode = MatchMode.CONTAINS
+
+    def __init__(
+        self,
+        system: str,
+        value: str,
+        mode: MatchModeLike = MatchMode.CONTAINS,
+    ):
+        self.system = system
+        self.value = value
+        self.mode = mode if isinstance(mode, MatchMode) else MatchMode(mode)
 
 
 @dataclass
