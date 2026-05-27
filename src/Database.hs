@@ -4,23 +4,20 @@
 
 module Database where
 
-import Data.Either (lefts, rights)
-import Data.Int (Int32)
 import qualified Data.IntSet as IS
-import Data.List (sort)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Database.MatrixBuild
 import Progress
 import qualified Search.BM25.Types as BM25T
 import qualified Search.Fuzzy as Fuzzy
 import qualified Search.Normalize as Normalize
 import Types
-import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
+import UnitConversion (UnitConfig)
 
 {- | Build complete database with pre-computed sparse matrices
 
@@ -45,204 +42,47 @@ Matrix Construction:
 buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> IO (Either Text Database)
 buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowDB unitDB = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
+    let !tables = buildInterningTables activityMap
+        !supplierRefUnits = buildSupplierRefUnits unitDB (itActivities tables)
+        !indexes = buildIndexesWithProcessIds (itActivities tables) (itProcessIdTable tables)
+        activityCount = itActivityCount tables
 
-    -- Step 1: Build UUID interning tables from Map keys
-    let activityKeys = M.keys activityMap
-        sortedKeys = sort activityKeys -- Ensure deterministic ordering
-
-        -- Build forward lookup: ProcessId (Int32) -> (UUID, UUID)
-        dbProcessIdTable = V.fromList sortedKeys
-
-        -- Build reverse lookup: (UUID, UUID) -> ProcessId (Int32)
-        dbProcessIdLookup = M.fromList $ zip sortedKeys [0 ..]
-
-        -- Build activity UUID index: UUID -> ProcessId (for O(1) lookups)
-        dbActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
-
-        -- Build activity products index: UUID -> [ProcessId] (for multi-product activities)
-        dbActivityProductsIndex = M.fromListWith (++) [(actUUID, [pid]) | (pid, (actUUID, _)) <- zip [0 ..] sortedKeys]
-
-        -- Build activity-product lookup for correct multi-output handling
-        -- Maps (activityUUID, productFlowUUID) -> ProcessId
-        -- This ensures exchanges link to the correct product in multi-output activities
-        activityProductLookup = M.fromList [((actUUID, prodUUID), pid) | (pid, (actUUID, prodUUID)) <- zip [0 ..] sortedKeys]
-
-        -- Convert Map to Vector indexed by ProcessId
-        dbActivities = V.fromList [activityMap M.! key | key <- sortedKeys]
-
-        -- Build indexes (now using Vector)
-        indexes = buildIndexesWithProcessIds dbActivities dbProcessIdTable
-
-        -- Build supplier reference unit lookup: ProcessId -> unit name of reference product
-        -- Used to convert exchange amounts to the supplier's unit for correct A-matrix coefficients
-        supplierRefUnits =
-            V.map
-                ( \act ->
-                    let refExs = [ex | ex <- exchanges act, exchangeIsReference ex, not (exchangeIsInput ex)]
-                     in case refExs of
-                            (ex : _) -> getUnitNameForExchange unitDB ex
-                            [] -> ""
-                )
-                dbActivities
-
-    -- Build activity index for matrix construction
-    reportMatrixOperation "Building activity indexes"
-    let activityCount = fromIntegral (V.length dbActivities) :: Int32
-
-    -- Note: ProcessId is already the matrix index (identity mapping removed for performance)
     reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
-
-    -- Build technosphere sparse triplets
     reportMatrixOperation "Building technosphere matrix triplets"
-    let buildTechTriple normalizationFactor j consumerActivity _consumerPid ex
-            -- Biosphere exchanges live in the B matrix, not A.
-            -- WasteExchanges share the A matrix with technosphere flows: the
-            -- underlying calculation is identical to a product link. Orphan
-            -- waste outputs (no activityLinkId) naturally drop out below when
-            -- producerIdx is Nothing — same as orphan tech inputs.
-            | isBiosphereExchange ex = Right ([], [])
-            | exchangeIsReference ex = Right ([], []) -- reference product is on the diagonal
-            | otherwise =
-                let producerResult = case exchangeProcessLinkId ex of
-                        Just pid -> (Just pid, [])
-                        Nothing -> case exchangeActivityLinkId ex of
-                            Just actUUID ->
-                                case M.lookup (actUUID, exchangeFlowId ex) activityProductLookup of
-                                    Just pid -> (Just pid, [])
-                                    Nothing ->
-                                        -- Only warn if exchange has non-zero amount (zero-amount are placeholders)
-                                        let warning =
-                                                [ "Missing activity-product pair referenced by exchange:\n"
-                                                    ++ "  Activity UUID: "
-                                                    ++ T.unpack (UUID.toText actUUID)
-                                                    ++ "\n"
-                                                    ++ "  Product UUID: "
-                                                    ++ T.unpack (UUID.toText (exchangeFlowId ex))
-                                                    ++ "\n"
-                                                    ++ "  Consumer: "
-                                                    ++ T.unpack (activityName consumerActivity)
-                                                    ++ "\n"
-                                                    ++ "  Expected file: "
-                                                    ++ T.unpack (UUID.toText actUUID)
-                                                    ++ "_"
-                                                    ++ T.unpack (UUID.toText (exchangeFlowId ex))
-                                                    ++ ".spold\n"
-                                                    ++ "  This exchange will be skipped."
-                                                | abs (exchangeAmount ex) > 1e-15
-                                                ]
-                                         in (Nothing, warning)
-                            Nothing -> (Nothing, [])
-                    (producerPid, warnings) = producerResult
-                    producerIdx =
-                        producerPid >>= \pid ->
-                            if pid >= 0 && fromIntegral pid < activityCount
-                                then Just $ fromIntegral pid
-                                else Nothing
-                 in case producerIdx of
-                        Just idx ->
-                            let rawValue = exchangeAmount ex
-                                exchangeUnit = getUnitNameForExchange unitDB ex
-                                supplierUnit = supplierRefUnits V.! fromIntegral idx
-                                needsConversion =
-                                    normalizeUnit exchangeUnit /= normalizeUnit supplierUnit
-                                        && not (T.null exchangeUnit)
-                                        && not (T.null supplierUnit)
-                             in case (needsConversion, convertUnit unitConfig exchangeUnit supplierUnit rawValue) of
-                                    (True, Nothing) ->
-                                        Left $
-                                            "Unknown unit conversion: \""
-                                                <> exchangeUnit
-                                                <> "\" \8594 \""
-                                                <> supplierUnit
-                                                <> "\" in "
-                                                <> activityName consumerActivity
-                                                <> " \8212 add these units to [[units]] CSV"
-                                    _ ->
-                                        let convertedValue = case (needsConversion, convertUnit unitConfig exchangeUnit supplierUnit rawValue) of
-                                                (True, Just v) -> v
-                                                _ -> rawValue
-                                            denom =
-                                                if normalizationFactor > 1e-15
-                                                    then normalizationFactor
-                                                    else 1.0
-                                            sign = if exchangeIsInput ex then 1 else -1
-                                            value = sign * convertedValue / denom
-                                         in Right ([SparseTriple idx j value | convertedValue /= 0, idx /= j], warnings)
-                        Nothing -> Right ([], warnings)
-
-        buildActivityTriplets (j, consumerPid) =
-            let consumerActivity = dbActivities V.! fromIntegral consumerPid
-                consumerKey = dbProcessIdTable V.! fromIntegral consumerPid
-                normalizationFactor = activityNormFactor consumerActivity consumerKey
-                buildNormalizedTechTriple = buildTechTriple normalizationFactor j consumerActivity consumerPid
-                results = map buildNormalizedTechTriple (exchanges consumerActivity)
-             in -- Short-circuit on first Left (unit conversion error)
-                case lefts results of
-                    (err : _) -> Left err
-                    [] -> let rs = rights results in Right (concatMap fst rs, concatMap snd rs)
-
-    -- Collect results, failing on first unit conversion error
-    let activityRange = [(fromIntegral j, j) | j <- [0 .. fromIntegral activityCount - 1 :: ProcessId]]
-        activityResults = map buildActivityTriplets activityRange
-    case lefts activityResults of
-        (err : _) -> return $ Left err
-        [] -> do
-            let allResults = rights activityResults
-                !techTriples = VU.fromList $ concatMap fst allResults
-                techWarnings = concatMap snd allResults
-
-            -- Emit warnings in IO context
+    case buildTechTriples unitConfig unitDB tables supplierRefUnits of
+        Left err -> pure (Left err)
+        Right (techTriples, techWarnings) -> do
             mapM_ (reportProgress Warning) techWarnings
-
             reportMatrixOperation ("Technosphere matrix: " ++ show (VU.length techTriples) ++ " non-zero entries")
 
-            -- Build biosphere sparse triplets
             reportMatrixOperation "Building biosphere matrix triplets"
-            let bioFlowUUIDs =
-                    V.fromList $
-                        sort $
-                            S.toList $
-                                S.fromList
-                                    [exchangeFlowId ex | pid <- [0 .. fromIntegral activityCount - 1 :: Int], let act = dbActivities V.! pid, ex <- exchanges act, isBiosphereExchange ex]
-                bioFlowCount = fromIntegral $ V.length bioFlowUUIDs :: Int32
-                bioFlowIndex = M.fromList $ zip (V.toList bioFlowUUIDs) [0 ..]
-
-                !bioTriples =
-                    let buildBioTriple normalizationFactor j _activity ex
-                            | not (isBiosphereExchange ex) = []
-                            | otherwise =
-                                case M.lookup (exchangeFlowId ex) bioFlowIndex of
-                                    Just i ->
-                                        let rawValue = exchangeAmount ex
-                                            denom = if normalizationFactor > 1e-15 then normalizationFactor else 1.0
-                                            value = rawValue / denom
-                                         in [SparseTriple i j value | rawValue /= 0]
-                                    Nothing -> []
-
-                        buildActivityBioTriplets (j, pid) =
-                            let activity = dbActivities V.! fromIntegral pid
-                                activityKey = dbProcessIdTable V.! fromIntegral pid
-                                normalizationFactor = activityNormFactor activity activityKey
-                             in concatMap (buildBioTriple normalizationFactor j activity) (exchanges activity)
-                     in VU.fromList $ concatMap buildActivityBioTriplets activityRange
+            let !bioFlowUUIDs = collectBioFlowOrder (itActivities tables)
+                !bioTriples = buildBioTriples bioFlowUUIDs tables
+                bioFlowCount = fromIntegral (V.length bioFlowUUIDs)
 
             reportMatrixOperation ("Biosphere matrix: " ++ show (VU.length bioTriples) ++ " non-zero entries")
             reportMatrixOperation "Database with matrices built successfully"
-            reportMatrixOperation ("Final matrix stats: " ++ show (VU.length techTriples) ++ " tech entries, " ++ show (VU.length bioTriples) ++ " bio entries")
+            reportMatrixOperation
+                ( "Final matrix stats: "
+                    ++ show (VU.length techTriples)
+                    ++ " tech entries, "
+                    ++ show (VU.length bioTriples)
+                    ++ " bio entries"
+                )
 
             reportMatrixOperation "Building product index"
-            let !productIndex = buildProductIndex dbActivities dbProcessIdTable techFlowDB
+            let !productIndex = buildProductIndex (itActivities tables) (itProcessIdTable tables) techFlowDB
             reportMatrixOperation ("Product index: " ++ show (M.size (piByUUID productIndex)) ++ " products indexed")
 
-            return $
+            pure $
                 Right
                     Database
-                        { dbProcessIdTable = dbProcessIdTable
-                        , dbProcessIdLookup = dbProcessIdLookup
-                        , dbActivityUUIDIndex = dbActivityUUIDIndex
-                        , dbActivityProductsIndex = dbActivityProductsIndex
+                        { dbProcessIdTable = itProcessIdTable tables
+                        , dbProcessIdLookup = itProcessIdLookup tables
+                        , dbActivityUUIDIndex = itActivityUUIDIndex tables
+                        , dbActivityProductsIndex = itActivityProductsIndex tables
                         , dbProductIndex = productIndex
-                        , dbActivities = dbActivities
+                        , dbActivities = itActivities tables
                         , dbTechFlows = techFlowDB
                         , dbBioFlows = bioFlowDB
                         , dbWasteFlows = wasteFlowDB

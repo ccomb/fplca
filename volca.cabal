@@ -39,6 +39,7 @@ library
                      , Database.Manager
                      , Database.Loader
                      , Database.CrossLinking
+                     , Database.MatrixBuild
                      , Database.Upload
                      , Database.UploadedDatabase
                      , SynonymDB
