@@ -546,6 +546,12 @@ flowKindUnitName udb (TechKind f) = getUnitNameForTechFlow udb f
 flowKindUnitName udb (BioKind f) = getUnitNameForBioFlow udb f
 flowKindUnitName udb (WasteKind f) = getUnitNameForWasteFlow udb f
 
+-- | Biosphere compartment, if any. Tech/waste flows carry no compartment.
+flowKindCompartment :: FlowKind -> Maybe Compartment
+flowKindCompartment (TechKind _) = Nothing
+flowKindCompartment (BioKind f) = bfCompartment f
+flowKindCompartment (WasteKind _) = Nothing
+
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
 
@@ -876,6 +882,19 @@ Uses the ProductIndex to resolve the supplier activity from the product flow.
 findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =
     M.lookup flowUUID (piByUUID $ dbProductIndex db)
+
+{- | Look up an exchange's flow on the appropriate side. Each exchange variant
+has exactly one flow side by construction (tech, bio, or waste), so the
+result is a single 'FlowKind' or 'Nothing' when the UUID is absent from the
+database.
+-}
+lookupExchangeFlow :: Database -> Exchange -> Maybe FlowKind
+lookupExchangeFlow db TechnosphereExchange{techFlowId = fid} =
+    TechKind <$> M.lookup fid (dbTechFlows db)
+lookupExchangeFlow db BiosphereExchange{bioFlowId = fid} =
+    BioKind <$> M.lookup fid (dbBioFlows db)
+lookupExchangeFlow db WasteExchange{waFlowId = fid} =
+    WasteKind <$> M.lookup fid (dbWasteFlows db)
 
 {- | Search products by name (for future product search feature)
 Returns all ProcessIds that produce products matching the given name

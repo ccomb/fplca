@@ -5,7 +5,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), parseSubRef, unresolvedFlowName)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), apiFlowOfKind, parseSubRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
@@ -1175,13 +1175,9 @@ resolveTarget cfg db links = \case
 flow side by construction, so no Maybe-merge is needed downstream.
 -}
 resolveFlow :: Database -> Exchange -> Maybe (Text, Maybe Compartment)
-resolveFlow db = \case
-    TechnosphereExchange{techFlowId = fid} ->
-        (\tf -> (tfName tf, Nothing)) <$> M.lookup fid (dbTechFlows db)
-    BiosphereExchange{bioFlowId = fid} ->
-        (\bf -> (bfName bf, bfCompartment bf)) <$> M.lookup fid (dbBioFlows db)
-    WasteExchange{waFlowId = fid} ->
-        (\wf -> (wfName wf, Nothing)) <$> M.lookup fid (dbWasteFlows db)
+resolveFlow db exchange = do
+    fk <- lookupExchangeFlow db exchange
+    pure (flowKindName fk, flowKindCompartment fk)
 
 {- | Build the cross-DB link map for one activity, keyed by consumer flow UUID.
 UUIDs are unique across flow kinds, so a tech and a waste link on the same
@@ -1323,109 +1319,82 @@ getActivitiesUsingFlow db flowUUID =
                 , Just processId <- [findProcessIdForActivity db proc]
                 ]
 
-{- | Helper function to get detailed exchanges with filtering. Resolves
-cross-DB technosphere inputs (SimaPro pattern: activityLinkId is nil,
-the supplier lives in a dep DB via 'dbCrossDBLinks') by synthesizing an
-'ActivitySummary' with a qualified pid @"dbName::actUUID_prodUUID"@ —
-same convention the @/activity/{pid}@ endpoint uses.
+{- | Sentinel returned only when an exchange's unit UUID failed to resolve.
+The exchange unit-name field already surfaces the same gap via
+'getUnitNameForExchange', so consumers see the missing unit in both the
+structured 'Unit' and the unit-name string.
+-}
+unresolvedUnit :: Unit
+unresolvedUnit = Unit{unitId = UUID.nil, unitName = "<unresolved unit>", unitSymbol = "", unitComment = ""}
+
+{- | 'ActivitySummary' form of a cross-DB link target. Mirrors
+'crossDBLinkToTarget' but produces the richer wire shape consumed by the
+exchange-details endpoint.
+-}
+crossDBLinkToSummary :: CrossDBLink -> ActivitySummary
+crossDBLinkToSummary link =
+    ActivitySummary
+        { prsProcessId =
+            cdlSourceDatabase link
+                <> "::"
+                <> UUID.toText (cdlSupplierActUUID link)
+                <> "_"
+                <> UUID.toText (cdlSupplierProdUUID link)
+        , prsName = cdlFlowName link
+        , prsLocation = cdlLocation link
+        , prsProduct = cdlFlowName link
+        , prsProductAmount = 1.0
+        , prsProductUnit = cdlExchangeUnit link
+        , prsAllocationPercent = Nothing
+        , prsAllocationFormula = Nothing
+        , prsNativeType = Nothing
+        }
+
+{- | Resolve an exchange's target as 'ActivitySummary', falling back to the
+cross-DB link map for unresolved technosphere/waste links. Biosphere flows
+have no target by definition.
+-}
+resolveTargetSummary
+    :: Database
+    -> M.Map UUID CrossDBLink
+    -> Exchange
+    -> Maybe ActivitySummary
+resolveTargetSummary db links exchange = case exchange of
+    BiosphereExchange{} -> Nothing
+    TechnosphereExchange{} -> resolved
+    WasteExchange{} -> resolved
+  where
+    resolved =
+        getTargetActivity db exchange
+            <|> (crossDBLinkToSummary <$> M.lookup (exchangeFlowId exchange) links)
+
+{- | Detailed exchanges with filtering. Resolves cross-DB technosphere inputs
+(SimaPro pattern: @activityLinkId@ is nil, the supplier lives in a dep DB
+via 'dbCrossDBLinks') by synthesizing an 'ActivitySummary' with a qualified
+pid @"dbName::actUUID_prodUUID"@ — same convention the @/activity/{pid}@
+endpoint uses.
+
+A missing flow row used to drop the exchange entirely. We now surface an
+unresolved-flow entry instead, so the returned list always has one element
+per matching exchange and the gap is reportable.
 -}
 getActivityExchangeDetails :: Database -> Activity -> (Exchange -> Bool) -> [ExchangeDetail]
 getActivityExchangeDetails db activity filterFn =
-    map mkDetail (filter filterFn (exchanges activity))
-  where
-    -- A missing flow or unit row used to drop the exchange entirely. We now
-    -- surface an unresolved-flow entry instead, so the returned list always
-    -- has one element per matching exchange and the gap is reportable.
-    mkDetail exchange =
-        let unitForExchange = M.findWithDefault unresolvedUnit (exchangeUnitId exchange) (dbUnits db)
-            exUnitName = getUnitNameForExchange (dbUnits db) exchange
-            fid = exchangeFlowId exchange
-            unresolved flow = ExchangeDetail exchange flow "" unitForExchange exUnitName Nothing
-         in case exchange of
-                TechnosphereExchange{} -> case M.lookup fid (dbTechFlows db) of
-                    Just flow ->
-                        ExchangeDetail
-                            exchange
-                            (ApiTechFlow flow)
-                            (getUnitNameForTechFlow (dbUnits db) flow)
-                            unitForExchange
-                            exUnitName
-                            (resolveCrossDBTarget exchange)
-                    Nothing -> unresolved (ApiUnresolvedFlow fid)
-                BiosphereExchange{} -> case M.lookup fid (dbBioFlows db) of
-                    Just flow ->
-                        ExchangeDetail
-                            exchange
-                            (ApiBioFlow flow)
-                            (getUnitNameForBioFlow (dbUnits db) flow)
-                            unitForExchange
-                            exUnitName
-                            Nothing -- Biosphere flows have no target activity
-                    Nothing -> unresolved (ApiUnresolvedFlow fid)
-                WasteExchange{} -> case M.lookup fid (dbWasteFlows db) of
-                    Just flow ->
-                        ExchangeDetail
-                            exchange
-                            (ApiWasteFlow flow)
-                            (getUnitNameForWasteFlow (dbUnits db) flow)
-                            unitForExchange
-                            exUnitName
-                            (resolveCrossDBTarget exchange)
-                    Nothing -> unresolved (ApiUnresolvedFlow fid)
+    let linkMap = case findProcessIdForActivity db activity of
+            Just pid -> buildCrossDBLinkMap db pid
+            Nothing -> M.empty
+     in map (toExchangeDetail db linkMap) (filter filterFn (exchanges activity))
 
-    -- Sentinel returned only when the exchange's unit UUID itself failed
-    -- to resolve. The exchange unit name field already surfaces the same
-    -- gap via 'getUnitNameForExchange', so consumers see the missing unit
-    -- in both the structured Unit and the exUnitName string.
-    unresolvedUnit = Unit{unitId = UUID.nil, unitName = "<unresolved unit>", unitSymbol = "", unitComment = ""}
-
-    -- Cross-DB link lookup keyed by the consumer-side flow UUID
-    -- ('cdlConsumerFlowId'). Built once per activity; O(log n) per-exchange
-    -- resolution. Keying by UUID — rather than normalized flow name — avoids
-    -- the collision where a tech "X" link and a waste "X" link on the same
-    -- activity would overwrite each other in a name-keyed map.
-    crossLinkByFlow :: M.Map UUID CrossDBLink
-    crossLinkByFlow = case findProcessIdForActivity db activity >>= processIdToUUIDs db of
-        Just (actUUID, _) ->
-            M.fromList
-                [ (cdlConsumerFlowId link, link)
-                | link <- dbCrossDBLinks db
-                , cdlConsumerActUUID link == actUUID
-                , cdlConsumerFlowId link /= UUID.nil
-                ]
-        Nothing -> M.empty
-
-    -- Resolves a target activity for a technosphere or waste exchange. Orphan
-    -- waste outputs resolved by the exact-match cross-DB linker share the same
-    -- 'crossLinkByFlow' path as technosphere inputs; both are keyed on the
-    -- consumer-side flow UUID.
-    resolveCrossDBTarget exchange =
-        case getTargetActivity db exchange of
-            Just s -> Just s
-            Nothing -> crossDBTarget (exchangeFlowId exchange)
-
-    crossDBTarget consumerFlowId =
-        case M.lookup consumerFlowId crossLinkByFlow of
-            Nothing -> Nothing
-            Just link ->
-                let qualifiedPid =
-                        cdlSourceDatabase link
-                            <> "::"
-                            <> UUID.toText (cdlSupplierActUUID link)
-                            <> "_"
-                            <> UUID.toText (cdlSupplierProdUUID link)
-                 in Just
-                        ActivitySummary
-                            { prsProcessId = qualifiedPid
-                            , prsName = cdlFlowName link
-                            , prsLocation = cdlLocation link
-                            , prsProduct = cdlFlowName link
-                            , prsProductAmount = 1.0
-                            , prsProductUnit = cdlExchangeUnit link
-                            , prsAllocationPercent = Nothing
-                            , prsAllocationFormula = Nothing
-                            , prsNativeType = Nothing
-                            }
+toExchangeDetail :: Database -> M.Map UUID CrossDBLink -> Exchange -> ExchangeDetail
+toExchangeDetail db links exchange =
+    let unitForExchange = M.findWithDefault unresolvedUnit (exchangeUnitId exchange) (dbUnits db)
+        exUnitName = getUnitNameForExchange (dbUnits db) exchange
+        target = resolveTargetSummary db links exchange
+     in case lookupExchangeFlow db exchange of
+            Just fk ->
+                ExchangeDetail exchange (apiFlowOfKind fk) (flowKindUnitName (dbUnits db) fk) unitForExchange exUnitName target
+            Nothing ->
+                ExchangeDetail exchange (ApiUnresolvedFlow (exchangeFlowId exchange)) "" unitForExchange exUnitName Nothing
 
 -- | Get detailed input exchanges
 getActivityInputDetails :: Database -> Activity -> [ExchangeDetail]
