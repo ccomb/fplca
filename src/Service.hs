@@ -2283,6 +2283,38 @@ computeScalingVectorWithSubstitutionsCrossDB depLookup db rootDbName solver pid 
             (d : _) -> Just d
             [] -> Nothing
 
+{- | A substitution endpoint resolved against the loaded databases.
+'Here' means the activity lives in @thisDb@ (no cross-DB plumbing
+needed); 'Elsewhere' carries the dep-DB descriptor required to look up
+static cross-DB links and synthesise virtual ones.
+
+The ADT replaces a @(Bool, Bool)@ dispatch on @(fromDb == thisDbName,
+toDb == thisDbName)@: each constructor names what the boolean meant.
+-}
+data Endpoint
+    = Here !ProcessId !(UUID, UUID)
+    | Elsewhere !DepRef
+
+-- | An endpoint that lives in a dependency database.
+data DepRef = DepRef
+    { drDbName :: !Text
+    , drDb :: !Database
+    , drPid :: !ProcessId
+    , drUUIDs :: !(UUID, UUID)
+    }
+
+{- | A planned rank-1 perturbation of one consumer column plus any virtual
+cross-DB links the substitution introduces or cancels. Computed purely
+from resolved endpoints by 'planUpdate'; consumed effectfully by
+'applyRankOne'. Separating the two keeps the four substitution cases
+out of the IO layer and makes them straightforward to test in isolation.
+-}
+data RankOneUpdate = RankOneUpdate
+    { ruConsumerPid :: !ProcessId
+    , ruPerturb :: ![(Int, Double)]
+    , ruExtras :: ![CrossDBLink]
+    }
+
 {- | Apply all substitutions whose consumer lives in @thisDbName@ to the
 given scaling vectors. Substitutions whose consumer lives elsewhere are
 skipped at this level — they'll match at the DB where their consumer
@@ -2353,130 +2385,128 @@ applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs =
         let (_, cPidText) = parseSubRef rootDb (subConsumer sub)
         case resolveActivityAndProcessId thisDb cPidText of
             Left e -> pure (Left e)
-            Right (consumerPid, _) -> do
+            Right (cPid, _) -> do
                 let (fromDb, fromPidText) = parseSubRef rootDb (subFrom sub)
                     (toDb, toPidText) = parseSubRef rootDb (subTo sub)
-                eFrom <- resolveRef fromDb fromPidText
-                eTo <- resolveRef toDb toPidText
+                eFrom <- resolveEndpoint fromDb fromPidText
+                eTo <- resolveEndpoint toDb toPidText
                 case (eFrom, eTo) of
                     (Left e, _) -> pure (Left e)
                     (_, Left e) -> pure (Left e)
-                    (Right fromRef, Right toRef) ->
-                        classify mFact xs consumerPid sub fromRef toRef
+                    (Right fromEp, Right toEp) ->
+                        case planUpdate sub cPid fromEp toEp of
+                            Left e -> pure (Left e)
+                            Right upd -> applyRankOne mFact xs upd
 
-    classify mFact xs consumerPid sub fromRef toRef =
-        let (fromDb, fromPid, fromUUIDs, _) = fromRef
-            (toDb, toPid, toUUIDs, toDbObj) = toRef
-         in case (fromDb == thisDbName, toDb == thisDbName) of
-                (True, True) ->
-                    case findTechCoefficient thisDb consumerPid fromPid of
-                        Nothing -> noTechLinkErr sub consumerPid
-                        Just aNorm ->
-                            applyRankOne
-                                mFact
-                                xs
-                                consumerPid
-                                [ (fromIntegral fromPid, aNorm)
-                                , (fromIntegral toPid, -aNorm)
-                                ]
-                                []
-                (True, False) ->
-                    -- Case B: drop this-DB oldSup, route demand to other-DB newSup.
-                    case findTechCoefficient thisDb consumerPid fromPid of
-                        Nothing -> noTechLinkErr sub consumerPid
-                        Just aNorm ->
-                            let aRaw = aNorm * activityNormalizationFactor thisDb consumerPid
-                                newLk = mkVirtualLink thisDb consumerPid toDbObj toDb toUUIDs toPid aRaw
-                             in applyRankOne
-                                    mFact
-                                    xs
-                                    consumerPid
-                                    [(fromIntegral fromPid, aNorm)]
-                                    [newLk]
-                (False, True) ->
-                    -- Case C: cancel existing cross-DB link, pull new this-DB supplier.
-                    case findStaticCrossDBLink thisDb consumerPid fromDb fromUUIDs of
-                        Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
-                        Just staticLk ->
-                            let aRaw = cdlCoefficient staticLk
-                                aNorm = aRaw / activityNormalizationFactor thisDb consumerPid
-                                cancel = staticLk{cdlCoefficient = -aRaw}
-                             in applyRankOne
-                                    mFact
-                                    xs
-                                    consumerPid
-                                    [(fromIntegral toPid, -aNorm)]
-                                    [cancel]
-                (False, False) ->
-                    -- Case D: re-route demand between two other DBs; this-DB x unchanged.
-                    case findStaticCrossDBLink thisDb consumerPid fromDb fromUUIDs of
-                        Nothing -> noStaticLinkErr sub consumerPid fromDb fromPid
-                        Just staticLk ->
-                            let aRaw = cdlCoefficient staticLk
-                                cancel = staticLk{cdlCoefficient = -aRaw}
-                                newLk = mkVirtualLink thisDb consumerPid toDbObj toDb toUUIDs toPid aRaw
-                             in applyRankOne mFact xs consumerPid [] [cancel, newLk]
+    planUpdate ::
+        Substitution ->
+        ProcessId ->
+        Endpoint ->
+        Endpoint ->
+        Either ServiceError RankOneUpdate
+    -- Case A: both suppliers in this DB. Symmetric rank-1 on the consumer column.
+    planUpdate sub cPid (Here fromPid _) (Here toPid _) = do
+        a <- requireTech sub cPid fromPid
+        Right $
+            RankOneUpdate
+                cPid
+                [(fromIntegral fromPid, a), (fromIntegral toPid, -a)]
+                []
+    -- Case B: drop this-DB oldSup, route demand to other-DB newSup.
+    -- aRaw = aNorm * normFactor (the cross-DB link stores *raw* coefficients).
+    planUpdate sub cPid (Here fromPid _) (Elsewhere toRef) = do
+        a <- requireTech sub cPid fromPid
+        let aRaw = a * activityNormalizationFactor thisDb cPid
+            newLk = virtualLinkTo cPid toRef aRaw
+        Right $ RankOneUpdate cPid [(fromIntegral fromPid, a)] [newLk]
+    -- Case C: cancel existing cross-DB link, pull new this-DB supplier.
+    planUpdate sub cPid (Elsewhere fromRef) (Here toPid _) = do
+        s <- requireStatic sub cPid fromRef
+        let aRaw = cdlCoefficient s
+            aNorm = aRaw / activityNormalizationFactor thisDb cPid
+            cancel = s{cdlCoefficient = -aRaw}
+        Right $ RankOneUpdate cPid [(fromIntegral toPid, -aNorm)] [cancel]
+    -- Case D: re-route demand between two other DBs; this-DB x unchanged.
+    -- Unlike Case B, the new-link coefficient is the *raw* static value,
+    -- not aNorm*normFactor — we're forwarding what the cancelled link carried.
+    planUpdate sub cPid (Elsewhere fromRef) (Elsewhere toRef) = do
+        s <- requireStatic sub cPid fromRef
+        let aRaw = cdlCoefficient s
+            cancel = s{cdlCoefficient = -aRaw}
+            newLk = virtualLinkTo cPid toRef aRaw
+        Right $ RankOneUpdate cPid [] [cancel, newLk]
 
-    applyRankOne mFact xs consumerPid perturb extra = do
+    virtualLinkTo cPid toRef =
+        mkVirtualLink thisDb cPid (drDb toRef) (drDbName toRef) (drUUIDs toRef) (drPid toRef)
+
+    requireTech sub cPid fromPid =
+        maybe (Left $ noTechLink sub cPid) Right $
+            findTechCoefficient thisDb cPid fromPid
+
+    requireStatic sub cPid fromRef =
+        maybe (Left $ noStaticLink sub cPid (drDbName fromRef) (drPid fromRef)) Right $
+            findStaticCrossDBLink thisDb cPid (drDbName fromRef) (drUUIDs fromRef)
+
+    applyRankOne mFact xs upd = do
         -- Apply the same rank-1 update to each of the K vectors. z depends
         -- only on u (not x); a future optimization can compute z once.
         results <-
             mapM
-                (\x -> perturbA thisDb mFact x (fromIntegral consumerPid) perturb)
+                (\x -> perturbA thisDb mFact x (fromIntegral (ruConsumerPid upd)) (ruPerturb upd))
                 xs
         pure $ case sequence results of
             Left msg -> Left (MatrixError msg)
-            Right xs' -> Right (xs', extra)
+            Right xs' -> Right (xs', ruExtras upd)
 
-    noTechLinkErr sub consumerPid =
-        pure $
-            Left $
-                MatrixError $
-                    "No technosphere link from "
-                        <> processIdToText thisDb consumerPid
-                        <> " to supplier "
-                        <> subFrom sub
+    noTechLink sub cPid =
+        MatrixError $
+            "No technosphere link from "
+                <> processIdToText thisDb cPid
+                <> " to supplier "
+                <> subFrom sub
 
-    noStaticLinkErr sub consumerPid fromDb fromPid =
-        pure $
-            Left $
-                MatrixError $
-                    "no cross-DB link from "
-                        <> processIdToText thisDb consumerPid
-                        <> " to "
-                        <> fromDb
-                        <> "::"
-                        <> T.pack (show fromPid)
-                        <> " (requested by substitution "
-                        <> subFrom sub
-                        <> " -> "
-                        <> subTo sub
-                        <> ")"
+    noStaticLink sub cPid fromDb fromPid =
+        MatrixError $
+            "no cross-DB link from "
+                <> processIdToText thisDb cPid
+                <> " to "
+                <> fromDb
+                <> "::"
+                <> T.pack (show fromPid)
+                <> " (requested by substitution "
+                <> subFrom sub
+                <> " -> "
+                <> subTo sub
+                <> ")"
 
-    resolveRef :: Text -> Text -> IO (Either ServiceError (Text, ProcessId, (UUID, UUID), Database))
-    resolveRef refDb pidText
-        | refDb == thisDbName = case resolveActivityAndProcessId thisDb pidText of
-            Left e -> pure (Left e)
-            Right (p, _) ->
-                let uuids = dbProcessIdTable thisDb V.! fromIntegral p
-                 in pure (Right (refDb, p, uuids, thisDb))
+    resolveEndpoint :: Text -> Text -> IO (Either ServiceError Endpoint)
+    resolveEndpoint refDb pidText
+        | refDb == thisDbName =
+            pure $ case resolveActivityAndProcessId thisDb pidText of
+                Left e -> Left e
+                Right (p, _) ->
+                    Right $ Here p (dbProcessIdTable thisDb V.! fromIntegral p)
         | otherwise = do
             mPair <- depLookup refDb
-            case mPair of
+            pure $ case mPair of
                 Nothing ->
-                    pure $
-                        Left $
-                            MatrixError $
-                                "substitution references unloaded database: " <> refDb
+                    Left $
+                        MatrixError $
+                            "substitution references unloaded database: " <> refDb
                 Just (depDb, _) -> case resolveActivityAndProcessId depDb pidText of
                     Left _ ->
-                        pure $
-                            Left $
-                                MatrixError $
-                                    "substitution PID not found in " <> refDb <> ": " <> pidText
+                        Left $
+                            MatrixError $
+                                "substitution PID not found in " <> refDb <> ": " <> pidText
                     Right (p, _) ->
-                        let uuids = dbProcessIdTable depDb V.! fromIntegral p
-                         in pure (Right (refDb, p, uuids, depDb))
+                        Right $
+                            Elsewhere
+                                DepRef
+                                    { drDbName = refDb
+                                    , drDb = depDb
+                                    , drPid = p
+                                    , drUUIDs = dbProcessIdTable depDb V.! fromIntegral p
+                                    }
 
 {- | Build a synthesized 'CrossDBLink' for a what-if substitution targeting a
 dep-DB supplier. Mirrors the fields a real (load-time) link would have so
