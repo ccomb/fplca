@@ -8,6 +8,8 @@ import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), Ac
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, try)
+import Control.Monad (foldM)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT)
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Either (fromRight, lefts, rights)
 import Data.Int (Int32)
@@ -2352,13 +2354,12 @@ applySubstitutionsAt ::
     -- | full sub list (filtered to consumer==this)
     [Substitution] ->
     IO (Either ServiceError ([U.Vector Double], [CrossDBLink]))
-applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs = do
-    let localSubs = filter consumerLivesHere allSubs
-    case localSubs of
+applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs =
+    case filter consumerLivesHere allSubs of
         [] -> pure $ Right (scalings, [])
-        _ -> do
+        localSubs -> do
             mFact <- getFactorization solver
-            applyAll mFact scalings [] localSubs
+            runExceptT $ foldM (step mFact) (scalings, []) localSubs
   where
     thisDbName = unThisDb thisDbObj
 
@@ -2374,29 +2375,21 @@ applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs =
         let (cDb, _) = parseSubRef rootDb (subConsumer sub)
          in cDb == thisDbName
 
-    applyAll _ xs links [] = pure $ Right (xs, links)
-    applyAll mFact xs links (sub : rest) = do
-        res <- applySub mFact xs sub
-        case res of
-            Left e -> pure (Left e)
-            Right (xs', extraLks) -> applyAll mFact xs' (links ++ extraLks) rest
-
-    applySub mFact xs sub = do
+    -- Resolve, plan, and apply one substitution; thread the K scalings
+    -- and the accumulated virtual links. 'from' is resolved before 'to'
+    -- so a failing 'from' wins when both refs are unresolvable.
+    step mFact (xs, links) sub = do
         let (_, cPidText) = parseSubRef rootDb (subConsumer sub)
-        case resolveActivityAndProcessId thisDb cPidText of
-            Left e -> pure (Left e)
-            Right (cPid, _) -> do
-                let (fromDb, fromPidText) = parseSubRef rootDb (subFrom sub)
-                    (toDb, toPidText) = parseSubRef rootDb (subTo sub)
-                eFrom <- resolveEndpoint fromDb fromPidText
-                eTo <- resolveEndpoint toDb toPidText
-                case (eFrom, eTo) of
-                    (Left e, _) -> pure (Left e)
-                    (_, Left e) -> pure (Left e)
-                    (Right fromEp, Right toEp) ->
-                        case planUpdate sub cPid fromEp toEp of
-                            Left e -> pure (Left e)
-                            Right upd -> applyRankOne mFact xs upd
+            (fromDb, fromPidText) = parseSubRef rootDb (subFrom sub)
+            (toDb, toPidText) = parseSubRef rootDb (subTo sub)
+        (cPid, _) <- hoistEither $ resolveActivityAndProcessId thisDb cPidText
+        fromEp <- ExceptT $ resolveEndpoint fromDb fromPidText
+        toEp <- ExceptT $ resolveEndpoint toDb toPidText
+        upd <- hoistEither $ planUpdate sub cPid fromEp toEp
+        (xs', extra) <- ExceptT $ applyRankOne mFact xs upd
+        pure (xs', links ++ extra)
+
+    hoistEither = ExceptT . pure
 
     planUpdate ::
         Substitution ->
