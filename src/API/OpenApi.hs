@@ -28,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (BioDirection, BiosphereFlow, Compartment, Exchange, LocationFallback, LocationKind, LocationUnresolved, Pedigree, TechRole, TechnosphereFlow, Unit)
+import Types (BioDirection, BiosphereFlow, Compartment, Exchange, LocationFallback, LocationKind, LocationUnresolved, NativeActivityType, Pedigree, TechRole, TechnosphereFlow, Unit)
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -220,6 +220,31 @@ instance ToSchema PerturbedEntry where
 instance ToSchema Perturbation where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ExchangeDetail where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ExchangeWithUnit where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
+
+-- Manual schema: the NativeActivityType sum is flattened by ToJSON to a
+-- single record with `source` discriminator and nullable code/special_*
+-- fields. The Generic schema would expose the Haskell sum-of-records shape.
+instance ToSchema NativeActivityType where
+    declareNamedSchema _ = do
+        intRef <- declareSchemaRef (Proxy :: Proxy Int)
+        textRef <- declareSchemaRef (Proxy :: Proxy Text)
+        let sourceEnum =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_ ?~ [toJSON ("ecospold2" :: Text), toJSON ("simapro" :: Text), toJSON ("ilcd" :: Text)]
+        pure $
+            NamedSchema (Just "NativeActivityType") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("source", Inline sourceEnum)
+                            , ("label", textRef)
+                            , ("code", intRef)
+                            , ("special_code", intRef)
+                            , ("special_label", textRef)
+                            ]
+                    & required .~ ["source", "label"]
 instance ToSchema ActivityForAPI where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ActivityInfo where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions
 instance ToSchema ActivityMetadata where declareNamedSchema = genericDeclareNamedSchema strippedSchemaOptions

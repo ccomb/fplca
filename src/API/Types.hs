@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
@@ -15,7 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), OctetStream)
-import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -115,6 +116,7 @@ data ActivitySummary = ActivitySummary
     , prsProductUnit :: Text -- Reference product unit name
     , prsAllocationPercent :: Maybe Double -- SimaPro coproduct allocation (%, 0..100); Nothing for non-allocated bases
     , prsAllocationFormula :: Maybe Text -- Raw SimaPro allocation formula; Nothing if purely numeric
+    , prsNativeType :: Maybe NativeActivityType -- Source-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source lacks the field
     }
     deriving (Generic)
 
@@ -793,6 +795,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaReferenceProductUnit :: Maybe Text -- Unit of reference product
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
+    , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type, surfaced flat in JSON (see NativeActivityType ToJSON instance)
     }
     deriving (Generic)
 
@@ -918,6 +921,80 @@ instance ToJSON ClassificationSystem where toJSON = strippedToJSON; toEncoding =
 instance ToJSON Aggregation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON AggregationGroup where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance (ToJSON a) => ToJSON (SearchResults a) where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+
+{- | NativeActivityType is a sum type internally but serialises to a single
+flat record so MCP / pyvolca consumers see one uniform shape regardless of
+which source database produced the activity. Discriminator is the 'source'
+field; format-specific fields (code, special_*) are null when irrelevant.
+-}
+instance ToJSON NativeActivityType where
+    toJSON = \case
+        EcoSpoldActivityType code label specCode specLabel ->
+            object
+                [ "source" .= ("ecospold2" :: Text)
+                , "label" .= label
+                , "code" .= code
+                , "special_code" .= specCode
+                , "special_label" .= specLabel
+                ]
+        SimaProProcessType label ->
+            object
+                [ "source" .= ("simapro" :: Text)
+                , "label" .= label
+                , "code" .= Null
+                , "special_code" .= Null
+                , "special_label" .= Null
+                ]
+        ILCDProcessType label ->
+            object
+                [ "source" .= ("ilcd" :: Text)
+                , "label" .= label
+                , "code" .= Null
+                , "special_code" .= Null
+                , "special_label" .= Null
+                ]
+    toEncoding = \case
+        EcoSpoldActivityType code label specCode specLabel ->
+            pairs
+                ( "source" .= ("ecospold2" :: Text)
+                    <> "label" .= label
+                    <> "code" .= code
+                    <> "special_code" .= specCode
+                    <> "special_label" .= specLabel
+                )
+        SimaProProcessType label ->
+            pairs
+                ( "source" .= ("simapro" :: Text)
+                    <> "label" .= label
+                    <> "code" .= Null
+                    <> "special_code" .= Null
+                    <> "special_label" .= Null
+                )
+        ILCDProcessType label ->
+            pairs
+                ( "source" .= ("ilcd" :: Text)
+                    <> "label" .= label
+                    <> "code" .= Null
+                    <> "special_code" .= Null
+                    <> "special_label" .= Null
+                )
+
+-- | Inverse of the ToJSON instance: discriminate on the @source@ field.
+instance FromJSON NativeActivityType where
+    parseJSON = withObject "NativeActivityType" $ \o -> do
+        src <- o .: "source"
+        label <- o .: "label"
+        case (src :: Text) of
+            "ecospold2" ->
+                EcoSpoldActivityType
+                    <$> o .: "code"
+                    <*> pure label
+                    <*> o .:? "special_code"
+                    <*> o .:? "special_label"
+            "simapro" -> pure (SimaProProcessType label)
+            "ilcd" -> pure (ILCDProcessType label)
+            other -> fail $ "Unknown NativeActivityType source: " <> T.unpack other
+
 instance ToJSON ActivitySummary where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON FlowSearchResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON InventoryMetadata where toJSON = strippedToJSON; toEncoding = strippedToEncoding
