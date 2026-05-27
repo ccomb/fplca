@@ -618,7 +618,7 @@ parseWithXeno xmlContent processId =
             description = reverse (psDescription st) -- Reverse to get correct order
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing
+            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

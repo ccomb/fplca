@@ -29,6 +29,7 @@ emptyActivity =
         , activityParamExprs = M.empty
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
+        , activityNativeType = Nothing
         }
 
 -- | A production output exchange (isInput=False, isReference=False by default)

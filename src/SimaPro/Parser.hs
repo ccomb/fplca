@@ -879,6 +879,7 @@ processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) Pr
                         , activityParamExprs = exprMap
                         , activityAllocationPercent = Just allocPercent
                         , activityAllocationFormula = allocFormula
+                        , activityNativeType = Nothing
                         }
                 allTechFlows = productFlow : sharedTechFlows
                 allBioFlows = sharedBioFlows
