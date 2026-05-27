@@ -1122,8 +1122,9 @@ class Method(FromJson):
     """One LCIA method, returned by :meth:`Client.list_methods`.
 
     Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
-    is the parent method collection (e.g. ``"ef-31"``) — load it with
-    :meth:`Client.load_method_collection` if not already loaded.
+    is the parent method collection (e.g. ``"ef-31"``), forwarded to
+    :meth:`Client.get_impacts` / :meth:`Client.get_impacts_batch` as their
+    ``collection`` argument.
     """
 
     id: str

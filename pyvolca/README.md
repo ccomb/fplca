@@ -153,11 +153,14 @@ Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[Consum
 
 ```python
 inv = c.get_inventory(plants[0].process_id, limit=20)
-# inv is a raw dict — see the OpenAPI spec for the full shape.
+for f in inv.flows[:5]:
+    print(f"  {f.quantity:.4g} {f.unit_name}  {f.flow_name}")
+print(f"  {inv.statistics.emission_quantity:.4g} emissions / "
+      f"{inv.statistics.resource_quantity:.4g} resources")
 # Substitutions are accepted: c.get_inventory(pid, substitutions=[...])
 ```
 
-The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead — same data, summarized.
+`InventoryResult` carries the typed `flows` list (one `InventoryFlow` per row) plus a `statistics` roll-up with per-direction totals and `top_categories`. The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead — same data, summarized.
 
 ## Compute environmental impacts (LCIA)
 
@@ -196,13 +199,19 @@ flows = c.get_contributing_flows(
     method_id="EF3.1-climate-change",
     limit=10,
 )
+for f in flows.top_flows:
+    print(f"  {f.share_pct:.1f}%  {f.flow_name}")
+
 acts = c.get_contributing_activities(
     plants[0].process_id,
     method_id="EF3.1-climate-change",
     limit=10,
 )
-# Both return raw dicts — the shape is documented in the OpenAPI spec.
+for a in acts.activities:
+    print(f"  {a.share_pct:.1f}%  {a.activity_name} ({a.location})")
 ```
+
+`ContributingFlows.top_flows` and `ContributingActivities.activities` are typed lists; both carriers also expose `method`, `unit`, and `total_score`. Note: the engine doesn't report a total count for these endpoints, so neither result derives a `has_more` flag — pass a generous `limit` and inspect the `share_pct` totals if you need exhaustive coverage.
 
 > *Which characterization factors does a method apply, and to which database flows?*
 

@@ -790,8 +790,6 @@ class Client:
             aggregate: :class:`AggregateOp` member or wire string
                 (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
         """
-        scope_str = scope.value if isinstance(scope, AggregateScope) else scope
-        aggregate_str = aggregate.value if isinstance(aggregate, AggregateOp) else aggregate
         # filter_classification goes over the wire as "System=Value[:exact]" strings.
         if filter_classification:
             filter_strings = [
@@ -808,7 +806,7 @@ class Client:
         raw = self._call(
             "aggregate",
             process_id=process_id,
-            scope=scope_str,
+            scope=scope,
             is_input=is_input,
             max_depth=max_depth,
             filter_name=filter_name,
@@ -819,7 +817,7 @@ class Client:
             filter_target_name=filter_target_name,
             filter_is_reference=filter_is_reference,
             group_by=group_by,
-            aggregate=aggregate_str,
+            aggregate=aggregate,
         )
         return AggregateResult.from_json(raw)
 
