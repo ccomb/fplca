@@ -45,6 +45,7 @@ module BrightwayExcel.Parser (
     readSheets,
     parseSheetXml,
     sheetToActivities,
+    skippedSheetWarning,
     splitCategories,
 ) where
 
@@ -55,9 +56,9 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, isAsciiUpper, ord, toUpper)
-import Data.List (find, findIndex)
+import Data.List (find, findIndex, partition)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -124,12 +125,13 @@ parseBrightwayExcel cfg path = do
     case readSheets raw of
         Left err -> pure (Left ("Brightway Excel: " <> err))
         Right sheets -> do
-            let results = concatMap (sheetToActivities cfg) (filter validFirstCell sheets)
+            let (dataSheets, skipped) = partition (validFirstCell . snd) sheets
+                results = concatMap (sheetToActivities cfg . snd) dataSheets
                 activities = [a | (a, _, _, _, _) <- results]
                 techFlows = concat [fs | (_, fs, _, _, _) <- results]
                 bioFlows = concat [fs | (_, _, fs, _, _) <- results]
                 units = concat [us | (_, _, _, us, _) <- results]
-                warnings = concat [ws | (_, _, _, _, ws) <- results]
+                warnings = concat [ws | (_, _, _, _, ws) <- results] ++ mapMaybe skippedSheetWarning skipped
             mapM_ (reportProgress Warning . T.unpack) warnings
             pure $
                 Right
@@ -147,6 +149,21 @@ validFirstCell :: [Row] -> Bool
 validFirstCell rows = case listToMaybe rows >>= textAt 0 of
     Just t -> T.toLower t /= "skip"
     Nothing -> False
+
+{- | Warn when a worksheet that /carries data/ is dropped because its first cell
+(A1) is blank. Brightway ignores the whole sheet on a blank A1, so a mistyped
+or shifted header silently loses every activity below it — surface it instead.
+The deliberate @"skip"@ sentinel and genuinely empty sheets are left silent.
+-}
+skippedSheetWarning :: (Text, [Row]) -> Maybe Text
+skippedSheetWarning (name, rows)
+    | isNothing (listToMaybe rows >>= textAt 0) && not (all M.null rows) =
+        Just $
+            "worksheet '"
+                <> name
+                <> "' ignored: its first cell (A1) is blank, so the whole sheet is skipped; "
+                <> "set A1 to 'Database' or 'Activity' to import it"
+    | otherwise = Nothing
 
 -- ---------------------------------------------------------------------------
 -- Block grammar (pure)
@@ -462,8 +479,10 @@ metaNum = fieldNum
 -- Workbook reader (zip + XML)
 -- ---------------------------------------------------------------------------
 
--- | Unzip an @.xlsx@ and return its worksheets, in workbook order, as row lists.
-readSheets :: BL.ByteString -> Either Text [[Row]]
+{- | Unzip an @.xlsx@ and return its worksheets, in workbook order, paired with
+their declared names (so a skipped sheet can be named in a warning).
+-}
+readSheets :: BL.ByteString -> Either Text [(Text, [Row])]
 readSheets raw = do
     archive <- first T.pack (toArchiveOrFail raw)
     workbook <- parseXml =<< entry archive "xl/workbook.xml"
@@ -477,12 +496,13 @@ readSheets raw = do
                 , Just tgt <- [attr "Target" r]
                 ]
         sheetRefs =
-            [ TE.decodeUtf8 rid
+            [ (sheetName, TE.decodeUtf8 rid)
             | sheetsNode <- maybeToList (firstChildNamed "sheets" workbook)
             , s <- childrenNamed "sheet" sheetsNode
             , Just rid <- [attr "r:id" s]
+            , let sheetName = maybe (TE.decodeUtf8 rid) TE.decodeUtf8 (attr "name" s)
             ]
-    traverse (loadSheet archive relMap sharedStrings) sheetRefs
+    traverse (\(name, rid) -> (,) name <$> loadSheet archive relMap sharedStrings rid) sheetRefs
 
 loadSheet :: Archive -> M.Map Text Text -> Maybe (V.Vector Text) -> Text -> Either Text [Row]
 loadSheet archive relMap sharedStrings rid = do

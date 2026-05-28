@@ -11,13 +11,13 @@ header, biosphere categories (with @::@), and within-file supplier linking.
 -}
 module BrightwayExcelSpec (spec) where
 
-import BrightwayExcel.Parser (CellValue (..), parseBrightwayExcel, parseSheetXml, splitCategories)
+import BrightwayExcel.Parser (CellValue (..), parseBrightwayExcel, parseSheetXml, skippedSheetWarning, splitCategories)
 import Codec.Archive.Zip (addEntryToArchive, emptyArchive, fromArchive, toEntry)
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (find)
 import qualified Data.Map.Strict as M
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -139,6 +139,43 @@ spec = describe "BrightwayExcel.Parser" $ do
             -- it and detectDatabaseFormat would fall through to UnknownFormat.
             detectArchiveFormat fixtureBytes `shouldBe` ArchiveXlsx
 
+    describe "multi-sheet workbooks" $ do
+        it "imports one activity per sheet across many sheets" $ do
+            let bytes =
+                    buildWorkbook
+                        [ ("alpha", activitySheet "Alpha activity" "alpha product")
+                        , ("beta", activitySheet "Beta activity" "beta product")
+                        , ("gamma", activitySheet "Gamma activity" "gamma product")
+                        ]
+            withWorkbook bytes $ \path -> do
+                parseBrightwayExcel defaultUnitConfig path >>= \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (acts, _, _, _, _) ->
+                        map activityName acts
+                            `shouldMatchList` ["Alpha activity", "Beta activity", "Gamma activity"]
+
+        it "skips a sheet whose first cell (A1) is blank, keeping the valid ones" $ do
+            let bytes =
+                    buildWorkbook
+                        [ ("kept", activitySheet "Kept activity" "kept product")
+                        , -- a leading blank row makes A1 empty, so bw2io ignores the sheet
+                          ("blankA1", [] : activitySheet "Dropped activity" "dropped product")
+                        ]
+            withWorkbook bytes $ \path -> do
+                parseBrightwayExcel defaultUnitConfig path >>= \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (acts, _, _, _, _) ->
+                        map activityName acts `shouldMatchList` ["Kept activity"]
+
+    describe "skippedSheetWarning" $ do
+        it "flags a sheet that holds data but whose A1 is blank" $
+            skippedSheetWarning ("Inventory", [M.empty, M.singleton 0 (CellText "Activity")])
+                `shouldSatisfy` isJust
+        it "stays silent on the deliberate 'skip' sentinel" $
+            skippedSheetWarning ("Notes", [M.singleton 0 (CellText "skip")]) `shouldBe` Nothing
+        it "stays silent on an entirely empty sheet" $
+            skippedSheetWarning ("Empty", [M.empty]) `shouldBe` Nothing
+
 -- ---------------------------------------------------------------------------
 -- Assertions helpers
 -- ---------------------------------------------------------------------------
@@ -198,50 +235,71 @@ directionOf bioDB acts name =
 -- Fixture workbook (generated in-memory)
 -- ---------------------------------------------------------------------------
 
-withFixture :: (FilePath -> IO a) -> IO a
-withFixture action =
+withWorkbook :: BL.ByteString -> (FilePath -> IO a) -> IO a
+withWorkbook bytes action =
     withSystemTempFile "brightway-fixture.xlsx" $ \path h -> do
-        BL.hPut h fixtureBytes
+        BL.hPut h bytes
         hClose h
         action path
 
+withFixture :: (FilePath -> IO a) -> IO a
+withFixture = withWorkbook fixtureBytes
+
 fixtureBytes :: BL.ByteString
-fixtureBytes =
+fixtureBytes = buildWorkbook [("data", sheet1Rows), ("reordered", sheet2Rows)]
+
+{- | Assemble a minimal @.xlsx@ from named sheets, wiring the workbook/rels parts
+so that worksheet N lives at @xl/worksheets/sheetN.xml@.
+-}
+buildWorkbook :: [(Text, [[Cell]])] -> BL.ByteString
+buildWorkbook sheets =
     fromArchive $
-        foldr
-            addEntryToArchive
-            emptyArchive
-            [ toEntry "xl/workbook.xml" 0 (enc workbookXml)
-            , toEntry "xl/_rels/workbook.xml.rels" 0 (enc relsXml)
-            , toEntry "xl/worksheets/sheet1.xml" 0 (enc (sheetXml sheet1Rows))
-            , toEntry "xl/worksheets/sheet2.xml" 0 (enc (sheetXml sheet2Rows))
-            ]
+        foldr addEntryToArchive emptyArchive $
+            toEntry "xl/workbook.xml" 0 (enc (workbookXml (map fst sheets)))
+                : toEntry "xl/_rels/workbook.xml.rels" 0 (enc (relsXml (length sheets)))
+                : [ toEntry ("xl/worksheets/sheet" <> show i <> ".xml") 0 (enc (sheetXml rows))
+                  | (i, (_, rows)) <- zip [1 :: Int ..] sheets
+                  ]
   where
     enc = BL.fromStrict . TE.encodeUtf8
 
-workbookXml :: Text
-workbookXml =
+-- | A single-activity worksheet (standard column order) for multi-sheet tests.
+activitySheet :: Text -> Text -> [[Cell]]
+activitySheet actName prodName =
+    [ [CT "Activity", CT actName]
+    , [CT "production amount", CN 1]
+    , [CT "reference product", CT prodName]
+    , [CT "location", CT "GLO"]
+    , [CT "unit", CT "kilogram"]
+    , [CT "Exchanges"]
+    , [CT "name", CT "amount", CT "reference product", CT "location", CT "unit", CT "categories", CT "type", CT "database"]
+    , [CT actName, CN 1, CT prodName, CT "GLO", CT "kilogram", CE, CT "production", CT "DB"]
+    ]
+
+workbookXml :: [Text] -> Text
+workbookXml names =
     "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""
         <> " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
         <> "<sheets>"
-        <> "<sheet name=\"data\" sheetId=\"1\" r:id=\"rId1\"/>"
-        <> "<sheet name=\"reordered\" sheetId=\"2\" r:id=\"rId2\"/>"
+        <> T.concat
+            [ "<sheet name=\"" <> nm <> "\" sheetId=\"" <> tshow i <> "\" r:id=\"rId" <> tshow i <> "\"/>"
+            | (i, nm) <- zip [1 :: Int ..] names
+            ]
         <> "</sheets></workbook>"
 
-relsXml :: Text
-relsXml =
+relsXml :: Int -> Text
+relsXml n =
     "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-        <> rel "rId1" "worksheets/sheet1.xml"
-        <> rel "rId2" "worksheets/sheet2.xml"
+        <> T.concat [rel i | i <- [1 .. n]]
         <> "</Relationships>"
   where
-    rel i tgt =
-        "<Relationship Id=\""
-            <> i
+    rel i =
+        "<Relationship Id=\"rId"
+            <> tshow i
             <> "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\""
-            <> " Target=\""
-            <> tgt
-            <> "\"/>"
+            <> " Target=\"worksheets/sheet"
+            <> tshow i
+            <> ".xml\"/>"
 
 {- | Sheet 1: standard column order, two activities. Widget consumes the file's
 own electricity product, so its supplier link must resolve within the file.
