@@ -215,7 +215,16 @@ finishCurrent st = case psStage st of
     ReadingNorm acc -> finishNW acc st
     ReadingWeight acc -> finishNW acc st
     NeedNWSection acc -> finishNW acc st
-    _ -> st
+    -- Stages with no in-progress block to flush. Enumerated (not wildcarded)
+    -- so a future accumulator-carrying stage can't silently skip its EOF flush.
+    Header -> st
+    MethodMeta -> st
+    BetweenSections -> st
+    NeedCatLine -> st
+    NeedSubstances{} -> st
+    NeedDcLine -> st
+    NeedDcImpacts{} -> st
+    NeedNWName -> st
 
 consCF :: MethodCF -> CatAccum -> CatAccum
 consCF cf (CatAccum name unit factors) = CatAccum name unit (cf : factors)
