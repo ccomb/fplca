@@ -368,14 +368,10 @@ withDb ::
     KeyMap Value ->
     ((Database, SharedSolver) -> IO Value) ->
     IO Value
-withDb dbManager rid args action =
-    case textArg "database" args of
-        Nothing -> return $ toolError rid "Missing required parameter: database"
-        Just dbName -> do
-            mLoaded <- getDatabase dbManager dbName
-            case mLoaded of
-                Nothing -> return $ toolError rid ("Database not loaded: " <> dbName)
-                Just ld -> action (ldDatabase ld, ldSharedSolver ld)
+withDb dbManager rid args action = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    ld <- requireDatabase dbManager dbName
+    liftIO $ action (ldDatabase ld, ldSharedSolver ld)
 
 -- ---------------------------------------------------------------------------
 -- ExceptT plumbing shared by every handler
@@ -595,36 +591,30 @@ callSearchFlows rid args (db, _) =
     a <|> _ = a
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callGetActivity rid args (db, _) =
-    case textArg "process_id" args of
-        Nothing -> return $ toolError rid "Missing required parameter: process_id"
-        Just pid -> case validatedExchangeType of
-            Left err -> return $ toolError rid err
-            Right _ ->
-                case Service.getActivityInfo defaultUnitConfig db pid of
-                    Left err -> return $ toolError rid (T.pack $ show err)
-                    Right val -> case fromJSON val of
-                        -- 'val' was built from an 'ActivityInfo' upstream, so a
-                        -- decode failure is genuinely defensive — pass it
-                        -- through unchanged, hint-less.
-                        Error _ -> return $ toolSuccessJson rid val
-                        Success ai ->
-                            -- Single resolve: take the activity name from the
-                            -- 'ActivityInfo' already in hand instead of asking
-                            -- the engine to resolve the PID again.
-                            let attach = attachMarketHintByName (pfaName (piActivity ai))
-                                payload
-                                    | noFilters = val
-                                    | otherwise =
-                                        toJSON
-                                            ai
-                                                { piActivity =
-                                                    (piActivity ai)
-                                                        { pfaExchanges =
-                                                            filter matchExchange (pfaExchanges (piActivity ai))
-                                                        }
-                                                }
-                             in return $ toolSuccessJson rid (attach payload)
+callGetActivity rid args (db, _) = runTool rid $ do
+    pid <- except (requireText "process_id" args)
+    _ <- except validatedExchangeType
+    val <- liftShow (Service.getActivityInfo defaultUnitConfig db pid)
+    pure $ case fromJSON val of
+        -- 'val' was built from an 'ActivityInfo' upstream, so a decode
+        -- failure is genuinely defensive — pass it through unchanged, hint-less.
+        Error _ -> toolSuccessJson rid val
+        Success ai ->
+            -- Single resolve: take the activity name from the 'ActivityInfo'
+            -- already in hand instead of asking the engine to resolve the PID again.
+            let attach = attachMarketHintByName (pfaName (piActivity ai))
+                payload
+                    | noFilters = val
+                    | otherwise =
+                        toJSON
+                            ai
+                                { piActivity =
+                                    (piActivity ai)
+                                        { pfaExchanges =
+                                            filter matchExchange (pfaExchanges (piActivity ai))
+                                        }
+                                }
+             in toolSuccessJson rid (attach payload)
   where
     exchangeType = textArg "exchange_type" args
     flowFilter = textArg "flow" args
@@ -657,73 +647,47 @@ callGetActivity rid args (db, _) =
         Just want -> exchangeIsInput (ewuExchange ewu) == want
 
 callGetSupplyChain :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callGetSupplyChain dbManager rid args =
-    case (,) <$> requireText "database" args <*> requireText "process_id" args of
-        Left err -> return $ toolError rid err
-        Right (dbName, pid) -> do
-            mLoaded <- getDatabase dbManager dbName
-            case mLoaded of
-                Nothing -> return $ toolError rid ("Database not loaded: " <> dbName)
-                Just ld -> do
-                    let db = ldDatabase ld
-                        solver = ldSharedSolver ld
-                        isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-                        classFilters = case (textArg "classification" args, textArg "classification_value" args) of
-                            (Just sys, Just val) -> [(sys, val, isExact)]
-                            _ -> []
-                        scf =
-                            Service.SupplyChainFilter
-                                { Service.scfCore =
-                                    Service.ActivityFilterCore
-                                        { Service.afcName = textArg "name" args
-                                        , Service.afcLocation = textArg "location" args
-                                        , Service.afcProduct = Nothing
-                                        , Service.afcClassifications = classFilters
-                                        , Service.afcLimit = intArg "limit" args
-                                        , Service.afcOffset = Nothing
-                                        , Service.afcSort = Nothing
-                                        , Service.afcOrder = Nothing
-                                        }
-                                , Service.scfMaxDepth = intArg "max_depth" args
-                                , Service.scfMinQuantity = doubleArg "min_quantity" args
-                                }
-                    case parseArrayArg "substitutions" Nothing args :: Either Text [Substitution] of
-                        Left err -> return $ toolError rid err
-                        Right [] -> do
-                            unitCfg <- DM.getMergedUnitConfig dbManager
-                            result <- Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName solver pid scf False
-                            case result of
-                                Left err -> return $ toolError rid (T.pack $ show err)
-                                Right val -> return $ toolSuccessJson rid (toJSON val)
-                        Right subs -> case Service.resolveActivityAndProcessId db pid of
-                            Left err -> return $ toolError rid (T.pack $ show err)
-                            Right (processId, _) -> do
-                                eScaling <-
-                                    Service.computeScalingVectorWithSubstitutionsCrossDB
-                                        (DM.mkDepSolverLookup dbManager)
-                                        db
-                                        dbName
-                                        solver
-                                        processId
-                                        subs
-                                case eScaling of
-                                    Left err -> return $ toolError rid (T.pack (show err))
-                                    Right (scalingVec, virtualLinks) -> do
-                                        unitCfg <- DM.getMergedUnitConfig dbManager
-                                        eResp <-
-                                            Service.buildSupplyChainFromScalingVectorCrossDB
-                                                unitCfg
-                                                (DM.mkDepSolverLookup dbManager)
-                                                db
-                                                dbName
-                                                processId
-                                                scalingVec
-                                                virtualLinks
-                                                scf
-                                                False
-                                        case eResp of
-                                            Left e -> return $ toolError rid (T.pack (show e))
-                                            Right v -> return $ toolSuccessJson rid (toJSON v)
+callGetSupplyChain dbManager rid args = runTool rid $ do
+    (dbName, pid) <- except $ (,) <$> requireText "database" args <*> requireText "process_id" args
+    ld <- requireDatabase dbManager dbName
+    let db = ldDatabase ld
+        solver = ldSharedSolver ld
+        depLookup = DM.mkDepSolverLookup dbManager
+        isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
+        classFilters = case (textArg "classification" args, textArg "classification_value" args) of
+            (Just sys, Just val) -> [(sys, val, isExact)]
+            _ -> []
+        scf =
+            Service.SupplyChainFilter
+                { Service.scfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = textArg "name" args
+                        , Service.afcLocation = textArg "location" args
+                        , Service.afcProduct = Nothing
+                        , Service.afcClassifications = classFilters
+                        , Service.afcLimit = intArg "limit" args
+                        , Service.afcOffset = Nothing
+                        , Service.afcSort = Nothing
+                        , Service.afcOrder = Nothing
+                        }
+                , Service.scfMaxDepth = intArg "max_depth" args
+                , Service.scfMinQuantity = doubleArg "min_quantity" args
+                }
+    subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
+    unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
+    payload <-
+        if null subs
+            then -- Plain cross-DB supply chain.
+                toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf False) >>= liftShow)
+            else do
+                -- Substitution-aware: re-solve the root scaling, then build from it.
+                (processId, _) <- liftShow (Service.resolveActivityAndProcessId db pid)
+                (scalingVec, virtualLinks) <-
+                    liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB depLookup db dbName solver processId subs) >>= liftShow
+                resp <-
+                    liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf False) >>= liftShow
+                pure (toJSON resp)
+    pure $ toolSuccessJson rid payload
 
 {- | Generic SQL-group-by aggregation. One small primitive for "how much X is
 in Y" questions — replaces ad-hoc decomposition tools.
@@ -796,51 +760,44 @@ callAggregate dbManager rid args (db, solver) =
                      in Just (T.strip sys, T.strip val, isExact)
 
 callGetPathTo :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callGetPathTo rid args (db, solver) =
-    case (textArg "process_id" args, textArg "target" args) of
-        (Nothing, _) -> return $ toolError rid "Missing required parameter: process_id"
-        (_, Nothing) -> return $ toolError rid "Missing required parameter: target"
-        (Just pid, Just target) -> do
-            result <- Service.getPathTo db solver pid target
-            case result of
-                Left err -> return $ toolError rid (T.pack $ show err)
-                Right val -> return $ toolSuccessJson rid val
+callGetPathTo rid args (db, solver) = runTool rid $ do
+    pid <- except (requireText "process_id" args)
+    target <- except (requireText "target" args)
+    val <- liftIO (Service.getPathTo db solver pid target) >>= liftShow
+    pure (toolSuccessJson rid val)
 
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callGetConsumers presets rid args (db, _) =
-    case textArg "process_id" args of
-        Nothing -> return $ toolError rid "Missing required parameter: process_id"
-        Just pid ->
-            let isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-                dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
-                presetFilters = case textArg "preset" args of
-                    Just pn -> case L.find (\p -> cpName p == pn) presets of
-                        Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
-                        Nothing -> []
-                    Nothing -> []
-                explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
-                    (Just sys, Just val) -> [(sys, val, isExact)]
-                    _ -> []
-                classFilters = presetFilters ++ explicitFilters
-                cnf =
-                    Service.ConsumerFilter
-                        { Service.cnfCore =
-                            Service.ActivityFilterCore
-                                { Service.afcName = textArg "name" args
-                                , Service.afcLocation = textArg "location" args
-                                , Service.afcProduct = textArg "product" args
-                                , Service.afcClassifications = classFilters
-                                , Service.afcLimit = intArg "limit" args
-                                , Service.afcOffset = Nothing
-                                , Service.afcSort = Nothing
-                                , Service.afcOrder = Nothing
-                                }
-                        , Service.cnfMaxDepth = intArg "max_depth" args
-                        , Service.cnfIncludeEdges = fromMaybe False (boolArg "include_edges" args)
+callGetConsumers presets rid args (db, _) = runTool rid $ do
+    pid <- except (requireText "process_id" args)
+    let isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
+        dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
+        presetFilters = case textArg "preset" args of
+            Just pn -> case L.find (\p -> cpName p == pn) presets of
+                Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
+                Nothing -> []
+            Nothing -> []
+        explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
+            (Just sys, Just val) -> [(sys, val, isExact)]
+            _ -> []
+        classFilters = presetFilters ++ explicitFilters
+        cnf =
+            Service.ConsumerFilter
+                { Service.cnfCore =
+                    Service.ActivityFilterCore
+                        { Service.afcName = textArg "name" args
+                        , Service.afcLocation = textArg "location" args
+                        , Service.afcProduct = textArg "product" args
+                        , Service.afcClassifications = classFilters
+                        , Service.afcLimit = intArg "limit" args
+                        , Service.afcOffset = Nothing
+                        , Service.afcSort = Nothing
+                        , Service.afcOrder = Nothing
                         }
-             in case Service.getConsumers db dbName pid cnf of
-                    Left err -> return $ toolError rid (T.pack $ show err)
-                    Right results -> return $ toolSuccessJson rid (toJSON results)
+                , Service.cnfMaxDepth = intArg "max_depth" args
+                , Service.cnfIncludeEdges = fromMaybe False (boolArg "include_edges" args)
+                }
+    results <- liftShow (Service.getConsumers db dbName pid cnf)
+    pure (toolSuccessJson rid (toJSON results))
 
 {- | MCP get_inventory: route through the cross-DB back-substitution path
 so inventories from dep DBs are merged into the returned flows.
@@ -1313,64 +1270,52 @@ callListMethods dbManager rid = do
     return $ toolSuccessJson rid $ object ["methods" .= summaries]
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callGetFlowMapping dbManager rid args =
-    case (,) <$> requireText "database" args <*> requireText "method_id" args of
-        Left err -> return $ toolError rid err
-        Right (dbName, methodIdText) -> do
-            mLoaded <- getDatabase dbManager dbName
-            case mLoaded of
-                Nothing -> return $ toolError rid ("Database not loaded: " <> dbName)
-                Just ld -> do
-                    let db = ldDatabase ld
-                    loadedMethods <- DM.getLoadedMethods dbManager
-                    let allMethods = map snd loadedMethods
-                    case UUID.fromText methodIdText of
-                        Nothing -> return $ toolError rid "Invalid method UUID format"
-                        Just uuid ->
-                            case filter (\m -> methodId m == uuid) allMethods of
-                                [] -> return $ toolError rid "Method not found"
-                                (method : _) -> do
-                                    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-                                    let stats = computeMappingStats mappings
-                                        total = msTotal stats
-                                        matched = total - msUnmatched stats
-                                        coverage =
-                                            if total > 0
-                                                then fromIntegral matched / fromIntegral total * 100 :: Double
-                                                else 0
-                                        verbose = fromMaybe False (boolArg "verbose" args)
-                                        maxUnm = fromMaybe 50 (intArg "max_unmatched" args)
-                                    extra <-
-                                        if not verbose
-                                            then pure []
-                                            else do
-                                                let unmatchedCFs =
-                                                        take
-                                                            maxUnm
-                                                            [ object
-                                                                [ "name" .= mcfFlowName cf
-                                                                , "cas" .= mcfCAS cf
-                                                                , "compartment" .= mcfCompartment cf
-                                                                , "cf_value" .= mcfValue cf
-                                                                , "cf_unit" .= mcfUnit cf
-                                                                ]
-                                                            | (cf, Nothing) <- mappings
-                                                            ]
-                                                unmatchedFlows <- buildUnmatchedDbFlows dbManager dbName db method args maxUnm
-                                                pure
-                                                    [ "unmatched_cfs" .= unmatchedCFs
-                                                    , "unmatched_db_flows" .= unmatchedFlows
-                                                    ]
-                                    return $
-                                        toolSuccessJson rid $
-                                            object $
-                                                [ "method" .= methodName method
-                                                , "total" .= total
-                                                , "matched" .= matched
-                                                , "unmatched" .= msUnmatched stats
-                                                , "coverage" .= coverage
-                                                ]
-                                                    ++ extra
+callGetFlowMapping dbManager rid args = runTool rid $ do
+    (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
+    ld <- requireDatabase dbManager dbName
+    (_, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    let db = ldDatabase ld
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    let stats = computeMappingStats mappings
+        total = msTotal stats
+        matched = total - msUnmatched stats
+        coverage =
+            if total > 0
+                then fromIntegral matched / fromIntegral total * 100 :: Double
+                else 0
+        verbose = fromMaybe False (boolArg "verbose" args)
+        maxUnm = fromMaybe 50 (intArg "max_unmatched" args)
+    extra <-
+        if not verbose
+            then pure []
+            else do
+                let unmatchedCFs =
+                        take
+                            maxUnm
+                            [ object
+                                [ "name" .= mcfFlowName cf
+                                , "cas" .= mcfCAS cf
+                                , "compartment" .= mcfCompartment cf
+                                , "cf_value" .= mcfValue cf
+                                , "cf_unit" .= mcfUnit cf
+                                ]
+                            | (cf, Nothing) <- mappings
+                            ]
+                unmatchedFlows <- liftIO $ buildUnmatchedDbFlows dbManager dbName db method args maxUnm
+                pure
+                    [ "unmatched_cfs" .= unmatchedCFs
+                    , "unmatched_db_flows" .= unmatchedFlows
+                    ]
+    pure $
+        toolSuccessJson rid $
+            object $
+                [ "method" .= methodName method
+                , "total" .= total
+                , "matched" .= matched
+                , "unmatched" .= msUnmatched stats
+                , "coverage" .= coverage
+                ]
+                    ++ extra
 
 {- | Verbose-mode helper: rank unmatched DB flows for a method.
 
@@ -1434,52 +1379,44 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                                 pure (map encodeUncharacterized uncharacterized)
 
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callGetCharacterization dbManager rid args =
-    case (,) <$> requireText "database" args <*> requireText "method_id" args of
-        Left err -> return $ toolError rid err
-        Right (dbName, methodIdText) -> do
-            mLoaded <- getDatabase dbManager dbName
-            case mLoaded of
-                Nothing -> return $ toolError rid ("Database not loaded: " <> dbName)
-                Just ld -> do
-                    eMethod <- resolveMethod dbManager methodIdText
-                    case eMethod of
-                        Left err -> return $ toolError rid err
-                        Right (_, method) -> do
-                            let db = ldDatabase ld
-                                lim = fromMaybe 20 (intArg "limit" args)
-                                flowQ = textArg "flow" args
-                                queryLower = fmap T.toLower flowQ
-                            mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-                            let matched =
-                                    [ (cf, f, strat)
-                                    | (cf, Just (f, strat)) <- mappings
-                                    , matchQuery queryLower (mcfFlowName cf) (bfName f)
-                                    ]
-                                sorted = L.sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
-                                top = take lim sorted
-                                mkEntry (cf, f, strat) =
-                                    object
-                                        [ "cf_flow_name" .= mcfFlowName cf
-                                        , "cf_value" .= mcfValue cf
-                                        , "cf_unit" .= mcfUnit cf
-                                        , "direction" .= (case mcfDirection cf of Input -> "Input" :: Text; Output -> "Output")
-                                        , "db_flow_name" .= bfName f
-                                        , "flow_id" .= UUID.toText (bfId f)
-                                        , "flow_unit" .= getUnitNameForBioFlow (dbUnits db) f
-                                        , "category" .= bfCompartmentName f
-                                        , "compartment" .= bfCompartmentSub f
-                                        , "match_strategy" .= show strat
-                                        ]
-                            return $
-                                toolSuccessJson rid $
-                                    object
-                                        [ "method" .= methodName method
-                                        , "unit" .= methodUnit method
-                                        , "matches" .= length matched
-                                        , "shown" .= length top
-                                        , "factors" .= map mkEntry top
-                                        ]
+callGetCharacterization dbManager rid args = runTool rid $ do
+    (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
+    ld <- requireDatabase dbManager dbName
+    (_, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    let db = ldDatabase ld
+        lim = fromMaybe 20 (intArg "limit" args)
+        flowQ = textArg "flow" args
+        queryLower = fmap T.toLower flowQ
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    let matched =
+            [ (cf, f, strat)
+            | (cf, Just (f, strat)) <- mappings
+            , matchQuery queryLower (mcfFlowName cf) (bfName f)
+            ]
+        sorted = L.sortOn (\(cf, _, _) -> negate (abs (mcfValue cf))) matched
+        top = take lim sorted
+        mkEntry (cf, f, strat) =
+            object
+                [ "cf_flow_name" .= mcfFlowName cf
+                , "cf_value" .= mcfValue cf
+                , "cf_unit" .= mcfUnit cf
+                , "direction" .= (case mcfDirection cf of Input -> "Input" :: Text; Output -> "Output")
+                , "db_flow_name" .= bfName f
+                , "flow_id" .= UUID.toText (bfId f)
+                , "flow_unit" .= getUnitNameForBioFlow (dbUnits db) f
+                , "category" .= bfCompartmentName f
+                , "compartment" .= bfCompartmentSub f
+                , "match_strategy" .= show strat
+                ]
+    pure $
+        toolSuccessJson rid $
+            object
+                [ "method" .= methodName method
+                , "unit" .= methodUnit method
+                , "matches" .= length matched
+                , "shown" .= length top
+                , "factors" .= map mkEntry top
+                ]
   where
     matchQuery Nothing _ _ = True
     matchQuery (Just q) cfName dbFlowName = T.isInfixOf q (T.toLower cfName) || T.isInfixOf q (T.toLower dbFlowName)
@@ -1750,29 +1687,24 @@ callGetContributingActivities dbManager mBaseUrl rid args =
                     ]
 
 callListGeographies :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callListGeographies dbManager rid args =
-    case textArg "database" args of
-        Nothing -> return $ toolError rid "Missing required parameter: database"
-        Just dbName -> do
-            mLoaded <- getDatabase dbManager dbName
-            case mLoaded of
-                Nothing -> return $ toolError rid ("Database not loaded: " <> dbName)
-                Just ld -> do
-                    let db = ldDatabase ld
-                        geoMap = dmGeographies dbManager
-                        codes = L.sort $ M.keys (idxByLocation (dbIndexes db))
-                        mkEntry code =
-                            let (displayName, parents) = M.findWithDefault (code, []) code geoMap
-                                parentStr = T.intercalate "|" parents
-                             in object
-                                    [ "geo" .= code
-                                    , "display_name" .= displayName
-                                    , "parent_regions" .= parentStr
-                                    ]
-                    return $
-                        toolSuccessJson rid $
-                            object
-                                ["geographies" .= map mkEntry codes]
+callListGeographies dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    ld <- requireDatabase dbManager dbName
+    let db = ldDatabase ld
+        geoMap = dmGeographies dbManager
+        codes = L.sort $ M.keys (idxByLocation (dbIndexes db))
+        mkEntry code =
+            let (displayName, parents) = M.findWithDefault (code, []) code geoMap
+                parentStr = T.intercalate "|" parents
+             in object
+                    [ "geo" .= code
+                    , "display_name" .= displayName
+                    , "parent_regions" .= parentStr
+                    ]
+    pure $
+        toolSuccessJson rid $
+            object
+                ["geographies" .= map mkEntry codes]
 
 -- ============================================================================
 -- score_activity / score_activities / list_scoring_sets
