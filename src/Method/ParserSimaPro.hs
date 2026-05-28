@@ -298,7 +298,7 @@ parseCFRow cfg line =
                         rawName
                         (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
                         cfUnitT
-             in Just
+                !cf =
                     MethodCF
                         { mcfFlowRef = flowRef
                         , mcfFlowName = rawName
@@ -309,6 +309,7 @@ parseCFRow cfg line =
                         , mcfUnit = cfUnitT
                         , mcfConsumerLocation = mLoc
                         }
+             in Just cf
         _ -> Nothing
 
 -- | Parse a two-column @name;value@ row (damage impacts, normalization,
