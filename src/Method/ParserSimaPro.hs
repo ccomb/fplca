@@ -180,17 +180,19 @@ step cfg st line = case psStage st of
   where
     stripped = BS8.strip line
 
--- | Append the completed in-progress block (if any) onto the right list.
+-- | Append the completed category. A header with zero CF rows still emits an
+-- empty 'Method': a category can be declared before its factors are added, and
+-- silently dropping it would hide that from downstream.
 -- Shared by 'step' (mid-stream, on blanks/markers/End) and 'finalize' (at EOF).
 finishCat :: CatAccum -> ParseState -> ParseState
-finishCat (CatAccum name unit factors) st
-    | null factors = st
-    | otherwise = st{psMethods = buildMethod (psMethodology st) name unit (reverse factors) : psMethods st}
+finishCat (CatAccum name unit factors) st =
+    st{psMethods = buildMethod (psMethodology st) name unit (reverse factors) : psMethods st}
 
+-- | Append the completed damage category, including one with zero impact rows
+-- (same rationale as 'finishCat').
 finishDamage :: DamageAccum -> ParseState -> ParseState
-finishDamage (DamageAccum name unit impacts) st
-    | null impacts = st
-    | otherwise = st{psDamageCats = DamageCategory name unit (reverse impacts) : psDamageCats st}
+finishDamage (DamageAccum name unit impacts) st =
+    st{psDamageCats = DamageCategory name unit (reverse impacts) : psDamageCats st}
 
 finishNW :: NWAccum -> ParseState -> ParseState
 finishNW (NWAccum name norm weight) st
