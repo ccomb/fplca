@@ -479,9 +479,6 @@ resolveOrThrow db processIdText = do
     either throwServiceError pure (Service.validateProcessIdInMatrixIndex db pid)
     pure (pid, act)
 
-{- | Translate a Service-level error into the HTTP status used across the
-cross-DB LCIA paths.
--}
 {- | Pure mapping from a domain 'Service.ServiceError' to the HTTP error it
 surfaces as. Every constructor is a client-supplied invariant breakage, so all
 map to 4xx/422 — never 5xx. Kept pure (and separate from 'throwServiceError')

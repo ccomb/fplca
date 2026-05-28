@@ -3,15 +3,10 @@
 ## [Unreleased]
 
 ### Changed
-- API: the supply-chain and aggregate endpoints now return HTTP 422 (instead of
-  500) when a process id is parseable but absent from the matrix index, or a
-  matrix solve fails — matching the rest of the cross-DB pipeline.
-- API: the `InvalidProcessId` error body now states the expected
-  `activity_uuid_product_uuid` format instead of a fixed string.
-- OpenAPI: schemas for `MissingSupplier`, `DependencyChoice`, `DependencyStatus`
-  and `DatabaseSetupInfo.availablePaths` (now a `PathCandidate` object rather
-  than a positional tuple) were aligned with the JSON the API already emits; the
-  emitted JSON is unchanged.
+- API: service errors no longer surface as HTTP 5xx. `InvalidUUID` now returns
+  400 and `FlowNotFound` returns 404 (both were 500), so malformed client UUIDs
+  and missing flows are reported as client errors — matching the rest of the
+  cross-DB pipeline.
 
 ## [0.5.0] - 2026-02-02
 
