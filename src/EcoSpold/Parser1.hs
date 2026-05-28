@@ -25,6 +25,7 @@ module EcoSpold.Parser1 (
 ) where
 
 import Control.Monad (forM_)
+import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import Data.Either (lefts, rights)
 import qualified Data.Map as M
@@ -147,303 +148,333 @@ initialParseState =
         , psCompletedActivities = []
         }
 
--- | Xeno SAX parser for EcoSpold1
-parseWithXeno :: BS.ByteString -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
-parseWithXeno xmlContent =
-    case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
-        Left err -> Left (show err)
-        Right finalState ->
-            case psCompletedActivities finalState of
-                (result : _) -> result
-                [] -> buildResult finalState
+-- ----------------------------------------------------------------------------
+-- Shared SAX handlers (used by both parseWithXeno and parseAllWithXeno)
+-- ----------------------------------------------------------------------------
+
+-- | Drop the current element from the path, keeping accumulated text.
+popPath :: ParseState -> ParseState
+popPath s = s{psPath = drop 1 (psPath s)}
+
+-- | Drop the current element from the path and clear accumulated text.
+popElement :: ParseState -> ParseState
+popElement s = s{psPath = drop 1 (psPath s), psTextAccum = []}
+
+-- | Open tag: push the element onto the path and switch context on the
+-- structural elements we care about. Groups only enter their context from
+-- within an exchange; any other current context is preserved.
+onOpenTag :: ParseState -> BS.ByteString -> ParseState
+onOpenTag state tagName =
+    state{psPath = tagName : psPath state, psContext = newContext, psTextAccum = []}
   where
-    -- Open tag handler
-    openTag state tagName =
-        let newPath = tagName : psPath state
-            newContext
-                | isElement tagName "referenceFunction" = InReferenceFunction
-                | isElement tagName "geography" = InGeography
-                | isElement tagName "exchange" = InExchange emptyExchangeData
-                | isElement tagName "inputGroup" =
-                    case psContext state of
-                        InExchange edata -> InInputGroup edata -- Preserve exchange data
-                        _ -> psContext state
-                | isElement tagName "outputGroup" =
-                    case psContext state of
-                        InExchange edata -> InOutputGroup edata -- Preserve exchange data
-                        _ -> psContext state
-                | otherwise = psContext state
-         in state{psPath = newPath, psContext = newContext, psTextAccum = []}
+    enterGroup wrap = case psContext state of
+        InExchange edata -> wrap edata
+        ctx -> ctx
+    newContext
+        | isElement tagName "referenceFunction" = InReferenceFunction
+        | isElement tagName "geography" = InGeography
+        | isElement tagName "exchange" = InExchange emptyExchangeData
+        | isElement tagName "inputGroup" = enterGroup InInputGroup
+        | isElement tagName "outputGroup" = enterGroup InOutputGroup
+        | otherwise = psContext state
 
-    -- Attribute handler
-    attribute state name value =
-        case psContext state of
-            InReferenceFunction ->
-                let st =
-                        state
-                            { psActivityName =
-                                if isElement name "name"
-                                    then Just (bsToText value)
-                                    else psActivityName state
-                            , psRefUnit =
-                                if isElement name "unit"
-                                    then Just (bsToText value)
-                                    else psRefUnit state
-                            , psActivityCategory =
-                                if isElement name "category"
-                                    then bsToText value
-                                    else psActivityCategory state
-                            , psActivitySubCategory =
-                                if isElement name "subCategory"
-                                    then bsToText value
-                                    else psActivitySubCategory state
-                            , psDescription =
-                                if isElement name "generalComment" && not (BS.null value)
-                                    then bsToText value : psDescription state
-                                    else psDescription state
-                            }
-                 in st
-            InGeography ->
-                if isElement name "location"
-                    then state{psLocation = Just (bsToText value)}
-                    else state
-            InExchange edata ->
-                let updated =
-                        edata
-                            { exNumber = if isElement name "number" then bsToInt value else exNumber edata
-                            , exName = if isElement name "name" then bsToText value else exName edata
-                            , exCategory = if isElement name "category" then bsToText value else exCategory edata
-                            , exSubCategory = if isElement name "subCategory" then bsToText value else exSubCategory edata
-                            , exLocation = if isElement name "location" then bsToText value else exLocation edata
-                            , exUnit = if isElement name "unit" then bsToText value else exUnit edata
-                            , exMeanValue = if isElement name "meanValue" then bsToDouble value else exMeanValue edata
-                            , exCASNumber = if isElement name "CASNumber" then bsToText value else exCASNumber edata
-                            , exFormula = if isElement name "formula" then bsToText value else exFormula edata
-                            , exInfrastructure =
-                                if isElement name "infrastructureProcess"
-                                    then bsToText value == "true"
-                                    else exInfrastructure edata
-                            , exComment = if isElement name "generalComment" then bsToText value else exComment edata
-                            }
-                 in state{psContext = InExchange updated}
-            _ ->
-                -- Handle dataset number at top level
-                if isElement name "number" && any (isElement "dataset") (psPath state)
-                    then state{psDatasetNumber = bsToInt value}
-                    else state
+-- | Attribute: route by current context to the matching field setter.
+onAttribute :: ParseState -> BS.ByteString -> BS.ByteString -> ParseState
+onAttribute state name value = case psContext state of
+    InReferenceFunction -> setRefFunctionAttr name value state
+    InGeography
+        | isElement name "location" -> state{psLocation = Just (bsToText value)}
+        | otherwise -> state
+    InExchange edata -> state{psContext = InExchange (setExchangeAttr name value edata)}
+    InInputGroup _ -> datasetNumberAttr
+    InOutputGroup _ -> datasetNumberAttr
+    Other -> datasetNumberAttr
+  where
+    -- The dataset's numeric id lives on the top-level <dataset> element.
+    datasetNumberAttr
+        | isElement name "number" && any (isElement "dataset") (psPath state) =
+            state{psDatasetNumber = bsToInt value}
+        | otherwise = state
 
-    -- End of opening tag
-    endOpen state _tagName = state
+-- | Apply a single referenceFunction attribute to the parse state.
+setRefFunctionAttr :: BS.ByteString -> BS.ByteString -> ParseState -> ParseState
+setRefFunctionAttr name value st
+    | isElement name "name" = st{psActivityName = Just (bsToText value)}
+    | isElement name "unit" = st{psRefUnit = Just (bsToText value)}
+    | isElement name "category" = st{psActivityCategory = bsToText value}
+    | isElement name "subCategory" = st{psActivitySubCategory = bsToText value}
+    | isElement name "generalComment", not (BS.null value) =
+        st{psDescription = bsToText value : psDescription st}
+    | otherwise = st
 
-    -- Text content handler
-    text state content =
-        let trimmed = BS.dropWhile (== 32) $ BS.dropWhileEnd (== 32) content
-         in if BS.null trimmed
-                then state
-                else state{psTextAccum = trimmed : psTextAccum state}
+-- | Apply a single exchange attribute to the in-progress exchange.
+setExchangeAttr :: BS.ByteString -> BS.ByteString -> ExchangeData -> ExchangeData
+setExchangeAttr name value e
+    | isElement name "number" = e{exNumber = bsToInt value}
+    | isElement name "name" = e{exName = bsToText value}
+    | isElement name "category" = e{exCategory = bsToText value}
+    | isElement name "subCategory" = e{exSubCategory = bsToText value}
+    | isElement name "location" = e{exLocation = bsToText value}
+    | isElement name "unit" = e{exUnit = bsToText value}
+    | isElement name "meanValue" = e{exMeanValue = bsToDouble value}
+    | isElement name "CASNumber" = e{exCASNumber = bsToText value}
+    | isElement name "formula" = e{exFormula = bsToText value}
+    | isElement name "infrastructureProcess" = e{exInfrastructure = bsToText value == "true"}
+    | isElement name "generalComment" = e{exComment = bsToText value}
+    | otherwise = e
 
-    -- Close tag handler
-    closeTag state tagName
-        | isElement tagName "inputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InInputGroup edata ->
-                        -- Restore parent exchange context with updated inputGroup
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "outputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InOutputGroup edata ->
-                        -- Restore parent exchange context with updated outputGroup
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "exchange" =
-            case psContext state of
-                InExchange edata ->
-                    let (exchange, parsedFlow, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
-                        !supplierLinks = case exchange of
-                            TechnosphereExchange{techRole = Input}
-                                | exNumber edata /= 0 ->
-                                    M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
-                            _ -> psSupplierLinks state
-                        (techs, bios, wastes) = case parsedFlow of
-                            ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
-                            ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
-                            ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
-                     in state
-                            { psExchanges = exchange : psExchanges state
-                            , psTechFlows = techs
-                            , psBioFlows = bios
-                            , psWasteFlows = wastes
-                            , psUnits = unit : psUnits state
-                            , psSupplierLinks = supplierLinks
-                            , psContext = Other
-                            , psPath = drop 1 (psPath state)
-                            , psTextAccum = []
-                            }
-                _ -> state{psPath = drop 1 (psPath state)}
-        | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "geography" =
-            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
-        -- Handle dataset close tag: accumulate completed activity for multi-dataset files
-        | isElement tagName "dataset" =
-            let !result = buildResult state
-                -- Reset dataset-specific fields for next dataset
-                -- Preserve: psPath (after popping current element), psCompletedActivities
-                resetState =
-                    state
-                        { psCompletedActivities = result : psCompletedActivities state
-                        , psDatasetNumber = 0
-                        , psActivityName = Nothing
-                        , psActivityCategory = ""
-                        , psActivitySubCategory = ""
-                        , psLocation = Nothing
-                        , psRefUnit = Nothing
-                        , psDescription = []
-                        , psExchanges = []
-                        , psTechFlows = []
-                        , psBioFlows = []
-                        , psWasteFlows = []
-                        , psUnits = []
-                        , psContext = Other
-                        , psTextAccum = []
-                        , psSupplierLinks = M.empty
-                        }
-             in resetState{psPath = drop 1 (psPath state)}
-        | otherwise =
-            state{psPath = drop 1 (psPath state)}
+-- | End of an opening tag: nothing to do for this format.
+onEndOpen :: ParseState -> BS.ByteString -> ParseState
+onEndOpen state _tagName = state
 
-    -- CDATA handler
-    cdata = text
+-- | Accumulate non-blank text content (also used for CDATA).
+onText :: ParseState -> BS.ByteString -> ParseState
+onText state content =
+    let trimmed = BS.dropWhile (== 32) $ BS.dropWhileEnd (== 32) content
+     in if BS.null trimmed
+            then state
+            else state{psTextAccum = trimmed : psTextAccum state}
 
-    -- Build exchange, flow, and unit from exchange data
-    -- activityLoc is the activity's location for fallback
-    buildExchange :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
-    buildExchange datasetNum activityLoc edata =
-        let flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
-            unitId = generateUnitUUID (exUnit edata)
+-- | Close tag: finalise the element that is ending.
+onCloseTag :: ParseState -> BS.ByteString -> ParseState
+onCloseTag state tagName
+    | isElement tagName "inputGroup" = closeGroup restoreInputGroup (\e t -> e{exInputGroup = t}) state
+    | isElement tagName "outputGroup" = closeGroup restoreOutputGroup (\e t -> e{exOutputGroup = t}) state
+    | isElement tagName "exchange" = closeExchange state
+    | isElement tagName "referenceFunction" = (popElement state){psContext = Other}
+    | isElement tagName "geography" = (popElement state){psContext = Other}
+    | isElement tagName "dataset" = closeDataset state
+    | otherwise = popPath state
 
-            -- Determine flow type from input/output groups
-            -- EcoSpold1 groups:
-            -- Input: 1-3 = technosphere, 4 = resource (biosphere)
-            -- Output: 0 = reference product, 1-3 = byproduct/co-product, 4 = emission (biosphere)
-            inputGroup = exInputGroup edata
-            outputGroup = exOutputGroup edata
+-- | Close an input/output group: fold its accumulated text into the parent
+-- exchange's matching group field and return to the exchange context.
+-- @ownGroup@ yields the exchange data to restore when the current context is
+-- the group being closed (or, defensively, a bare exchange); any other context
+-- just pops the element. The opposite group never restores, so a stray
+-- </inputGroup> inside an <outputGroup> (malformed) is ignored, not merged.
+closeGroup :: (ElementContext -> Maybe ExchangeData) -> (ExchangeData -> Text -> ExchangeData) -> ParseState -> ParseState
+closeGroup ownGroup setField state =
+    case ownGroup (psContext state) of
+        Just edata -> (popElement state){psContext = InExchange (setField edata txt)}
+        Nothing -> popElement state
+  where
+    txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
 
-            isBiosphere = inputGroup == "4" || outputGroup == "4"
-            isInput = not (T.null inputGroup)
-            isReferenceProduct = outputGroup == "0"
-            -- SimaPro's third flow class ('Final waste flows'). EcoSpold1
-            -- exports surface them on inputGroup=5 to fit the 4-type
-            -- input/output model, but the category attribute survives.
-            -- Route to WasteExchange so they bypass cross-DB technosphere
-            -- linking (orphan outputs, not demands) and land in the
-            -- dedicated waste-side surfaces.
-            isWasteFlow = exCategory edata == "Final waste flows"
+-- | Exchange data to restore when closing an <inputGroup>: the group we opened,
+-- or (defensively) a bare exchange. The opposite group does not restore.
+restoreInputGroup :: ElementContext -> Maybe ExchangeData
+restoreInputGroup (InInputGroup edata) = Just edata
+restoreInputGroup (InExchange edata) = Just edata
+restoreInputGroup InOutputGroup{} = Nothing
+restoreInputGroup InReferenceFunction = Nothing
+restoreInputGroup InGeography = Nothing
+restoreInputGroup Other = Nothing
 
-            -- Exchange location: use exchange's own location
-            -- For technosphere: leave empty if not specified, so Loader can use name-only lookup
-            -- For biosphere: fall back to activity location (biosphere flows don't need supplier linking)
-            exchangeLocation =
-                if T.null (exLocation edata)
-                    then
-                        if isBiosphere
-                            then fromMaybe "" activityLoc
-                            else "" -- Technosphere: leave empty for name-only lookup in Loader
-                    else exLocation edata
+-- | Exchange data to restore when closing an <outputGroup>: the group we opened,
+-- or (defensively) a bare exchange. The opposite group does not restore.
+restoreOutputGroup :: ElementContext -> Maybe ExchangeData
+restoreOutputGroup (InOutputGroup edata) = Just edata
+restoreOutputGroup (InExchange edata) = Just edata
+restoreOutputGroup InInputGroup{} = Nothing
+restoreOutputGroup InReferenceFunction = Nothing
+restoreOutputGroup InGeography = Nothing
+restoreOutputGroup Other = Nothing
 
-            cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
-            unit = Unit unitId (exUnit edata) (exUnit edata) ""
+-- | Close an exchange: build its exchange/flow/unit, accumulate them, and
+-- record the supplier link for technosphere inputs.
+closeExchange :: ParseState -> ParseState
+closeExchange state = case psContext state of
+    InExchange edata ->
+        let (exchange, parsedFlow, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
+            !supplierLinks = case exchange of
+                TechnosphereExchange{techRole = Input}
+                    | exNumber edata /= 0 ->
+                        M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
+                TechnosphereExchange{} -> psSupplierLinks state
+                BiosphereExchange{} -> psSupplierLinks state
+                WasteExchange{} -> psSupplierLinks state
+            (techs, bios, wastes) = case parsedFlow of
+                ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
+                ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
+                ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
+         in (popElement state)
+                { psExchanges = exchange : psExchanges state
+                , psTechFlows = techs
+                , psBioFlows = bios
+                , psWasteFlows = wastes
+                , psUnits = unit : psUnits state
+                , psSupplierLinks = supplierLinks
+                , psContext = Other
+                }
+    InInputGroup _ -> popPath state
+    InOutputGroup _ -> popPath state
+    InReferenceFunction -> popPath state
+    InGeography -> popPath state
+    Other -> popPath state
 
-            -- Role: EcoSpold1 never emits ReferenceInput (no waste-treatment encoding here)
-            techRoleFor
-                | isReferenceProduct = ReferenceProduct
-                | isInput = Input
-                | otherwise = Coproduct
-         in -- Set activityLinkId to nil - will be resolved later in Loader using
-            -- (flowName, exchangeLocation) lookup against supplier activities
-            if isWasteFlow
-                then
-                    let wf = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
-                        ex =
-                            WasteExchange
-                                { waFlowId = flowId
-                                , waAmount = exMeanValue edata
-                                , waUnitId = unitId
-                                , -- Final waste flows surface on inputGroup=5
-                                  -- (consumer's POV: input from a hypothetical
-                                  -- treatment service). Preserve that semantic
-                                  -- by mirroring isInput here.
-                                  waIsInput = isInput
-                                , waActivityLinkId = UUID.nil
-                                , waProcessLinkId = Nothing
-                                , waLocation = exchangeLocation
-                                , waComment = nonEmptyText (exComment edata)
-                                , waPedigree = Nothing
-                                }
-                     in (ex, ParsedWaste wf, unit)
-                else
-                    if isBiosphere
-                        then
-                            let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                                compartment =
-                                    if T.null (exCategory edata) && isNothing subCat
-                                        then Nothing
-                                        else Just (Compartment (exCategory edata) subCat)
-                                bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
-                                ex =
-                                    BiosphereExchange
-                                        { bioFlowId = flowId
-                                        , bioAmount = exMeanValue edata
-                                        , bioUnitId = unitId
-                                        , bioDirection = if inputGroup == "4" then Resource else Emission
-                                        , bioLocation = exchangeLocation
-                                        , bioComment = nonEmptyText (exComment edata)
-                                        , bioPedigree = Nothing
-                                        }
-                             in (ex, ParsedBio bioFlow, unit)
-                        else
-                            let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
-                                ex =
-                                    TechnosphereExchange
-                                        { techFlowId = flowId
-                                        , techAmount = exMeanValue edata
-                                        , techUnitId = unitId
-                                        , techRole = techRoleFor
-                                        , techActivityLinkId = UUID.nil
-                                        , techProcessLinkId = Nothing
-                                        , techLocation = exchangeLocation
-                                        , techComment = nonEmptyText (exComment edata)
-                                        , techPedigree = Nothing
-                                        }
-                             in (ex, ParsedTech techFlow, unit)
+-- | Close a dataset: snapshot the completed activity and reset per-dataset
+-- accumulators for the next one (multi-dataset files).
+closeDataset :: ParseState -> ParseState
+closeDataset state =
+    let !result = buildResult state
+     in popPath ((resetDataset state){psCompletedActivities = result : psCompletedActivities state})
 
-    -- Build final result
-    buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
-    buildResult st =
-        let name = fromMaybe "Unknown Activity" (psActivityName st)
-            location = fromMaybe "GLO" (psLocation st)
-            refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
-            description = reverse (psDescription st)
-            classifications =
-                M.fromList $
-                    filter
-                        (not . T.null . snd)
-                        [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
-            techs = reverse (psTechFlows st)
-            bios = reverse (psBioFlows st)
-            wastes = reverse (psWasteFlows st)
-            units = reverse (psUnits st)
-         in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, wastes, units, psDatasetNumber st, psSupplierLinks st)
-                Left err -> Left err
+-- | Clear per-dataset accumulators, preserving cross-dataset state
+-- (psPath and psCompletedActivities).
+resetDataset :: ParseState -> ParseState
+resetDataset state =
+    state
+        { psDatasetNumber = 0
+        , psActivityName = Nothing
+        , psActivityCategory = ""
+        , psActivitySubCategory = ""
+        , psLocation = Nothing
+        , psRefUnit = Nothing
+        , psDescription = []
+        , psExchanges = []
+        , psTechFlows = []
+        , psBioFlows = []
+        , psWasteFlows = []
+        , psUnits = []
+        , psContext = Other
+        , psTextAccum = []
+        , psSupplierLinks = M.empty
+        }
+
+{- | Build exchange, flow, and unit from exchange data.
+@activityLoc@ is the activity's location, used as a biosphere fallback.
+
+EcoSpold1 groups:
+  Input:  1-3 = technosphere, 4 = resource (biosphere)
+  Output: 0 = reference product, 1-3 = byproduct/co-product, 4 = emission (biosphere)
+-}
+buildExchange :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
+buildExchange datasetNum activityLoc edata
+    | isWasteFlow = (wasteEx, ParsedWaste wasteFlow, unit)
+    | isBiosphere = (bioEx, ParsedBio bioFlow, unit)
+    | otherwise = (techEx, ParsedTech techFlow, unit)
+  where
+    flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
+    unitId = generateUnitUUID (exUnit edata)
+    unit = Unit unitId (exUnit edata) (exUnit edata) ""
+
+    inputGroup = exInputGroup edata
+    outputGroup = exOutputGroup edata
+    isBiosphere = inputGroup == "4" || outputGroup == "4"
+    isInput = not (T.null inputGroup)
+    isReferenceProduct = outputGroup == "0"
+    -- SimaPro's third flow class ('Final waste flows'). EcoSpold1 exports
+    -- surface them on inputGroup=5 to fit the 4-type input/output model, but
+    -- the category attribute survives. Routed to WasteExchange so they bypass
+    -- cross-DB technosphere linking (orphan outputs, not demands).
+    isWasteFlow = exCategory edata == "Final waste flows"
+
+    -- Technosphere: leave empty if unspecified so the Loader can do name-only
+    -- lookup. Biosphere: fall back to the activity location (no supplier link).
+    exchangeLocation
+        | not (T.null (exLocation edata)) = exLocation edata
+        | isBiosphere = fromMaybe "" activityLoc
+        | otherwise = ""
+
+    cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
+
+    -- EcoSpold1 never emits ReferenceInput (no waste-treatment encoding here).
+    techRoleFor
+        | isReferenceProduct = ReferenceProduct
+        | isInput = Input
+        | otherwise = Coproduct
+
+    -- activityLinkId stays nil; the Loader resolves it later via
+    -- (flowName, exchangeLocation) against supplier activities.
+    wasteFlow = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
+    wasteEx =
+        WasteExchange
+            { waFlowId = flowId
+            , waAmount = exMeanValue edata
+            , waUnitId = unitId
+            , -- Mirror isInput: final waste flows surface on inputGroup=5
+              -- (consumer's POV: input from a hypothetical treatment service).
+              waIsInput = isInput
+            , waActivityLinkId = UUID.nil
+            , waProcessLinkId = Nothing
+            , waLocation = exchangeLocation
+            , waComment = nonEmptyText (exComment edata)
+            , waPedigree = Nothing
+            }
+
+    subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
+    compartment =
+        if T.null (exCategory edata) && isNothing subCat
+            then Nothing
+            else Just (Compartment (exCategory edata) subCat)
+    bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
+    bioEx =
+        BiosphereExchange
+            { bioFlowId = flowId
+            , bioAmount = exMeanValue edata
+            , bioUnitId = unitId
+            , bioDirection = if inputGroup == "4" then Resource else Emission
+            , bioLocation = exchangeLocation
+            , bioComment = nonEmptyText (exComment edata)
+            , bioPedigree = Nothing
+            }
+
+    techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
+    techEx =
+        TechnosphereExchange
+            { techFlowId = flowId
+            , techAmount = exMeanValue edata
+            , techUnitId = unitId
+            , techRole = techRoleFor
+            , techActivityLinkId = UUID.nil
+            , techProcessLinkId = Nothing
+            , techLocation = exchangeLocation
+            , techComment = nonEmptyText (exComment edata)
+            , techPedigree = Nothing
+            }
+
+-- | Build the final per-dataset result, applying the cut-off strategy.
+buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
+buildResult st =
+    let name = fromMaybe "Unknown Activity" (psActivityName st)
+        location = fromMaybe "GLO" (psLocation st)
+        refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
+        description = reverse (psDescription st)
+        classifications =
+            M.fromList $
+                filter
+                    (not . T.null . snd)
+                    [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
+        activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
+        pack act =
+            ( act
+            , reverse (psTechFlows st)
+            , reverse (psBioFlows st)
+            , reverse (psWasteFlows st)
+            , reverse (psUnits st)
+            , psDatasetNumber st
+            , psSupplierLinks st
+            )
+     in pack <$> applyCutoffStrategy activity
+
+-- | Run the shared SAX fold, surfacing any Xeno error as a String.
+foldEcoSpold1 :: BS.ByteString -> Either String ParseState
+foldEcoSpold1 =
+    first show . X.fold onOpenTag onAttribute onEndOpen onText onCloseTag onText initialParseState
+
+-- | Xeno SAX parser for EcoSpold1 — first dataset in the file.
+parseWithXeno :: BS.ByteString -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
+parseWithXeno xmlContent = do
+    finalState <- foldEcoSpold1 xmlContent
+    case psCompletedActivities finalState of
+        (result : _) -> result
+        [] -> buildResult finalState
+
+{- | Parse ALL datasets from an EcoSpold1 file (multi-dataset support).
+Outer Either = XML parse failure; inner Either = per-activity failure.
+-}
+parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
+parseAllWithXeno = fmap (reverse . psCompletedActivities) . foldEcoSpold1
 
 -- | Parse EcoSpold1 file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int))
@@ -525,274 +556,6 @@ unmarkAsReference ex@WasteExchange{} = ex
 -- ============================================================================
 -- Multi-dataset file support
 -- ============================================================================
-
-{- | Parse ALL datasets from an EcoSpold1 file (multi-dataset support)
-Returns the accumulated completed activities from psCompletedActivities
-Outer Either = XML parse failure; inner Either = per-activity failure
--}
-parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
-parseAllWithXeno xmlContent =
-    case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
-        Left err -> Left (show err)
-        Right finalState -> Right (reverse $ psCompletedActivities finalState)
-  where
-    -- Open tag handler
-    openTag state tagName =
-        let newPath = tagName : psPath state
-            newContext
-                | isElement tagName "referenceFunction" = InReferenceFunction
-                | isElement tagName "geography" = InGeography
-                | isElement tagName "exchange" = InExchange emptyExchangeData
-                | isElement tagName "inputGroup" =
-                    case psContext state of
-                        InExchange edata -> InInputGroup edata
-                        _ -> psContext state
-                | isElement tagName "outputGroup" =
-                    case psContext state of
-                        InExchange edata -> InOutputGroup edata
-                        _ -> psContext state
-                | otherwise = psContext state
-         in state{psPath = newPath, psContext = newContext, psTextAccum = []}
-
-    -- Attribute handler
-    attribute state name value =
-        case psContext state of
-            InReferenceFunction ->
-                let st =
-                        state
-                            { psActivityName =
-                                if isElement name "name"
-                                    then Just (bsToText value)
-                                    else psActivityName state
-                            , psRefUnit =
-                                if isElement name "unit"
-                                    then Just (bsToText value)
-                                    else psRefUnit state
-                            , psActivityCategory =
-                                if isElement name "category"
-                                    then bsToText value
-                                    else psActivityCategory state
-                            , psActivitySubCategory =
-                                if isElement name "subCategory"
-                                    then bsToText value
-                                    else psActivitySubCategory state
-                            , psDescription =
-                                if isElement name "generalComment" && not (BS.null value)
-                                    then bsToText value : psDescription state
-                                    else psDescription state
-                            }
-                 in st
-            InGeography ->
-                if isElement name "location"
-                    then state{psLocation = Just (bsToText value)}
-                    else state
-            InExchange edata ->
-                let updated =
-                        edata
-                            { exNumber = if isElement name "number" then bsToInt value else exNumber edata
-                            , exName = if isElement name "name" then bsToText value else exName edata
-                            , exCategory = if isElement name "category" then bsToText value else exCategory edata
-                            , exSubCategory = if isElement name "subCategory" then bsToText value else exSubCategory edata
-                            , exLocation = if isElement name "location" then bsToText value else exLocation edata
-                            , exUnit = if isElement name "unit" then bsToText value else exUnit edata
-                            , exMeanValue = if isElement name "meanValue" then bsToDouble value else exMeanValue edata
-                            , exCASNumber = if isElement name "CASNumber" then bsToText value else exCASNumber edata
-                            , exFormula = if isElement name "formula" then bsToText value else exFormula edata
-                            , exInfrastructure =
-                                if isElement name "infrastructureProcess"
-                                    then bsToText value == "true"
-                                    else exInfrastructure edata
-                            , exComment = if isElement name "generalComment" then bsToText value else exComment edata
-                            }
-                 in state{psContext = InExchange updated}
-            _ ->
-                -- Handle dataset number at top level
-                if isElement name "number" && any (isElement "dataset") (psPath state)
-                    then state{psDatasetNumber = bsToInt value}
-                    else state
-
-    -- End of opening tag
-    endOpen state _tagName = state
-
-    -- Text content handler
-    text state content =
-        let trimmed = BS.dropWhile (== 32) $ BS.dropWhileEnd (== 32) content
-         in if BS.null trimmed
-                then state
-                else state{psTextAccum = trimmed : psTextAccum state}
-
-    -- Close tag handler
-    closeTag state tagName
-        | isElement tagName "inputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InInputGroup edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InExchange edata ->
-                        state{psContext = InExchange edata{exInputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "outputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InOutputGroup edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InExchange edata ->
-                        state{psContext = InExchange edata{exOutputGroup = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "exchange" =
-            case psContext state of
-                InExchange edata ->
-                    let (exchange, parsedFlow, unit) = buildExchangeForAll (psDatasetNumber state) (psLocation state) edata
-                        !supplierLinks = case exchange of
-                            TechnosphereExchange{techRole = Input}
-                                | exNumber edata /= 0 ->
-                                    M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
-                            _ -> psSupplierLinks state
-                        (techs, bios, wastes) = case parsedFlow of
-                            ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
-                            ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
-                            ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
-                     in state
-                            { psExchanges = exchange : psExchanges state
-                            , psTechFlows = techs
-                            , psBioFlows = bios
-                            , psWasteFlows = wastes
-                            , psUnits = unit : psUnits state
-                            , psSupplierLinks = supplierLinks
-                            , psContext = Other
-                            , psPath = drop 1 (psPath state)
-                            , psTextAccum = []
-                            }
-                _ -> state{psPath = drop 1 (psPath state)}
-        | isElement tagName "referenceFunction" =
-            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
-        | isElement tagName "geography" =
-            state{psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
-        -- Handle dataset close tag: accumulate completed activity
-        | isElement tagName "dataset" =
-            let !result = buildResultForAll state
-                resetState =
-                    state
-                        { psCompletedActivities = result : psCompletedActivities state
-                        , psDatasetNumber = 0
-                        , psActivityName = Nothing
-                        , psActivityCategory = ""
-                        , psActivitySubCategory = ""
-                        , psLocation = Nothing
-                        , psRefUnit = Nothing
-                        , psDescription = []
-                        , psExchanges = []
-                        , psTechFlows = []
-                        , psBioFlows = []
-                        , psWasteFlows = []
-                        , psUnits = []
-                        , psContext = Other
-                        , psTextAccum = []
-                        , psSupplierLinks = M.empty
-                        }
-             in resetState{psPath = drop 1 (psPath state)}
-        | otherwise =
-            state{psPath = drop 1 (psPath state)}
-
-    -- CDATA handler
-    cdata = text
-
-    -- Build exchange, flow, and unit from exchange data (same logic as parseWithXeno)
-    buildExchangeForAll :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
-    buildExchangeForAll datasetNum activityLoc edata =
-        let flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
-            unitId = generateUnitUUID (exUnit edata)
-            inputGroup = exInputGroup edata
-            outputGroup = exOutputGroup edata
-            isBiosphere = inputGroup == "4" || outputGroup == "4"
-            isInput = not (T.null inputGroup)
-            isReferenceProduct = outputGroup == "0"
-            isWasteFlow = exCategory edata == "Final waste flows"
-            exchangeLocation =
-                if T.null (exLocation edata)
-                    then
-                        if isBiosphere
-                            then fromMaybe "" activityLoc
-                            else ""
-                    else exLocation edata
-            cas = if T.null (exCASNumber edata) then Nothing else Just (exCASNumber edata)
-            unit = Unit unitId (exUnit edata) (exUnit edata) ""
-            techRoleFor
-                | isReferenceProduct = ReferenceProduct
-                | isInput = Input
-                | otherwise = Coproduct
-         in if isWasteFlow
-                then
-                    let wf = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
-                        ex =
-                            WasteExchange
-                                { waFlowId = flowId
-                                , waAmount = exMeanValue edata
-                                , waUnitId = unitId
-                                , waIsInput = isInput
-                                , waActivityLinkId = UUID.nil
-                                , waProcessLinkId = Nothing
-                                , waLocation = exchangeLocation
-                                , waComment = nonEmptyText (exComment edata)
-                                , waPedigree = Nothing
-                                }
-                     in (ex, ParsedWaste wf, unit)
-                else
-                    if isBiosphere
-                        then
-                            let subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-                                compartment =
-                                    if T.null (exCategory edata) && isNothing subCat
-                                        then Nothing
-                                        else Just (Compartment (exCategory edata) subCat)
-                                bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
-                                ex =
-                                    BiosphereExchange
-                                        { bioFlowId = flowId
-                                        , bioAmount = exMeanValue edata
-                                        , bioUnitId = unitId
-                                        , bioDirection = if inputGroup == "4" then Resource else Emission
-                                        , bioLocation = exchangeLocation
-                                        , bioComment = nonEmptyText (exComment edata)
-                                        , bioPedigree = Nothing
-                                        }
-                             in (ex, ParsedBio bioFlow, unit)
-                        else
-                            let techFlow = TechnosphereFlow flowId (exName edata) unitId M.empty cas Nothing
-                                ex =
-                                    TechnosphereExchange
-                                        { techFlowId = flowId
-                                        , techAmount = exMeanValue edata
-                                        , techUnitId = unitId
-                                        , techRole = techRoleFor
-                                        , techActivityLinkId = UUID.nil
-                                        , techProcessLinkId = Nothing
-                                        , techLocation = exchangeLocation
-                                        , techComment = nonEmptyText (exComment edata)
-                                        , techPedigree = Nothing
-                                        }
-                             in (ex, ParsedTech techFlow, unit)
-
-    -- Build final result for a single dataset
-    buildResultForAll :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
-    buildResultForAll st =
-        let name = fromMaybe "Unknown Activity" (psActivityName st)
-            location = fromMaybe "GLO" (psLocation st)
-            refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
-            description = reverse (psDescription st)
-            classifications =
-                M.fromList $
-                    filter
-                        (not . T.null . snd)
-                        [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-            activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing
-            techs = reverse (psTechFlows st)
-            bios = reverse (psBioFlows st)
-            wastes = reverse (psWasteFlows st)
-            units = reverse (psUnits st)
-         in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, wastes, units, psDatasetNumber st, psSupplierLinks st)
-                Left err -> Left err
 
 {- | Parse ALL datasets from a single EcoSpold1 file
 Used for multi-dataset files where <ecoSpold> contains multiple <dataset> elements
