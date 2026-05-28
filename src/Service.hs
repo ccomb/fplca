@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
-import Matrix (Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, toList)
+import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, toList)
 import qualified Matrix.Export as MatrixExport
 import Plugin.Types (Severity (..), ValidateContext (..), ValidateHandle (..), ValidationIssue (..), ValidationPhase (..))
 import qualified Progress
@@ -2277,7 +2277,7 @@ resolveDepWithSubs ::
     SharedSolver.DepSolverLookup ->
     -- | ROOT DB's name (default for bare consumer/from/to refs)
     RootDb ->
-    [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
+    [DepDemands] ->
     [Substitution] ->
     Int ->
     Int ->
@@ -2291,13 +2291,11 @@ resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth k de
             -- contributes 'Nothing' at every root; dropped before merge.
             pure (Right (replicate k Nothing))
         Just (depDb, depSolver) ->
-            let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
-                depVecsE = traverse (depDemandsToVector unitCfg depDbName depDb) demandsPerRoot
-             in case depVecsE of
-                    Left err -> pure (Left (MatrixError err))
-                    Right depDemandVecs -> do
-                        sols <- goWithSubsAndDeps unitCfg depLookup depDb (ThisDb depDbName) rootDb depSolver depDemandVecs allSubs (depth + 1)
-                        pure $ fmap (map Just) sols
+            case SharedSolver.prepareDepDemandVecs unitCfg depDbName depDb perRootDepDemands of
+                Left err -> pure (Left (MatrixError err))
+                Right depDemandVecs -> do
+                    sols <- goWithSubsAndDeps unitCfg depLookup depDb (ThisDb depDbName) rootDb depSolver depDemandVecs allSubs (depth + 1)
+                    pure $ fmap (map Just) sols
 
 {- | Cross-DB substitution resolver (root-only path, used by supply-chain).
 
