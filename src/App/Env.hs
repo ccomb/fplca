@@ -5,7 +5,6 @@
 -- mapping passed to Servant's 'hoistServer'.
 module App.Env (
     AppEnv (..),
-    mkAppEnv,
     AppM (..),
     runApp,
 ) where
@@ -25,15 +24,6 @@ data AppEnv = AppEnv
     , aeHostingConfig :: !(Maybe Config.HostingConfig)
     , aeClassificationPresets :: ![Config.ClassificationPreset]
     }
-
-mkAppEnv
-    :: DatabaseManager
-    -> Int
-    -> Maybe String
-    -> Maybe Config.HostingConfig
-    -> [Config.ClassificationPreset]
-    -> AppEnv
-mkAppEnv = AppEnv
 
 newtype AppM a = AppM {unAppM :: ReaderT AppEnv Handler a}
     deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader AppEnv, MonadError ServerError)

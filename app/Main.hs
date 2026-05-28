@@ -39,7 +39,7 @@ import Progress
 import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
-import App.Env (mkAppEnv)
+import App.Env (AppEnv (..))
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -337,7 +337,14 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
     mcp <- mcpApp dbManager filterPresets hasFrontend
-    let env = mkAppEnv dbManager maxTreeDepth password hostingConfig filterPresets
+    let env =
+            AppEnv
+                { aeDbManager = dbManager
+                , aeMaxTreeDepth = maxTreeDepth
+                , aePassword = password
+                , aeHostingConfig = hostingConfig
+                , aeClassificationPresets = filterPresets
+                }
         apiApp = serve lcaAPI (lcaServer env)
     pure $ \req respond -> do
         unless desktopMode (logRequest req)
