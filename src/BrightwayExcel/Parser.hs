@@ -207,6 +207,10 @@ parseBlock block0 = do
                 , Just k <- [textAt 0 row]
                 , Just v <- [M.lookup 1 row]
                 ]
+        -- Everything after the Exchanges header is taken as exchange data. This
+        -- assumes a @parameters@ section (if any) precedes Exchanges, as bw2io
+        -- writes it; a trailing parameters block would be read as exchange rows
+        -- and rejected by their missing @type@ (a warning, never a silent drop).
         (headers, dataRows) = case excIdx of
             Nothing -> ([], [])
             Just i -> case drop (i + 1) block of
@@ -283,7 +287,7 @@ rawToActivity cfg ra =
 
     refExch = find exchangeIsReference exchanges'
     refUnitName = case refExch of
-        Just ex -> maybe metaUnit unitName (find ((== exchUnitId ex) . unitId) units)
+        Just ex -> maybe metaUnit unitName (find ((== exchangeUnitId ex) . unitId) units)
         Nothing -> metaUnit
     metaUnit = fromMaybe "" (metaText meta "unit")
 
@@ -291,6 +295,9 @@ rawToActivity cfg ra =
         concatMap roWarn allOuts
             ++ [ "activity '" <> raName ra <> "': parameters section ignored (not supported)"
                | raHasParams ra
+               ]
+            ++ [ "activity '" <> raName ra <> "': multiple production rows; coproducts are emitted without allocation"
+               | length prodRows > 1
                ]
             ++ [ "activity '" <> raName ra <> "': no reference product; activity will not be scoreable"
                | not (any exchangeIsReference exchanges')
@@ -439,12 +446,6 @@ isResourceCompartment :: Text -> Bool
 isResourceCompartment comp =
     T.toLower (T.strip comp) `elem` ["natural resource", "resource", "resources", "raw"]
 
-exchUnitId :: Exchange -> UUID.UUID
-exchUnitId = \case
-    TechnosphereExchange{techUnitId = u} -> u
-    BiosphereExchange{bioUnitId = u} -> u
-    WasteExchange{waUnitId = u} -> u
-
 fieldText :: M.Map Text CellValue -> Text -> Maybe Text
 fieldText m k = cellText =<< M.lookup k m
 
@@ -467,6 +468,7 @@ readSheets raw = do
     archive <- first T.pack (toArchiveOrFail raw)
     workbook <- parseXml =<< entry archive "xl/workbook.xml"
     rels <- parseXml =<< entry archive "xl/_rels/workbook.xml.rels"
+    sharedStrings <- traverse parseSharedStrings (entryMaybe archive "xl/sharedStrings.xml")
     let relMap =
             M.fromList
                 [ (TE.decodeUtf8 i, TE.decodeUtf8 tgt)
@@ -474,7 +476,6 @@ readSheets raw = do
                 , Just i <- [attr "Id" r]
                 , Just tgt <- [attr "Target" r]
                 ]
-        sharedStrings = parseSharedStrings <$> entryMaybe archive "xl/sharedStrings.xml"
         sheetRefs =
             [ TE.decodeUtf8 rid
             | sheetsNode <- maybeToList (firstChildNamed "sheets" workbook)
@@ -550,11 +551,14 @@ readInt t = case TR.decimal (T.strip t) of
     Right (n, rest) | T.null rest -> Just n
     _ -> Nothing
 
--- | Shared-string table: each @\<si\>@ maps to its concatenated text.
-parseSharedStrings :: BS.ByteString -> V.Vector Text
+{- | Shared-string table: each @\<si\>@ maps to its concatenated text. A present
+but unparseable table is surfaced rather than silently treated as empty,
+which would drop every @t="s"@ cell without trace.
+-}
+parseSharedStrings :: BS.ByteString -> Either Text (V.Vector Text)
 parseSharedStrings bs = case X.parse bs of
-    Left _ -> V.empty
-    Right sst -> V.fromList [nodeText si | si <- childrenNamed "si" sst]
+    Left err -> Left ("shared strings: " <> T.pack (show err))
+    Right sst -> Right (V.fromList [nodeText si | si <- childrenNamed "si" sst])
 
 -- ---------------------------------------------------------------------------
 -- xeno DOM helpers
