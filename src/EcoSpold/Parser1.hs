@@ -238,8 +238,8 @@ onText state content =
 -- | Close tag: finalise the element that is ending.
 onCloseTag :: ParseState -> BS.ByteString -> ParseState
 onCloseTag state tagName
-    | isElement tagName "inputGroup" = closeGroup (\e t -> e{exInputGroup = t}) state
-    | isElement tagName "outputGroup" = closeGroup (\e t -> e{exOutputGroup = t}) state
+    | isElement tagName "inputGroup" = closeGroup restoreInputGroup (\e t -> e{exInputGroup = t}) state
+    | isElement tagName "outputGroup" = closeGroup restoreOutputGroup (\e t -> e{exOutputGroup = t}) state
     | isElement tagName "exchange" = closeExchange state
     | isElement tagName "referenceFunction" = (popElement state){psContext = Other}
     | isElement tagName "geography" = (popElement state){psContext = Other}
@@ -247,20 +247,38 @@ onCloseTag state tagName
     | otherwise = popPath state
 
 -- | Close an input/output group: fold its accumulated text into the parent
--- exchange's group field and return to the exchange context. Any context that
--- carries exchange data restores it; other contexts just pop the element.
-closeGroup :: (ExchangeData -> Text -> ExchangeData) -> ParseState -> ParseState
-closeGroup setField state =
-    case psContext state of
-        InInputGroup edata -> restore edata
-        InOutputGroup edata -> restore edata
-        InExchange edata -> restore edata
-        InReferenceFunction -> popElement state
-        InGeography -> popElement state
-        Other -> popElement state
+-- exchange's matching group field and return to the exchange context.
+-- @ownGroup@ yields the exchange data to restore when the current context is
+-- the group being closed (or, defensively, a bare exchange); any other context
+-- just pops the element. The opposite group never restores, so a stray
+-- </inputGroup> inside an <outputGroup> (malformed) is ignored, not merged.
+closeGroup :: (ElementContext -> Maybe ExchangeData) -> (ExchangeData -> Text -> ExchangeData) -> ParseState -> ParseState
+closeGroup ownGroup setField state =
+    case ownGroup (psContext state) of
+        Just edata -> (popElement state){psContext = InExchange (setField edata txt)}
+        Nothing -> popElement state
   where
     txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-    restore edata = (popElement state){psContext = InExchange (setField edata txt)}
+
+-- | Exchange data to restore when closing an <inputGroup>: the group we opened,
+-- or (defensively) a bare exchange. The opposite group does not restore.
+restoreInputGroup :: ElementContext -> Maybe ExchangeData
+restoreInputGroup (InInputGroup edata) = Just edata
+restoreInputGroup (InExchange edata) = Just edata
+restoreInputGroup InOutputGroup{} = Nothing
+restoreInputGroup InReferenceFunction = Nothing
+restoreInputGroup InGeography = Nothing
+restoreInputGroup Other = Nothing
+
+-- | Exchange data to restore when closing an <outputGroup>: the group we opened,
+-- or (defensively) a bare exchange. The opposite group does not restore.
+restoreOutputGroup :: ElementContext -> Maybe ExchangeData
+restoreOutputGroup (InOutputGroup edata) = Just edata
+restoreOutputGroup (InExchange edata) = Just edata
+restoreOutputGroup InInputGroup{} = Nothing
+restoreOutputGroup InReferenceFunction = Nothing
+restoreOutputGroup InGeography = Nothing
+restoreOutputGroup Other = Nothing
 
 -- | Close an exchange: build its exchange/flow/unit, accumulate them, and
 -- record the supplier link for technosphere inputs.
