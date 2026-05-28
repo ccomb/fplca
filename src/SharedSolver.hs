@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
@@ -33,12 +34,13 @@ module SharedSolver (
     computeInventoryMatrixBatchWithDepsCached,
     goWithDepsFromScalings,
     mergeSolutions,
+    prepareDepDemandVecs,
     crossDBProcessContributions,
 ) where
 
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, withMVar)
-import Control.Exception (SomeException, catch)
+import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar, withMVar)
+import Control.Exception (SomeException, try)
 import Data.List (transpose)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
@@ -47,6 +49,7 @@ import Data.Maybe (catMaybes)
 import qualified Data.Set as S
 import Data.Text (Text)
 import Matrix (
+    DepDemands,
     Inventory,
     Vector,
     accumulateDepDemands,
@@ -89,40 +92,36 @@ createSharedSolver dbName techTriples activityCount = do
     factVar <- newMVar Nothing
     return $ SharedSolver lock factVar techTriples activityCount dbName
 
+{- | Compute the factorization and cache it. Assumes 'solverLock' is held and
+the cache is empty (i.e. only called on a miss). Shared by the first-solve
+path and 'ensureFactorization'.
+-}
+computeAndStoreFactorization :: SharedSolver -> IO MatrixFactorization
+computeAndStoreFactorization solver = do
+    reportProgress Info $ "Factorizing '" ++ show (solverDbName solver) ++ "' on first use"
+    fact <-
+        precomputeMatrixFactorization
+            (solverDbName solver)
+            (solverTechTriples solver)
+            (solverActivityCount solver)
+    modifyMVar_ (solverFactorizationVar solver) (const (pure (Just fact)))
+    pure fact
+
 -- | Solve using shared solver. On first call, triggers lazy factorization.
 solveWithSharedSolver :: SharedSolver -> Vector -> IO Vector
-solveWithSharedSolver solver demandVector = do
-    withMVar (solverLock solver) $ \_ -> do
-        maybeFact <- readMVar (solverFactorizationVar solver)
-        case maybeFact of
-            Just factorization -> do
+solveWithSharedSolver solver demandVector =
+    withMVar (solverLock solver) $ \_ ->
+        readMVar (solverFactorizationVar solver) >>= \case
+            Just fact -> do
                 reportProgress Solver "Using cached factorization for sub-second solve"
-                solveSparseLinearSystemWithFactorization factorization demandVector
-            Nothing -> do
-                -- First solve: factorize, cache, then solve
-                reportProgress Info $ "First solve for '" ++ show (solverDbName solver) ++ "' — computing factorization..."
-                factResult <-
-                    catch
-                        ( do
-                            factorization <-
-                                precomputeMatrixFactorization
-                                    (solverDbName solver)
-                                    (solverTechTriples solver)
-                                    (solverActivityCount solver)
-                            -- Store for subsequent solves (replace the MVar contents)
-                            _ <- modifyMVar (solverFactorizationVar solver) $ \_ -> return (Just factorization, ())
-                            reportProgress Info "Factorization complete — solving"
-                            result <- solveSparseLinearSystemWithFactorization factorization demandVector
-                            return (Just result)
-                        )
-                        ( \e -> do
-                            reportProgress Solver $ "Factorization failed: " ++ show (e :: SomeException) ++ " — using fallback solver"
-                            return Nothing
-                        )
-                case factResult of
-                    Just result -> return result
-                    Nothing ->
-                        solveSparseLinearSystem (solverTechTriples solver) (solverActivityCount solver) demandVector
+                solveSparseLinearSystemWithFactorization fact demandVector
+            Nothing ->
+                try (computeAndStoreFactorization solver >>= flip solveSparseLinearSystemWithFactorization demandVector)
+                    >>= either fallback pure
+  where
+    fallback e = do
+        reportProgress Solver $ "Factorization failed: " ++ show (e :: SomeException) ++ " — using fallback solver"
+        solveSparseLinearSystem (solverTechTriples solver) (solverActivityCount solver) demandVector
 
 -- | Read the cached factorization without solving. Returns Nothing until the first solve.
 getFactorization :: SharedSolver -> IO (Maybe MatrixFactorization)
@@ -132,19 +131,10 @@ getFactorization solver = readMVar (solverFactorizationVar solver)
 Safe to call from multiple threads: the solverLock serializes first-time factorization.
 -}
 ensureFactorization :: SharedSolver -> IO MatrixFactorization
-ensureFactorization solver = withMVar (solverLock solver) $ \_ -> do
-    maybeFact <- readMVar (solverFactorizationVar solver)
-    case maybeFact of
+ensureFactorization solver = withMVar (solverLock solver) $ \_ ->
+    readMVar (solverFactorizationVar solver) >>= \case
         Just fact -> pure fact
-        Nothing -> do
-            reportProgress Info $ "Factorizing '" ++ show (solverDbName solver) ++ "' on first use"
-            fact <-
-                precomputeMatrixFactorization
-                    (solverDbName solver)
-                    (solverTechTriples solver)
-                    (solverActivityCount solver)
-            modifyMVar_ (solverFactorizationVar solver) $ \_ -> pure (Just fact)
-            pure fact
+        Nothing -> computeAndStoreFactorization solver
 
 {- | Solve with multiple RHS vectors in one MUMPS call, using the cached factorization.
 Forces factorization on first call. Subsequent calls reuse the cached LU.
@@ -203,6 +193,16 @@ data CrossDBSolution = CrossDBSolution
     { csInventory :: !Inventory
     , csScalings :: !(NonEmpty (Text, Database, Vector))
     }
+
+{- | Combine two cross-DB solutions: sum their inventories and concatenate
+their visited-DB scalings. Associative; folding from a base preserves the
+base-first, deps-in-order BFS layout 'csScalings' documents.
+-}
+instance Semigroup CrossDBSolution where
+    a <> b =
+        CrossDBSolution
+            (M.unionWith (+) (csInventory a) (csInventory b))
+            (csScalings a <> csScalings b)
 
 {- |
 Batch inventory with cross-DB back-substitution. Multi-RHS is preserved at
@@ -320,7 +320,7 @@ goWithDepsFromScalings unitConfig depLookup db dbName extraLinks scalings depth 
         then pure (Right baseSolutions)
         else do
             let perRootDepDemands = map (accumulateDepDemandsWith db extraLinks) scalings
-                allDepDbs = S.toList $ S.unions $ map M.keysSet perRootDepDemands
+                allDepDbs = depDbsOf perRootDepDemands
             if null allDepDbs
                 then pure (Right baseSolutions)
                 else do
@@ -352,20 +352,25 @@ Exported so the substitution-aware solver ('Service.goWithSubsAndDeps')
 reuses the same merge shape as the plain cross-DB solver.
 -}
 mergeSolutions :: CrossDBSolution -> [CrossDBSolution] -> CrossDBSolution
-mergeSolutions base depSols =
-    CrossDBSolution
-        { csInventory =
-            foldr (M.unionWith (+)) (csInventory base) (map csInventory depSols)
-        , csScalings =
-            NE.appendList
-                (csScalings base)
-                (concatMap (NE.toList . csScalings) depSols)
-        }
+mergeSolutions = foldl' (<>)
+
+-- | Every dependency DB referenced across a level's per-root demand maps.
+depDbsOf :: [DepDemands] -> [Text]
+depDbsOf = S.toList . S.unions . map M.keysSet
+
+{- | Turn a level's per-root demand maps into the dep DB's per-root demand
+vectors, performing unit conversion. Picks out @depDbName@'s share of each
+root's demands. Shared by every dep resolver (inventory, contributions, and
+the substitution-aware path in 'Service').
+-}
+prepareDepDemandVecs :: UnitConfig -> Text -> Database -> [DepDemands] -> Either Text [Vector]
+prepareDepDemandVecs unitConfig depDbName depDb =
+    traverse (depDemandsToVector unitConfig depDbName depDb . M.findWithDefault M.empty depDbName)
 
 resolveDep ::
     UnitConfig ->
     DepSolverLookup ->
-    [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
+    [DepDemands] ->
     -- | current depth (for recursion)
     Int ->
     -- | K (so absent-dep returns the right number of 'Nothing' padding)
@@ -383,13 +388,11 @@ resolveDep unitConfig depLookup perRootDepDemands depth k depDbName = do
             -- materialising one (which the NonEmpty type forbids).
             pure (Right (replicate k Nothing))
         Just (depDb, depSolver) ->
-            let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
-                depVecsE = traverse (depDemandsToVector unitConfig depDbName depDb) demandsPerRoot
-             in case depVecsE of
-                    Left err -> pure (Left err)
-                    Right depDemandVecs -> do
-                        sols <- goWithDeps unitConfig depLookup depDb depDbName depSolver depDemandVecs (depth + 1)
-                        pure $ fmap (map Just) sols
+            case prepareDepDemandVecs unitConfig depDbName depDb perRootDepDemands of
+                Left err -> pure (Left err)
+                Right depDemandVecs -> do
+                    sols <- goWithDeps unitConfig depLookup depDb depDbName depSolver depDemandVecs (depth + 1)
+                    pure $ fmap (map Just) sols
 
 {- | Cross-DB per-activity LCIA contributions. Walks the same dep graph as
 'goWithDeps' but attributes contributions per @(dbName, localPid)@ instead
@@ -442,7 +445,7 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
             then pure (Right localTagged)
             else do
                 let perRootDepDemands = map (accumulateDepDemands db) scalings
-                    allDepDbs = S.toList $ S.unions $ map M.keysSet perRootDepDemands
+                    allDepDbs = depDbsOf perRootDepDemands
                 if null allDepDbs
                     then pure (Right localTagged)
                     else do
@@ -453,7 +456,7 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
                                 Right $ foldr (M.unionWith (+)) localTagged depMaps
 
     resolveDepContribs ::
-        [M.Map Text (M.Map (UUID, UUID) (Double, Text))] ->
+        [DepDemands] ->
         Int ->
         Text ->
         IO (Either Text (M.Map (Text, ProcessId) Double))
@@ -462,8 +465,6 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
         case depM of
             Nothing -> pure (Right M.empty) -- dep DB not loaded; root-level gate should have caught this
             Just (depDb, depSolver) ->
-                let demandsPerRoot = map (M.findWithDefault M.empty depDbName) perRootDepDemands
-                    depVecsE = traverse (depDemandsToVector unitConfig depDbName depDb) demandsPerRoot
-                 in case depVecsE of
-                        Left err -> pure (Left err)
-                        Right depDemandVecs -> go depDb depDbName depSolver depDemandVecs (depth + 1)
+                case prepareDepDemandVecs unitConfig depDbName depDb perRootDepDemands of
+                    Left err -> pure (Left err)
+                    Right depDemandVecs -> go depDb depDbName depSolver depDemandVecs (depth + 1)

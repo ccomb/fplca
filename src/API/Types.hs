@@ -1,16 +1,24 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module API.Types where
 
-import API.JsonOptions (strippedParseJSON, strippedToEncoding, strippedToJSON)
+import API.JsonOptions (Stripped (..), strippedParseJSON, strippedToEncoding, strippedToJSON)
+import Control.Lens ((&), (.~), (?~))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import qualified Data.Map as M
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), declareSchemaRef, enum_, format, nullable, properties, required, type_)
+import qualified Data.OpenApi.Lens as OA
+import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -95,7 +103,60 @@ instance FromJSON ApiFlow where
             "unresolved" -> ApiUnresolvedFlow <$> o .: "id"
             other -> fail $ "ApiFlow.kind must be \"technosphere\", \"biosphere\", \"waste\", or \"unresolved\", got: " <> T.unpack other
 
--- | Search response combining results and count
+-- | Manual schema for ApiFlow — discriminated by 'kind' so OpenAPI consumers
+-- see a real tagged union instead of a generic Either.
+instance ToSchema ApiFlow where
+    declareNamedSchema _ = do
+        techRef <- declareSchemaRef (Proxy :: Proxy TechnosphereFlow)
+        bioRef <- declareSchemaRef (Proxy :: Proxy BiosphereFlow)
+        let kindEnum =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_
+                        ?~ [ toJSON ("technosphere" :: Text)
+                           , toJSON ("biosphere" :: Text)
+                           , toJSON ("unresolved" :: Text)
+                           ]
+            tech =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("technosphere" :: Text)]))
+                            , ("flow", techRef)
+                            ]
+                    & required .~ ["kind", "flow"]
+            bio =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("biosphere" :: Text)]))
+                            , ("flow", bioRef)
+                            ]
+                    & required .~ ["kind", "flow"]
+            unresolved =
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [toJSON ("unresolved" :: Text)]))
+                            , ("id", Inline (mempty & type_ ?~ OpenApiString & format ?~ "uuid"))
+                            ]
+                    & required .~ ["kind", "id"]
+        pure $
+            NamedSchema (Just "ApiFlow") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("kind", Inline kindEnum)
+                            ]
+                    & required .~ ["kind"]
+                    & OA.oneOf ?~ [Inline tech, Inline bio, Inline unresolved]
+
+-- | Search response combining results and count. ToSchema is added below
+-- via a standalone deriving (needed because of the `(ToSchema a) =>` context).
 data SearchResults a = SearchResults
     { srResults :: [a] -- The actual search results
     , srTotal :: Int -- Total count of all matching items (before pagination)
@@ -105,6 +166,10 @@ data SearchResults a = SearchResults
     , srSearchTimeMs :: Double -- Search execution time in milliseconds
     }
     deriving (Generic)
+
+deriving via (Stripped (SearchResults a)) instance ToJSON a => ToJSON (SearchResults a)
+deriving via (Stripped (SearchResults a)) instance FromJSON a => FromJSON (SearchResults a)
+deriving via (Stripped (SearchResults a)) instance ToSchema a => ToSchema (SearchResults a)
 
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
@@ -119,6 +184,7 @@ data ActivitySummary = ActivitySummary
     , prsNativeType :: Maybe NativeActivityType -- Source-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source lacks the field
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivitySummary)
 
 -- | Consumer result — ActivitySummary enriched with BFS depth from the queried supplier
 data ConsumerResult = ConsumerResult
@@ -132,6 +198,7 @@ data ConsumerResult = ConsumerResult
     , crClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, Category, etc.), mirrors SupplyChainEntry
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ConsumerResult)
 
 {- | Wrapper for /consumers responses. Mirrors 'SupplyChainResponse' so clients
 have a uniform {entries, edges} shape in both traversal directions. Edges
@@ -143,6 +210,7 @@ data ConsumersResponse = ConsumersResponse
     , crrEdges :: ![SupplyChainEdge]
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ConsumersResponse)
 
 -- | Enhanced flow information for search results (now includes synonyms)
 data FlowSearchResult = FlowSearchResult
@@ -153,6 +221,7 @@ data FlowSearchResult = FlowSearchResult
     , fsrSynonyms :: M.Map Text [Text] -- Synonyms by language (converted from Set to List for JSON)
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowSearchResult)
 
 -- | Inventory export data structures
 data InventoryExport = InventoryExport
@@ -161,6 +230,7 @@ data InventoryExport = InventoryExport
     , ieStatistics :: InventoryStatistics
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped InventoryExport)
 
 data InventoryMetadata = InventoryMetadata
     { imRootActivity :: ActivitySummary
@@ -169,6 +239,7 @@ data InventoryMetadata = InventoryMetadata
     , imResourceFlows :: Int -- Biosphere inputs (resource extraction)
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped InventoryMetadata)
 
 data InventoryFlowDetail = InventoryFlowDetail
     { ifdFlow :: BiosphereFlow -- Inventory flows are always biosphere
@@ -178,6 +249,7 @@ data InventoryFlowDetail = InventoryFlowDetail
     , ifdCategory :: Text -- Flow category for grouping
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped InventoryFlowDetail)
 
 data InventoryStatistics = InventoryStatistics
     { isTotalQuantity :: Double -- Sum of absolute values
@@ -186,6 +258,7 @@ data InventoryStatistics = InventoryStatistics
     , isTopCategories :: [(Text, Int)] -- Top flow categories by count
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped InventoryStatistics)
 
 -- | Tree export data structures for visualization
 data TreeExport = TreeExport
@@ -194,6 +267,7 @@ data TreeExport = TreeExport
     , teEdges :: [TreeEdge]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped TreeExport)
 
 data TreeMetadata = TreeMetadata
     { tmRootId :: Text -- Changed to Text (ProcessId format)
@@ -204,6 +278,7 @@ data TreeMetadata = TreeMetadata
     , tmExpandableNodes :: Int -- Nodes that could expand further
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped TreeMetadata)
 
 data ExportNode = ExportNode
     { enId :: Text -- Changed to Text (ProcessId format)
@@ -219,12 +294,15 @@ data ExportNode = ExportNode
     , enCompartment :: Maybe Text -- Biosphere compartment (air/water/soil), only for BiosphereNodes
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExportNode)
 
 data NodeType = ActivityNode | LoopNode | BiosphereEmissionNode | BiosphereResourceNode
     deriving (Eq, Show, Generic)
+    deriving anyclass (ToSchema)
 
 data EdgeType = TechnosphereEdge | BiosphereEmissionEdge | BiosphereResourceEdge
     deriving (Eq, Show, Generic)
+    deriving anyclass (ToSchema)
 
 data TreeEdge = TreeEdge
     { teFrom :: Text -- Changed to Text (ProcessId format)
@@ -235,6 +313,7 @@ data TreeEdge = TreeEdge
     , teEdgeType :: EdgeType -- Type of edge (technosphere or biosphere)
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped TreeEdge)
 
 data FlowInfo = FlowInfo
     { fiId :: UUID
@@ -242,6 +321,7 @@ data FlowInfo = FlowInfo
     , fiCategory :: Text
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowInfo)
 
 -- | Graph export data structures for network visualization
 data GraphExport = GraphExport
@@ -250,6 +330,7 @@ data GraphExport = GraphExport
     , geUnitGroups :: M.Map Text Text -- Unit to unit group mapping
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped GraphExport)
 
 data GraphNode = GraphNode
     { gnNodeId :: Int -- Numeric ID for efficient frontend processing
@@ -260,6 +341,7 @@ data GraphNode = GraphNode
     , gnLocation :: Text -- Geography
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped GraphNode)
 
 data GraphEdge = GraphEdge
     { geSource :: Int -- Source node ID
@@ -269,6 +351,7 @@ data GraphEdge = GraphEdge
     , geFlowName :: Text -- Name of the flow
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped GraphEdge)
 
 {- | Lightweight flow information for lists. Carries either a tech or a bio
 flow; the @ApiFlow@ tag is the wire discriminator.
@@ -280,10 +363,12 @@ data FlowSummary = FlowSummary
     , fsRole :: FlowRole -- Role in this specific activity
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowSummary)
 
 -- | Role of a flow in a specific activity context
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
     deriving (Show, Generic)
+    deriving anyclass (ToSchema)
 
 -- Synonym types removed - synonyms are now included directly in flow responses
 
@@ -297,12 +382,14 @@ data MethodSummary = MethodSummary
     , msmCollection :: Text -- Parent collection name (e.g., "ef-31")
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped MethodSummary)
 
 -- | Method collection list response
 newtype MethodCollectionListResponse = MethodCollectionListResponse
     { mclMethods :: [MethodCollectionStatusAPI]
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped MethodCollectionListResponse)
 
 -- | Method collection status for API responses
 data MethodCollectionStatusAPI = MethodCollectionStatusAPI
@@ -316,12 +403,14 @@ data MethodCollectionStatusAPI = MethodCollectionStatusAPI
     , mcaFormat :: Maybe Text -- Format (e.g. "ILCD")
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped MethodCollectionStatusAPI)
 
 -- | Reference data list response (flow synonyms, compartment mappings, units)
 newtype RefDataListResponse = RefDataListResponse
     { rdlItems :: [RefDataStatusAPI]
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RefDataListResponse)
 
 -- | Reference data status for API responses
 data RefDataStatusAPI = RefDataStatusAPI
@@ -334,12 +423,14 @@ data RefDataStatusAPI = RefDataStatusAPI
     , rdaEntryCount :: Int
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RefDataStatusAPI)
 
 -- | Synonym groups response
 newtype SynonymGroupsResponse = SynonymGroupsResponse
     { sgrGroups :: [[Text]]
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SynonymGroupsResponse)
 
 -- | Full method details
 data MethodDetail = MethodDetail
@@ -352,6 +443,7 @@ data MethodDetail = MethodDetail
     , mdFactorCount :: Int
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped MethodDetail)
 
 -- | Characterization factor for API response
 data MethodFactorAPI = MethodFactorAPI
@@ -361,6 +453,7 @@ data MethodFactorAPI = MethodFactorAPI
     , mfaValue :: Double -- CF value
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped MethodFactorAPI)
 
 -- | A single flow's contribution to an LCIA score
 data FlowContributionEntry = FlowContributionEntry
@@ -373,6 +466,7 @@ data FlowContributionEntry = FlowContributionEntry
     , fcoCfValue :: Double -- Raw characterization factor value
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowContributionEntry)
 
 -- | LCIA result for a single impact category
 data LCIAResult = LCIAResult
@@ -389,6 +483,7 @@ data LCIAResult = LCIAResult
     , lrTopContributors :: [FlowContributionEntry] -- Top contributing elementary flows
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped LCIAResult)
 
 -- | Contributing flows result: top elementary flows for a specific impact category
 data ContributingFlowsResult = ContributingFlowsResult
@@ -398,6 +493,7 @@ data ContributingFlowsResult = ContributingFlowsResult
     , cfrTopFlows :: [FlowContributionEntry]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ContributingFlowsResult)
 
 -- | A single activity's contribution to an LCIA score
 data ActivityContribution = ActivityContribution
@@ -409,6 +505,7 @@ data ActivityContribution = ActivityContribution
     , acSharePct :: Double -- Percentage of total score (0-100)
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ActivityContribution)
 
 -- | Contributing activities result: top upstream activities for a specific impact category
 data ContributingActivitiesResult = ContributingActivitiesResult
@@ -418,12 +515,14 @@ data ContributingActivitiesResult = ContributingActivitiesResult
     , carActivities :: [ActivityContribution]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ContributingActivitiesResult)
 
 -- | Batch impacts request: compute LCIA for every process in one call.
 newtype BatchImpactsRequest = BatchImpactsRequest
     { birProcessIds :: [Text]
     }
     deriving (Generic)
+    deriving (FromJSON, ToSchema) via (Stripped BatchImpactsRequest)
 
 -- | One entry of a batch impacts response.
 data BatchImpactsEntry = BatchImpactsEntry
@@ -432,6 +531,7 @@ data BatchImpactsEntry = BatchImpactsEntry
     , bieImpacts :: LCIABatchResult
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped BatchImpactsEntry)
 
 {- | Batch impacts response: one entry per successfully computed process,
 plus lists of process ids that could not be resolved.
@@ -442,6 +542,7 @@ data BatchImpactsResponse = BatchImpactsResponse
     , birInvalid :: [Text]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped BatchImpactsResponse)
 
 {- | A single scoring-set indicator: the per-variable normalized-weighted value
 plus the impact category it came from. Value is pre-multiplied by the
@@ -452,6 +553,7 @@ data ScoringIndicator = ScoringIndicator
     , siValue :: Double
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ScoringIndicator)
 
 -- | Batch LCIA result with optional single score
 data LCIABatchResult = LCIABatchResult
@@ -472,6 +574,7 @@ data LCIABatchResult = LCIABatchResult
     -- consumers see what's excluded rather than silently undercounting.
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped LCIABatchResult)
 
 {- | A single orphan waste exchange on a scored activity: the dataset author
 declared this waste output but did not link it to a treatment activity,
@@ -487,6 +590,7 @@ data CutoffWasteFlow = CutoffWasteFlow
     , cwfUnit :: Text
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped CutoffWasteFlow)
 
 -- | Flow mapping status for a method
 data MappingStatus = MappingStatus
@@ -504,6 +608,7 @@ data MappingStatus = MappingStatus
     , mstUnmappedFlows :: [UnmappedFlowAPI] -- Details of unmapped flows
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped MappingStatus)
 
 -- | Details about an unmapped flow
 data UnmappedFlowAPI = UnmappedFlowAPI
@@ -512,6 +617,7 @@ data UnmappedFlowAPI = UnmappedFlowAPI
     , ufaDirection :: Text -- "Input" or "Output"
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped UnmappedFlowAPI)
 
 -- | DB-flow-centric mapping: all biosphere flows with their CF assignments
 data FlowCFMapping = FlowCFMapping
@@ -522,6 +628,7 @@ data FlowCFMapping = FlowCFMapping
     , fcmFlows :: [FlowCFEntry]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowCFMapping)
 
 -- | A single DB biosphere flow with its CF assignment (if any)
 data FlowCFEntry = FlowCFEntry
@@ -533,6 +640,7 @@ data FlowCFEntry = FlowCFEntry
     , fceMatchStrategy :: Maybe Text -- "uuid" | "name" | "synonym"
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowCFEntry)
 
 -- | Characterization result: matched CFs for a method in a database
 data CharacterizationResult = CharacterizationResult
@@ -543,6 +651,7 @@ data CharacterizationResult = CharacterizationResult
     , chrFactors :: [CharacterizationEntry]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped CharacterizationResult)
 
 -- | A single matched characterization factor
 data CharacterizationEntry = CharacterizationEntry
@@ -558,12 +667,14 @@ data CharacterizationEntry = CharacterizationEntry
     , cheMatchStrategy :: Text -- "uuid", "cas", "name", "synonym", "fuzzy"
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped CharacterizationEntry)
 
 -- | Database list response
 newtype DatabaseListResponse = DatabaseListResponse
     { dlrDatabases :: [DatabaseStatusAPI] -- All available databases
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DatabaseListResponse)
 
 -- | Database status for API responses
 data DatabaseStatusAPI = DatabaseStatusAPI
@@ -579,6 +690,7 @@ data DatabaseStatusAPI = DatabaseStatusAPI
     , dsaDependsOn :: [Text] -- Names of databases this one depends on (for cross-DB linking)
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DatabaseStatusAPI)
 
 -- | Response for database activation
 data ActivateResponse = ActivateResponse
@@ -587,6 +699,7 @@ data ActivateResponse = ActivateResponse
     , arDatabase :: Maybe DatabaseStatusAPI
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivateResponse)
 
 {- | Response for the re-link endpoint: fresh cross-DB link stats after a
 second-pass linking against the currently-loaded databases.
@@ -599,18 +712,21 @@ data RelinkResponse = RelinkResponse
     , rrDependsOn :: [Text]
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkResponse)
 
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded {dlrName :: Text}
     | DepLoadFailed {dlfName :: Text, dlfError :: Text}
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DepLoadResult)
 
 -- | Response for the load database endpoint
 data LoadDatabaseResponse
     = LoadFailed {ldrError :: Text}
     | LoadSucceeded {ldrDatabase :: DatabaseStatusAPI, ldrDeps :: [DepLoadResult]}
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped LoadDatabaseResponse)
 
 -- | Request for database upload (base64-encoded ZIP)
 data UploadRequest = UploadRequest
@@ -619,6 +735,7 @@ data UploadRequest = UploadRequest
     , urFileData :: Text -- Base64-encoded ZIP file content
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped UploadRequest)
 
 -- | Response for database upload
 data UploadResponse = UploadResponse
@@ -628,6 +745,7 @@ data UploadResponse = UploadResponse
     , uprFormat :: Maybe Text -- Detected format (if successful)
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped UploadResponse)
 
 -- | Supply chain response — all upstream activities with scaling factors
 data SupplyChainResponse = SupplyChainResponse
@@ -638,6 +756,7 @@ data SupplyChainResponse = SupplyChainResponse
     , scrEdges :: [SupplyChainEdge]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped SupplyChainResponse)
 
 {- | A single entry in the supply chain. @sceProcessId@ is bare for entries
 from the root DB and qualified (@"dbName::pid"@) for entries reached via
@@ -657,6 +776,7 @@ data SupplyChainEntry = SupplyChainEntry
     , sceUpstreamCount :: Int -- number of unique upstream activities reachable from this one
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped SupplyChainEntry)
 
 -- | An edge in the upstream supply chain subgraph
 data SupplyChainEdge = SupplyChainEdge
@@ -667,6 +787,7 @@ data SupplyChainEdge = SupplyChainEdge
     , sceEdgeAmount :: Double -- technosphere coefficient
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SupplyChainEdge)
 
 {- | Request body for POST endpoints that accept substitutions.
 Substitutions modify the scaling vector via Sherman-Morrison rank-1 updates.
@@ -675,6 +796,7 @@ newtype SubstitutionRequest = SubstitutionRequest
     { srSubstitutions :: [Substitution]
     }
     deriving (Generic)
+    deriving (FromJSON, ToSchema) via (Stripped SubstitutionRequest)
 
 {- | A single supplier substitution.
 
@@ -691,6 +813,7 @@ data Substitution = Substitution
     , subConsumer :: Text -- Consumer activity ProcessId (bare or dbName::pid)
     }
     deriving (Generic)
+    deriving (FromJSON, ToSchema) via (Stripped Substitution)
 
 {- | A single rank-1 perturbation of a technosphere coefficient @A_ij@.
 
@@ -705,12 +828,14 @@ data Perturbation = Perturbation
     , perLabel :: Maybe Text -- Optional label for response correlation
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Perturbation)
 
 -- | Request body for POST sensitivity endpoints. Flat list, V1.
 newtype SensitivityRequest = SensitivityRequest
     { srPerturbations :: [Perturbation]
     }
     deriving (Generic)
+    deriving (FromJSON, ToSchema) via (Stripped SensitivityRequest)
 
 {- | One result entry per perturbation. The 'peResult' carries either an
 error message ('Left') or the (impact, deltaImpact) pair ('Right'). The
@@ -725,12 +850,36 @@ data PerturbedEntry = PerturbedEntry
     }
     deriving (Generic)
 
+-- | Manual schema for PerturbedEntry: the Either inside is flattened by ToJSON
+-- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
+-- on failure. The Generic-derived schema would expose the Haskell shape
+-- (a oneOf wrapper around the Either) instead of the flat wire format.
+instance ToSchema PerturbedEntry where
+    declareNamedSchema _ = do
+        pertRef <- declareSchemaRef (Proxy :: Proxy Perturbation)
+        lciaRef <- declareSchemaRef (Proxy :: Proxy LCIAResult)
+        doubleRef <- declareSchemaRef (Proxy :: Proxy Double)
+        textRef <- declareSchemaRef (Proxy :: Proxy Text)
+        pure $
+            NamedSchema (Just "PerturbedEntry") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("perturbation", pertRef)
+                            , ("impact", lciaRef)
+                            , ("deltaImpact", doubleRef)
+                            , ("error", textRef)
+                            ]
+                    & required .~ ["perturbation"]
+
 -- | Sensitivity response: baseline LCIA + one entry per perturbation (in order).
 data SensitivityResponse = SensitivityResponse
     { srBaseline :: LCIAResult
     , srPerturbed :: [PerturbedEntry]
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped SensitivityResponse)
 
 {- | Name of the request-level "root" database — the DB extracted from the
 URL path and the implicit target of any bare 'ProcessId' (one without the
@@ -780,6 +929,7 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuPedigree :: Maybe Pedigree -- LCA data-quality scores when available (mirrors exchangePedigree)
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeWithUnit)
 
 -- | Activity information optimized for API responses
 data ActivityForAPI = ActivityForAPI
@@ -798,6 +948,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityForAPI)
 
 -- | Streamlined activity information - core data only
 data ActivityInfo = ActivityInfo
@@ -807,6 +958,7 @@ data ActivityInfo = ActivityInfo
     , piLinks :: ActivityLinks -- Links to sub-resources
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityInfo)
 
 -- | Extended activity metadata
 data ActivityMetadata = ActivityMetadata
@@ -819,6 +971,7 @@ data ActivityMetadata = ActivityMetadata
     , pmReferenceProductFlow :: Maybe UUID -- Flow ID of reference product
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityMetadata)
 
 -- | Links to related resources
 data ActivityLinks = ActivityLinks
@@ -828,6 +981,7 @@ data ActivityLinks = ActivityLinks
     , plReferenceProductUrl :: Maybe Text -- URL to reference product (if exists)
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityLinks)
 
 -- | Activity statistics
 data ActivityStats = ActivityStats
@@ -837,6 +991,7 @@ data ActivityStats = ActivityStats
     , psLocation :: Text
     }
     deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityStats)
 
 -- | Flow with additional metadata. Carries either a tech or bio flow.
 data FlowDetail = FlowDetail
@@ -845,6 +1000,7 @@ data FlowDetail = FlowDetail
     , fdUsageCount :: Int -- How many activities use this flow
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped FlowDetail)
 
 {- | Exchange with flow, unit, and target activity information.
 The carried flow's variant lines up with the Exchange variant.
@@ -858,6 +1014,7 @@ data ExchangeDetail = ExchangeDetail
     , edTargetActivity :: Maybe ActivitySummary -- Target activity for technosphere inputs
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExchangeDetail)
 
 -- | A single filter entry returned in a preset
 data ClassificationEntryInfo = ClassificationEntryInfo
@@ -866,6 +1023,7 @@ data ClassificationEntryInfo = ClassificationEntryInfo
     , ceiMode :: !Text -- "exact" or "contains"
     }
     deriving (Show, Eq, Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ClassificationEntryInfo)
 
 -- | A named filter preset (from TOML config)
 data ClassificationPresetInfo = ClassificationPresetInfo
@@ -875,6 +1033,7 @@ data ClassificationPresetInfo = ClassificationPresetInfo
     , cpiFilters :: ![ClassificationEntryInfo]
     }
     deriving (Show, Eq, Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ClassificationPresetInfo)
 
 -- | Classification system with its values for browsing/filtering
 data ClassificationSystem = ClassificationSystem
@@ -883,6 +1042,7 @@ data ClassificationSystem = ClassificationSystem
     , csActivityCount :: Int -- How many activities have this system
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ClassificationSystem)
 
 {- | Result of an /activity/{pid}/aggregate call.
 
@@ -897,6 +1057,7 @@ data Aggregation = Aggregation
     , aggGroups :: [AggregationGroup] -- one entry per group_by bucket (empty when group_by omitted)
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped Aggregation)
 
 -- | One bucket in an aggregation result.
 data AggregationGroup = AggregationGroup
@@ -907,25 +1068,26 @@ data AggregationGroup = AggregationGroup
     , aggCount :: Int
     }
     deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped AggregationGroup)
 
 -- JSON instances. All record types use API.JsonOptions.stripLowerPrefix
 -- via the strippedToJSON/strippedToEncoding/strippedParseJSON helpers.
 -- Sum-only types (NodeType, EdgeType, FlowRole) keep default derivation.
-instance ToJSON ConsumerResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON ConsumerResult where parseJSON = strippedParseJSON
-instance ToJSON ConsumersResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON ConsumersResponse where parseJSON = strippedParseJSON
-instance ToJSON ClassificationEntryInfo where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ClassificationPresetInfo where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ClassificationSystem where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON Aggregation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON AggregationGroup where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance (ToJSON a) => ToJSON (SearchResults a) where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+-- ToJSON / FromJSON / ToSchema for SearchResults a are standalone-derived
+-- alongside the data declaration above (line ~169).
+-- ConsumerResult, ConsumersResponse, ClassificationEntryInfo,
+-- ClassificationPresetInfo, ClassificationSystem, Aggregation,
+-- AggregationGroup, ActivitySummary, FlowSearchResult, InventoryMetadata,
+-- InventoryStatistics, TreeExport, TreeMetadata, ExportNode now derive
+-- ToJSON / FromJSON via Stripped attached to their data declarations.
 
 {- | NativeActivityType is a sum type internally but serialises to a single
 flat record so MCP / pyvolca consumers see one uniform shape regardless of
 which source database produced the activity. Discriminator is the 'source'
 field; format-specific fields (code, special_*) are null when irrelevant.
+
+Hand-rolled (kept out of the Stripped DerivingVia path) because Stripped is
+for records only; this is a sum-of-records flattened to one wire record.
 -}
 instance ToJSON NativeActivityType where
     toJSON = \case
@@ -995,65 +1157,48 @@ instance FromJSON NativeActivityType where
             "ilcd" -> pure (ILCDProcessType label)
             other -> fail $ "Unknown NativeActivityType source: " <> T.unpack other
 
-instance ToJSON ActivitySummary where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowSearchResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON InventoryMetadata where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON InventoryStatistics where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON TreeExport where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON TreeMetadata where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ExportNode where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+-- | Wire schema mirrors the flat ToJSON shape: a single object with a
+-- 'source' discriminator and source-specific fields that are null when
+-- irrelevant. Co-located with the JSON instances above so that downstream
+-- DerivingVia clauses (e.g. ToSchema for ActivitySummary, ActivityForAPI)
+-- can resolve the instance without forming a circular dep on API.OpenApi.
+instance ToSchema NativeActivityType where
+    declareNamedSchema _ = do
+        let sourceEnum =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_ ?~ [toJSON ("ecospold2" :: Text), toJSON ("simapro" :: Text), toJSON ("ilcd" :: Text)]
+            labelSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+            nullableIntSchema =
+                mempty
+                    & type_ ?~ OpenApiInteger
+                    & nullable ?~ True
+            nullableTextSchema =
+                mempty
+                    & type_ ?~ OpenApiString
+                    & nullable ?~ True
+        pure $
+            NamedSchema (Just "NativeActivityType") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("source", Inline sourceEnum)
+                            , ("label", Inline labelSchema)
+                            , ("code", Inline nullableIntSchema)
+                            , ("special_code", Inline nullableIntSchema)
+                            , ("special_label", Inline nullableTextSchema)
+                            ]
+                    & required .~ ["source", "label"]
 instance ToJSON NodeType
 instance ToJSON EdgeType
-instance ToJSON TreeEdge where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowInfo where toJSON = strippedToJSON; toEncoding = strippedToEncoding
 instance ToJSON FlowRole
-instance ToJSON ExchangeWithUnit where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityForAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityInfo where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityMetadata where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityLinks where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityStats where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON InventoryFlowDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowSummary where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON InventoryExport where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ExchangeDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON Unit where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON GraphExport where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON GraphNode where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON GraphEdge where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MethodSummary where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MethodCollectionListResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MethodCollectionStatusAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MethodDetail where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MethodFactorAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowContributionEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON LCIAResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ScoringIndicator where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON LCIABatchResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON CutoffWasteFlow where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON BatchImpactsEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON BatchImpactsResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON BatchImpactsRequest where parseJSON = strippedParseJSON
-instance ToJSON ContributingFlowsResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivityContribution where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ContributingActivitiesResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON MappingStatus where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON UnmappedFlowAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowCFMapping where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON FlowCFEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON CharacterizationResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON CharacterizationEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON SupplyChainResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON SupplyChainEntry where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON SupplyChainEdge where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON SupplyChainEdge where parseJSON = strippedParseJSON
-instance FromJSON SubstitutionRequest where parseJSON = strippedParseJSON
-instance FromJSON Substitution where parseJSON = strippedParseJSON
-instance FromJSON SensitivityRequest where parseJSON = strippedParseJSON
-instance FromJSON Perturbation where parseJSON = strippedParseJSON
-instance ToJSON Perturbation where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON SensitivityResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
+-- ToJSON / FromJSON / ToSchema for Unit are derived via Stripped alongside
+-- its data declaration in src/Types.hs.
+-- CutoffWasteFlow (added on main) derives via Stripped attached to its data
+-- declaration above.
 
 -- Custom ToJSON for PerturbedEntry: flatten the Either so success entries
 -- have impact+deltaImpact and error entries have error.
@@ -1065,38 +1210,7 @@ instance ToJSON PerturbedEntry where
                 Right (lcia, d) -> ["impact" .= lcia, "deltaImpact" .= d]
 
 -- FromJSON instances needed for API conversion
-instance (FromJSON a) => FromJSON (SearchResults a) where parseJSON = strippedParseJSON
-instance FromJSON ActivitySummary where parseJSON = strippedParseJSON
-instance FromJSON ActivityInfo where parseJSON = strippedParseJSON
-instance FromJSON ActivityForAPI where parseJSON = strippedParseJSON
-instance FromJSON ActivityMetadata where parseJSON = strippedParseJSON
-instance FromJSON ActivityLinks where parseJSON = strippedParseJSON
-instance FromJSON ActivityStats where parseJSON = strippedParseJSON
-instance FromJSON ExchangeWithUnit where parseJSON = strippedParseJSON
-instance ToJSON DatabaseListResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON DatabaseStatusAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON ActivateResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON RelinkResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON DepLoadResult where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON LoadDatabaseResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON UploadRequest where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON UploadResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON DatabaseListResponse where parseJSON = strippedParseJSON
-instance FromJSON DatabaseStatusAPI where parseJSON = strippedParseJSON
-instance FromJSON ActivateResponse where parseJSON = strippedParseJSON
-instance FromJSON RelinkResponse where parseJSON = strippedParseJSON
-instance FromJSON DepLoadResult where parseJSON = strippedParseJSON
-instance FromJSON LoadDatabaseResponse where parseJSON = strippedParseJSON
-instance FromJSON UploadRequest where parseJSON = strippedParseJSON
-instance FromJSON UploadResponse where parseJSON = strippedParseJSON
-instance FromJSON MethodCollectionListResponse where parseJSON = strippedParseJSON
-instance FromJSON MethodCollectionStatusAPI where parseJSON = strippedParseJSON
-instance ToJSON RefDataListResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON RefDataStatusAPI where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance ToJSON SynonymGroupsResponse where toJSON = strippedToJSON; toEncoding = strippedToEncoding
-instance FromJSON RefDataListResponse where parseJSON = strippedParseJSON
-instance FromJSON RefDataStatusAPI where parseJSON = strippedParseJSON
-instance FromJSON SynonymGroupsResponse where parseJSON = strippedParseJSON
+-- (FromJSON (SearchResults a) above)
 
 -- openapi3 cannot derive ToSchema for BSL.ByteString directly
 newtype BinaryContent = BinaryContent BSL.ByteString

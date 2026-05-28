@@ -39,6 +39,7 @@ import Progress
 import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
+import App.Env (AppEnv (..))
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -47,7 +48,7 @@ import Data.String (fromString)
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
-import Network.Wai.Application.Static (defaultWebAppSettings, ssIndices, staticApp)
+import Network.Wai.Application.Static (StaticSettings, defaultWebAppSettings, ssIndices, staticApp)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setPort, setTimeout)
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
@@ -132,76 +133,97 @@ runStopWithoutConfig cliConfig = do
     rc <- resolveRemoteConfig (globalOptions cliConfig) Nothing
     executeRemoteCommand mgr rc (globalOptions cliConfig) Stop
 
+-- | Apply the --load override (if any) to the in-memory config.
+applyLoadOverride :: ServerOptions -> Config -> Config
+applyLoadOverride serverOpts config = case serverLoadDbs serverOpts of
+    Nothing -> config
+    Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
+
+-- | Log loaded databases (allows starting with none for BYOL mode).
+logLoadedDatabases :: DatabaseManager -> IO ()
+logLoadedDatabases dbManager = do
+    loadedDbs <- readTVarIO (dmLoadedDbs dbManager)
+    reportProgress Info $
+        if M.null loadedDbs
+            then "No databases loaded - upload or load one via the web interface"
+            else "Loaded databases: " ++ intercalate ", " (map T.unpack (M.keys loadedDbs))
+
+{- | Resolve the admin password from CLI flag, config file, or env var, in that
+order. Returns 'Nothing' when authentication is disabled (no source set).
+-}
+resolvePassword :: GlobalOptions -> ServerConfig -> IO (Maybe String)
+resolvePassword globalOpts serverCfg = case CLI.Types.serverPassword globalOpts of
+    Just pwd -> pure (Just pwd)
+    Nothing -> case scPassword serverCfg of
+        Just pwd -> pure (Just (T.unpack pwd))
+        Nothing -> lookupEnv "VOLCA_PASSWORD"
+
+{- | In desktop mode, print a machine-readable port line for the launcher
+to capture and stay quiet. Otherwise emit the human-facing startup banner.
+-}
+logServerStartup :: ServerOptions -> Int -> Maybe String -> IO ()
+logServerStartup serverOpts port password
+    | serverDesktopMode serverOpts = do
+        putStrLn ("VOLCA_PORT=" ++ show port)
+        hFlush stdout
+    | otherwise = do
+        reportProgress Info ("Starting API server on port " ++ show port)
+        reportProgress Info ("Tree depth: " ++ show (serverTreeDepth serverOpts))
+        reportProgress Info $ case password of
+            Just _ -> "Authentication: ENABLED"
+            Nothing -> "Authentication: DISABLED (use --password or VOLCA_PASSWORD to enable)"
+        reportProgress Info ("Web interface available at: http://localhost:" ++ show port ++ "/")
+
+{- | Allocate the idle-tracking refs and fork the watchdog when
+@--idle-timeout@ is positive. The refs are returned for both the
+tracking and the shutdown middleware.
+-}
+setupIdleTimeout :: ServerOptions -> IO (IORef UTCTime, IORef Bool)
+setupIdleTimeout serverOpts = do
+    lastRequestRef <- newIORef =<< getCurrentTime
+    idleActiveRef <- newIORef False
+    let idleTimeout = serverIdleTimeout serverOpts
+    when (idleTimeout > 0) $ do
+        reportProgress Info ("Idle timeout: " ++ show idleTimeout ++ "s")
+        writeIORef idleActiveRef True
+        _ <- forkIO (idleWatchdog lastRequestRef idleActiveRef idleTimeout)
+        pure ()
+    pure (lastRequestRef, idleActiveRef)
+
+-- | Stack idle-tracking, shutdown-endpoint and (optionally) auth middleware.
+wrapWithMiddleware :: Maybe String -> IORef UTCTime -> IORef Bool -> Application -> Application
+wrapWithMiddleware password lastRequestRef idleActiveRef baseApp =
+    let withIdleAndShutdown =
+            idleTrackingMiddleware lastRequestRef $
+                shutdownEndpoint lastRequestRef idleActiveRef baseApp
+     in case password of
+            Just pwd -> authMiddleware (C8.pack pwd) withIdleAndShutdown
+            Nothing -> withIdleAndShutdown
+
 -- | Run server with multi-database configuration file
 runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()
 runServerWithConfig cliConfig serverOpts cfgFile = do
-    config <- loadConfigOrDie cfgFile
-
-    -- Apply --load override if specified
-    let effectiveConfig = case serverLoadDbs serverOpts of
-            Nothing -> config
-            Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
-
-    -- Initialize DatabaseManager (pre-loads databases with load=true)
+    config <- applyLoadOverride serverOpts <$> loadConfigOrDie cfgFile
     reportProgress Info "Initializing database manager..."
-    dbManager <- initDatabaseManager effectiveConfig (noCache (globalOptions cliConfig)) (Just cfgFile)
-
-    -- Log database status (allow starting with no databases for BYOL mode)
-    loadedDbs <- readTVarIO (dmLoadedDbs dbManager)
-    if M.null loadedDbs
-        then reportProgress Info "No databases loaded - upload or load one via the web interface"
-        else reportProgress Info $ "Loaded databases: " ++ intercalate ", " (map T.unpack (M.keys loadedDbs))
-
-    let port = fromMaybe (scPort (cfgServer effectiveConfig)) (serverPort serverOpts)
-
-    -- Initialize matrix solver (no-op for MUMPS, kept for API compatibility)
+    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
+    logLoadedDatabases dbManager
     initializeSolverForServer
-
-    -- Get password from CLI, config, or env var
-    password <- case CLI.Types.serverPassword (globalOptions cliConfig) of
-        Just pwd -> return (Just pwd)
-        Nothing -> case scPassword (cfgServer effectiveConfig) of
-            Just pwd -> return (Just $ T.unpack pwd)
-            Nothing -> lookupEnv "VOLCA_PASSWORD"
-
-    -- Determine static directory (--static-dir or default "web/dist")
-    let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
-        desktopMode = serverDesktopMode serverOpts
-
-    -- In desktop mode, print machine-readable port for launcher, then minimal logging
-    if desktopMode
-        then do
-            putStrLn $ "VOLCA_PORT=" ++ show port
-            hFlush stdout
-        else do
-            reportProgress Info $ "Starting API server on port " ++ show port
-            reportProgress Info $ "Tree depth: " ++ show (serverTreeDepth serverOpts)
-            case password of
-                Just _ -> reportProgress Info "Authentication: ENABLED"
-                Nothing -> reportProgress Info "Authentication: DISABLED (use --password or VOLCA_PASSWORD to enable)"
-            reportProgress Info $ "Web interface available at: http://localhost:" ++ show port ++ "/"
-
-    -- Idle timeout: track last request time, watchdog activated on demand via API
-    lastRequestRef <- newIORef =<< getCurrentTime
-    idleActiveRef <- newIORef False
-
-    -- If --idle-timeout is set, activate immediately (for scripts)
-    let idleTimeout = serverIdleTimeout serverOpts
-    when (idleTimeout > 0) $ do
-        reportProgress Info $ "Idle timeout: " ++ show idleTimeout ++ "s"
-        writeIORef idleActiveRef True
-        _ <- forkIO $ idleWatchdog lastRequestRef idleActiveRef idleTimeout
-        pure ()
-
-    -- Create app with DatabaseManager - API handlers fetch current DB dynamically
-    baseApp <- Main.createServerApp dbManager (serverTreeDepth serverOpts) staticDir desktopMode password (cfgHosting effectiveConfig) (cfgClassificationPresets effectiveConfig)
-    let appWithIdleAndShutdown =
-            idleTrackingMiddleware lastRequestRef $
-                shutdownEndpoint lastRequestRef idleActiveRef baseApp
-        finalApp = case password of
-            Just pwd -> authMiddleware (C8.pack pwd) appWithIdleAndShutdown
-            Nothing -> appWithIdleAndShutdown
-        settings = setTimeout 600 $ setPort port defaultSettings
+    let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
+        staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
+    password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
+    logServerStartup serverOpts port password
+    (lastRequestRef, idleActiveRef) <- setupIdleTimeout serverOpts
+    baseApp <-
+        createServerApp
+            dbManager
+            (serverTreeDepth serverOpts)
+            staticDir
+            (serverDesktopMode serverOpts)
+            password
+            (cfgHosting config)
+            (cfgClassificationPresets config)
+    let finalApp = wrapWithMiddleware password lastRequestRef idleActiveRef baseApp
+        settings = setTimeout 600 (setPort port defaultSettings)
     runSettings settings finalApp
 
 {- | Run config load-only mode (load all databases from config and exit)
@@ -225,7 +247,87 @@ overrideLoad :: [T.Text] -> DatabaseConfig -> DatabaseConfig
 overrideLoad dbNames dbConfig =
     dbConfig{dcLoad = dcName dbConfig `elem` dbNames}
 
--- | Create a Wai application with DatabaseManager
+{- | Swagger-UI shell that pulls the OpenAPI spec from our @/api/v1/openapi.json@
+endpoint. Served verbatim from @/api/v1/docs@; constant per build.
+-}
+swaggerHtml :: BSL.ByteString
+swaggerHtml =
+    "<!DOCTYPE html><html><head><title>volca API</title>\
+    \<meta charset=\"utf-8\"/>\
+    \<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css\">\
+    \</head><body>\
+    \<div id=\"swagger-ui\"></div>\
+    \<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js\"></script>\
+    \<script>SwaggerUIBundle({url:\"/api/v1/openapi.json\",dom_id:\"#swagger-ui\"})</script>\
+    \</body></html>"
+
+{- | Serve the Elm SPA bundle from @staticDir@, with the SPA's @index.html@ as
+the directory index and no @max-age@ caching headers.
+-}
+spaStaticSettings :: FilePath -> StaticSettings
+spaStaticSettings staticDir =
+    (defaultWebAppSettings staticDir)
+        { ssIndices = [unsafeToPiece (T.pack "index.html")]
+        , ssMaxAge = NoMaxAge
+        }
+
+{- | Serve files under @/static/<rest>@ by stripping the prefix and delegating
+to wai-app-static.
+-}
+serveStripped :: StaticSettings -> Application
+serveStripped settings req respond =
+    let strippedPath = BS.drop 7 (rawPathInfo req)
+        newPathInfo = case pathInfo req of
+            (segment : rest) | segment == T.pack "static" -> rest
+            other -> other
+        staticReq = req{rawPathInfo = strippedPath, pathInfo = newPathInfo}
+     in staticApp settings staticReq respond
+
+{- | Serve the SPA shell (@index.html@) for any non-API path, with cache-busting
+headers so the browser always re-fetches the latest bundle.
+-}
+serveSpaIndex :: StaticSettings -> Application
+serveSpaIndex settings req respond =
+    let indexReq = req{rawPathInfo = C8.pack "/", pathInfo = []}
+        noCacheRespond res =
+            respond $
+                mapResponseHeaders
+                    ( \hs ->
+                        (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
+                            : (hPragma, C8.pack "no-cache")
+                            : hs
+                    )
+                    res
+     in staticApp settings indexReq noCacheRespond
+
+{- | Path-based request dispatcher. The fixed endpoints (@/mcp@,
+@/api/v1/{openapi.json,licenses,docs,logs/stream}@) match exactly; anything
+under @/api/@ goes through Servant; @/static/@ serves bundled assets; the
+catch-all hands back the SPA so client-side routing can handle the URL.
+-}
+dispatchRequest :: FilePath -> Application -> Application -> Application
+dispatchRequest staticDir mcp apiApp req respond =
+    let path = rawPathInfo req
+        settings = spaStaticSettings staticDir
+     in if
+            | path == "/mcp" -> mcp req respond
+            | path == "/api/v1/openapi.json" ->
+                respond $ responseLBS status200 [(hContentType, "application/json")] (encode volcaOpenApi)
+            | path == "/api/v1/licenses" -> respond licensesResponse
+            | path == "/api/v1/docs" ->
+                respond $ responseLBS status200 [(hContentType, "text/html; charset=utf-8")] swaggerHtml
+            | path == "/api/v1/logs/stream" -> handleLogStream req respond
+            | C8.pack "/api/" `BS.isPrefixOf` path -> apiApp req respond
+            | C8.pack "/static/" `BS.isPrefixOf` path -> serveStripped settings req respond
+            | otherwise -> serveSpaIndex settings req respond
+
+-- | Per-request log line written to stdout (suppressed in desktop mode).
+logRequest :: Request -> IO ()
+logRequest req = do
+    putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack (rawPathInfo req <> rawQueryString req)
+    hFlush stdout
+
+-- | Create a Wai application with DatabaseManager.
 createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO Application
 createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets = do
     -- The MCP @web_url@ deep links point at Elm SPA routes served from
@@ -235,66 +337,18 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
     mcp <- mcpApp dbManager filterPresets hasFrontend
-    let openApiJson = encode volcaOpenApi
-        swaggerHtml =
-            "<!DOCTYPE html><html><head><title>volca API</title>\
-            \<meta charset=\"utf-8\"/>\
-            \<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css\">\
-            \</head><body>\
-            \<div id=\"swagger-ui\"></div>\
-            \<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js\"></script>\
-            \<script>SwaggerUIBundle({url:\"/api/v1/openapi.json\",dom_id:\"#swagger-ui\"})</script>\
-            \</body></html>"
-    return $ \req respond -> do
-        let path = rawPathInfo req
-            qs = rawQueryString req
-            fullUrl = path <> qs
-
-        -- Simple request logging (suppress in desktop mode)
-        unless desktopMode $ do
-            putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack fullUrl
-            hFlush stdout
-
-        -- Route requests based on path prefix.
-        let staticSettings =
-                (defaultWebAppSettings staticDir)
-                    { ssIndices = [unsafeToPiece (T.pack "index.html")]
-                    , ssMaxAge = NoMaxAge
-                    }
-
-            serveStripped =
-                let strippedPath = BS.drop 7 path
-                    newPathInfo = case pathInfo req of
-                        (segment : rest) | segment == T.pack "static" -> rest
-                        other -> other
-                    staticReq = req{rawPathInfo = strippedPath, pathInfo = newPathInfo}
-                 in staticApp staticSettings staticReq respond
-
-            serveSpaIndex =
-                let indexReq = req{rawPathInfo = C8.pack "/", pathInfo = []}
-                    noCacheRespond res =
-                        respond $
-                            mapResponseHeaders
-                                ( \hs ->
-                                    (hCacheControl, C8.pack "no-cache, no-store, must-revalidate")
-                                        : (hPragma, C8.pack "no-cache")
-                                        : hs
-                                )
-                                res
-                 in staticApp staticSettings indexReq noCacheRespond
-
-        if
-            | path == "/mcp" -> mcp req respond
-            | path == "/api/v1/openapi.json" ->
-                respond $ responseLBS status200 [(hContentType, "application/json")] openApiJson
-            | path == "/api/v1/licenses" -> respond licensesResponse
-            | path == "/api/v1/docs" ->
-                respond $ responseLBS status200 [(hContentType, "text/html; charset=utf-8")] swaggerHtml
-            | path == "/api/v1/logs/stream" -> handleLogStream req respond
-            | C8.pack "/api/" `BS.isPrefixOf` path ->
-                serve lcaAPI (lcaServer dbManager maxTreeDepth password hostingConfig filterPresets) req respond
-            | C8.pack "/static/" `BS.isPrefixOf` path -> serveStripped
-            | otherwise -> serveSpaIndex
+    let env =
+            AppEnv
+                { aeDbManager = dbManager
+                , aeMaxTreeDepth = maxTreeDepth
+                , aePassword = password
+                , aeHostingConfig = hostingConfig
+                , aeClassificationPresets = filterPresets
+                }
+        apiApp = serve lcaAPI (lcaServer env)
+    pure $ \req respond -> do
+        unless desktopMode (logRequest req)
+        dispatchRequest staticDir mcp apiApp req respond
 
 -- | SSE endpoint for real-time log streaming
 handleLogStream :: Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived

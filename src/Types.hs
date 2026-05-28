@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -12,9 +13,9 @@ module Types (
     UUID,
 ) where
 
-import API.JsonOptions (stripLowerPrefix)
+import API.JsonOptions (Stripped (..))
 import Control.DeepSeq (NFData)
-import Data.Aeson (FromJSON (..), ToJSON (..), genericParseJSON, genericToEncoding, genericToJSON)
+import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
@@ -35,6 +36,8 @@ import Data.List (nub)
 import Search.BM25.Types (BM25Index)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
+import Control.Lens ((&), (?~))
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -64,6 +67,7 @@ data Compartment = Compartment
     , compartmentSub :: !(Maybe Text) -- "high. pop.", "river water", …
     }
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Compartment)
 
 {- | The biosphere flow's medium (air | water | soil | …), or @""@ when the
 source dataset omitted the compartment. Use 'bfCompartment' directly when
@@ -88,6 +92,7 @@ biosphere side also gets named variants instead of a load-bearing 'Bool'.
 -}
 data BioDirection = Resource | Emission
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving anyclass (ToSchema)
 
 {- | Role of a technosphere exchange within its host activity. Names the four
 valid combinations of (input?, reference?). `ReferenceInput` is the
@@ -100,6 +105,7 @@ data TechRole
     | ReferenceInput -- main input of a treatment process
     | Input -- ordinary technosphere input
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving anyclass (ToSchema)
 
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -109,6 +115,7 @@ data Unit = Unit
     , unitComment :: !Text -- Description/comment
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Unit)
 
 {- | Substance - groups flows with the same chemical identity across databases
 Used for flow matching between different LCA databases (ecoinvent, ILCD, SimaPro)
@@ -135,6 +142,7 @@ data TechnosphereFlow = TechnosphereFlow
     , tfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped TechnosphereFlow)
 
 {- | A biosphere flow — an environmental exchange (resource extraction or
 emission). Always carries a `Compartment` identifying the medium.
@@ -154,6 +162,7 @@ data BiosphereFlow = BiosphereFlow
     -}
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped BiosphereFlow)
 
 {- | A waste flow — a residual output that a process generates and which a
 treatment activity may consume as its reference input. Sister type to
@@ -175,6 +184,7 @@ data WasteFlow = WasteFlow
     , wfSubstanceId :: !(Maybe Int)
     }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped WasteFlow)
 
 {- | Pedigree matrix (Weidema & Wesnæs 1996) — five LCA data-quality scores
 each in 1..5 (1 = best, 5 = worst). SimaPro CSV encodes it as a prefix in the
@@ -188,6 +198,7 @@ data Pedigree = Pedigree
     , pedTechnological :: !Int -- 1..5
     }
     deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Pedigree)
 
 {- | Smart constructor: rejects out-of-range values (anything not in 1..5)
 by returning Nothing. Callers should treat Nothing as "no pedigree
@@ -237,6 +248,7 @@ data Exchange
         , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         }
     deriving (Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped Exchange)
 
 -- | Helper functions for Exchange variants
 exchangeFlowId :: Exchange -> UUID
@@ -533,6 +545,12 @@ flowKindUnitName :: UnitDB -> FlowKind -> Text
 flowKindUnitName udb (TechKind f) = getUnitNameForTechFlow udb f
 flowKindUnitName udb (BioKind f) = getUnitNameForBioFlow udb f
 flowKindUnitName udb (WasteKind f) = getUnitNameForWasteFlow udb f
+
+-- | Biosphere compartment, if any. Tech/waste flows carry no compartment.
+flowKindCompartment :: FlowKind -> Maybe Compartment
+flowKindCompartment (TechKind _) = Nothing
+flowKindCompartment (BioKind f) = bfCompartment f
+flowKindCompartment (WasteKind _) = Nothing
 
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit
@@ -865,6 +883,19 @@ findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =
     M.lookup flowUUID (piByUUID $ dbProductIndex db)
 
+{- | Look up an exchange's flow on the appropriate side. Each exchange variant
+has exactly one flow side by construction (tech, bio, or waste), so the
+result is a single 'FlowKind' or 'Nothing' when the UUID is absent from the
+database.
+-}
+lookupExchangeFlow :: Database -> Exchange -> Maybe FlowKind
+lookupExchangeFlow db TechnosphereExchange{techFlowId = fid} =
+    TechKind <$> M.lookup fid (dbTechFlows db)
+lookupExchangeFlow db BiosphereExchange{bioFlowId = fid} =
+    BioKind <$> M.lookup fid (dbBioFlows db)
+lookupExchangeFlow db WasteExchange{waFlowId = fid} =
+    WasteKind <$> M.lookup fid (dbWasteFlows db)
+
 {- | Search products by name (for future product search feature)
 Returns all ProcessIds that produce products matching the given name
 -}
@@ -1065,6 +1096,36 @@ locationKindCode ParentLoc = "parent"
 locationKindCode GlobalLoc = "global"
 locationKindCode UnrelatedLoc = "unrelated"
 
+-- | Lowercase-wire-code ToJSON for 'LocationKind'. Stays in lock-step with
+-- 'locationKindCode' so the JSON output and the rejection-reason text can
+-- never drift apart.
+instance ToJSON LocationKind where
+    toJSON = toJSON . locationKindCode
+
+instance FromJSON LocationKind where
+    parseJSON v = do
+        s <- parseJSON v
+        case (s :: Text) of
+            "exact" -> pure ExactLoc
+            "parent" -> pure ParentLoc
+            "global" -> pure GlobalLoc
+            "unrelated" -> pure UnrelatedLoc
+            other -> fail $ "Invalid LocationKind: " <> T.unpack other
+
+-- | OpenAPI schema for 'LocationKind' as a string-enum matching the wire codes
+-- produced by 'locationKindCode'. The generic schema would expose the raw
+-- Haskell constructor names; this keeps the spec in sync with the ToJSON.
+instance ToSchema LocationKind where
+    declareNamedSchema _ =
+        pure $
+            NamedSchema (Just "LocationKind") $
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_
+                        ?~ [ toJSON (c :: Text)
+                           | c <- ["exact", "parent", "global", "unrelated"]
+                           ]
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text
@@ -1073,6 +1134,7 @@ data LocationFallback = LocationFallback
     , lfKind :: !LocationKind
     }
     deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped LocationFallback)
 
 {- | A product whose supplier could not be linked — either because no candidate
 matched the name/unit, or because every geographic candidate was rejected by
@@ -1084,6 +1146,7 @@ data LocationUnresolved = LocationUnresolved
     , luReason :: !Text
     }
     deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped LocationUnresolved)
 
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.
@@ -1110,26 +1173,28 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     }
     deriving (Generic, NFData, Store)
 
--- | Empty stats
-emptyCrossDBLinkingStats :: CrossDBLinkingStats
-emptyCrossDBLinkingStats = CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 0
+-- | Field-wise '<>'. On unresolved-product collision counts are summed
+-- and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
+-- has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
+-- not itself a 'Monoid'.
+instance Semigroup CrossDBLinkingStats where
+    s1 <> s2 =
+        CrossDBLinkingStats
+            { cdlLinks = cdlLinks s1 <> cdlLinks s2
+            , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
+            , cdlUnknownUnits = cdlUnknownUnits s1 <> cdlUnknownUnits s2
+            , cdlLocationFallbacks = cdlLocationFallbacks s1 <> cdlLocationFallbacks s2
+            , cdlLocationUnresolved = cdlLocationUnresolved s1 <> cdlLocationUnresolved s2
+            , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
+            , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
+            , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
+            , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
+            }
+      where
+        mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
--- | Merge two CrossDBLinkingStats
-mergeCrossDBStats :: CrossDBLinkingStats -> CrossDBLinkingStats -> CrossDBLinkingStats
-mergeCrossDBStats s1 s2 =
-    CrossDBLinkingStats
-        { cdlLinks = cdlLinks s1 ++ cdlLinks s2
-        , cdlUnresolvedProducts = M.unionWith mergeUnresolved (cdlUnresolvedProducts s1) (cdlUnresolvedProducts s2)
-        , cdlUnknownUnits = S.union (cdlUnknownUnits s1) (cdlUnknownUnits s2)
-        , cdlLocationFallbacks = cdlLocationFallbacks s1 ++ cdlLocationFallbacks s2
-        , cdlLocationUnresolved = cdlLocationUnresolved s1 ++ cdlLocationUnresolved s2
-        , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
-        , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
-        , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
-        , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
-        }
-  where
-    mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
+instance Monoid CrossDBLinkingStats where
+    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 0
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
 deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]
@@ -1244,46 +1309,11 @@ data CF = CF
     , cfFactor :: !Double -- Characterization factor
     }
 
--- JSON instances for API compatibility
--- Note: ProcessId is Int32, which already has ToJSON/FromJSON instances
-instance ToJSON Pedigree where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON Pedigree where
-    parseJSON = genericParseJSON stripLowerPrefix
-instance ToJSON Exchange where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-
-instance FromJSON Exchange where
-    parseJSON = genericParseJSON stripLowerPrefix
-
+-- ToJSON/FromJSON for the records above are produced via `deriving via (Stripped X)`
+-- attached to each `data` declaration. The two enums TechRole and BioDirection use
+-- the default Generic encoding (constructor name as JSON string).
 instance ToJSON TechRole
 instance FromJSON TechRole
 
 instance ToJSON BioDirection
 instance FromJSON BioDirection
-
-instance ToJSON Compartment where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON Compartment where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON TechnosphereFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON TechnosphereFlow where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON BiosphereFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON BiosphereFlow where
-    parseJSON = genericParseJSON stripLowerPrefix
-
-instance ToJSON WasteFlow where
-    toJSON = genericToJSON stripLowerPrefix
-    toEncoding = genericToEncoding stripLowerPrefix
-instance FromJSON WasteFlow where
-    parseJSON = genericParseJSON stripLowerPrefix

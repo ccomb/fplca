@@ -67,6 +67,7 @@ module Database.CrossLinking (
 ) where
 
 import Data.Char (isAlpha, isUpper)
+import Data.Foldable (find)
 import Data.List (maximumBy)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -522,21 +523,19 @@ findSupplierInIndexedDBs ::
     CrossDBLinkResult
 findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     let normalizedName = normalizeText productName
-        -- Try exact match first (O(1) lookup)
-        exactCandidates = concatMap (lookupExact normalizedName) lcIndexedDatabases
-        -- Try synonym match if no exact match
-        synonymCandidates =
-            if null exactCandidates
-                then case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
+        -- Three priority-ordered match strategies; we take the first non-empty
+        -- result via 'firstNonEmpty' (the "First" monoid restricted to lists).
+        --   1. Exact product-name match across all indexed DBs.
+        --   2. Synonym-group match if exact yielded nothing.
+        --   3. Prefix-splitting fallback for compound names (e.g. SimaPro).
+        allCandidates =
+            firstNonEmpty
+                [ concatMap (lookupExact normalizedName) lcIndexedDatabases
+                , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
                     Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                     Nothing -> []
-                else []
-        -- Fallback: try prefix-based splitting for compound names (e.g. SimaPro)
-        prefixCandidates =
-            if null exactCandidates && null synonymCandidates
-                then tryPrefixes (extractProductPrefixes productName)
-                else []
-        allCandidates = exactCandidates ++ synonymCandidates ++ prefixCandidates
+                , tryPrefixes (extractProductPrefixes productName)
+                ]
         -- Effective location: if raw location is empty, try extracting from compound name
         effectiveLocation =
             if T.null location
@@ -605,20 +604,27 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     lookupBySynonym groupId idb =
         [(idbName idb, entry) | entry <- fromMaybe [] (M.lookup groupId (idbBySynonymGroup idb))]
 
-    -- Try each prefix from compound name splitting, return first match
+    {- | First non-empty list in a priority order. This is the @First@ monoid
+    on @Maybe [a]@ (lift each list into @Maybe@ via 'nonEmpty', combine with
+    @<|>@, drop back), collapsed to a single helper because that's the
+    exact shape every match-strategy cascade in this module wants.
+    -}
+    firstNonEmpty :: [[a]] -> [a]
+    firstNonEmpty = fromMaybe [] . find (not . null)
+
+    -- Try each prefix from compound name splitting; for each prefix run the
+    -- same (exact, then synonym) sub-cascade; return the first prefix that
+    -- yields anything.
     tryPrefixes :: [Text] -> [(Text, SupplierEntry)]
-    tryPrefixes [] = []
-    tryPrefixes (p : ps) =
-        let normalized = normalizeText p
-            candidates = concatMap (lookupExact normalized) lcIndexedDatabases
-         in if null candidates
-                then -- Also try synonym match for this prefix
-                    case lookupSynonymGroup lcSynonymDB (normalizeName p) of
-                        Just groupId ->
-                            let synCandidates = concatMap (lookupBySynonym groupId) lcIndexedDatabases
-                             in if null synCandidates then tryPrefixes ps else synCandidates
-                        Nothing -> tryPrefixes ps
-                else candidates
+    tryPrefixes = firstNonEmpty . map candidatesFor
+      where
+        candidatesFor p =
+            let normalized = normalizeText p
+                byExact = concatMap (lookupExact normalized) lcIndexedDatabases
+                bySynonym = case lookupSynonymGroup lcSynonymDB (normalizeName p) of
+                    Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
+                    Nothing -> []
+             in firstNonEmpty [byExact, bySynonym]
 
     classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
     classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =

@@ -21,6 +21,7 @@ module API.BatchImpacts (
 
 import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, databaseNotLoadedPrefix)
 import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, LCIABatchResult, SubstitutionRequest)
+import App.Env (AppEnv (..), runApp)
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -77,7 +78,15 @@ runActivityLCIABatch ::
     Maybe SubstitutionRequest ->
     IO (Either BatchError LCIABatchResult)
 runActivityLCIABatch dbm dbName pid coll mSub = do
-    res <- Servant.runHandler (activityLCIABatchH dbm dbName pid coll mSub)
+    let env =
+            AppEnv
+                { aeDbManager = dbm
+                , aeMaxTreeDepth = 0
+                , aePassword = Nothing
+                , aeHostingConfig = Nothing
+                , aeClassificationPresets = []
+                }
+    res <- Servant.runHandler (runApp env (activityLCIABatchH dbName pid coll mSub))
     case res of
         Right lbr -> pure (Right lbr)
         Left se -> Left <$> translateErrorIO dbm se
@@ -99,15 +108,22 @@ runBatchImpacts ::
     [Text] ->
     IO (Either BatchError BatchImpactsResponse)
 runBatchImpacts dbm dbName coll topFlows pids = do
+    let env =
+            AppEnv
+                { aeDbManager = dbm
+                , aeMaxTreeDepth = 0
+                , aePassword = Nothing
+                , aeHostingConfig = Nothing
+                , aeClassificationPresets = []
+                }
     res <-
-        Servant.runHandler
-            ( batchImpactsH
-                dbm
-                dbName
-                coll
-                topFlows
-                (BatchImpactsRequest{birProcessIds = pids})
-            )
+        Servant.runHandler $
+            runApp env $
+                batchImpactsH
+                    dbName
+                    coll
+                    topFlows
+                    (BatchImpactsRequest{birProcessIds = pids})
     case res of
         Right r -> pure (Right r)
         Left se -> Left <$> translateErrorIO dbm se

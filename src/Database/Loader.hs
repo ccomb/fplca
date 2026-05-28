@@ -45,7 +45,6 @@ module Database.Loader (
     fixActivityLinksWithCrossDB,
     findAllCrossDBLinks,
     CrossDBLinkingStats (..),
-    emptyCrossDBLinkingStats,
     crossDBLinksCount,
     unresolvedCount,
     crossDBBySource,
@@ -68,8 +67,6 @@ module Database.Loader (
     generateActivityUUIDFromActivity,
     getReferenceProductUUID,
     UnlinkedSummary (..),
-    emptyUnlinkedSummary,
-    mergeUnlinkedSummaries,
     buildSupplierIndex,
     buildSupplierIndexByName,
     fixExchangeLinkByName,
@@ -237,7 +234,9 @@ data UnlinkedExchange = UnlinkedExchange
     }
     deriving (Eq, Ord, Show)
 
--- | Summary of unlinked exchanges grouped by consumer activity
+-- | Summary of unlinked exchanges grouped by consumer activity.
+-- 'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
+-- 'Sum Int' would force every reader to unwrap.
 data UnlinkedSummary = UnlinkedSummary
     { usActivities :: !(M.Map T.Text [UnlinkedExchange]) -- consumer name → list of unlinked exchanges
     , usTotalLinks :: !Int
@@ -246,19 +245,12 @@ data UnlinkedSummary = UnlinkedSummary
     }
     deriving (Show)
 
--- | Empty unlinked summary
-emptyUnlinkedSummary :: UnlinkedSummary
-emptyUnlinkedSummary = UnlinkedSummary M.empty 0 0 0
+instance Semigroup UnlinkedSummary where
+    UnlinkedSummary a1 t1 f1 m1 <> UnlinkedSummary a2 t2 f2 m2 =
+        UnlinkedSummary (M.unionWith (++) a1 a2) (t1 + t2) (f1 + f2) (m1 + m2)
 
--- | Merge two unlinked summaries
-mergeUnlinkedSummaries :: UnlinkedSummary -> UnlinkedSummary -> UnlinkedSummary
-mergeUnlinkedSummaries s1 s2 =
-    UnlinkedSummary
-        { usActivities = M.unionWith (++) (usActivities s1) (usActivities s2)
-        , usTotalLinks = usTotalLinks s1 + usTotalLinks s2
-        , usFoundLinks = usFoundLinks s1 + usFoundLinks s2
-        , usMissingLinks = usMissingLinks s1 + usMissingLinks s2
-        }
+instance Monoid UnlinkedSummary where
+    mempty = UnlinkedSummary M.empty 0 0 0
 
 -- | Report grouped summary of unlinked exchanges
 reportUnlinkedSummary :: UnlinkedSummary -> IO ()
@@ -415,7 +407,7 @@ fixAllActivities :: ExchangeLinkContext -> ActivityMap -> (ActivityMap, Unlinked
 fixAllActivities ctx activities =
     let results = M.map (fixActivityExchanges ctx) activities
         summaries = map snd $ M.elems results
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
@@ -423,7 +415,7 @@ fixAllActivities ctx activities =
 fixActivityExchanges :: ExchangeLinkContext -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchanges ctx act =
     let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink ctx (activityName act)) (exchanges act)
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link by (flowName, location) match.
@@ -465,13 +457,13 @@ fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{tec
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
                     (ex, UnlinkedSummary M.empty 1 0 1)
-    | otherwise = (ex, emptyUnlinkedSummary)
-fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+    | otherwise = (ex, mempty)
+fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- A WasteExchange in input direction (consumed by treatment) would benefit
 -- from the same supplier-lookup logic as a technosphere Input, but at this
 -- stage we leave waste links to the cross-DB linker (see CrossLinking) and
 -- the downstream parsers. Pure pass-through here.
-fixExchangeLink _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
+fixExchangeLink _ _ ex@WasteExchange{} = (ex, mempty)
 
 {- |
 Load all EcoSpold files with optimized parallel processing and deduplication.
@@ -570,7 +562,7 @@ fixAllActivitiesByName :: NameOnlyIndex -> TechFlowDB -> ActivityMap -> (Activit
 fixAllActivitiesByName idx techFlowDb activities =
     let results = M.map (fixActivityExchangesByName idx techFlowDb) activities
         summaries = map snd $ M.elems results
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
@@ -578,7 +570,7 @@ fixAllActivitiesByName idx techFlowDb activities =
 fixActivityExchangesByName :: NameOnlyIndex -> TechFlowDB -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchangesByName idx techFlowDb act =
     let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx techFlowDb (activityName act)) (exchanges act)
-        combinedSummary = foldr mergeUnlinkedSummaries emptyUnlinkedSummary summaries
+        combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
 {- | Fix a single exchange's activity link using name-only matching.
@@ -611,10 +603,10 @@ fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFl
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)
-    | otherwise = (ex, emptyUnlinkedSummary) -- Reference products: nothing to relink
-fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, emptyUnlinkedSummary)
+    | otherwise = (ex, mempty) -- Reference products: nothing to relink
+fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
-fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, emptyUnlinkedSummary)
+fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, mempty)
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
@@ -1060,7 +1052,7 @@ saveCachedDatabaseWithMatrices dbName dataDir db = do
 -- Cross-Database Linking
 --------------------------------------------------------------------------------
 
-{- | CrossDBLinkingStats, emptyCrossDBLinkingStats, mergeCrossDBStats,
+{- | CrossDBLinkingStats, mempty, (<>),
   crossDBLinksCount, unresolvedCount, crossDBBySource
   are now defined in Types and re-exported from this module.
 -}
@@ -1118,7 +1110,7 @@ loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig
             if null otherIndexes
                 then do
                     -- No cross-DB linking needed
-                    let !stats = emptyCrossDBLinkingStats{cdlUnknownUnits = unknownUnits, cdlTotalInputs = totalInputs}
+                    let !stats = mempty{cdlUnknownUnits = unknownUnits, cdlTotalInputs = totalInputs}
                     reportCrossDBLinkingStats (M.size (sdbActivities simpleDb)) stats
                     return $ Right (simpleDb, stats)
                 else do
@@ -1171,7 +1163,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
     if unlinkedBefore == 0
         then do
             reportProgress Info "No unlinked exchanges to resolve via cross-DB linking"
-            return (db, emptyCrossDBLinkingStats{cdlTotalInputs = totalInputs})
+            return (db, mempty{cdlTotalInputs = totalInputs})
         else do
             reportProgress Info $
                 printf
@@ -1279,7 +1271,7 @@ findAllCrossDBLinks ::
     CrossDBLinkingStats
 findAllCrossDBLinks ctx techFlowDb wasteFlowDb unitDb activities =
     let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb) activities
-     in foldr mergeCrossDBStats emptyCrossDBLinkingStats (M.elems results)
+     in mconcat (M.elems results)
 
 -- | Find cross-database links for one activity's exchanges
 findActivityCrossDBLinks ::
@@ -1293,7 +1285,7 @@ findActivityCrossDBLinks ::
     CrossDBLinkingStats
 findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
     let stats = map (findExchangeCrossDBLink ctx techFlowDb wasteFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
-     in foldr mergeCrossDBStats emptyCrossDBLinkingStats stats
+     in mconcat stats
 
 {- | Find cross-database link for a single exchange.
 
@@ -1316,7 +1308,7 @@ findExchangeCrossDBLink ::
 findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
     | exchangeIsInput ex && linkId == UUID.nil =
         case M.lookup fid techFlowDb of
-            Nothing -> emptyCrossDBLinkingStats
+            Nothing -> mempty
             Just flow ->
                 let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
                  in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
@@ -1339,7 +1331,7 @@ findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consu
                                     [ LocationFallback (cdlrProductName result) req actLoc kind
                                     | UpperLocationUsed req actLoc kind <- cdlrWarnings result
                                     ]
-                             in emptyCrossDBLinkingStats{cdlLinks = [crossLink], cdlLocationFallbacks = fallbacks}
+                             in mempty{cdlLinks = [crossLink], cdlLocationFallbacks = fallbacks}
                         CrossDBNotLinked blocker ->
                             let unresolved = case blocker of
                                     LocationRejectedByPolicy req actLoc kind ->
@@ -1356,12 +1348,12 @@ findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consu
                                         [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
                                     NoNameMatch -> []
                                     UnitIncompatible _ _ -> []
-                             in emptyCrossDBLinkingStats
+                             in mempty
                                     { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
                                     , cdlLocationUnresolved = unresolved
                                     }
-    | otherwise = emptyCrossDBLinkingStats
-findExchangeCrossDBLink _ _ _ _ _ _ BiosphereExchange{} = emptyCrossDBLinkingStats
+    | otherwise = mempty
+findExchangeCrossDBLink _ _ _ _ _ _ BiosphereExchange{} = mempty
 -- Cross-DB linking for orphan waste OUTPUTS: strict match only — see
 -- 'findWasteTreatmentAcrossDatabases'. No synonym, no fuzzy name match, no
 -- location widening. Multi-DB matches stay orphan as 'cdlWasteAmbiguous'.
@@ -1386,10 +1378,10 @@ findExchangeCrossDBLink ctx _ wasteFlowDb _ consumerActUUID consumerProdUUID Was
                                 , cdlSourceDatabase = dbN
                                 , cdlTiedAlternatives = []
                                 }
-                     in emptyCrossDBLinkingStats{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
-                WasteAmbiguous _ -> emptyCrossDBLinkingStats{cdlWasteAmbiguous = 1}
-                WasteNoMatch -> emptyCrossDBLinkingStats{cdlCutoffWasteCount = 1}
-    | otherwise = emptyCrossDBLinkingStats
+                     in mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
+                WasteAmbiguous _ -> mempty{cdlWasteAmbiguous = 1}
+                WasteNoMatch -> mempty{cdlCutoffWasteCount = 1}
+    | otherwise = mempty
 
 -- | Report cross-database linking statistics
 reportCrossDBLinkingStats :: Int -> CrossDBLinkingStats -> IO ()

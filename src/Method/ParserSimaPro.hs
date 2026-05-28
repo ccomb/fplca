@@ -50,8 +50,8 @@ parseSimaProMethodCSVBytes raw =
     let !utf8 = ensureUtf8 raw
         lns = BS8.lines utf8
         cfg = parseConfig lns
-        methodName' = parseMethodName cfg lns
-        result = foldl' (step cfg methodName') initState lns
+        methodologyName = parseMethodName cfg lns
+        result = foldl' (step cfg) (initState methodologyName) lns
      in Right (finalize result)
 
 {- | Detect whether bytes are a SimaPro method CSV export.
@@ -74,263 +74,262 @@ isSimaProMethodCSV bs =
 -- Parser State
 -- ============================================================================
 
+-- | In-progress accumulators. Each carries exactly the data its stage needs,
+-- so the parser can never hold (say) lingering CFs while reading an NW set.
+data CatAccum = CatAccum !Text !Text ![MethodCF]
+data DamageAccum = DamageAccum !Text !Text ![(Text, Double)]
+data NWAccum = NWAccum !Text !(M.Map Text Double) !(M.Map Text Double)
+
+{- | The single source of truth for "where we are and what we're collecting".
+Folds the old @Phase@ enum together with the per-section accumulators: an
+impossible state (a phase disagreeing with its accumulator) is unrepresentable.
+-}
+data Stage
+    = Header -- reading {key: value} header lines
+    | MethodMeta -- skipping method-level metadata until a section marker
+    | BetweenSections -- finished a block; expecting the next marker or End
+    | NeedCatLine -- expecting "Name;Unit" after "Impact category"
+    | NeedSubstances !Text !Text -- have cat name+unit; expecting "Substances"
+    | ReadingCFs !CatAccum -- reading substance/CF rows
+    | NeedDcLine -- expecting "Name;Unit" after "Damage category"
+    | NeedDcImpacts !Text !Text -- expecting "Impact categories" marker
+    | ReadingDcImpacts !DamageAccum -- reading impact rows of a damage category
+    | NeedNWName -- expecting the NW-set name line
+    | NeedNWSection !NWAccum -- expecting "Normalization"/"Weighting"/next marker
+    | ReadingNorm !NWAccum -- reading normalization rows
+    | ReadingWeight !NWAccum -- reading weighting rows
+
 data ParseState = ParseState
-    { psPhase :: !Phase
-    , psCatName :: !Text -- current impact category name
-    , psCatUnit :: !Text -- current impact category unit
-    , psFactors :: ![MethodCF] -- CFs accumulated (reversed) for current category
+    { psStage :: !Stage
+    , psMethodology :: !Text -- constant; the method-level "Name"
     , psMethods :: ![Method] -- completed methods (reversed)
-    -- Damage categories
     , psDamageCats :: ![DamageCategory] -- completed damage categories (reversed)
-    , psDcName :: !Text -- current damage category name
-    , psDcUnit :: !Text -- current damage category unit
-    , psDcImpacts :: ![(Text, Double)] -- current damage category impacts (reversed)
-    -- Normalization/Weighting
     , psNWsets :: ![NormWeightSet] -- completed NW sets (reversed)
-    , psNWname :: !Text -- current NW set name
-    , psNormMap :: !(M.Map Text Double) -- current normalization factors
-    , psWeightMap :: !(M.Map Text Double) -- current weighting factors
     }
 
-data Phase
-    = PhHeader -- reading {key: value} header lines
-    | PhMethodMeta -- reading method-level metadata (Name, Version, etc.)
-    | PhExpectCategory -- expecting "Impact category" or "Damage category" etc.
-    | PhExpectCatLine -- expecting the "Name;Unit" line after "Impact category"
-    | PhExpectSubst -- expecting blank or "Substances" marker
-    | PhReadingCFs -- reading substance/CF rows
-    -- Damage categories
-    | PhExpectDcLine -- expecting "Name;Unit" after "Damage category"
-    | PhExpectDcImpacts -- expecting "Impact categories" marker
-    | PhReadingDcImpacts -- reading impact category rows in damage category
-    -- Normalization/Weighting
-    | PhExpectNWname -- expecting NW set name line
-    | PhExpectNWsection -- expecting "Normalization" or "Weighting" or next section
-    | PhReadingNorm -- reading normalization rows
-    | PhReadingWeight -- reading weighting rows
-
-initState :: ParseState
-initState = ParseState PhHeader "" "" [] [] [] "" "" [] [] "" M.empty M.empty
+initState :: Text -> ParseState
+initState methodology = ParseState Header methodology [] [] []
 
 -- ============================================================================
 -- State Machine
 -- ============================================================================
 
-step :: SimaProConfig -> Text -> ParseState -> BS.ByteString -> ParseState
-step cfg methodologyName st line = case psPhase st of
-    PhHeader
+step :: SimaProConfig -> ParseState -> BS.ByteString -> ParseState
+step cfg st line = case psStage st of
+    Header
         | BS8.isPrefixOf "{" line -> st
-        | otherwise -> st{psPhase = PhMethodMeta}
-    PhMethodMeta
-        | stripped == "Impact category" -> st{psPhase = PhExpectCatLine}
-        | stripped == "Damage category" -> st{psPhase = PhExpectDcLine}
-        | isNWsetMarker stripped -> st{psPhase = PhExpectNWname}
+        | otherwise -> st{psStage = MethodMeta}
+    MethodMeta
+        | Just m <- detectMarker stripped -> st{psStage = stageFor m}
         | otherwise -> st
-    PhExpectCategory
-        | stripped == "Impact category" -> st{psPhase = PhExpectCatLine}
-        | stripped == "Damage category" -> st{psPhase = PhExpectDcLine}
-        | isNWsetMarker stripped -> st{psPhase = PhExpectNWname}
-        | stripped == "End" -> st
+    BetweenSections
+        | Just m <- detectMarker stripped -> st{psStage = stageFor m}
         | otherwise -> st
-    PhExpectCatLine
+    NeedCatLine
         | isBlank line -> st
         | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-                catName = decodeBS (BS8.strip (head' fields))
-                catUnit =
-                    if length fields > 1
-                        then decodeBS (BS8.strip (fields !! 1))
-                        else ""
-             in st
-                    { psPhase = PhExpectSubst
-                    , psCatName = catName
-                    , psCatUnit = catUnit
-                    , psFactors = []
-                    }
-    PhExpectSubst
+            let (name, unit) = parseNameUnit cfg line
+             in st{psStage = NeedSubstances name unit}
+    NeedSubstances name unit
         | isBlank line -> st
-        | stripped == "Substances" -> st{psPhase = PhReadingCFs}
+        | stripped == "Substances" -> st{psStage = ReadingCFs (CatAccum name unit [])}
         | otherwise -> st
-    PhReadingCFs
-        | isBlank line -> finishCategory st
-        | stripped == "Impact category" ->
-            (finishCategory st){psPhase = PhExpectCatLine}
-        | stripped == "Damage category" ->
-            (finishCategory st){psPhase = PhExpectDcLine}
-        | isNWsetMarker stripped ->
-            (finishCategory st){psPhase = PhExpectNWname}
-        | stripped == "End" -> finishCategory st
-        | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-             in case fields of
-                    (comp : sub : name : cas : cfVal : cfUnit : _) ->
-                        let !rawName = decodeBS (BS8.strip name)
-                            -- Keep the full suffixed name so the CF's
-                            -- 'mcfFlowRef' UUID matches the suffixed
-                            -- biosphere flow UUID parsed by
-                            -- 'SimaPro.Parser.bioRowToExchange'. The location
-                            -- is also exposed via 'mcfConsumerLocation' for
-                            -- regional dispatch on engines that key CFs by
-                            -- activity location (openLCA JSON-LD); SimaPro
-                            -- CSV CFs are already region-tagged in the name,
-                            -- so dual storage is correct.
-                            !mLoc = snd (extractLocationSuffix rawName)
-                            !cfUnitT = decodeBS (BS8.strip cfUnit)
-                            -- UUID hashed via the shared 'generateFlowUUID' +
-                            -- 'normalizeSimaProCompartment' so the CF side
-                            -- and 'SimaPro.Parser.bioRowToExchange' produce
-                            -- the same UUID for the same flow.
-                            !flowRef =
-                                generateFlowUUID
-                                    rawName
-                                    (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
-                                    cfUnitT
-                            !cf =
-                                MethodCF
-                                    { mcfFlowRef = flowRef
-                                    , mcfFlowName = rawName
-                                    , mcfDirection = direction comp
-                                    , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
-                                    , mcfCompartment = mkCompartment comp sub
-                                    , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
-                                    , mcfUnit = cfUnitT
-                                    , mcfConsumerLocation = mLoc
-                                    }
-                         in st{psFactors = cf : psFactors st}
-                    _ -> st
-    -- Damage category parsing
-    PhExpectDcLine
-        | isBlank line -> st
-        | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-                dcn = decodeBS (BS8.strip (head' fields))
-                dcu = if length fields > 1 then decodeBS (BS8.strip (fields !! 1)) else ""
-             in st{psPhase = PhExpectDcImpacts, psDcName = dcn, psDcUnit = dcu, psDcImpacts = []}
-    PhExpectDcImpacts
-        | isBlank line -> st
-        | stripped == "Impact categories" -> st{psPhase = PhReadingDcImpacts}
+    ReadingCFs acc
+        | isBlank line -> finishCat acc st{psStage = BetweenSections}
+        | stripped == "End" -> finishCat acc st{psStage = BetweenSections}
+        | Just m <- detectMarker stripped -> finishCat acc st{psStage = stageFor m}
+        | Just cf <- parseCFRow cfg line -> st{psStage = ReadingCFs (consCF cf acc)}
         | otherwise -> st
-    PhReadingDcImpacts
-        | isBlank line -> finishDamageCategory st
-        | stripped == "Damage category" ->
-            (finishDamageCategory st){psPhase = PhExpectDcLine}
-        | isNWsetMarker stripped ->
-            (finishDamageCategory st){psPhase = PhExpectNWname}
-        | stripped == "End" -> finishDamageCategory st
+    NeedDcLine
+        | isBlank line -> st
         | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-             in case fields of
-                    (name : val : _) ->
-                        let n = decodeBS (BS8.strip name)
-                            v = parseAmount (spDecimal cfg) (BS8.strip val)
-                         in st{psDcImpacts = (n, v) : psDcImpacts st}
-                    _ -> st
-    -- Normalization/Weighting parsing
-    PhExpectNWname
+            let (name, unit) = parseNameUnit cfg line
+             in st{psStage = NeedDcImpacts name unit}
+    NeedDcImpacts name unit
         | isBlank line -> st
-        | otherwise -> st{psPhase = PhExpectNWsection, psNWname = decodeBS (BS8.strip line)}
-    PhExpectNWsection
-        | isBlank line -> st
-        | stripped == "Normalization" -> st{psPhase = PhReadingNorm}
-        | stripped == "Weighting" -> st{psPhase = PhReadingWeight}
-        | stripped == "Damage category" ->
-            (finishNWset st){psPhase = PhExpectDcLine}
-        | isNWsetMarker stripped ->
-            (finishNWset st){psPhase = PhExpectNWname}
-        | stripped == "End" -> finishNWset st
+        | stripped == "Impact categories" -> st{psStage = ReadingDcImpacts (DamageAccum name unit [])}
         | otherwise -> st
-    PhReadingNorm
-        | isBlank line -> st{psPhase = PhExpectNWsection}
-        | stripped == "Weighting" -> st{psPhase = PhReadingWeight}
-        | stripped == "End" -> finishNWset st
-        | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-             in case fields of
-                    (name : val : _) ->
-                        let n = decodeBS (BS8.strip name)
-                            v = parseAmount (spDecimal cfg) (BS8.strip val)
-                         in st{psNormMap = M.insert n v (psNormMap st)}
-                    _ -> st
-    PhReadingWeight
-        | isBlank line -> st{psPhase = PhExpectNWsection}
-        | isNWsetMarker stripped ->
-            (finishNWset st){psPhase = PhExpectNWname}
-        | stripped == "End" -> finishNWset st
-        | otherwise ->
-            let fields = splitCSV (spDelimiter cfg) line
-             in case fields of
-                    (name : val : _) ->
-                        let n = decodeBS (BS8.strip name)
-                            v = parseAmount (spDecimal cfg) (BS8.strip val)
-                         in st{psWeightMap = M.insert n v (psWeightMap st)}
-                    _ -> st
+    ReadingDcImpacts acc
+        | isBlank line -> finishDamage acc st{psStage = BetweenSections}
+        | stripped == "End" -> finishDamage acc st{psStage = BetweenSections}
+        | Just m <- detectMarker stripped -> finishDamage acc st{psStage = stageFor m}
+        | Just nv <- parseNameValue cfg line -> st{psStage = ReadingDcImpacts (consImpact nv acc)}
+        | otherwise -> st
+    NeedNWName
+        | isBlank line -> st
+        | otherwise -> st{psStage = NeedNWSection (NWAccum (decodeBS stripped) M.empty M.empty)}
+    NeedNWSection acc
+        | isBlank line -> st
+        | stripped == "Normalization" -> st{psStage = ReadingNorm acc}
+        | stripped == "Weighting" -> st{psStage = ReadingWeight acc}
+        | stripped == "End" -> finishNW acc st{psStage = BetweenSections}
+        | Just m <- detectMarker stripped -> finishNW acc st{psStage = stageFor m}
+        | otherwise -> st
+    ReadingNorm acc
+        | isBlank line -> st{psStage = NeedNWSection acc}
+        | stripped == "Weighting" -> st{psStage = ReadingWeight acc}
+        | stripped == "End" -> finishNW acc st{psStage = BetweenSections}
+        | Just (n, v) <- parseNameValue cfg line -> st{psStage = ReadingNorm (insertNorm n v acc)}
+        | otherwise -> st
+    ReadingWeight acc
+        | isBlank line -> st{psStage = NeedNWSection acc}
+        | stripped == "End" -> finishNW acc st{psStage = BetweenSections}
+        | Just m <- detectMarker stripped -> finishNW acc st{psStage = stageFor m}
+        | Just (n, v) <- parseNameValue cfg line -> st{psStage = ReadingWeight (insertWeight n v acc)}
+        | otherwise -> st
   where
     stripped = BS8.strip line
 
-    finishCategory s =
-        let !m =
-                Method
-                    { methodId =
-                        UUID5.generateNamed
-                            simaproNamespace
-                            (BS.unpack $ TE.encodeUtf8 $ "method:" <> psCatName s)
-                    , methodName = psCatName s
-                    , methodDescription = Nothing
-                    , methodUnit = psCatUnit s
-                    , methodCategory = psCatName s
-                    , methodMethodology = Just methodologyName
-                    , methodFactors = reverse (psFactors s)
-                    }
-         in s{psPhase = PhExpectCategory, psFactors = [], psMethods = m : psMethods s}
+-- | Append the completed category. A header with zero CF rows still emits an
+-- empty 'Method': a category can be declared before its factors are added, and
+-- silently dropping it would hide that from downstream.
+-- Shared by 'step' (mid-stream, on blanks/markers/End) and 'finalize' (at EOF).
+finishCat :: CatAccum -> ParseState -> ParseState
+finishCat (CatAccum name unit factors) st =
+    st{psMethods = buildMethod (psMethodology st) name unit (reverse factors) : psMethods st}
 
-    finishDamageCategory s =
-        let !dc = DamageCategory (psDcName s) (psDcUnit s) (reverse (psDcImpacts s))
-         in s{psPhase = PhExpectCategory, psDcImpacts = [], psDamageCats = dc : psDamageCats s}
+-- | Append the completed damage category, including one with zero impact rows
+-- (same rationale as 'finishCat').
+finishDamage :: DamageAccum -> ParseState -> ParseState
+finishDamage (DamageAccum name unit impacts) st =
+    st{psDamageCats = DamageCategory name unit (reverse impacts) : psDamageCats st}
 
-    finishNWset s
-        | M.null (psNormMap s) && M.null (psWeightMap s) = s{psPhase = PhExpectCategory}
-        | otherwise =
-            let !nw = NormWeightSet (psNWname s) (psNormMap s) (psWeightMap s)
-             in s
-                    { psPhase = PhExpectCategory
-                    , psNormMap = M.empty
-                    , psWeightMap = M.empty
-                    , psNWname = ""
-                    , psNWsets = nw : psNWsets s
-                    }
+finishNW :: NWAccum -> ParseState -> ParseState
+finishNW (NWAccum name norm weight) st
+    | M.null norm && M.null weight = st
+    | otherwise = st{psNWsets = NormWeightSet name norm weight : psNWsets st}
 
+-- | Flush whatever block is in progress at end of input, then read out the
+-- accumulated collections in source order.
 finalize :: ParseState -> MethodCollection
 finalize st =
-    let methods = case psPhase st of
-            PhReadingCFs
-                | not (null (psFactors st)) ->
-                    let !m =
-                            Method
-                                { methodId =
-                                    UUID5.generateNamed
-                                        simaproNamespace
-                                        (BS.unpack $ TE.encodeUtf8 $ "method:" <> psCatName st)
-                                , methodName = psCatName st
-                                , methodDescription = Nothing
-                                , methodUnit = psCatUnit st
-                                , methodCategory = psCatName st
-                                , methodMethodology = Nothing
-                                , methodFactors = reverse (psFactors st)
-                                }
-                     in reverse (m : psMethods st)
-            _ -> reverse (psMethods st)
-        -- Flush any pending NW set
-        nwSets = case psPhase st of
-            PhReadingWeight
-                | not (M.null (psWeightMap st)) ->
-                    let !nw = NormWeightSet (psNWname st) (psNormMap st) (psWeightMap st)
-                     in reverse (nw : psNWsets st)
-            PhReadingNorm
-                | not (M.null (psNormMap st)) ->
-                    let !nw = NormWeightSet (psNWname st) (psNormMap st) (psWeightMap st)
-                     in reverse (nw : psNWsets st)
-            _ -> reverse (psNWsets st)
-     in MethodCollection methods (reverse (psDamageCats st)) nwSets []
+    let s = finishCurrent st
+     in MethodCollection
+            (reverse (psMethods s))
+            (reverse (psDamageCats s))
+            (reverse (psNWsets s))
+            []
+
+finishCurrent :: ParseState -> ParseState
+finishCurrent st = case psStage st of
+    ReadingCFs acc -> finishCat acc st
+    ReadingDcImpacts acc -> finishDamage acc st
+    ReadingNorm acc -> finishNW acc st
+    ReadingWeight acc -> finishNW acc st
+    NeedNWSection acc -> finishNW acc st
+    -- Stages with no in-progress block to flush. Enumerated (not wildcarded)
+    -- so a future accumulator-carrying stage can't silently skip its EOF flush.
+    Header -> st
+    MethodMeta -> st
+    BetweenSections -> st
+    NeedCatLine -> st
+    NeedSubstances{} -> st
+    NeedDcLine -> st
+    NeedDcImpacts{} -> st
+    NeedNWName -> st
+
+consCF :: MethodCF -> CatAccum -> CatAccum
+consCF cf (CatAccum name unit factors) = CatAccum name unit (cf : factors)
+
+consImpact :: (Text, Double) -> DamageAccum -> DamageAccum
+consImpact i (DamageAccum name unit impacts) = DamageAccum name unit (i : impacts)
+
+insertNorm :: Text -> Double -> NWAccum -> NWAccum
+insertNorm n v (NWAccum name norm weight) = NWAccum name (M.insert n v norm) weight
+
+insertWeight :: Text -> Double -> NWAccum -> NWAccum
+insertWeight n v (NWAccum name norm weight) = NWAccum name norm (M.insert n v weight)
+
+buildMethod :: Text -> Text -> Text -> [MethodCF] -> Method
+buildMethod methodology name unit factors =
+    Method
+        { methodId =
+            UUID5.generateNamed
+                simaproNamespace
+                (BS.unpack $ TE.encodeUtf8 $ "method:" <> name)
+        , methodName = name
+        , methodDescription = Nothing
+        , methodUnit = unit
+        , methodCategory = name
+        , methodMethodology = Just methodology
+        , methodFactors = factors
+        }
+
+-- ============================================================================
+-- Line parsers
+-- ============================================================================
+
+-- | A line that begins a new section. "End" is deliberately not a marker — it
+-- only closes the current block — so the reading stages handle it inline.
+data Marker = MImpactCat | MDamageCat | MNWSet
+
+detectMarker :: BS.ByteString -> Maybe Marker
+detectMarker s
+    | s == "Impact category" = Just MImpactCat
+    | s == "Damage category" = Just MDamageCat
+    | isNWsetMarker s = Just MNWSet
+    | otherwise = Nothing
+
+stageFor :: Marker -> Stage
+stageFor MImpactCat = NeedCatLine
+stageFor MDamageCat = NeedDcLine
+stageFor MNWSet = NeedNWName
+
+-- | Parse one substance/CF row into a 'MethodCF', or 'Nothing' if the row is
+-- too short to be a factor line.
+parseCFRow :: SimaProConfig -> BS.ByteString -> Maybe MethodCF
+parseCFRow cfg line =
+    case splitCSV (spDelimiter cfg) line of
+        (comp : sub : name : cas : cfVal : cfUnit : _) ->
+            let !rawName = decodeBS (BS8.strip name)
+                -- Keep the full suffixed name so the CF's 'mcfFlowRef' UUID
+                -- matches the suffixed biosphere flow UUID parsed by
+                -- 'SimaPro.Parser.bioRowToExchange'. The location is also
+                -- exposed via 'mcfConsumerLocation' for regional dispatch on
+                -- engines that key CFs by activity location (openLCA JSON-LD);
+                -- SimaPro CSV CFs are already region-tagged in the name, so
+                -- dual storage is correct.
+                !mLoc = snd (extractLocationSuffix rawName)
+                !cfUnitT = decodeBS (BS8.strip cfUnit)
+                -- UUID hashed via the shared 'generateFlowUUID' +
+                -- 'normalizeSimaProCompartment' so the CF side and
+                -- 'SimaPro.Parser.bioRowToExchange' produce the same UUID for
+                -- the same flow.
+                !flowRef =
+                    generateFlowUUID
+                        rawName
+                        (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
+                        cfUnitT
+                !cf =
+                    MethodCF
+                        { mcfFlowRef = flowRef
+                        , mcfFlowName = rawName
+                        , mcfDirection = direction comp
+                        , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
+                        , mcfCompartment = mkCompartment comp sub
+                        , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
+                        , mcfUnit = cfUnitT
+                        , mcfConsumerLocation = mLoc
+                        }
+             in Just cf
+        _ -> Nothing
+
+-- | Parse a two-column @name;value@ row (damage impacts, normalization,
+-- weighting), or 'Nothing' if the row lacks both columns.
+parseNameValue :: SimaProConfig -> BS.ByteString -> Maybe (Text, Double)
+parseNameValue cfg line =
+    case splitCSV (spDelimiter cfg) line of
+        (name : val : _) ->
+            Just (decodeBS (BS8.strip name), parseAmount (spDecimal cfg) (BS8.strip val))
+        _ -> Nothing
+
+-- | Parse a @Name;Unit@ header line. Total: a missing unit yields "".
+parseNameUnit :: SimaProConfig -> BS.ByteString -> (Text, Text)
+parseNameUnit cfg line =
+    case splitCSV (spDelimiter cfg) line of
+        (name : unit : _) -> (decodeBS (BS8.strip name), decodeBS (BS8.strip unit))
+        [name] -> (decodeBS (BS8.strip name), "")
+        [] -> ("", "")
 
 -- ============================================================================
 -- Helpers
@@ -363,10 +362,6 @@ parseMethodName _cfg = go False
 
 isBlank :: BS.ByteString -> Bool
 isBlank = BS.null . BS8.strip
-
-head' :: [a] -> a
-head' (x : _) = x
-head' [] = error "Method.ParserSimaPro: unexpected empty field list"
 
 direction :: BS.ByteString -> FlowDirection
 direction comp

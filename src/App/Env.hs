@@ -1,0 +1,32 @@
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
+-- | 'AppM' is @'ReaderT' 'AppEnv' 'Handler'@; 'runApp' is the @AppM ~> Handler@
+-- mapping passed to Servant's 'hoistServer'.
+module App.Env (
+    AppEnv (..),
+    AppM (..),
+    runApp,
+) where
+
+import Control.Monad.Except (MonadError)
+import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.Reader (MonadReader, ReaderT (..))
+import qualified Config
+import Database.Manager (DatabaseManager)
+import Servant (Handler, ServerError)
+
+-- | Read-only application environment threaded through every request.
+data AppEnv = AppEnv
+    { aeDbManager :: !DatabaseManager
+    , aeMaxTreeDepth :: !Int
+    , aePassword :: !(Maybe String)
+    , aeHostingConfig :: !(Maybe Config.HostingConfig)
+    , aeClassificationPresets :: ![Config.ClassificationPreset]
+    }
+
+newtype AppM a = AppM {unAppM :: ReaderT AppEnv Handler a}
+    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader AppEnv, MonadError ServerError)
+
+runApp :: AppEnv -> AppM a -> Handler a
+runApp env (AppM m) = runReaderT m env

@@ -23,6 +23,8 @@ library
   import:              warnings
   hs-source-dirs:      src
   exposed-modules:     Types
+                     , App.Env
+                     , Data.Validation
                      , Progress
                      , UnitConversion
                      , Config
@@ -37,6 +39,7 @@ library
                      , Database.Manager
                      , Database.Loader
                      , Database.CrossLinking
+                     , Database.MatrixBuild
                      , Database.Upload
                      , Database.UploadedDatabase
                      , SynonymDB
@@ -70,6 +73,7 @@ library
                      , CLI.Client
                      , CLI.Repl
                      , EcoSpold.Common
+                     , EcoSpold.Cutoff
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser

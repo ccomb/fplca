@@ -144,26 +144,26 @@ spec = do
             getReferenceProductUUID act `shouldBe` UUID.nil
 
     -- -----------------------------------------------------------------------
-    -- mergeUnlinkedSummaries
+    -- UnlinkedSummary Monoid (product of monoids: Map-union + 3× Int addition)
     -- -----------------------------------------------------------------------
-    describe "mergeUnlinkedSummaries" $ do
-        it "sums all counters" $ do
+    describe "UnlinkedSummary Monoid" $ do
+        it "sums all counters via (<>)" $ do
             let s1 = UnlinkedSummary M.empty 10 8 2
                 s2 = UnlinkedSummary M.empty 5 3 2
-                m = mergeUnlinkedSummaries s1 s2
+                m = s1 <> s2
             usTotalLinks m `shouldBe` 15
             usFoundLinks m `shouldBe` 11
             usMissingLinks m `shouldBe` 4
 
-        it "unions activity maps" $ do
+        it "unions activity maps via (<>)" $ do
             let s1 = UnlinkedSummary (M.singleton "actA" []) 1 0 1
                 s2 = UnlinkedSummary (M.singleton "actB" []) 1 0 1
-                m = mergeUnlinkedSummaries s1 s2
+                m = s1 <> s2
             M.size (usActivities m) `shouldBe` 2
 
-        it "emptyUnlinkedSummary is the identity" $ do
+        it "mempty is the identity" $ do
             let s = UnlinkedSummary M.empty 3 2 1
-                m = mergeUnlinkedSummaries s emptyUnlinkedSummary
+                m = s <> mempty
             usTotalLinks m `shouldBe` 3
             usFoundLinks m `shouldBe` 2
             usMissingLinks m `shouldBe` 1
