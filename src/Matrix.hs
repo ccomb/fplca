@@ -33,6 +33,8 @@ Performance characteristics:
 module Matrix (
     Vector,
     Inventory,
+    SupplierDemands,
+    DepDemands,
     computeScalingVector,
     applyBiosphereMatrix,
     computeInventoryMatrix,
@@ -94,6 +96,13 @@ type Vector = U.Vector Double
 
 -- | Final inventory vector mapping biosphere flow UUIDs to quantities.
 type Inventory = M.Map UUID Double
+
+-- | Demand a consumer DB places on one supplier @(activityUUID, productUUID)@:
+-- the amount plus the consumer's exchange unit (for cross-DB unit conversion).
+type SupplierDemands = M.Map (UUID, UUID) (Double, Text)
+
+-- | Per-dependency-DB supplier demands, keyed by source database name.
+type DepDemands = M.Map Text SupplierDemands
 
 {- | Per-database coalescing solver. A single worker thread owns the MUMPS
 handle and drains a queue of solve requests, batching whatever has piled up
@@ -727,7 +736,7 @@ before accumulating.
 accumulateDepDemands ::
     Database ->
     Vector ->
-    M.Map Text (M.Map (UUID, UUID) (Double, Text))
+    DepDemands
 accumulateDepDemands db = accumulateDepDemandsWith db []
 
 {- | Same as 'accumulateDepDemands' but folds over an additional list of
@@ -743,7 +752,7 @@ accumulateDepDemandsWith ::
     Database ->
     [CrossDBLink] ->
     Vector ->
-    M.Map Text (M.Map (UUID, UUID) (Double, Text))
+    DepDemands
 accumulateDepDemandsWith db extraLinks scalingVec =
     foldr step M.empty (dbCrossDBLinks db ++ extraLinks)
   where
@@ -818,7 +827,7 @@ depDemandsToVector ::
     -- | dep DB name, for error messages
     Text ->
     Database ->
-    M.Map (UUID, UUID) (Double, Text) ->
+    SupplierDemands ->
     Either Text Vector
 depDemandsToVector unitConfig depDbName depDb demands = do
     converted <- traverse convertEntry (M.toList demands)
