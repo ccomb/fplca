@@ -73,6 +73,7 @@ library
                      , CLI.Client
                      , CLI.Repl
                      , EcoSpold.Common
+                     , EcoSpold.Cutoff
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser

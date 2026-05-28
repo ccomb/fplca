@@ -7,6 +7,7 @@ import qualified Data.Map.Strict as M
 import Data.UUID (nil)
 import Test.Hspec
 
+import EcoSpold.Cutoff
 import EcoSpold.Parser1
 import Types
 
