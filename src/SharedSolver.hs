@@ -39,9 +39,9 @@ module SharedSolver (
 ) where
 
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, withMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar, withMVar)
 import Control.Exception (SomeException, try)
-import Data.List (foldl', transpose)
+import Data.List (transpose)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
