@@ -673,19 +673,22 @@ filterTreeExport pat export =
         meta = (teTree export){tmTotalNodes = M.size filteredNodes}
      in export{teTree = meta, teNodes = filteredNodes, teEdges = filteredEdges}
 
-{- | Activities whose absolute cumulative value clears the threshold, plus the
-root activity (which we always surface, even if it falls below). Out-of-bounds
-roots become a zero-valued entry rather than crashing.
+{- | Activities whose absolute cumulative value clears the threshold. The root
+activity is always surfaced: above threshold it keeps its natural position;
+otherwise it is prepended (becoming node 0) with its actual supply value, or
+0 when out of bounds.
 -}
 selectSignificantActivities :: Double -> ProcessId -> [Double] -> [(ProcessId, Double)]
 selectSignificantActivities threshold rootPid supplyList =
-    let kept =
+    let aboveThreshold =
             [ (fromIntegral idx :: ProcessId, val)
             | (idx, val) <- zip [(0 :: Int) ..] supplyList
-            , abs val > threshold || idx == fromIntegral rootPid
+            , abs val > threshold
             ]
-        rootInBounds = fromIntegral rootPid < length supplyList
-     in if rootInBounds then kept else (rootPid, 0.0) : kept
+        rootValue = fromMaybe 0.0 (lookup (fromIntegral rootPid :: Int) (zip [0 ..] supplyList))
+     in if any ((== rootPid) . fst) aboveThreshold
+            then aboveThreshold
+            else (rootPid, rootValue) : aboveThreshold
 
 {- | True iff the exchange is a technosphere @Input@ whose link points at the
 given target activity. Waste exchanges aren't traversed by the graph builder
