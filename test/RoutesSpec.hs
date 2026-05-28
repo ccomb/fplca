@@ -62,6 +62,10 @@ import System.Process (
  )
 import Test.Hspec
 
+import API.Routes (serviceErrorToServerError)
+import Servant.Server (errHTTPCode)
+import Service (ServiceError (..))
+
 -- | Resources owned for the lifetime of the spec, threaded via beforeAll.
 data Booted = Booted
     { bManager :: Manager
@@ -171,7 +175,28 @@ doPost b path = do
     httpLbs req (bManager b)
 
 spec :: Spec
-spec
+spec = do
+    errorMappingSpec
+    integrationSpec
+
+-- | Pure regression guard for the ServiceError -> HTTP status contract. Lives
+-- outside the booted-server block so it runs everywhere (incl. Windows) and
+-- needs no loaded database.
+errorMappingSpec :: Spec
+errorMappingSpec = describe "serviceErrorToServerError (HTTP status contract)" $ do
+    it "maps InvalidUUID to 400 (malformed client id, never 5xx)" $
+        errHTTPCode (serviceErrorToServerError (InvalidUUID "x")) `shouldBe` 400
+    it "maps InvalidProcessId to 400" $
+        errHTTPCode (serviceErrorToServerError (InvalidProcessId "x")) `shouldBe` 400
+    it "maps ActivityNotFound to 404" $
+        errHTTPCode (serviceErrorToServerError (ActivityNotFound "x")) `shouldBe` 404
+    it "maps FlowNotFound to 404" $
+        errHTTPCode (serviceErrorToServerError (FlowNotFound "x")) `shouldBe` 404
+    it "maps MatrixError to 422" $
+        errHTTPCode (serviceErrorToServerError (MatrixError "x")) `shouldBe` 422
+
+integrationSpec :: Spec
+integrationSpec
     | Info.os == "mingw32" =
         describe "Routes integration (skipped on Windows)" $
             it "subprocess teardown deadlocks on this platform" pending

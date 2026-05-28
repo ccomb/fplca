@@ -13,9 +13,7 @@ When both arms fail, the resulting 'Failure' carries both messages.
 module Data.Validation (
     Validation (..),
     toEither,
-    fromEither,
     failure,
-    success,
 ) where
 
 import Data.List.NonEmpty (NonEmpty)
@@ -47,18 +45,7 @@ toEither :: Validation e a -> Either e a
 toEither (Failure e) = Left e
 toEither (Success a) = Right a
 
--- | Inject an 'Either' into 'Validation'. Use 'fromEither' to lift a
--- short-circuiting parser into an accumulating context.
-fromEither :: Either e a -> Validation e a
-fromEither (Left e) = Failure e
-fromEither (Right a) = Success a
-
 -- | Build a singleton-error failure. Convenient for 'NonEmpty'-keyed
 -- validators where each leaf check produces exactly one error message.
 failure :: e -> Validation (NonEmpty e) a
 failure = Failure . NE.singleton
-
--- | Inject a value into 'Success'. Symmetric to 'failure'; useful in
--- chains where readability is helped by an explicit constructor.
-success :: a -> Validation e a
-success = Success

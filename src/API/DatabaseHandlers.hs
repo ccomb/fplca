@@ -144,7 +144,7 @@ getDatabases = do
 
 -- | Load a database on demand
 loadDatabaseHandler :: Text -> AppM LoadDatabaseResponse
-loadDatabaseHandler dbName= do
+loadDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ loadDatabase dbManager dbName
     case eitherResult of
@@ -166,7 +166,7 @@ dependency databases. Lets the user recover from loads that happened in a
 suboptimal order without reloading the whole database.
 -}
 relinkDatabaseHandler :: Text -> AppM RelinkResponse
-relinkDatabaseHandler dbName= do
+relinkDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     res <- liftIO $ relinkDatabase dbManager dbName
     case res of
@@ -189,7 +189,7 @@ deleteDatabaseHandler dbName = do
 
 -- | Upload a new database
 uploadDatabaseHandler :: UploadRequest -> AppM UploadResponse
-uploadDatabaseHandler req= do
+uploadDatabaseHandler req = do
     dbManager <- asks aeDbManager
     -- Decode base64 ZIP data
     let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
@@ -324,7 +324,7 @@ formatToText UnknownFormat = "unknown"
 Returns completeness, missing suppliers, and dependency suggestions
 -}
 getDatabaseSetupHandler :: Text -> AppM DatabaseSetupInfo
-getDatabaseSetupHandler dbName= do
+getDatabaseSetupHandler dbName = do
     dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ getDatabaseSetupInfo dbManager dbName
     case eitherResult of
@@ -368,7 +368,7 @@ setDataPathHandler dbName body = do
 Builds matrices and makes it ready for queries
 -}
 finalizeDatabaseHandler :: Text -> AppM ActivateResponse
-finalizeDatabaseHandler dbName= do
+finalizeDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ finalizeDatabase dbManager dbName
     case eitherResult of
@@ -383,7 +383,7 @@ finalizeDatabaseHandler dbName= do
 Same flow as database upload but creates MethodConfig entry
 -}
 uploadMethodHandler :: UploadRequest -> AppM UploadResponse
-uploadMethodHandler req= do
+uploadMethodHandler req = do
     dbManager <- asks aeDbManager
     let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
     case zipDataResult of

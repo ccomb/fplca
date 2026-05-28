@@ -14,7 +14,7 @@ import API.Types (
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
-import Data.UUID (nil)
+import Data.UUID (nil, toText)
 import Service (
     ServiceError (..),
     buildUnitGroups,
@@ -37,9 +37,9 @@ spec = do
     -- validateUUID
     -- -----------------------------------------------------------------------
     describe "validateUUID" $ do
-        it "accepts a well-formed UUID" $
+        it "accepts a well-formed UUID and returns the parsed value" $
             case validateUUID "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" of
-                Right t -> t `shouldBe` "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                Right u -> toText u `shouldBe` "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
                 Left _ -> expectationFailure "Expected Right"
 
         it "rejects an empty string" $

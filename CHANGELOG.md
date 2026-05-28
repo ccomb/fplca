@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- API: service errors no longer surface as HTTP 5xx. `InvalidUUID` now returns
+  400 and `FlowNotFound` returns 404 (both were 500), so malformed client UUIDs
+  and missing flows are reported as client errors — matching the rest of the
+  cross-DB pipeline.
+
 ## [0.5.0] - 2026-02-02
 
 ### Added
