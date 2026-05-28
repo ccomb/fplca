@@ -129,11 +129,12 @@ data ServiceError
     | MatrixError Text -- Generic error from matrix computations
     deriving (Show)
 
--- | Validate UUID format
-validateUUID :: Text -> Either ServiceError Text
-validateUUID uuidText
-    | Just _ <- UUID.fromText uuidText = Right uuidText
-    | otherwise = Left $ InvalidUUID $ "Invalid UUID format: " <> uuidText
+-- | Validate UUID format, returning the parsed UUID so callers do not have to
+-- re-parse the text afterwards.
+validateUUID :: Text -> Either ServiceError UUID.UUID
+validateUUID uuidText = case UUID.fromText uuidText of
+    Just uuid -> Right uuid
+    Nothing -> Left $ InvalidUUID $ "Invalid UUID format: " <> uuidText
 
 -- | Parse ProcessId from text (activity_uuid_product_uuid format)
 parseProcessIdFromText :: Database -> Text -> Either ServiceError ProcessId

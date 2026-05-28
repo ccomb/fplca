@@ -9,7 +9,7 @@
 
 module API.Types where
 
-import API.JsonOptions (Stripped (..), strippedParseJSON, strippedToEncoding, strippedToJSON)
+import API.JsonOptions (Stripped (..))
 import Control.Lens ((&), (.~), (?~))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
@@ -1070,8 +1070,8 @@ data AggregationGroup = AggregationGroup
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped AggregationGroup)
 
--- JSON instances. All record types use API.JsonOptions.stripLowerPrefix
--- via the strippedToJSON/strippedToEncoding/strippedParseJSON helpers.
+-- JSON instances. Record types derive ToJSON/FromJSON/ToSchema via the
+-- API.JsonOptions.Stripped carrier, which strips the lowercase field prefix.
 -- Sum-only types (NodeType, EdgeType, FlowRole) keep default derivation.
 -- ToJSON / FromJSON / ToSchema for SearchResults a are standalone-derived
 -- alongside the data declaration above (line ~169).

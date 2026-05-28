@@ -18,6 +18,24 @@ import UnitConversion (defaultUnitConfig)
 spec :: Spec
 spec = do
     -- -----------------------------------------------------------------------
+    -- CrossDBLinkingStats Semigroup / Monoid
+    -- -----------------------------------------------------------------------
+    describe "CrossDBLinkingStats <>" $ do
+        it "sums unresolved-product counts per key and keeps the first blocker" $ do
+            let s1 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", (2, NoNameMatch))]} :: CrossDBLinkingStats
+                s2 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", (3, LocationUnavailable "FR")), ("maize", (1, NoNameMatch))]}
+                merged = s1 <> s2
+            M.lookup "wheat" (cdlUnresolvedProducts merged) `shouldBe` Just (5, NoNameMatch)
+            M.lookup "maize" (cdlUnresolvedProducts merged) `shouldBe` Just (1, NoNameMatch)
+
+        it "adds the scalar counters" $ do
+            let s1 = mempty{cdlTotalInputs = 4, cdlWasteExactLinks = 1} :: CrossDBLinkingStats
+                s2 = mempty{cdlTotalInputs = 6, cdlWasteAmbiguous = 2}
+            cdlTotalInputs (s1 <> s2) `shouldBe` 10
+            cdlWasteExactLinks (s1 <> s2) `shouldBe` 1
+            cdlWasteAmbiguous (s1 <> s2) `shouldBe` 2
+
+    -- -----------------------------------------------------------------------
     -- normalizeText
     -- -----------------------------------------------------------------------
     describe "normalizeText" $ do

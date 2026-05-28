@@ -282,6 +282,8 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
     tally (Just ByFuzzy) = one{msByFuzzy = 1}
+    -- 'NoMatch' is not produced by the current matchers; this row exists only
+    -- to keep the match exhaustive. Counts as unmatched if ever introduced.
     tally (Just NoMatch) = one{msUnmatched = 1}
 
 {- | Precomputed CF lookup tables for one (database, method) pair.
