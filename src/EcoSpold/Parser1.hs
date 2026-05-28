@@ -17,11 +17,6 @@ module EcoSpold.Parser1 (
     -- * Pure helpers (exported for testing)
     generateFlowUUID,
     generateUnitUUID,
-    applyCutoffStrategy,
-    hasReferenceProduct,
-    removeZeroAmountCoproducts,
-    assignSingleProductAsReference,
-    isProductionExchange,
 ) where
 
 import Control.Monad (forM_)
@@ -36,6 +31,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement, nonEmptyText)
+import EcoSpold.Cutoff (applyCutoffStrategy)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
 import qualified Xeno.SAX as X
@@ -481,77 +477,6 @@ streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity,
 streamParseActivityAndFlowsFromFile1 path = do
     !xmlContent <- BS.readFile path
     return (parseWithXeno xmlContent)
-
--- | Apply cut-off strategy (same logic as EcoSpold2)
-applyCutoffStrategy :: Activity -> Either String Activity
-applyCutoffStrategy activity =
-    let filteredExchanges = removeZeroAmountCoproducts (exchanges activity)
-        updatedActivity = activity{exchanges = filteredExchanges}
-        finalActivity =
-            if hasReferenceProduct updatedActivity
-                then updatedActivity
-                else assignSingleProductAsReference updatedActivity
-     in if hasReferenceProduct finalActivity
-            then Right finalActivity
-            else Left $ "Activity has no reference product: " ++ T.unpack (activityName activity)
-
--- | Check if activity has any reference product
-hasReferenceProduct :: Activity -> Bool
-hasReferenceProduct act = any exchangeIsReference (exchanges act)
-
--- | Remove production exchanges with zero amounts
-removeZeroAmountCoproducts :: [Exchange] -> [Exchange]
-removeZeroAmountCoproducts = filter keepExchange
-  where
-    keepExchange TechnosphereExchange{techRole = ReferenceProduct} = True
-    keepExchange TechnosphereExchange{techRole = ReferenceInput} = True
-    keepExchange TechnosphereExchange{techRole = Input} = True
-    keepExchange TechnosphereExchange{techRole = Coproduct, techAmount = amount} = amount /= 0.0
-    keepExchange BiosphereExchange{} = True
-    keepExchange WasteExchange{} = True
-
--- | Assign single product as reference product
-assignSingleProductAsReference :: Activity -> Activity
-assignSingleProductAsReference act =
-    let productionExchanges = [ex | ex <- exchanges act, isProductionExchange ex]
-        nonZeroProduction = [ex | ex <- productionExchanges, exchangeAmount ex /= 0.0]
-     in case nonZeroProduction of
-            [singleProduct] ->
-                let updatedExchanges = map (updateReferenceProduct singleProduct) (exchanges act)
-                 in act{exchanges = updatedExchanges}
-            _ -> act
-
--- | Check if exchange is production exchange (technosphere output)
-isProductionExchange :: Exchange -> Bool
-isProductionExchange TechnosphereExchange{techRole = ReferenceProduct} = True
-isProductionExchange TechnosphereExchange{techRole = Coproduct} = True
-isProductionExchange TechnosphereExchange{techRole = Input} = False
-isProductionExchange TechnosphereExchange{techRole = ReferenceInput} = False
-isProductionExchange BiosphereExchange{} = False
-isProductionExchange WasteExchange{} = False -- waste outputs aren't "production" in the SimaPro sense
-
--- | Update reference product flag
-updateReferenceProduct :: Exchange -> Exchange -> Exchange
-updateReferenceProduct target current
-    | exchangeFlowId target == exchangeFlowId current = markAsReference current
-    | otherwise = unmarkAsReference current
-
--- | Promote a production exchange to reference product
-markAsReference :: Exchange -> Exchange
-markAsReference ex@TechnosphereExchange{} = ex{techRole = ReferenceProduct}
-markAsReference ex@BiosphereExchange{} = ex
-markAsReference ex@WasteExchange{} = ex -- waste flows can't be promoted to reference product
-
--- | Demote a reference role back to non-reference (preserving input/output direction)
-unmarkAsReference :: Exchange -> Exchange
-unmarkAsReference ex@TechnosphereExchange{techRole = role} = ex{techRole = demote role}
-  where
-    demote ReferenceProduct = Coproduct
-    demote ReferenceInput = Input
-    demote Coproduct = Coproduct
-    demote Input = Input
-unmarkAsReference ex@BiosphereExchange{} = ex
-unmarkAsReference ex@WasteExchange{} = ex
 
 -- ============================================================================
 -- Multi-dataset file support
