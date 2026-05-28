@@ -2,7 +2,7 @@
 
 **VoLCA** is a Life Cycle Assessment engine that turns LCA databases into inspectable, queryable answers — fast.
 
-It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds supply chain dependency trees, computes life cycle inventories using sparse matrix algebra, and applies characterization methods for impact assessment. Everything runs in-memory against your own data.
+It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel databases, builds supply chain dependency trees, computes life cycle inventories using sparse matrix algebra, and applies characterization methods for impact assessment. Everything runs in-memory against your own data.
 
 ## What It Does
 
@@ -19,7 +19,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, and ILCD process databases, builds s
 
 ## Key Features
 
-- **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets
+- **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets, Brightway Excel (.xlsx)
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
 - **Cross-DB what-if substitutions**: Swap an upstream activity at any depth — including suppliers in dependency databases — and recompute inventory and impacts through one endpoint
@@ -555,7 +555,7 @@ docker run -p 8080:8080 -v /path/to/data:/data volca
 cabal test --test-show-details=streaming
 ```
 
-Tests cover matrix construction (sign convention), inventory calculation (golden values), parsers (EcoSpold1/2, ILCD, SimaPro, classification fields), and matrix export format compliance.
+Tests cover matrix construction (sign convention), inventory calculation (golden values), parsers (EcoSpold1/2, ILCD, SimaPro, Brightway Excel, classification fields), and matrix export format compliance.
 
 ---
 

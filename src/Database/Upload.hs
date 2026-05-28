@@ -31,6 +31,7 @@ module Database.Upload (
     slugify,
 ) where
 
+import Codec.Archive.Zip (findEntryByPath, toArchiveOrFail)
 import Control.Exception (SomeException, try)
 import Control.Monad (filterM, forM)
 import Data.Aeson (FromJSON (..), ToJSON (..), withText)
@@ -39,6 +40,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAlphaNum, toLower)
 import Data.List (isPrefixOf, isSuffixOf, sortOn)
+import Data.Maybe (isJust)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -60,6 +62,7 @@ data DatabaseFormat
     | EcoSpold2 -- EcoSpold v2 XML format
     | ILCDProcess -- ILCD process dataset format
     | OpenLcaJsonLd -- openLCA JSON-LD (single ImpactCategory document)
+    | BrightwayExcel -- Brightway Excel (.xlsx) inventory format
     | UnknownFormat -- Could not detect format
     deriving (Show, Eq, Generic)
 
@@ -69,6 +72,7 @@ instance ToJSON DatabaseFormat where
     toJSON SimaProCSV = A.String "SimaPro CSV"
     toJSON ILCDProcess = A.String "ILCD"
     toJSON OpenLcaJsonLd = A.String "openLCA JSON-LD"
+    toJSON BrightwayExcel = A.String "Brightway Excel"
     toJSON UnknownFormat = A.String ""
 
 instance FromJSON DatabaseFormat where
@@ -78,6 +82,7 @@ instance FromJSON DatabaseFormat where
         "SimaPro CSV" -> pure SimaProCSV
         "ILCD" -> pure ILCDProcess
         "openLCA JSON-LD" -> pure OpenLcaJsonLd
+        "Brightway Excel" -> pure BrightwayExcel
         _ -> pure UnknownFormat
 
 -- | Progress event for upload/loading operations
@@ -163,6 +168,7 @@ handleUpload uploadsDir UploadData{..} reportProgress = do
 -- | Supported archive format (detected by magic bytes)
 data ArchiveFormat
     = ArchiveZip -- ZIP: 50 4B (PK)
+    | ArchiveXlsx -- Brightway Excel .xlsx: an OOXML zip (50 4B) carrying xl/workbook.xml
     | Archive7z -- 7z:  37 7A BC AF 27 1C
     | ArchiveGzip -- gzip (tar.gz): 1F 8B
     | ArchiveXz -- XZ (tar.xz): FD 37 7A 58 5A 00
@@ -176,7 +182,7 @@ data ArchiveFormat
 detectArchiveFormat :: BL.ByteString -> ArchiveFormat
 detectArchiveFormat content
     | BL.null content = ArchiveUnknown
-    | matchesMagic [0x50, 0x4B] = ArchiveZip
+    | matchesMagic [0x50, 0x4B] = if isXlsx then ArchiveXlsx else ArchiveZip
     | matchesMagic [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] = Archive7z
     | matchesMagic [0x1F, 0x8B] = ArchiveGzip
     | matchesMagic [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] = ArchiveXz
@@ -187,6 +193,13 @@ detectArchiveFormat content
   where
     bytes = BL.unpack (BL.take 10 content)
     matchesMagic magic = take (length magic) bytes == magic
+    -- An .xlsx is a zip (same PK magic as a database archive), so it can only be
+    -- told apart by its contents: openpyxl/bw2io always writes xl/workbook.xml.
+    -- Routing it here keeps the package intact instead of letting extractZip
+    -- explode it into XML parts that detectDatabaseFormat can't recognise.
+    isXlsx = case toArchiveOrFail content of
+        Left _ -> False
+        Right archive -> isJust (findEntryByPath "xl/workbook.xml" archive)
     -- Check for XML declaration "<?xml" (0x3C 0x3F 0x78 0x6D 0x6C)
     -- or "<ecoSpold" (0x3C 0x65 0x63 0x6F)
     -- or UTF-8 BOM (0xEF 0xBB 0xBF) followed by "<?xml"
@@ -237,6 +250,12 @@ extractUpload content targetDir = do
         ArchivePlainCSV -> do
             -- Plain CSV: write directly
             BL.writeFile (targetDir </> "data.csv") content
+            return $ Right ()
+        ArchiveXlsx -> do
+            -- Brightway Excel: keep the .xlsx (an OOXML zip) intact so the loader
+            -- dispatches on the extension; extracting it would scatter the XML
+            -- parts and detectDatabaseFormat would fall through to UnknownFormat.
+            BL.writeFile (targetDir </> "data.xlsx") content
             return $ Right ()
         ArchiveUnknown ->
             return $ Left "Unsupported file format. Please upload a ZIP, 7z, tar.gz, tar.xz archive, XML, CSV, or openLCA JSON-LD file."
@@ -406,6 +425,7 @@ extractArchive format archiveData targetDir = do
             ArchiveGzip -> ".tar.gz"
             ArchiveXz -> ".tar.xz"
             ArchiveZip -> ".tar"
+            ArchiveXlsx -> ".tar"
             Archive7z -> ".tar"
             ArchivePlainXML -> ".tar"
             ArchivePlainJSON -> ".tar"
@@ -433,6 +453,7 @@ extractArchive format archiveData targetDir = do
         ArchiveGzip -> "tar.gz"
         ArchiveXz -> "tar.xz"
         ArchiveZip -> "archive"
+        ArchiveXlsx -> "archive"
         Archive7z -> "archive"
         ArchivePlainXML -> "archive"
         ArchivePlainJSON -> "archive"
@@ -623,6 +644,7 @@ countDataFiles d format = do
     isDataFile EcoSpold2 f = ".spold" `isSuffixOf` map toLower f
     isDataFile ILCDProcess f = ".xml" `isSuffixOf` map toLower f
     isDataFile OpenLcaJsonLd f = ".json" `isSuffixOf` map toLower f
+    isDataFile BrightwayExcel f = ".xlsx" `isSuffixOf` map toLower f
     isDataFile UnknownFormat _ = True
 
 -- | Recursively list all files in a directory
@@ -648,6 +670,7 @@ detectDatabaseFormat path = do
             let ext = map toLower (takeExtension path)
             case ext of
                 ".spold" -> return EcoSpold2
+                ".xlsx" -> return BrightwayExcel
                 ".xml" -> do
                     isEcoSpold1 <- checkForEcoSpold1 [path]
                     return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
@@ -669,26 +692,30 @@ detectDatabaseFormat path = do
                             fs <- listDirectoryRecursive path
                             let extensions = map (map toLower . takeExtension) fs
                             let hasSpold = ".spold" `elem` extensions
+                                hasXlsx = ".xlsx" `elem` extensions
                                 hasXml = ".xml" `elem` extensions
                                 hasCsv = ".csv" `elem` extensions
                                 jsonFiles = [f | f <- fs, map toLower (takeExtension f) == ".json"]
                             if hasSpold
                                 then return EcoSpold2
                                 else
-                                    if hasXml
-                                        then do
-                                            isEcoSpold1 <- checkForEcoSpold1 fs
-                                            return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                                    if hasXlsx
+                                        then return BrightwayExcel
                                         else
-                                            if hasCsv
+                                            if hasXml
                                                 then do
-                                                    isSimaPro <- checkForSimaProCSV fs
-                                                    return $ if isSimaPro then SimaProCSV else UnknownFormat
-                                                else case jsonFiles of
-                                                    [] -> return UnknownFormat
-                                                    (j : _) -> do
-                                                        isOlca <- isOlcaJsonFile j
-                                                        return $ if isOlca then OpenLcaJsonLd else UnknownFormat
+                                                    isEcoSpold1 <- checkForEcoSpold1 fs
+                                                    return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                                                else
+                                                    if hasCsv
+                                                        then do
+                                                            isSimaPro <- checkForSimaProCSV fs
+                                                            return $ if isSimaPro then SimaProCSV else UnknownFormat
+                                                        else case jsonFiles of
+                                                            [] -> return UnknownFormat
+                                                            (j : _) -> do
+                                                                isOlca <- isOlcaJsonFile j
+                                                                return $ if isOlca then OpenLcaJsonLd else UnknownFormat
                 else return UnknownFormat
 
 -- | Check if XML files are EcoSpold1 format

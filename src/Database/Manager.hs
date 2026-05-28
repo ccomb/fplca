@@ -2057,6 +2057,7 @@ discoverCandidatePaths dbConfig = do
                 Upload.SimaProCSV -> "SimaPro CSV"
                 Upload.ILCDProcess -> "ILCD"
                 Upload.OpenLcaJsonLd -> "openLCA JSON-LD"
+                Upload.BrightwayExcel -> "Brightway Excel"
                 Upload.UnknownFormat -> "Unknown"
         return PathCandidate{pcPath = T.pack rel, pcFormat = label, pcFileCount = count}
   where

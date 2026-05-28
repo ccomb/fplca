@@ -72,6 +72,7 @@ module Database.Loader (
     fixExchangeLinkByName,
 ) where
 
+import qualified BrightwayExcel.Parser as BrightwayExcel
 import qualified Codec.Compression.Zstd as Zstd
 import Control.Concurrent.Async
 import Control.DeepSeq (force)
@@ -501,6 +502,7 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
         then case map toLower (takeExtension path) of
             ".csv" -> loadSimaProCSV unitConfig path
             ".xml" -> loadSingleEcoSpold1File locationAliases path
+            ".xlsx" -> loadBrightwayExcel unitConfig path
             _ -> return $ Left $ T.pack $ "Unsupported file type: " ++ path
         else
             if isDir
@@ -532,6 +534,30 @@ loadSimaProCSV unitConfig csvPath = do
 
             -- Fix activity links using supplier lookup (same as EcoSpold1)
             Right <$> fixSimaProActivityLinks simpleDb
+
+{- | Load a Brightway Excel (.xlsx) inventory.
+
+Mirrors 'loadSimaProCSV': the parser returns the same 5-tuple, activities are
+keyed @(activityUUID, referenceProductUUID)@, and within-file supplier
+references are resolved by the shared name-based pass. Cross-database links to a
+background database (e.g. ecoinvent) are resolved later by
+'fixActivityLinksWithCrossDB', exactly as for SimaPro and EcoSpold.
+-}
+loadBrightwayExcel :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadBrightwayExcel unitConfig xlsxPath = do
+    parsed <- BrightwayExcel.parseBrightwayExcel unitConfig xlsxPath
+    case parsed of
+        Left err -> return $ Left err
+        Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
+            | null activities -> return $ Left "No activities found in Brightway Excel file."
+            | otherwise -> do
+                let procMap =
+                        M.fromList
+                            [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
+                            | act <- activities
+                            ]
+                    simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
+                Right <$> fixSimaProActivityLinks simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references
 Uses name-only matching (no location required) for SimaPro technosphere inputs

@@ -174,6 +174,7 @@ formatMetaToml UploadMeta{..} =
     formatToText SimaProCSV = "simapro"
     formatToText ILCDProcess = "ilcd"
     formatToText OpenLcaJsonLd = "openlca-jsonld"
+    formatToText BrightwayExcel = "brightway-excel"
     formatToText UnknownFormat = "unknown"
 
 -- | Scan a directory for subdirectories with meta.toml
