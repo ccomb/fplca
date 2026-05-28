@@ -73,6 +73,7 @@ library
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser
+                     , BrightwayExcel.Parser
                      , Expr
                      , ILCD.Parser
                      , Plugin.Types
@@ -89,6 +90,7 @@ library
                      , text
                      , containers
                      , xeno
+                     , zip-archive
                      , filepath
                      , directory
                      , mtl
@@ -190,6 +192,7 @@ test-suite lca-tests
                      , MatrixExportSpec
                      , MethodSpec
                      , SimaProParserSpec
+                     , BrightwayExcelSpec
                      , UnitConversionSpec
                      , PluginSpec
                      , ServerSpec
@@ -251,6 +254,7 @@ test-suite lca-tests
                      , containers
                      , vector
                      , bytestring
+                     , zip-archive
                      , temporary
                      , time
                      , aeson

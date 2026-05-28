@@ -60,6 +60,7 @@ data DatabaseFormat
     | EcoSpold2 -- EcoSpold v2 XML format
     | ILCDProcess -- ILCD process dataset format
     | OpenLcaJsonLd -- openLCA JSON-LD (single ImpactCategory document)
+    | BrightwayExcel -- Brightway Excel (.xlsx) inventory format
     | UnknownFormat -- Could not detect format
     deriving (Show, Eq, Generic)
 
@@ -69,6 +70,7 @@ instance ToJSON DatabaseFormat where
     toJSON SimaProCSV = A.String "SimaPro CSV"
     toJSON ILCDProcess = A.String "ILCD"
     toJSON OpenLcaJsonLd = A.String "openLCA JSON-LD"
+    toJSON BrightwayExcel = A.String "Brightway Excel"
     toJSON UnknownFormat = A.String ""
 
 instance FromJSON DatabaseFormat where
@@ -78,6 +80,7 @@ instance FromJSON DatabaseFormat where
         "SimaPro CSV" -> pure SimaProCSV
         "ILCD" -> pure ILCDProcess
         "openLCA JSON-LD" -> pure OpenLcaJsonLd
+        "Brightway Excel" -> pure BrightwayExcel
         _ -> pure UnknownFormat
 
 -- | Progress event for upload/loading operations
@@ -623,6 +626,7 @@ countDataFiles d format = do
     isDataFile EcoSpold2 f = ".spold" `isSuffixOf` map toLower f
     isDataFile ILCDProcess f = ".xml" `isSuffixOf` map toLower f
     isDataFile OpenLcaJsonLd f = ".json" `isSuffixOf` map toLower f
+    isDataFile BrightwayExcel f = ".xlsx" `isSuffixOf` map toLower f
     isDataFile UnknownFormat _ = True
 
 -- | Recursively list all files in a directory
@@ -648,6 +652,7 @@ detectDatabaseFormat path = do
             let ext = map toLower (takeExtension path)
             case ext of
                 ".spold" -> return EcoSpold2
+                ".xlsx" -> return BrightwayExcel
                 ".xml" -> do
                     isEcoSpold1 <- checkForEcoSpold1 [path]
                     return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
@@ -669,26 +674,30 @@ detectDatabaseFormat path = do
                             fs <- listDirectoryRecursive path
                             let extensions = map (map toLower . takeExtension) fs
                             let hasSpold = ".spold" `elem` extensions
+                                hasXlsx = ".xlsx" `elem` extensions
                                 hasXml = ".xml" `elem` extensions
                                 hasCsv = ".csv" `elem` extensions
                                 jsonFiles = [f | f <- fs, map toLower (takeExtension f) == ".json"]
                             if hasSpold
                                 then return EcoSpold2
                                 else
-                                    if hasXml
-                                        then do
-                                            isEcoSpold1 <- checkForEcoSpold1 fs
-                                            return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                                    if hasXlsx
+                                        then return BrightwayExcel
                                         else
-                                            if hasCsv
+                                            if hasXml
                                                 then do
-                                                    isSimaPro <- checkForSimaProCSV fs
-                                                    return $ if isSimaPro then SimaProCSV else UnknownFormat
-                                                else case jsonFiles of
-                                                    [] -> return UnknownFormat
-                                                    (j : _) -> do
-                                                        isOlca <- isOlcaJsonFile j
-                                                        return $ if isOlca then OpenLcaJsonLd else UnknownFormat
+                                                    isEcoSpold1 <- checkForEcoSpold1 fs
+                                                    return $ if isEcoSpold1 then EcoSpold1 else UnknownFormat
+                                                else
+                                                    if hasCsv
+                                                        then do
+                                                            isSimaPro <- checkForSimaProCSV fs
+                                                            return $ if isSimaPro then SimaProCSV else UnknownFormat
+                                                        else case jsonFiles of
+                                                            [] -> return UnknownFormat
+                                                            (j : _) -> do
+                                                                isOlca <- isOlcaJsonFile j
+                                                                return $ if isOlca then OpenLcaJsonLd else UnknownFormat
                 else return UnknownFormat
 
 -- | Check if XML files are EcoSpold1 format

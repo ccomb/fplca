@@ -305,6 +305,7 @@ formatToText EcoSpold1 = "ecospold1"
 formatToText EcoSpold2 = "ecospold2"
 formatToText ILCDProcess = "ilcd"
 formatToText OpenLcaJsonLd = "openlca-jsonld"
+formatToText BrightwayExcel = "brightway-excel"
 formatToText UnknownFormat = "unknown"
 
 --------------------------------------------------------------------------------
