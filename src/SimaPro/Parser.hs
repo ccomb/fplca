@@ -34,6 +34,7 @@ module SimaPro.Parser (
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
+import Control.Monad (mfilter)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
@@ -41,7 +42,7 @@ import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
 import Data.List (dropWhileEnd)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isNothing)
+import Data.Maybe (catMaybes, isNothing, maybeToList)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -240,6 +241,41 @@ data ParseAcc = ParseAcc
     , paProjInputParams :: ![(Text, Text)]
     , paProjCalcParams :: ![(Text, Text)]
     }
+
+-- ============================================================================
+-- Global parameter bundle
+-- ============================================================================
+
+{- | Parameters declared outside any single process block — database- and
+project-level Input/Calculated params — threaded into every block's evaluation
+environment. The 'Monoid' instance merges the params each parallel worker
+collected from its own chunk.
+-}
+data GlobalParams = GlobalParams
+    { gpDbInput :: ![(Text, Text)]
+    , gpDbCalc :: ![(Text, Text)]
+    , gpProjInput :: ![(Text, Text)]
+    , gpProjCalc :: ![(Text, Text)]
+    }
+    deriving (Show, Eq, Generic)
+
+instance NFData GlobalParams
+
+instance Semigroup GlobalParams where
+    GlobalParams a1 b1 c1 d1 <> GlobalParams a2 b2 c2 d2 =
+        GlobalParams (a1 <> a2) (b1 <> b2) (c1 <> c2) (d1 <> d2)
+
+instance Monoid GlobalParams where
+    mempty = GlobalParams [] [] [] []
+
+-- | Output of parsing one contiguous chunk of lines.
+data WorkerResult = WorkerResult
+    { wrBlocks :: ![ProcessBlock]
+    , wrParams :: !GlobalParams
+    }
+    deriving (Show, Eq, Generic)
+
+instance NFData WorkerResult
 
 -- ============================================================================
 -- Header Parsing
@@ -760,140 +796,121 @@ resolveAmount env raw fallback
             Right v -> v
             Left _ -> fallback
 
+{- | Build the resolved parameter environment and the raw-expression map from
+ordered parameter groups. Input groups are resolved with a single pass each;
+calc groups iterate to a fixed point (to resolve forward references where a
+param depends on one defined later in the CSV). Groups are ordered low→high
+precedence: database, project, process.
+-}
+buildParamEnv :: [[(Text, Text)]] -> [[(Text, Text)]] -> (M.Map Text Double, M.Map Text Text)
+buildParamEnv inputGroups calcGroups =
+    ( foldl' evalToFixpoint (foldl' (foldl' evalParam) M.empty inputGroups) calcGroups
+    , M.fromList (concat (inputGroups ++ calcGroups))
+    )
+  where
+    evalParam acc (name, rawVal) =
+        either (const acc) (\v -> M.insert name v acc) (Expr.evaluate acc rawVal)
+    evalToFixpoint acc params =
+        let acc' = foldl' evalParam acc params
+         in if M.size acc' == M.size acc then acc' else evalToFixpoint acc' params
+
 {- | Convert ProcessBlock to list of Activities (one per product)
 This matches EcoSpold behavior where multi-product processes create multiple activities
 Global params (db + project level) are passed in and combined with process-level params.
 -}
 processBlockToActivity ::
     UnitConversion.UnitConfig ->
-    ([(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)]) ->
+    GlobalParams ->
     ProcessBlock ->
     [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])]
-processBlockToActivity unitCfg (dbInputPs, dbCalcPs, projInputPs, projCalcPs) ProcessBlock{..} =
-    let
-        -- Build parameter environment: input params first, then calculated params
-        evalParam acc (name, rawVal) = case Expr.evaluate acc rawVal of
-            Right v -> M.insert name v acc
-            Left _ -> acc
-        -- Fixed-point iteration for calculated params: repeat until no new variables resolve
-        -- (handles forward references where a param depends on one defined later in the CSV)
-        evalCalcParams acc params =
-            let acc' = foldl' evalParam acc params
-             in if M.size acc' == M.size acc then acc' else evalCalcParams acc' params
-        env0 = foldl' evalParam M.empty (reverse dbInputPs)
-        env1 = foldl' evalParam env0 (reverse projInputPs)
-        env2 = foldl' evalParam env1 (reverse pbInputParams)
-        env3 = evalCalcParams env2 (reverse dbCalcPs)
-        env4 = evalCalcParams env3 (reverse projCalcPs)
-        env = evalCalcParams env4 (reverse pbCalcParams)
+processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
+    map makeActivity pbProducts
+  where
+    (env, exprMap) =
+        buildParamEnv
+            (reverse <$> [gpDbInput, gpProjInput, pbInputParams])
+            (reverse <$> [gpDbCalc, gpProjCalc, pbCalcParams])
 
-        -- Raw expression map for re-evaluation
-        allExprs =
-            reverse dbInputPs
-                ++ reverse projInputPs
-                ++ reverse pbInputParams
-                ++ reverse dbCalcPs
-                ++ reverse projCalcPs
-                ++ reverse pbCalcParams
-        exprMap = M.fromList allExprs
+    -- Extract location from process name if not specified.
+    (cleanProcessNameRaw, locFromName) = extractLocation pbName
+    location =
+        if T.null pbLocation || T.toLower pbLocation == "unspecified"
+            then locFromName
+            else pbLocation
+    -- Trimmed Process name (without curly-brace location tag). Empty when the
+    -- SimaPro "Process name" field is empty (typical for mono-product blocks
+    -- where only the Product line carries the human-readable name).
+    processNameTrimmed = T.strip cleanProcessNameRaw
 
-        -- Extract location from process name if not specified
-        (cleanProcessNameRaw, locFromName) = extractLocation pbName
-        location = if T.null pbLocation || T.toLower pbLocation == "unspecified" then locFromName else pbLocation
-        -- Trimmed Process name (without curly-brace location tag). Empty when
-        -- the SimaPro "Process name" field is empty (typical for mono-product
-        -- blocks where only the Product line carries the human-readable name).
-        processNameTrimmed = T.strip cleanProcessNameRaw
+    -- Convert each section's rows to (exchange, flow, unit) triples in one pass.
+    -- 'Final waste flows' route to WasteExchange so the cross-DB linker doesn't
+    -- tally them as missing suppliers (they're end-of-life markers, not demands).
+    (avoidedExs, avoidedFlows, avoidedUnits) =
+        unzip3 (productToExchange unitCfg env False <$> pbAvoidedProducts)
+    (techMaybeExs, techFlows, techUnits) =
+        unzip3 (techRowToExchange env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
+    (bioExs, bioFlows, bioUnits) =
+        unzip3 $
+            (bioRowToExchange env True "resource" <$> pbResources)
+                ++ (bioRowToExchange env False "air" <$> pbEmissionsAir)
+                ++ (bioRowToExchange env False "water" <$> pbEmissionsWater)
+                ++ (bioRowToExchange env False "soil" <$> pbEmissionsSoil)
+    (wasteExs, wasteFlows, wasteUnits) =
+        unzip3 (wasteRowToExchange env <$> pbFinalWaste)
 
-        -- Convert all rows in one pass, collecting exchanges/flows/units together
-        avoidedTriples = map (productToExchange unitCfg env False) pbAvoidedProducts
-        techTriples = map (techRowToExchange env) (pbMaterials ++ pbElectricity)
-        treatmentTriples = map (techRowToExchange env) pbWasteToTreatment
-        -- SimaPro's 'Final waste flows' section: outputs the activity 'throws
-        -- away' with no modelled treatment in the dataset. Route to
-        -- WasteExchange so the cross-DB linker doesn't tally them as missing
-        -- suppliers (they're end-of-life markers, not demands).
-        finalWasteTriples = map (wasteRowToExchange env) pbFinalWaste
-        bioTriples =
-            map (bioRowToExchange env True "resource") pbResources
-                ++ map (bioRowToExchange env False "air") pbEmissionsAir
-                ++ map (bioRowToExchange env False "water") pbEmissionsWater
-                ++ map (bioRowToExchange env False "soil") pbEmissionsSoil
+    -- Exchanges/flows/units shared by every coproduct (scaled per product below).
+    -- Tech rows with a zero amount yield no exchange but still contribute a flow.
+    sharedExchanges = avoidedExs ++ catMaybes techMaybeExs ++ bioExs ++ wasteExs
+    sharedTechFlows = avoidedFlows ++ techFlows
+    sharedBioFlows = bioFlows
+    sharedWasteFlows = wasteFlows
+    sharedUnitNames =
+        S.toList . S.fromList $ unitName <$> (avoidedUnits ++ techUnits ++ bioUnits ++ wasteUnits)
 
-        -- Tech rows may have zero amounts (Maybe Exchange), others always have exchanges
-        techRowExchanges = [e | (Just e, _, _) <- techTriples ++ treatmentTriples]
-        techRowFlows = [f | (_, f, _) <- techTriples ++ treatmentTriples]
-        techRowUnits = [u | (_, _, u) <- techTriples ++ treatmentTriples]
+    -- Loop-invariant activity fields (independent of the coproduct).
+    descriptionLines = maybeToList (nonEmptyText pbComment)
+    nativeType = SimaProProcessType <$> nonEmptyText pbType
 
-        sharedExchanges =
-            map (\(e, _, _) -> e) avoidedTriples
-                ++ techRowExchanges
-                ++ map (\(e, _, _) -> e) bioTriples
-                ++ map (\(e, _, _) -> e) finalWasteTriples
-        sharedTechFlows = map (\(_, f, _) -> f) avoidedTriples ++ techRowFlows
-        sharedBioFlows = map (\(_, f, _) -> f) bioTriples
-        sharedWasteFlows = map (\(_, f, _) -> f) finalWasteTriples
-        sharedUnits =
-            S.toList . S.fromList $
-                map (\(_, _, u) -> unitName u) avoidedTriples
-                    ++ map unitName techRowUnits
-                    ++ map (\(_, _, u) -> unitName u) bioTriples
-                    ++ map (\(_, _, u) -> unitName u) finalWasteTriples
-
-        -- Create one activity per product
-        makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
-        makeActivity prod =
-            let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
-                effUnitName = unitName productUnit
-                allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
-                allocFraction = allocPercent / 100.0
-                (cleanProductName, locFromProduct) = extractLocation (prName prod)
-                effectiveLoc = if T.null location then locFromProduct else location
-                -- Activity name = Process name when present (so coproducts of
-                -- the same Process share one activityUUID via generateActivityUUID),
-                -- otherwise fall back to product name (mono-product blocks
-                -- with empty "Process name" field).
-                effectiveActivityName =
-                    if T.null processNameTrimmed then cleanProductName else processNameTrimmed
-                allocFormulaRaw = T.strip (prAllocRaw prod)
-                allocFormula =
-                    if T.null allocFormulaRaw || isNumericFormula allocFormulaRaw
-                        then Nothing
-                        else Just allocFormulaRaw
-                activity =
-                    Activity
-                        { activityName = effectiveActivityName
-                        , activityDescription = if T.null pbComment then [] else [pbComment]
-                        , activitySynonyms = M.empty
-                        , activityClassification =
-                            M.fromList $
-                                filter
-                                    (not . T.null . snd)
-                                    [ ("Category type", pbCategoryType)
-                                    , ("Category", prCategory prod)
-                                    ]
-                        , activityLocation = effectiveLoc
-                        , activityUnit = effUnitName
-                        , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
-                        , activityParams = env
-                        , activityParamExprs = exprMap
-                        , activityAllocationPercent = Just allocPercent
-                        , activityAllocationFormula = allocFormula
-                        , activityNativeType =
-                            if T.null pbType
-                                then Nothing
-                                else Just (SimaProProcessType{sptLabel = pbType})
-                        }
-                allTechFlows = productFlow : sharedTechFlows
-                allBioFlows = sharedBioFlows
-                allWasteFlows = sharedWasteFlows
-                allUnits =
-                    map
-                        (\name -> Unit (generateUnitUUID name) name name "")
-                        (S.toList . S.fromList $ effUnitName : sharedUnits)
-             in (activity, allTechFlows, allBioFlows, allWasteFlows, allUnits)
-     in
-        map makeActivity pbProducts
+    makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
+    makeActivity prod =
+        let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
+            effUnitName = unitName productUnit
+            allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
+            allocFraction = allocPercent / 100.0
+            (cleanProductName, locFromProduct) = extractLocation (prName prod)
+            effectiveLoc = if T.null location then locFromProduct else location
+            -- Activity name = Process name when present (so coproducts of the same
+            -- Process share one activityUUID via generateActivityUUID), otherwise
+            -- fall back to product name (mono-product blocks with empty field).
+            effectiveActivityName =
+                if T.null processNameTrimmed then cleanProductName else processNameTrimmed
+            allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
+            activity =
+                Activity
+                    { activityName = effectiveActivityName
+                    , activityDescription = descriptionLines
+                    , activitySynonyms = M.empty
+                    , activityClassification =
+                        M.fromList $
+                            filter
+                                (not . T.null . snd)
+                                [ ("Category type", pbCategoryType)
+                                , ("Category", prCategory prod)
+                                ]
+                    , activityLocation = effectiveLoc
+                    , activityUnit = effUnitName
+                    , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
+                    , activityParams = env
+                    , activityParamExprs = exprMap
+                    , activityAllocationPercent = Just allocPercent
+                    , activityAllocationFormula = allocFormula
+                    , activityNativeType = nativeType
+                    }
+            allUnits =
+                map
+                    (\name -> Unit (generateUnitUUID name) name name "")
+                    (S.toList . S.fromList $ effUnitName : sharedUnitNames)
+         in (activity, productFlow : sharedTechFlows, sharedBioFlows, sharedWasteFlows, allUnits)
 
 -- | True when the raw allocation cell is a plain decimal literal (no formula).
 isNumericFormula :: Text -> Bool
@@ -1250,7 +1267,7 @@ splitForWorkers numWorkers allLines
             chopAtEnds target endCount (l : acc) ls
 
 -- | Parse a contiguous range of lines into ProcessBlocks + global params.
-parseWorkerLines :: SimaProConfig -> [BS.ByteString] -> ([ProcessBlock], [(Text, Text)], [(Text, Text)], [(Text, Text)], [(Text, Text)])
+parseWorkerLines :: SimaProConfig -> [BS.ByteString] -> WorkerResult
 parseWorkerLines cfg ls =
     let initAcc =
             ParseAcc
@@ -1265,12 +1282,16 @@ parseWorkerLines cfg ls =
                 , paProjCalcParams = []
                 }
         finalAcc = foldl' processLine initAcc ls
-     in ( reverse (paBlocks finalAcc)
-        , paDbInputParams finalAcc
-        , paDbCalcParams finalAcc
-        , paProjInputParams finalAcc
-        , paProjCalcParams finalAcc
-        )
+     in WorkerResult
+            { wrBlocks = reverse (paBlocks finalAcc)
+            , wrParams =
+                GlobalParams
+                    { gpDbInput = paDbInputParams finalAcc
+                    , gpDbCalc = paDbCalcParams finalAcc
+                    , gpProjInput = paProjInputParams finalAcc
+                    , gpProjCalc = paProjCalcParams finalAcc
+                    }
+            }
 
 -- ============================================================================
 -- Main Entry Point
@@ -1304,13 +1325,8 @@ parseSimaProCSV unitCfg path = do
 
     -- Parse chunks in parallel — each worker folds its contiguous range
     results <- mapConcurrently (evaluate . force . parseWorkerLines cfg) workerChunks
-    let allBlocks = concatMap (\(b, _, _, _, _) -> b) results
-        globalParams =
-            ( concatMap (\(_, a, _, _, _) -> a) results
-            , concatMap (\(_, _, b, _, _) -> b) results
-            , concatMap (\(_, _, _, c, _) -> c) results
-            , concatMap (\(_, _, _, _, d) -> d) results
-            )
+    let allBlocks = concatMap wrBlocks results
+        globalParams = foldMap wrParams results
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
     converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
