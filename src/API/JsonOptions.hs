@@ -35,11 +35,14 @@ import GHC.Generics (Generic, Rep)
 stripLowerPrefix :: Options
 stripLowerPrefix =
     defaultOptions
-        { fieldLabelModifier = lowerFirst . dropWhile isLower
+        { fieldLabelModifier = stripPrefix
         }
   where
-    lowerFirst "" = ""
-    lowerFirst (c : cs) = toLower c : cs
+    -- Drop the lowercase Type-prefix (@fooBar -> bar@). An all-lowercase field
+    -- has no prefix boundary, so keep it verbatim rather than emit an empty key.
+    stripPrefix label = case dropWhile isLower label of
+        "" -> label
+        (c : cs) -> toLower c : cs
 
 strippedToJSON :: (Generic a, GToJSON' Value Zero (Rep a)) => a -> Value
 strippedToJSON = genericToJSON stripLowerPrefix
