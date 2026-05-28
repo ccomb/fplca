@@ -111,6 +111,12 @@ jobs:
           - name: macos-arm64
             runner: macos-15
             os: macos
+          # Intel macOS via GitHub's last x86_64 hosted label. GitHub retires
+          # x86_64 macOS entirely in Aug 2027 — migrate to arm64-only or a
+          # self-hosted Intel runner before then.
+          - name: macos-intel
+            runner: macos-15-intel
+            os: macos
     env:
       MACOSX_DEPLOYMENT_TARGET: ${{ needs.versions.outputs.macos_target }}
       # Skip the brew formula refresh and post-install cleanup on every
