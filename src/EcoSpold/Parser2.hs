@@ -4,6 +4,7 @@
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
 
+import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Maybe (catMaybes, fromMaybe)
@@ -224,14 +225,146 @@ ecoSpoldSpecialActivityTypeLabel = \case
     6 -> "Import activity"
     n -> "Unknown (code " <> T.pack (show n) <> ")"
 
+-- ============================================================================
+-- SAX state combinators (pure, allocation-neutral — inlined into the fold)
+-- ============================================================================
+
+-- | Concatenated, entity-decoded text accumulated since the element opened.
+accumText :: ParseState -> Text
+accumText = T.concat . reverse . map bsToText . psTextAccum
+
+-- | Pop one element off the path stack.
+popPath :: ParseState -> ParseState
+popPath st = st{psPath = drop 1 (psPath st)}
+
+-- | The common close-tag epilogue: pop the path and discard accumulated text.
+popText :: ParseState -> ParseState
+popText st = (popPath st){psTextAccum = []}
+
+-- | Is the element at the given depth (0 = currently-open tag) named @name@?
+pathAt :: Int -> BS.ByteString -> ParseState -> Bool
+pathAt depth name st = case drop depth (psPath st) of
+    (e : _) -> isElement e name
+    [] -> False
+
+-- | Transform the open exchange accumulator, leaving non-exchange contexts
+-- untouched. The exhaustive match lives here so the call sites stay wildcard-free.
+mapExchange ::
+    (IntermediateData -> IntermediateData) ->
+    (ElementaryData -> ElementaryData) ->
+    ElementContext ->
+    ElementContext
+mapExchange fi fe = \case
+    InIntermediateExchange d -> InIntermediateExchange (fi d)
+    InElementaryExchange d -> InElementaryExchange (fe d)
+    InActivityName -> InActivityName
+    InGeographyShortname -> InGeographyShortname
+    InGeneralCommentText i -> InGeneralCommentText i
+    Other -> Other
+
+-- | Apply per-kind updates to the open exchange accumulator, then pop path+text.
+onExchange ::
+    (IntermediateData -> IntermediateData) ->
+    (ElementaryData -> ElementaryData) ->
+    ParseState ->
+    ParseState
+onExchange fi fe st = popText st{psContext = mapExchange fi fe (psContext st)}
+
+-- | The currently-open intermediate exchange, if any.
+currentIntermediate :: ParseState -> Maybe IntermediateData
+currentIntermediate st = case psContext st of
+    InIntermediateExchange d -> Just d
+    InElementaryExchange _ -> Nothing
+    InActivityName -> Nothing
+    InGeographyShortname -> Nothing
+    InGeneralCommentText _ -> Nothing
+    Other -> Nothing
+
+-- | The currently-open elementary exchange, if any.
+currentElementary :: ParseState -> Maybe ElementaryData
+currentElementary st = case psContext st of
+    InElementaryExchange d -> Just d
+    InIntermediateExchange _ -> Nothing
+    InActivityName -> Nothing
+    InGeographyShortname -> Nothing
+    InGeneralCommentText _ -> Nothing
+    Other -> Nothing
+
+-- | Are we inside a @generalComment@ @\<text\>@ element?
+inGeneralComment :: ParseState -> Bool
+inGeneralComment st = case psContext st of
+    InGeneralCommentText _ -> True
+    InIntermediateExchange _ -> False
+    InElementaryExchange _ -> False
+    InActivityName -> False
+    InGeographyShortname -> False
+    Other -> False
+
+-- | Build a 'Unit', substituting placeholders for a missing unit name.
+mkUnit :: UUID -> Text -> Unit
+mkUnit uuid name
+    | T.null name = Unit uuid "UNKNOWN_UNIT" "?" ""
+    | otherwise = Unit uuid name name ""
+
+-- | Resolve in/out group: prefer the attribute value, fall back to the pending
+-- value captured from the child @\<inputGroup\>@ / @\<outputGroup\>@ element.
+resolveGroups :: Text -> Text -> ParseState -> (Text, Text)
+resolveGroups inG outG st =
+    ( if T.null inG then psPendingInputGroup st else inG
+    , if T.null outG then psPendingOutputGroup st else outG
+    )
+
+-- | Warning emitted (as a singleton, else empty) when an exchange has no unit name.
+missingUnitWarning :: String -> Text -> Text -> [String]
+missingUnitWarning kind flowId unitName =
+    [ "[WARNING] Missing unit name for "
+        ++ kind
+        ++ " exchange with flow ID: "
+        ++ T.unpack flowId
+        ++ " - using 'UNKNOWN_UNIT' placeholder"
+    | T.null unitName
+    ]
+
+-- | Parse a UUID, treating the empty string as the nil UUID (no warning).
+parseUUIDOrNil :: Text -> (UUID, Maybe String)
+parseUUIDOrNil t
+    | T.null t = (UUID.nil, Nothing)
+    | otherwise = parseUUID t
+
+-- | Second argument when non-blank, otherwise the fallback.
+nonBlankOr :: Text -> Text -> Text
+nonBlankOr fallback t = if T.null t then fallback else t
+
+addExchange :: Exchange -> ParseState -> ParseState
+addExchange ex st = st{psExchanges = ex : psExchanges st}
+
+addTechFlow :: TechnosphereFlow -> ParseState -> ParseState
+addTechFlow f st = st{psTechFlows = f : psTechFlows st}
+
+addBioFlow :: BiosphereFlow -> ParseState -> ParseState
+addBioFlow f st = st{psBioFlows = f : psBioFlows st}
+
+addWasteFlow :: WasteFlow -> ParseState -> ParseState
+addWasteFlow f st = st{psWasteFlows = f : psWasteFlows st}
+
+-- | Common exchange-close bookkeeping: leave the exchange context, pop the
+-- path/text, clear pending groups, record the unit and any warnings.
+finishExchange :: Unit -> [String] -> ParseState -> ParseState
+finishExchange unit warns st =
+    (popText st)
+        { psContext = Other
+        , psPendingInputGroup = ""
+        , psPendingOutputGroup = ""
+        , psUnits = unit : psUnits st
+        , psWarnings = warns ++ psWarnings st
+        }
+
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
-parseWithXeno xmlContent processId =
-    case X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent of
-        Left err -> Left (show err)
-        Right finalState -> case buildResult finalState processId of
-            Left err -> Left err
-            Right result -> Right (result, reverse $ psWarnings finalState)
+parseWithXeno xmlContent processId = do
+    finalState <- first show (X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent)
+    result <- buildResult finalState processId
+    pure (result, reverse (psWarnings finalState))
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -258,17 +391,12 @@ parseWithXeno xmlContent processId =
 
     -- Attribute handler - extract attributes
     attribute state name value =
-        let isInsideProperty = case psPath state of
-                [] -> False
-                (current : _) -> isElement current "property"
-            isOnComment = case psPath state of
-                [] -> False
-                (current : _) -> isElement current "comment"
+        let isInsideProperty = pathAt 0 "property" state
             -- xml:lang on the currently-open <comment>; remembered until closeTag.
             -- Attribute order is not significant for entity ref selection — we
             -- only need the lang at close-time.
             withLang st
-                | isOnComment && isElement name "xml:lang" = st{psPendingCommentLang = bsToText value}
+                | pathAt 0 "comment" state && isElement name "xml:lang" = st{psPendingCommentLang = bsToText value}
                 | otherwise = st
          in case psContext state of
                 InIntermediateExchange idata ->
@@ -297,9 +425,7 @@ parseWithXeno xmlContent processId =
                 _ ->
                     -- Attributes on the <activity> opening tag carry the
                     -- ecospold2 activityType and specialActivityType enums.
-                    let onActivity = case psPath state of
-                            (current : _) -> isElement current "activity"
-                            [] -> False
+                    let onActivity = pathAt 0 "activity" state
                         captured
                             | onActivity && isElement name "activityType" =
                                 state{psActivityType = bsToIntMaybe value}
@@ -321,60 +447,48 @@ parseWithXeno xmlContent processId =
     -- Close tag handler - finalize elements
     closeTag state tagName
         | isElement tagName "activityName" =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psActivityName = Just txt, psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
+            (popText state){psActivityName = Just (accumText state), psContext = Other}
         | isElement tagName "comment" =
             -- Capture <comment> text only when the immediate parent is the
             -- exchange itself, not a nested <property>. Property comments
             -- describe the property (e.g. "carbon content"), not the exchange.
-            let parent = case drop 1 (psPath state) of
-                    (p : _) -> p
-                    [] -> ""
-                txt = T.concat $ reverse $ map bsToText (psTextAccum state)
+            let txt = accumText state
                 lang = psPendingCommentLang state
-                popPath = state{psPath = drop 1 (psPath state), psTextAccum = [], psPendingCommentLang = ""}
-             in case psContext state of
-                    InIntermediateExchange idata
-                        | isElement parent "intermediateExchange" ->
-                            popPath{psContext = InIntermediateExchange idata{idComment = pickComment (idComment idata) lang txt}}
-                    InElementaryExchange edata
-                        | isElement parent "elementaryExchange" ->
-                            popPath{psContext = InElementaryExchange edata{edComment = pickComment (edComment edata) lang txt}}
-                    _ -> popPath
+                st' =
+                    onExchange
+                        (\d -> if pathAt 1 "intermediateExchange" state then d{idComment = pickComment (idComment d) lang txt} else d)
+                        (\d -> if pathAt 1 "elementaryExchange" state then d{edComment = pickComment (edComment d) lang txt} else d)
+                        state
+             in st'{psPendingCommentLang = ""}
         | isElement tagName "shortname" && psContext state == InGeographyShortname =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psLocation = Just txt, psContext = Other, psPath = drop 1 (psPath state), psTextAccum = []}
+            (popText state){psLocation = Just (accumText state), psContext = Other}
         | isElement tagName "intermediateExchange" =
-            case psContext state of
-                InIntermediateExchange idata ->
-                    -- Use pending group values if attribute values are empty
-                    let finalInputGroup = if T.null (idInputGroup idata) then psPendingInputGroup state else idInputGroup idata
-                        finalOutputGroup = if T.null (idOutputGroup idata) then psPendingOutputGroup state else idOutputGroup idata
-                        isInput = not $ T.null finalInputGroup
+            case currentIntermediate state of
+                Nothing -> popPath state
+                Just idata ->
+                    let (finalInputGroup, finalOutputGroup) = resolveGroups (idInputGroup idata) (idOutputGroup idata) state
+                        isInput = not (T.null finalInputGroup)
                         isOutput = T.null finalInputGroup
-                        -- Reference flow identification:
-                        -- Reference products are identified ONLY by outputGroup="0"
-                        -- This works for both normal production (positive amount) and waste treatment (negative amount)
-                        -- Negative inputs (like wastewater discharge) should NOT be considered reference products
-                        -- outputGroup valid values: 0=reference product, 1-3=byproducts, 4=allocated byproduct, 5=recyclable
+                        -- Reference products are identified ONLY by outputGroup="0"; this holds for
+                        -- normal production (positive amount) and waste treatment (negative amount).
+                        -- Negative inputs (e.g. wastewater discharge) are never reference products.
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
-                        -- Pattern B: intermediateExchange tagged as Waste via classification
-                        -- (System='By-product classification', Value='Waste'). When set, the flow
-                        -- represents a waste output that consumers treat via a treatment activity.
+                        -- Pattern B: intermediateExchange tagged Waste via classification
+                        -- (System='By-product classification', Value='Waste') — a waste output that
+                        -- consumers treat via a treatment activity.
                         isWasteFlow = M.lookup "By-product classification" (idClassifications idata) == Just "Waste"
-                        -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (idFlowId idata)
                         (unitUUID, unitWarn) = parseUUID (idUnitId idata)
-                        (linkUUID, linkWarn) =
-                            if T.null (idActivityLinkId idata)
-                                then (UUID.nil, Nothing)
-                                else parseUUID (idActivityLinkId idata)
-                        uuidWarnings = catMaybes [flowWarn, unitWarn, linkWarn]
+                        (linkUUID, linkWarn) = parseUUIDOrNil (idActivityLinkId idata)
+                        warns =
+                            catMaybes [flowWarn, unitWarn, linkWarn]
+                                ++ missingUnitWarning "intermediate" (idFlowId idata) (idUnitName idata)
                         techRoleFor
                             | isReferenceProduct = ReferenceProduct
                             | isInput = Input
                             | otherwise = Coproduct
-                        resolvedFlowName = if T.null (idFlowName idata) then idFlowId idata else idFlowName idata
+                        resolvedFlowName = nonBlankOr (idFlowId idata) (idFlowName idata)
+                        unit = mkUnit unitUUID (idUnitName idata)
                         techExchange =
                             TechnosphereExchange
                                 { techFlowId = flowUUID
@@ -387,14 +501,7 @@ parseWithXeno xmlContent processId =
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing
                                 }
-                        techFlow =
-                            TechnosphereFlow
-                                flowUUID
-                                resolvedFlowName
-                                unitUUID
-                                (idSynonyms idata)
-                                Nothing -- CAS
-                                Nothing -- substanceId
+                        techFlow = TechnosphereFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
                         wasteExchange =
                             WasteExchange
                                 { waFlowId = flowUUID
@@ -407,64 +514,24 @@ parseWithXeno xmlContent processId =
                                 , waComment = snd <$> idComment idata
                                 , waPedigree = Nothing
                                 }
-                        wasteFlow =
-                            WasteFlow
-                                flowUUID
-                                resolvedFlowName
-                                unitUUID
-                                (idSynonyms idata)
-                                Nothing -- CAS
-                                Nothing -- substanceId
-                        unitNameWarning =
-                            [ "[WARNING] Missing unit name for intermediate exchange with flow ID: "
-                                ++ T.unpack (idFlowId idata)
-                                ++ " - using 'UNKNOWN_UNIT' placeholder"
-                            | T.null (idUnitName idata)
-                            ]
-                        unit =
-                            Unit
-                                unitUUID
-                                (if T.null (idUnitName idata) then "UNKNOWN_UNIT" else idUnitName idata)
-                                (if T.null (idUnitName idata) then "?" else idUnitName idata)
-                                ""
-                        -- Reference product unit: only meaningful when the flow stays in the technosphere
+                        wasteFlow = WasteFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
+                        -- Reference product unit only when the flow stays in the technosphere
                         -- (waste outputs are never the reference product of a producing process).
                         newRefUnit =
                             if isReferenceProduct && not isWasteFlow && not (T.null (idUnitName idata))
                                 then Just (idUnitName idata)
                                 else psRefUnit state
-                        baseState =
-                            state
-                                { psContext = Other
-                                , psPath = drop 1 (psPath state)
-                                , psTextAccum = []
-                                , psPendingInputGroup = ""
-                                , psPendingOutputGroup = ""
-                                , psRefUnit = newRefUnit
-                                , psUnits = unit : psUnits state
-                                , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
-                                }
+                        base = (finishExchange unit warns state){psRefUnit = newRefUnit}
                      in if isWasteFlow
-                            then
-                                baseState
-                                    { psExchanges = wasteExchange : psExchanges state
-                                    , psWasteFlows = wasteFlow : psWasteFlows state
-                                    }
-                            else
-                                baseState
-                                    { psExchanges = techExchange : psExchanges state
-                                    , psTechFlows = techFlow : psTechFlows state
-                                    }
-                _ -> state{psPath = drop 1 (psPath state)}
+                            then addExchange wasteExchange (addWasteFlow wasteFlow base)
+                            else addExchange techExchange (addTechFlow techFlow base)
         | isElement tagName "elementaryExchange" =
-            case psContext state of
-                InElementaryExchange edata ->
-                    -- Use pending group values if attribute values are empty
-                    let finalInputGroup = if T.null (edInputGroup edata) then psPendingInputGroup state else edInputGroup edata
-                        finalOutputGroup = if T.null (edOutputGroup edata) then psPendingOutputGroup state else edOutputGroup edata
-                        -- A missing compartment becomes 'Nothing', not an empty
-                        -- 'Compartment ""' sentinel — the latter used to silently
-                        -- collide with method-side empty mediums.
+            case currentElementary state of
+                Nothing -> popPath state
+                Just edata ->
+                    let (finalInputGroup, finalOutputGroup) = resolveGroups (edInputGroup edata) (edOutputGroup edata) state
+                        -- A missing compartment becomes 'Nothing', not an empty 'Compartment ""'
+                        -- sentinel — the latter used to silently collide with method-side empty mediums.
                         mCompName = case edCompartments edata of
                             (c : _) | not (T.null c) -> Just c
                             _ -> Nothing
@@ -475,29 +542,29 @@ parseWithXeno xmlContent processId =
                             (Nothing, Nothing) -> Nothing
                             (Just c, sc) -> Just (Compartment c sc)
                             (Nothing, Just _) -> Nothing -- sub without medium is meaningless; drop
-                            -- Determine the biosphere direction.
-                            -- Primary: use inputGroup/outputGroup if present.
-                            -- Fallback: compartment heuristic — natural-resource flows are extractions.
+                        -- Biosphere direction: prefer inputGroup/outputGroup, else fall back to the
+                        -- compartment heuristic (natural-resource flows are extractions).
                         direction
                             | not (T.null finalInputGroup) = Resource
                             | not (T.null finalOutputGroup) = Emission
                             | otherwise = case edCompartments edata of
                                 (comp : _) | T.toLower comp == "natural resource" -> Resource
                                 _ -> Emission
-                        -- Pattern A: elementaryExchange with compartment="inventory indicator"
-                        -- subcompartment="waste". Waste outputs surfaced through the
-                        -- elementary axis but semantically technosphere waste — route them
-                        -- to WasteExchange instead of BiosphereExchange.
+                        -- Pattern A: compartment="inventory indicator" / subcompartment="waste".
+                        -- Surfaced through the elementary axis but semantically technosphere waste —
+                        -- route to WasteExchange instead of BiosphereExchange.
                         isInventoryIndicatorWaste = case (mCompName, subCompartment) of
                             (Just c, Just s) ->
                                 T.toLower (T.strip c) == "inventory indicator"
                                     && T.toLower (T.strip s) == "waste"
                             _ -> False
-                        -- Parse UUIDs and collect warnings
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
-                        uuidWarnings = catMaybes [flowWarn, unitWarn]
-                        resolvedFlowName = if T.null (edFlowName edata) then edFlowId edata else edFlowName edata
+                        warns =
+                            catMaybes [flowWarn, unitWarn]
+                                ++ missingUnitWarning "elementary" (edFlowId edata) (edUnitName edata)
+                        resolvedFlowName = nonBlankOr (edFlowId edata) (edFlowName edata)
+                        unit = mkUnit unitUUID (edUnitName edata)
                         bioExchange =
                             BiosphereExchange
                                 { bioFlowId = flowUUID
@@ -508,15 +575,7 @@ parseWithXeno xmlContent processId =
                                 , bioComment = snd <$> edComment edata
                                 , bioPedigree = Nothing
                                 }
-                        bioFlow =
-                            BiosphereFlow
-                                flowUUID
-                                resolvedFlowName
-                                unitUUID
-                                (edSynonyms edata)
-                                (edCAS edata)
-                                Nothing -- substanceId - to be filled later
-                                compartment
+                        bioFlow = BiosphereFlow flowUUID resolvedFlowName unitUUID (edSynonyms edata) (edCAS edata) Nothing compartment
                         wasteExchange =
                             WasteExchange
                                 { waFlowId = flowUUID
@@ -529,147 +588,61 @@ parseWithXeno xmlContent processId =
                                 , waComment = snd <$> edComment edata
                                 , waPedigree = Nothing
                                 }
-                        wasteFlow =
-                            WasteFlow
-                                flowUUID
-                                resolvedFlowName
-                                unitUUID
-                                (edSynonyms edata)
-                                (edCAS edata)
-                                Nothing -- substanceId
-                        unitNameWarning =
-                            [ "[WARNING] Missing unit name for elementary exchange with flow ID: "
-                                ++ T.unpack (edFlowId edata)
-                                ++ " - using 'UNKNOWN_UNIT' placeholder"
-                            | T.null (edUnitName edata)
-                            ]
-                        unit =
-                            Unit
-                                unitUUID
-                                (if T.null (edUnitName edata) then "UNKNOWN_UNIT" else edUnitName edata)
-                                (if T.null (edUnitName edata) then "?" else edUnitName edata)
-                                ""
-                        baseState =
-                            state
-                                { psContext = Other
-                                , psPath = drop 1 (psPath state)
-                                , psTextAccum = []
-                                , psPendingInputGroup = ""
-                                , psPendingOutputGroup = ""
-                                , psUnits = unit : psUnits state
-                                , psWarnings = uuidWarnings ++ unitNameWarning ++ psWarnings state
-                                }
+                        wasteFlow = WasteFlow flowUUID resolvedFlowName unitUUID (edSynonyms edata) (edCAS edata) Nothing
+                        base = finishExchange unit warns state
                      in if isInventoryIndicatorWaste
-                            then
-                                baseState
-                                    { psExchanges = wasteExchange : psExchanges state
-                                    , psWasteFlows = wasteFlow : psWasteFlows state
-                                    }
-                            else
-                                baseState
-                                    { psExchanges = bioExchange : psExchanges state
-                                    , psBioFlows = bioFlow : psBioFlows state
-                                    }
-                _ -> state{psPath = drop 1 (psPath state)}
+                            then addExchange wasteExchange (addWasteFlow wasteFlow base)
+                            else addExchange bioExchange (addBioFlow bioFlow base)
         | isElement tagName "text" =
-            case psContext state of
-                InGeneralCommentText _idx ->
-                    let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                     in -- Store as (index, text) pair for later sorting
-                        if T.null txt
-                            then state{psContext = Other, psTextAccum = []}
-                            else state{psDescription = txt : psDescription state, psContext = Other, psTextAccum = []}
-                _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
+            -- The generalComment <text> branch deliberately does NOT pop the path.
+            if inGeneralComment state
+                then
+                    let txt = accumText state
+                        withDesc = if T.null txt then state else state{psDescription = txt : psDescription state}
+                     in withDesc{psContext = Other, psTextAccum = []}
+                else popText state
         | isElement tagName "name" =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                isInsideProperty = case psPath state of
-                    (_ : parent : _) -> isElement parent "property"
-                    _ -> False
-             in case psContext state of
-                    InIntermediateExchange idata
-                        | not isInsideProperty ->
-                            state{psContext = InIntermediateExchange idata{idFlowName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InElementaryExchange edata
-                        | not isInsideProperty ->
-                            state{psContext = InElementaryExchange edata{edFlowName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
+            let txt = accumText state
+             in if pathAt 1 "property" state
+                    then popText state
+                    else onExchange (\d -> d{idFlowName = txt}) (\d -> d{edFlowName = txt}) state
         | isElement tagName "unitName" =
-            let txt = T.concat $ reverse $ map bsToText (psTextAccum state)
-                isInsideProperty = case psPath state of
-                    (_ : parent : _) -> isElement parent "property"
-                    _ -> False
-             in case psContext state of
-                    InIntermediateExchange idata
-                        | not isInsideProperty ->
-                            state{psContext = InIntermediateExchange idata{idUnitName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InElementaryExchange edata
-                        | not isInsideProperty ->
-                            state{psContext = InElementaryExchange edata{edUnitName = txt}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
+            let txt = accumText state
+             in if pathAt 1 "property" state
+                    then popText state
+                    else onExchange (\d -> d{idUnitName = txt}) (\d -> d{edUnitName = txt}) state
         | isElement tagName "synonym" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InIntermediateExchange idata
-                        | not (T.null txt) ->
-                            let syns = M.insertWith S.union "en" (S.singleton txt) (idSynonyms idata)
-                             in state{psContext = InIntermediateExchange idata{idSynonyms = syns}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    InElementaryExchange edata
-                        | not (T.null txt) ->
-                            let syns = M.insertWith S.union "en" (S.singleton txt) (edSynonyms edata)
-                             in state{psContext = InElementaryExchange edata{edSynonyms = syns}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ -> state{psPath = drop 1 (psPath state), psTextAccum = []}
+            let txt = T.strip (accumText state)
+                ins m = if T.null txt then m else M.insertWith S.union "en" (S.singleton txt) m
+             in onExchange (\d -> d{idSynonyms = ins (idSynonyms d)}) (\d -> d{edSynonyms = ins (edSynonyms d)}) state
+        -- inputGroup / outputGroup: stash the pending value, keep the parent exchange context.
         | isElement tagName "inputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in -- DON'T change psContext - preserve the parent exchange context
-                state{psPendingInputGroup = txt, psPath = drop 1 (psPath state), psTextAccum = []}
+            (popText state){psPendingInputGroup = T.strip (accumText state)}
         | isElement tagName "outputGroup" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in -- DON'T change psContext - preserve the parent exchange context
-                state{psPendingOutputGroup = txt, psPath = drop 1 (psPath state), psTextAccum = []}
+            (popText state){psPendingOutputGroup = T.strip (accumText state)}
         | isElement tagName "compartment" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InElementaryExchange edata
-                        | not (T.null txt) ->
-                            state{psContext = InElementaryExchange edata{edCompartments = txt : edCompartments edata}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ ->
-                        state{psPath = drop 1 (psPath state), psTextAccum = []}
+            let txt = T.strip (accumText state)
+                add d = if T.null txt then d else d{edCompartments = txt : edCompartments d}
+             in onExchange id add state
         | isElement tagName "subcompartment" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in case psContext state of
-                    InElementaryExchange edata
-                        | not (T.null txt) ->
-                            state{psContext = InElementaryExchange edata{edSubcompartments = txt : edSubcompartments edata}, psPath = drop 1 (psPath state), psTextAccum = []}
-                    _ ->
-                        state{psPath = drop 1 (psPath state), psTextAccum = []}
+            let txt = T.strip (accumText state)
+                add d = if T.null txt then d else d{edSubcompartments = txt : edSubcompartments d}
+             in onExchange id add state
         | isElement tagName "classificationSystem" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
-             in state{psPendingClassSystem = txt, psPath = drop 1 (psPath state), psTextAccum = []}
+            (popText state){psPendingClassSystem = T.strip (accumText state)}
         | isElement tagName "classificationValue" =
-            let txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
+            let txt = T.strip (accumText state)
                 sys = psPendingClassSystem state
-                emptyPair = T.null sys || T.null txt
-             in case psContext state of
-                    InIntermediateExchange idata
-                        | not emptyPair ->
-                            state
-                                { psContext =
-                                    InIntermediateExchange
-                                        idata{idClassifications = M.insert sys txt (idClassifications idata)}
-                                , psPath = drop 1 (psPath state)
-                                , psTextAccum = []
-                                }
-                    _ ->
-                        state
-                            { psClassifications =
-                                if emptyPair
-                                    then psClassifications state
-                                    else M.insert sys txt (psClassifications state)
-                            , psPath = drop 1 (psPath state)
-                            , psTextAccum = []
-                            }
+             in popText $
+                    if T.null sys || T.null txt
+                        then state
+                        else case currentIntermediate state of
+                            -- Exchange-scoped classification (e.g. By-product → Waste).
+                            Just d -> state{psContext = InIntermediateExchange d{idClassifications = M.insert sys txt (idClassifications d)}}
+                            -- Otherwise an activity-level classification.
+                            Nothing -> state{psClassifications = M.insert sys txt (psClassifications state)}
         | otherwise =
-            state{psPath = drop 1 (psPath state)}
+            popPath state
 
     -- CDATA handler - treat as text
     cdata = text
@@ -688,9 +661,7 @@ parseWithXeno xmlContent processId =
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
-         in case applyCutoffStrategy activity of
-                Right act -> Right (act, techs, bios, wastes, units)
-                Left err -> Left err
+         in (\act -> (act, techs, bios, wastes, units)) <$> applyCutoffStrategy activity
 
 -- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
