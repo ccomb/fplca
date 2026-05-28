@@ -23,6 +23,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Database.Loader (loadDatabase)
+import Database.Upload (ArchiveFormat (..), detectArchiveFormat)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
@@ -131,6 +132,12 @@ spec = describe "BrightwayExcel.Parser" $ do
                         -- Widget consumes the file's own "electricity, high voltage";
                         -- the name-based pass must resolve that supplier.
                         any (/= UUID.nil) links `shouldBe` True
+
+    describe "upload format detection" $
+        it "routes a Brightway .xlsx to ArchiveXlsx, not generic ArchiveZip" $
+            -- An .xlsx is a PK zip; without this the upload extractor would unzip
+            -- it and detectDatabaseFormat would fall through to UnknownFormat.
+            detectArchiveFormat fixtureBytes `shouldBe` ArchiveXlsx
 
 -- ---------------------------------------------------------------------------
 -- Assertions helpers
