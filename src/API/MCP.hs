@@ -507,6 +507,29 @@ callListPresets presets rid =
                 | p <- presets
                 ]
 
+{- | Explicit classification filter from the @classification@ +
+@classification_value@ args (honouring @classification_match@). Shared by the
+search, consumers, and supply-chain handlers.
+-}
+explicitClassFilter :: KeyMap Value -> [(Text, Text, Bool)]
+explicitClassFilter args = case (textArg "classification" args, textArg "classification_value" args) of
+    (Just sys, Just val) -> [(sys, val, isExact)]
+    _ -> []
+  where
+    isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
+
+{- | Preset filters (looked up by @preset@ name) followed by the explicit
+filter. Shared by the search and consumers handlers.
+-}
+classificationFilters :: [ClassificationPreset] -> KeyMap Value -> [(Text, Text, Bool)]
+classificationFilters presets args = presetFilters ++ explicitClassFilter args
+  where
+    presetFilters = case textArg "preset" args of
+        Just pn -> case L.find (\p -> cpName p == pn) presets of
+            Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
+            Nothing -> []
+        Nothing -> []
+
 callSearchActivities :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchActivities presets rid args (db, _) = do
     let name = textArg "name" args
@@ -514,24 +537,14 @@ callSearchActivities presets rid args (db, _) = do
         product' = textArg "product" args
         limit = intArg "limit" args
         exact = fromMaybe False (boolArg "exact" args)
-        isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-        presetFilters = case textArg "preset" args of
-            Just pn -> case L.find (\p -> cpName p == pn) presets of
-                Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
-                Nothing -> []
-            Nothing -> []
-        explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
-            (Just sys, Just val) -> [(sys, val, isExact)]
-            _ -> []
-        classFilters = presetFilters ++ explicitFilters
-    let sf =
+        sf =
             Service.SearchFilter
                 { Service.sfCore =
                     Service.ActivityFilterCore
                         { Service.afcName = name
                         , Service.afcLocation = geo
                         , Service.afcProduct = product'
-                        , Service.afcClassifications = classFilters
+                        , Service.afcClassifications = classificationFilters presets args
                         , Service.afcLimit = limit <|> Just 20
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
@@ -543,9 +556,6 @@ callSearchActivities presets rid args (db, _) = do
     case result of
         Left err -> return $ toolError rid (T.pack $ show err)
         Right val -> return $ toolSuccessJson rid val
-  where
-    Nothing <|> b = b
-    a <|> _ = a
 
 callListClassifications :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callListClassifications rid args (db, _) =
@@ -586,9 +596,6 @@ callSearchFlows rid args (db, _) =
             case result of
                 Left err -> return $ toolError rid (T.pack $ show err)
                 Right val -> return $ toolSuccessJson rid val
-  where
-    Nothing <|> b = b
-    a <|> _ = a
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) = runTool rid $ do
@@ -653,10 +660,6 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
     let db = ldDatabase ld
         solver = ldSharedSolver ld
         depLookup = DM.mkDepSolverLookup dbManager
-        isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-        classFilters = case (textArg "classification" args, textArg "classification_value" args) of
-            (Just sys, Just val) -> [(sys, val, isExact)]
-            _ -> []
         scf =
             Service.SupplyChainFilter
                 { Service.scfCore =
@@ -664,7 +667,7 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = Nothing
-                        , Service.afcClassifications = classFilters
+                        , Service.afcClassifications = explicitClassFilter args
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
@@ -769,17 +772,7 @@ callGetPathTo rid args (db, solver) = runTool rid $ do
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetConsumers presets rid args (db, _) = runTool rid $ do
     pid <- except (requireText "process_id" args)
-    let isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
-        dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
-        presetFilters = case textArg "preset" args of
-            Just pn -> case L.find (\p -> cpName p == pn) presets of
-                Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
-                Nothing -> []
-            Nothing -> []
-        explicitFilters = case (textArg "classification" args, textArg "classification_value" args) of
-            (Just sys, Just val) -> [(sys, val, isExact)]
-            _ -> []
-        classFilters = presetFilters ++ explicitFilters
+    let dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
         cnf =
             Service.ConsumerFilter
                 { Service.cnfCore =
@@ -787,7 +780,7 @@ callGetConsumers presets rid args (db, _) = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = textArg "product" args
-                        , Service.afcClassifications = classFilters
+                        , Service.afcClassifications = classificationFilters presets args
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
@@ -1086,11 +1079,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
             liftIO $
                 Service.computeSensitivities db (ldSharedSolver ld) (raPid ra) perts
         (baselineX, perResults) <- liftShow eRes
-        let scoreOf x =
-                let inv = applyBiosphereMatrix db x
-                 in case computeLCIAScoreAuto unitCfg mUnits mFlows db x inv hier tables of
-                        Right s -> Right s
-                        Left e -> Left e
+        let scoreOf x = computeLCIAScoreAuto unitCfg mUnits mFlows db x (applyBiosphereMatrix db x) hier tables
         baselineScore <- case scoreOf baselineX of
             Right s -> pure s
             Left e -> throwE ("baseline scoring failed: " <> e)
