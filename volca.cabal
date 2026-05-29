@@ -224,6 +224,7 @@ test-suite lca-tests
                      , MethodSetTablesSpec
                      , ChemSynonymsSpec
                      , UploadedDatabaseSpec
+                     , UploadSizeSpec
                      , ProgressSpec
                      , EcoSpold1Spec
                      , EcoSpold2Spec

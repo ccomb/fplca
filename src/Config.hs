@@ -82,6 +82,7 @@ data Config = Config
 -- | Hosting configuration for managed VoLCA instances
 data HostingConfig = HostingConfig
     { hcMaxUploads :: !Int -- Max database uploads (-1 = unlimited, 0 = disabled)
+    , hcMaxUploadMb :: !Int -- Max upload size in MB (-1 = unlimited, 0 = disabled)
     , hcApiAccess :: !Bool -- Programmatic API access allowed
     , hcUpgradeUpload :: !Text -- Upgrade message when upload restricted
     , hcUpgradeApi :: !Text -- Upgrade message when API restricted
@@ -263,6 +264,7 @@ instance DecodeTOML RefDataConfig where
 instance DecodeTOML HostingConfig where
     tomlDecoder = do
         hcMaxUploads <- fromMaybe (-1) <$> getFieldOpt "max_uploads"
+        hcMaxUploadMb <- fromMaybe 100 <$> getFieldOpt "max_upload_mb"
         hcApiAccess <- fromMaybe True <$> getFieldOpt "api_access"
         hcUpgradeUpload <- fromMaybe "" <$> getFieldOpt "upgrade_upload"
         hcUpgradeApi <- fromMaybe "" <$> getFieldOpt "upgrade_api"

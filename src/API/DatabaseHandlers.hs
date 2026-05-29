@@ -42,10 +42,12 @@ module API.DatabaseHandlers (
     convertDbStatus,
     simpleAction,
     formatToText,
+    checkUploadSize,
 ) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (liftIO)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Lazy as BSL
 import Data.List (isPrefixOf)
@@ -77,7 +79,7 @@ import API.Types (
     UploadRequest (..),
     UploadResponse (..),
  )
-import Config (DatabaseConfig (..), MethodConfig (..), RefDataConfig (..))
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), RefDataConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
@@ -187,68 +189,99 @@ deleteDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     simpleAction (removeDatabase dbManager dbName) ("Deleted database: " <> dbName)
 
--- | Upload a new database
-uploadDatabaseHandler :: UploadRequest -> AppM UploadResponse
-uploadDatabaseHandler req = do
-    dbManager <- asks aeDbManager
-    -- Decode base64 ZIP data
-    let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
-    case zipDataResult of
+{- | Enforce the hosting upload-size policy on a decoded payload.
+Local/CLI mode (no hosting config) is unlimited. A configured limit of 0
+disables uploads; a negative limit is unlimited; a positive limit caps the
+size in megabytes. Returns the failure message to surface, or () to proceed.
+-}
+checkUploadSize :: Maybe HostingConfig -> Int -> Either Text ()
+checkUploadSize Nothing _ = Right ()
+checkUploadSize (Just hc) sizeBytes =
+    case hcMaxUploadMb hc of
+        0 -> Left "Uploads are disabled on this plan."
+        limitMb
+            | limitMb < 0 -> Right ()
+            | sizeBytes > limitMb * 1024 * 1024 ->
+                Left $
+                    "File too large ("
+                        <> T.pack (show (sizeBytes `div` (1024 * 1024)))
+                        <> " MB). The upload limit on this plan is "
+                        <> T.pack (show limitMb)
+                        <> " MB."
+            | otherwise -> Right ()
+
+{- | Decode the base64 upload payload and enforce the hosting size policy,
+then hand the raw bytes to the continuation. Shared by the database and
+method upload handlers so both gate on one rule.
+-}
+withUploadBytes :: UploadRequest -> (BS.ByteString -> AppM UploadResponse) -> AppM UploadResponse
+withUploadBytes req k =
+    case B64.decode (T.encodeUtf8 (urFileData req)) of
         Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
         Right zipBytes -> do
-            let uploadData =
-                    UploadData
-                        { udName = urName req
-                        , udDescription = urDescription req
-                        , udZipData = BSL.fromStrict zipBytes
-                        }
-            -- Handle the upload (extract, detect format)
-            uploadsDir <- liftIO UploadedDB.getDatabaseUploadsDir
-            result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
+            hostingConfig <- asks aeHostingConfig
+            case checkUploadSize hostingConfig (BS.length zipBytes) of
+                Left rejection -> return $ UploadResponse False rejection Nothing Nothing
+                Right () -> k zipBytes
 
-            case result of
-                Left err ->
-                    return $ UploadResponse False err Nothing Nothing
-                Right uploadResult -> do
-                    let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
+-- | Upload a new database
+uploadDatabaseHandler :: UploadRequest -> AppM UploadResponse
+uploadDatabaseHandler req =
+    withUploadBytes req $ \zipBytes -> do
+        dbManager <- asks aeDbManager
+        let uploadData =
+                UploadData
+                    { udName = urName req
+                    , udDescription = urDescription req
+                    , udZipData = BSL.fromStrict zipBytes
+                    }
+        -- Handle the upload (extract, detect format)
+        uploadsDir <- liftIO UploadedDB.getDatabaseUploadsDir
+        result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
 
-                    -- Create meta.toml for self-describing upload
-                    let meta =
-                            UploadedDB.UploadMeta
-                                { UploadedDB.umVersion = 1
-                                , UploadedDB.umDisplayName = urName req
-                                , UploadedDB.umDescription = urDescription req
-                                , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
-                                , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
-                                }
-                    liftIO $ UploadedDB.writeUploadMeta uploadDir meta
+        case result of
+            Left err ->
+                return $ UploadResponse False err Nothing Nothing
+            Right uploadResult -> do
+                let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
 
-                    -- Create database config for in-memory manager
-                    let dbConfig =
-                            DatabaseConfig
-                                { dcName = urSlug uploadResult
-                                , dcDisplayName = urName req
-                                , dcPath = urPath uploadResult
-                                , dcDescription = urDescription req
-                                , dcLoad = False -- Don't auto-load
-                                , dcDefault = False
-                                , dcDepends = []
-                                , dcLocationAliases = M.empty
-                                , dcFormat = Just (urFormat uploadResult)
-                                , dcIsUploaded = True -- Freshly uploaded database
-                                , dcDeletable = True
-                                , dcGeographyPolicy = GeoGlobal
-                                }
+                -- Create meta.toml for self-describing upload
+                let meta =
+                        UploadedDB.UploadMeta
+                            { UploadedDB.umVersion = 1
+                            , UploadedDB.umDisplayName = urName req
+                            , UploadedDB.umDescription = urDescription req
+                            , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
+                            , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
+                            }
+                liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
-                    -- Add to manager
-                    liftIO $ addDatabase dbManager dbConfig
+                -- Create database config for in-memory manager
+                let dbConfig =
+                        DatabaseConfig
+                            { dcName = urSlug uploadResult
+                            , dcDisplayName = urName req
+                            , dcPath = urPath uploadResult
+                            , dcDescription = urDescription req
+                            , dcLoad = False -- Don't auto-load
+                            , dcDefault = False
+                            , dcDepends = []
+                            , dcLocationAliases = M.empty
+                            , dcFormat = Just (urFormat uploadResult)
+                            , dcIsUploaded = True -- Freshly uploaded database
+                            , dcDeletable = True
+                            , dcGeographyPolicy = GeoGlobal
+                            }
 
-                    return $
-                        UploadResponse
-                            True
-                            "Database uploaded successfully"
-                            (Just $ urSlug uploadResult)
-                            (Just $ formatToText $ urFormat uploadResult)
+                -- Add to manager
+                liftIO $ addDatabase dbManager dbConfig
+
+                return $
+                    UploadResponse
+                        True
+                        "Database uploaded successfully"
+                        (Just $ urSlug uploadResult)
+                        (Just $ formatToText $ urFormat uploadResult)
 
 -- | Convert DatabaseManager.DatabaseStatus to API.DatabaseStatusAPI
 convertDbStatus :: DatabaseStatus -> DatabaseStatusAPI
@@ -383,59 +416,56 @@ finalizeDatabaseHandler dbName = do
 Same flow as database upload but creates MethodConfig entry
 -}
 uploadMethodHandler :: UploadRequest -> AppM UploadResponse
-uploadMethodHandler req = do
-    dbManager <- asks aeDbManager
-    let zipDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
-    case zipDataResult of
-        Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
-        Right zipBytes -> do
-            let uploadData =
-                    UploadData
-                        { udName = urName req
-                        , udDescription = urDescription req
-                        , udZipData = BSL.fromStrict zipBytes
-                        }
-            uploadsDir <- liftIO UploadedDB.getMethodUploadsDir
-            result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
-            case result of
-                Left err ->
-                    return $ UploadResponse False err Nothing Nothing
-                Right uploadResult -> do
-                    let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
+uploadMethodHandler req =
+    withUploadBytes req $ \zipBytes -> do
+        dbManager <- asks aeDbManager
+        let uploadData =
+                UploadData
+                    { udName = urName req
+                    , udDescription = urDescription req
+                    , udZipData = BSL.fromStrict zipBytes
+                    }
+        uploadsDir <- liftIO UploadedDB.getMethodUploadsDir
+        result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
+        case result of
+            Left err ->
+                return $ UploadResponse False err Nothing Nothing
+            Right uploadResult -> do
+                let uploadDir = uploadsDir </> T.unpack (urSlug uploadResult)
 
-                    -- Find the actual method XML directory (e.g. ILCD/lciamethods/)
-                    methodDir <- liftIO $ findMethodDirectory uploadDir
+                -- Find the actual method XML directory (e.g. ILCD/lciamethods/)
+                methodDir <- liftIO $ findMethodDirectory uploadDir
 
-                    -- Create meta.toml (store path relative to upload dir)
-                    let meta =
-                            UploadedDB.UploadMeta
-                                { UploadedDB.umVersion = 1
-                                , UploadedDB.umDisplayName = urName req
-                                , UploadedDB.umDescription = urDescription req
-                                , UploadedDB.umFormat = urFormat uploadResult
-                                , UploadedDB.umDataPath = makeRelative uploadDir methodDir
-                                }
-                    liftIO $ UploadedDB.writeUploadMeta uploadDir meta
+                -- Create meta.toml (store path relative to upload dir)
+                let meta =
+                        UploadedDB.UploadMeta
+                            { UploadedDB.umVersion = 1
+                            , UploadedDB.umDisplayName = urName req
+                            , UploadedDB.umDescription = urDescription req
+                            , UploadedDB.umFormat = urFormat uploadResult
+                            , UploadedDB.umDataPath = makeRelative uploadDir methodDir
+                            }
+                liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
-                    -- Create MethodConfig and add to manager
-                    let mc =
-                            MethodConfig
-                                { mcName = urName req
-                                , mcPath = methodDir
-                                , mcActive = False
-                                , mcIsUploaded = True
-                                , mcDescription = urDescription req
-                                , mcFormat = Just $ formatToText $ urFormat uploadResult
-                                , mcScoringSets = []
-                                }
-                    liftIO $ addMethodCollection dbManager mc
+                -- Create MethodConfig and add to manager
+                let mc =
+                        MethodConfig
+                            { mcName = urName req
+                            , mcPath = methodDir
+                            , mcActive = False
+                            , mcIsUploaded = True
+                            , mcDescription = urDescription req
+                            , mcFormat = Just $ formatToText $ urFormat uploadResult
+                            , mcScoringSets = []
+                            }
+                liftIO $ addMethodCollection dbManager mc
 
-                    return $
-                        UploadResponse
-                            True
-                            "Method uploaded successfully"
-                            (Just $ urSlug uploadResult)
-                            (Just $ formatToText $ urFormat uploadResult)
+                return $
+                    UploadResponse
+                        True
+                        "Method uploaded successfully"
+                        (Just $ urSlug uploadResult)
+                        (Just $ formatToText $ urFormat uploadResult)
 
 -- | Delete an uploaded method collection
 deleteMethodHandler :: Text -> AppM ActivateResponse
