@@ -1066,6 +1066,7 @@ getHosting = do
             object
                 [ "is_hosted" .= True
                 , "max_uploads" .= Config.hcMaxUploads hc
+                , "max_upload_mb" .= Config.hcMaxUploadMb hc
                 , "api_access" .= Config.hcApiAccess hc
                 , "upgrade_upload" .= Config.hcUpgradeUpload hc
                 , "upgrade_api" .= Config.hcUpgradeApi hc
@@ -1075,6 +1076,7 @@ getHosting = do
             object
                 [ "is_hosted" .= False
                 , "max_uploads" .= (-1 :: Int)
+                , "max_upload_mb" .= (-1 :: Int)
                 , "api_access" .= True
                 , "upgrade_upload" .= ("" :: Text)
                 , "upgrade_api" .= ("" :: Text)
