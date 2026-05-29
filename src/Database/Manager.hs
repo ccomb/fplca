@@ -1451,9 +1451,11 @@ data RelinkResult = RelinkResult
     }
     deriving (Show, Eq)
 
-{- | Re-run cross-DB linking for an already-loaded DB against the current set
-of loaded dep DBs. Updates 'dbCrossDBLinks' and 'dbLinkingStats' in place
-in the LoadedDatabase record. Does NOT rebuild the technosphere matrix or
+{- | Re-run cross-DB linking for an already-loaded DB against its pinned
+dependency set ('dbDependsOn'), not the full set of loaded DBs. Updates
+'dbCrossDBLinks' and 'dbLinkingStats' in place in the LoadedDatabase record;
+the dependency set itself is left untouched (strict pin — it changes only via
+explicit add/remove-dependency). Does NOT rebuild the technosphere matrix or
 invalidate the MUMPS factorization — cross-DB links are consumed only at
 solve time.
 
@@ -1471,7 +1473,12 @@ relinkDatabase manager dbName = do
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            let otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName]
+            -- Strict pin: candidates are restricted to the database's declared
+            -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
+            -- This keeps the user's explicit selection authoritative — relink
+            -- recomputes links *within* the pin but never expands or shrinks it.
+            let pinnedDeps = dbDependsOn (ldDatabase loaded)
+                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
             synonymDB <- getMergedSynonymDB manager
             unitConfig <- getMergedUnitConfig manager
             let db = ldDatabase loaded
@@ -1502,7 +1509,9 @@ relinkDatabase manager dbName = do
                         activityMap
                 newStats = rawStats{cdlTotalInputs = totalInputs}
                 newLinks = cdlLinks newStats
-                newDeps = M.keys (crossDBBySource newStats)
+                -- Strict pin: the dependency set is the user's selection,
+                -- unchanged by relinking. Only the links within it are refreshed.
+                newDeps = beforeDeps
                 !db' =
                     db
                         { dbCrossDBLinks = newLinks
@@ -2319,8 +2328,21 @@ finalizeDatabase manager dbName = do
                             -- Use pre-built database from cache, or build matrices from scratch
                             buildResult <- case sdCachedDB staged of
                                 Just cachedDb -> do
-                                    let db = BM25.addBM25Index (initializeRuntimeFields cachedDb synonymDB)
-                                    return $ Right (db, True)
+                                    -- The on-disk cache == cachedDb. Carry the
+                                    -- (possibly edited) staged dependency pin and
+                                    -- its recomputed links onto the loaded DB so
+                                    -- the pin is authoritative; flag a re-save
+                                    -- when either diverges from what's on disk.
+                                    let pinned =
+                                            cachedDb
+                                                { dbCrossDBLinks = sdCrossDBLinks staged
+                                                , dbDependsOn = sdSelectedDeps staged
+                                                , dbLinkingStats = sdLinkingStats staged
+                                                }
+                                        needsSave =
+                                            dbDependsOn cachedDb /= sdSelectedDeps staged
+                                                || dbCrossDBLinks cachedDb /= sdCrossDBLinks staged
+                                    return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
                                 Nothing -> do
                                     unitConfig <- getMergedUnitConfig manager
                                     dbResult <-
@@ -2340,11 +2362,12 @@ finalizeDatabase manager dbName = do
                                                         , dbDependsOn = sdSelectedDeps staged
                                                         , dbLinkingStats = sdLinkingStats staged
                                                         }
-                                            return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), False)
+                                            -- Freshly built matrices: always persist.
+                                            return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), True)
 
                             case buildResult of
                                 Left err -> return $ Left err
-                                Right (dbWithRuntime, fromCache) -> do
+                                Right (dbWithRuntime, needsSave) -> do
                                     -- Create shared solver with lazy factorization (deferred to first query)
                                     let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
                                         activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
@@ -2374,19 +2397,24 @@ finalizeDatabase manager dbName = do
                                     -- is True) the matrix cache.
                                     relinkOutcome <- relinkDatabase manager dbName
 
-                                    -- Explicit cache save is only needed when
-                                    -- we built matrices fresh AND the relink
-                                    -- didn't already write the cache. The
-                                    -- 'Left' fallback preserves the original
-                                    -- "save iff fresh" behavior if relink
-                                    -- failed for some unexpected reason.
+                                    -- 'needsSave' marks a finalize that changed
+                                    -- something on disk (fresh build, or an
+                                    -- edited dependency pin on a cache hit). The
+                                    -- 'Left' fallback treats a failed relink as
+                                    -- "no relink write happened", so the explicit
+                                    -- save below still fires when needed.
                                     linksChangedAfter <- case relinkOutcome of
                                         Right rr -> return (rresLinksChanged rr)
                                         Left err -> do
                                             reportProgress Warning $
                                                 "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
                                             return False
-                                    when (not fromCache && not linksChangedAfter) $
+                                    -- Persist when this finalize introduced a
+                                    -- change (fresh build, or an edited pin on a
+                                    -- cache hit) that the relink didn't already
+                                    -- write. relink owns the save whenever it
+                                    -- actually changed the in-memory links.
+                                    when (needsSave && not linksChangedAfter) $
                                         Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
 
                                     reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName

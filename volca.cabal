@@ -208,6 +208,7 @@ test-suite lca-tests
                      , CrossLinkingSpec
                      , MinimalCoverSpec
                      , MinimalCoverIntegrationSpec
+                     , StrictPinSpec
                      , CrossDBInventorySpec
                      , CrossDBRegionalLCIASpec
                      , CrossDBRegionalLCIAFixture

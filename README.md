@@ -147,6 +147,8 @@ active = true
 
 The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies.
 
+A database's dependency set is **pinned**: it is seeded automatically when the database is first staged (the minimal set of supplier databases needed to resolve its links), and from then on it is authoritative. `relink` re-resolves links *within* the pinned set only — it never silently adds another loaded database. Edit the pin explicitly with `add-dependency` / `remove-dependency`, then `finalize`; the new set is written to the matrix cache and reused on every later open. This is how you restrict a consumer (e.g. an inventory built against a single Agribalyse version) to exactly the supplier databases it should depend on, even while other versions stay loaded for other consumers.
+
 ---
 
 ## REST API
