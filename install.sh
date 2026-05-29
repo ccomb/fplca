@@ -7,7 +7,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/ccomb/volca/main/install.sh | sh -s -- v0.7.0
 #
 # What it does:
-#   1. Detects platform (linux-amd64, linux-arm64, macos-arm64)
+#   1. Detects platform (linux-amd64, linux-arm64, macos-arm64, macos-intel)
 #   2. Downloads volca-<version>-<platform>.tar.gz from the GH Release
 #   3. Downloads volca-data-<data-version>.tar.gz (the reference data bundle)
 #   4. Verifies both against SHA256SUMS
@@ -55,7 +55,7 @@ case "$UNAME_S" in
         OS=macos
         case "$UNAME_M" in
             arm64) ARCH=arm64 ;;
-            x86_64) err "macOS x86_64 is not built — use macos-arm64 (Apple Silicon)" ;;
+            x86_64) ARCH=intel ;;
             *) err "unsupported macOS arch: $UNAME_M" ;;
         esac
         ;;

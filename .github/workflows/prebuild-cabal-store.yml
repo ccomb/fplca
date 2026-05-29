@@ -66,6 +66,10 @@ jobs:
           - name: macos-arm64
             runner: macos-15
             os: macos
+          # Intel macOS — GitHub's last x86_64 hosted label (retires Aug 2027).
+          - name: macos-intel
+            runner: macos-15-intel
+            os: macos
     env:
       MACOSX_DEPLOYMENT_TARGET: ${{ needs.versions.outputs.macos_target }}
       HOMEBREW_NO_AUTO_UPDATE: '1'
