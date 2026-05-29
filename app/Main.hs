@@ -36,6 +36,8 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Progress
 
 -- For server mode
+
+import API.DatabaseHandlers (uploadBodyCeiling)
 import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
@@ -47,9 +49,10 @@ import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.String (fromString)
 import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
-import Network.Wai (Application, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
+import Network.Wai (Application, Middleware, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
 import Network.Wai.Application.Static (StaticSettings, defaultWebAppSettings, ssIndices, staticApp)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setPort, setTimeout)
+import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
 
@@ -200,6 +203,18 @@ wrapWithMiddleware password lastRequestRef idleActiveRef baseApp =
             Just pwd -> authMiddleware (C8.pack pwd) withIdleAndShutdown
             Nothing -> withIdleAndShutdown
 
+{- | Reject oversized upload requests at the HTTP layer, before the body is
+buffered into memory. The per-request ceiling comes from 'uploadBodyCeiling',
+so the unlimited tier is never bounded and only the policy-governed upload
+routes are capped. This backstops the in-handler 'checkUploadSize'.
+-}
+uploadSizeLimitMiddleware :: Maybe HostingConfig -> Middleware
+uploadSizeLimitMiddleware hostingConfig =
+    requestSizeLimitMiddleware $
+        setMaxLengthForRequest
+            (pure . uploadBodyCeiling hostingConfig . pathInfo)
+            defaultRequestSizeLimitSettings
+
 -- | Run server with multi-database configuration file
 runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()
 runServerWithConfig cliConfig serverOpts cfgFile = do
@@ -222,7 +237,9 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
             password
             (cfgHosting config)
             (cfgClassificationPresets config)
-    let finalApp = wrapWithMiddleware password lastRequestRef idleActiveRef baseApp
+    let finalApp =
+            uploadSizeLimitMiddleware (cfgHosting config) $
+                wrapWithMiddleware password lastRequestRef idleActiveRef baseApp
         settings = setTimeout 600 (setPort port defaultSettings)
     runSettings settings finalApp
 

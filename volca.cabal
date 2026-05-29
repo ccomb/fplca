@@ -164,6 +164,7 @@ executable volca
                      , time
                      , warp
                      , wai
+                     , wai-extra >=3.1.1
                      , wai-app-static
                      , servant
                      , servant-server
