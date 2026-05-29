@@ -186,14 +186,17 @@ jobs:
 
       - name: Read versions + cabal hash
         id: meta
-        # Hash inputs identical to _build-matrix.yml's cabal-store cache
-        # key, so content change there always implies a new prebuilt.
+        # Hash inputs identical to _build-matrix.yml's cabal-store probe, so
+        # content change there always implies a new prebuilt. version/synopsis/
+        # description are stripped from volca.cabal — they don't affect deps,
+        # so a release bump reuses the store. Keep this filter byte-identical
+        # to the one in _build-matrix.yml.
         shell: bash
         run: |
           source versions.env
           echo "ghc=$GHC_VERSION" >> "$GITHUB_OUTPUT"
           echo "rev=${CABAL_PREBUILT_REVISION:-1}" >> "$GITHUB_OUTPUT"
-          echo "hash=$(cat volca.cabal mumps-hs/mumps-hs.cabal cabal.project | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
+          echo "hash=$( { grep -vE '^(version|synopsis|description):' volca.cabal; cat mumps-hs/mumps-hs.cabal cabal.project; } | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/publish-prebuilt-release
         with:

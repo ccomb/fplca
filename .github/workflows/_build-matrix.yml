@@ -279,7 +279,11 @@ jobs:
           # Hash matches the prebuild-cabal-store.yml publish step exactly,
           # so a content change in any of these files always misses the
           # prebuilt and falls through to the cache + source build path.
-          HASH8=$(cat volca.cabal mumps-hs/mumps-hs.cabal cabal.project | sha256sum | cut -c1-8)
+          # volca.cabal's version/synopsis/description are stripped: they
+          # never affect the dependency closure, so a release bump must NOT
+          # invalidate the store (otherwise every `vX.Y.Z` PR forces a full
+          # 5-platform re-prebuild). Keep this filter identical in both files.
+          HASH8=$( { grep -vE '^(version|synopsis|description):' volca.cabal; cat mumps-hs/mumps-hs.cabal cabal.project; } | sha256sum | cut -c1-8)
           REV="${CABAL_PREBUILT_REVISION:-1}"
           TAG="cabal-store-prebuilt-ghc${GHC_VERSION}-${HASH8}-r${REV}"
           PLATFORM='${{ matrix.name }}'
