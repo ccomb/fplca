@@ -1443,13 +1443,19 @@ data RelinkResult = RelinkResult
     , rresCrossDBLinks :: !Int
     , rresDepsLoaded :: ![Text]
     , rresLinksChanged :: !Bool
-    {- ^ True iff the relink actually changed 'dbCrossDBLinks' or
-    'dbDependsOn' versus the in-memory state before the call. Callers
-    use this to skip redundant work — e.g. the explicit cache write in
-    'finalizeDatabase' is suppressed when the relink already saved.
+    {- ^ True iff the relink actually changed 'dbCrossDBLinks' (as a set)
+    versus the in-memory state before the call. Callers use this to skip
+    redundant work — e.g. the explicit cache write in 'finalizeDatabase'
+    is suppressed when the relink already saved.
     -}
     }
     deriving (Show, Eq)
+
+-- | Order-insensitive equality for lists that are semantically sets
+-- (cross-DB links, dependency names). Avoids spurious cache re-saves when
+-- only the element order differs.
+sameSet :: Ord a => [a] -> [a] -> Bool
+sameSet xs ys = S.fromList xs == S.fromList ys
 
 {- | Re-run cross-DB linking for an already-loaded DB against its pinned
 dependency set ('dbDependsOn'), not the full set of loaded DBs. Updates
@@ -1461,7 +1467,7 @@ solve time.
 
 Side-effect: persists the updated 'Database' back to its matrix-cache file
 ('Loader.saveCachedDatabaseWithMatrices') whenever the relink actually
-changed 'dbCrossDBLinks' or 'dbDependsOn'. Without this, the next startup
+changed 'dbCrossDBLinks'. Without this, the next startup
 would re-load the stale cache and re-run cross-DB linking from scratch
 even though we already know the answer. The save is skipped when the
 relink is a no-op (no change vs. the in-memory state).
@@ -1520,7 +1526,10 @@ relinkDatabase manager dbName = do
                         }
                 !loaded' = loaded{ldDatabase = db'}
                 afterUnresolved = unresolvedCount newStats
-                linksChanged = newLinks /= beforeLinks || newDeps /= beforeDeps
+                -- The pin is invariant under relink (newDeps == beforeDeps), so a
+                -- change can only be in the links. Compare as sets: link order is
+                -- not significant and must not trigger a redundant cache write.
+                linksChanged = not (sameSet newLinks beforeLinks)
             atomically $ do
                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                 modifyTVar'
@@ -2340,8 +2349,8 @@ finalizeDatabase manager dbName = do
                                                 , dbLinkingStats = sdLinkingStats staged
                                                 }
                                         needsSave =
-                                            dbDependsOn cachedDb /= sdSelectedDeps staged
-                                                || dbCrossDBLinks cachedDb /= sdCrossDBLinks staged
+                                            not (sameSet (dbDependsOn cachedDb) (sdSelectedDeps staged))
+                                                || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
                                     return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
                                 Nothing -> do
                                     unitConfig <- getMergedUnitConfig manager

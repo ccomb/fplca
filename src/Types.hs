@@ -1300,7 +1300,7 @@ data CrossDBLink = CrossDBLink
     another database — used to compute the minimal dependency pre-selection.
     -}
     }
-    deriving (Generic, NFData, Store, Show, Eq)
+    deriving (Generic, NFData, Store, Show, Eq, Ord)
 
 -- | Characterization factor (associated with an LCIA method)
 data CF = CF
