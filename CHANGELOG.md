@@ -1,12 +1,66 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-05-29
+
+A month of engine work: a third flow kind for waste, regionalized impact
+assessment, more input formats, and a hardening pass that turns silent
+miscounts into explicit errors.
+
+### Added
+- Brightway Excel (`.xlsx`) inventories can now be loaded directly.
+- Regionalized LCIA scoring via openLCA JSON-LD `ImpactCategory`, including
+  uploading openLCA JSON-LD methods through the method pipeline.
+- `WasteFlow` / `WasteExchange` as a third top-level flow kind, with an
+  exact-match cross-database waste linker and explicit reporting of orphan
+  (unlinked) waste.
+- Per-database `geography_policy` controlling how activities are matched across
+  databases during cross-DB linking.
+- Sensitivity analysis: a rank-1 perturbation primitive and a sweep endpoint.
+- SimaPro pedigree (uncertainty) matrix parsed and exposed through the API.
+- Configurable per-instance upload size limit (hosting policy), enforced both in
+  the upload handler and at the HTTP layer.
+- macOS Intel (x86_64) engine build target and published release assets.
+- One-liner installers for Linux, macOS, and Windows.
+- MCP: batched LCIA and scoring sets, columnar `score_activities`, and
+  source-native `activity_type` surfaced through search/score/get_activity.
+- `/api/v1/licenses` endpoint plus `NOTICE` / `THIRD_PARTY_LICENSES`.
 
 ### Changed
-- API: service errors no longer surface as HTTP 5xx. `InvalidUUID` now returns
-  400 and `FlowNotFound` returns 404 (both were 500), so malformed client UUIDs
-  and missing flows are reported as client errors — matching the rest of the
-  cross-DB pipeline.
+- The cross-database dependency pin is now authoritative and persisted to cache,
+  and databases auto-relink on every load.
+- `Flow` split into `TechnosphereFlow` and `BiosphereFlow` (with `WasteFlow` as
+  the third kind) so flow handling is total over the type system.
+- Service errors are reported as 4xx, not 5xx: `InvalidUUID` → 400,
+  `FlowNotFound` → 404, and cross-DB invariant breakages surface as client
+  errors instead of 500s.
+- Large LCIA speedups: batched multi-method scoring (~22× on PEF), precomputed
+  per-activity weights for regionalized methods, and coalesced matrix solves.
+- Docker images standardized on musl with a fully-static build and ARM64
+  support.
+- pyvolca: typed returns, string enums, and lazily paginated search/consumer
+  results.
+
+### Fixed
+- Characterization no longer silently returns zero on a compartment,
+  subcompartment, or unit mismatch — the gap is surfaced instead of undercounted.
+- Regionalized LCIA returns a partial score on tainted columns rather than
+  failing the whole computation.
+- SimaPro: sign preserved on substitution (Materials/fuels) exchanges, reference
+  amounts normalized to the canonical base unit, and split-location products
+  exposed to the cross-DB linker.
+
+## [0.6.0] - 2026-05-01
+
+Packaging and distribution milestone (not previously recorded here).
+
+### Added
+- GitHub Actions build matrix producing release assets for Linux, macOS, and
+  Windows, driven by a tag-based release pipeline with a relocatable data bundle.
+- `pyvolca` published to PyPI, with per-exchange comments surfaced through the
+  API and Python bindings.
+
+### Changed
+- SimaPro location extraction and reference-amount normalization improvements.
 
 ## [0.5.0] - 2026-02-02
 
