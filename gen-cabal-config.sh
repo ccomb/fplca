@@ -17,6 +17,14 @@ MUMPS_INCLUDE_DIR="${MUMPS_INCLUDE_DIR:-/usr/include}"
 LINK_MODE="${LINK_MODE:-dynamic}"
 OUTPUT="${OUTPUT_DIR:-.}/cabal.project.local"
 
+# Optimization level for volca's own code, as a per-package override of the
+# global `optimization: 2` (which must stay 2 so the prebuilt cabal store's
+# deps keep matching). Default 2 — shipped artifacts (Docker, release, local
+# builds) are unaffected. CI PR/test builds export VOLCA_OPT_LEVEL=1 to halve
+# the cold compile of volca's ~100 modules; -O2 buys runtime speed the smoke
+# build doesn't need. Deps stay -O2 either way.
+VOLCA_OPT_LEVEL="${VOLCA_OPT_LEVEL:-2}"
+
 # Parallelism preamble shared by every LINK_MODE.
 # Lives in cabal.project.local (not cabal.project) so that Docker builds —
 # which copy only volca.cabal + mumps-hs/ into the build context and write a
@@ -38,6 +46,9 @@ optimization: 2
 
 extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
+
+package volca
+  optimization: $VOLCA_OPT_LEVEL
 EOF
         ;;
 
@@ -84,6 +95,7 @@ extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
 
 package volca
+  optimization: $VOLCA_OPT_LEVEL
   ghc-options: $MUSL_LINK_FLAGS
 EOF
         ;;
@@ -114,6 +126,7 @@ package mumps-hs
   ghc-options: $DARWIN_LINK_FLAGS
 
 package volca
+  optimization: $VOLCA_OPT_LEVEL
   ghc-options: $DARWIN_LINK_FLAGS
 EOF
         ;;
@@ -151,6 +164,7 @@ extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
 
 package volca
+  optimization: $VOLCA_OPT_LEVEL
   ghc-options: -optl-Wl,--allow-multiple-definition -optl-L$GCC_LIB_DIR -optl-L$MSYS2_LIB_DIR -optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-lopenblas -optl-lgfortran -optl-lgcc -optl-lquadmath -optl-lmingwex -optl-lpthread -optl-lmsvcrt
 EOF
         ;;
