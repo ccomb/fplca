@@ -215,6 +215,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           source versions.env
+          # Retry `gh release view` so a transient API hiccup isn't read as a
+          # missing asset. Prints the asset list (rc 0) on a successful query;
+          # rc 1 only when every attempt failed (API error or release absent).
+          # Kept identical in the cabal-store probe step below.
+          gh_list_assets() {
+            local tag="$1" out
+            for attempt in 1 2 3; do
+              if out=$(gh release view "$tag" -R "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null); then
+                printf '%s\n' "$out"; return 0
+              fi
+              echo "::notice::Querying release $tag failed (attempt $attempt/3) — retrying in 4s" >&2
+              sleep 4
+            done
+            return 1
+          }
           TAG="mumps-prebuilt-${MUMPS_VERSION}-r${MUMPS_PREBUILT_REVISION:-1}"
           PLATFORM='${{ matrix.name }}'
           ASSET="mumps-prebuilt-${PLATFORM}.tar.gz"
@@ -222,9 +237,20 @@ jobs:
           # asset may be absent from an existing release (e.g. first macos-intel
           # build before prebuild-mumps.yml has published its tarball). Missing
           # asset → fall through to the source build instead of failing here.
-          if ! gh release view "$TAG" -R "${GITHUB_REPOSITORY}" --json assets \
-                 --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
-            echo "::warning::Prebuilt MUMPS asset $ASSET (tag $TAG) not found — falling back to source build (or cache). Trigger prebuild-mumps.yml to populate."
+          #
+          # Distinguish a genuine absence from a transient API failure: piping
+          # `gh ... 2>/dev/null` straight into grep conflates the two, so a
+          # flaky `gh release view` silently downgraded the job to the slow
+          # source build even when the asset existed (observed on macos-arm64
+          # against a release that had it). Retry the query; only a *successful*
+          # query with the asset missing is a real miss.
+          if ! assets=$(gh_list_assets "$TAG"); then
+            echo "::warning::Could not query release $TAG after retries (API error or release absent) — falling back to source build (or cache)."
+            echo "populated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -qx "$ASSET" <<<"$assets"; then
+            echo "::warning::Prebuilt MUMPS asset $ASSET (tag $TAG) absent on the release — falling back to source build (or cache). Trigger prebuild-mumps.yml to populate."
             echo "populated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -276,6 +302,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           source versions.env
+          # Retry `gh release view` so a transient API hiccup isn't read as a
+          # missing asset (see the MUMPS step above — kept identical here).
+          gh_list_assets() {
+            local tag="$1" out
+            for attempt in 1 2 3; do
+              if out=$(gh release view "$tag" -R "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null); then
+                printf '%s\n' "$out"; return 0
+              fi
+              echo "::notice::Querying release $tag failed (attempt $attempt/3) — retrying in 4s" >&2
+              sleep 4
+            done
+            return 1
+          }
           # Hash matches the prebuild-cabal-store.yml publish step exactly,
           # so a content change in any of these files always misses the
           # prebuilt and falls through to the cache + source build path.
@@ -291,9 +330,13 @@ jobs:
           # Probe the asset, not just the release (see MUMPS step): a newly-added
           # platform's asset may be missing from an existing release. Missing
           # asset → fall through to the source build instead of failing here.
-          if ! gh release view "$TAG" -R "${GITHUB_REPOSITORY}" --json assets \
-                 --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
-            echo "::warning::Cabal-store prebuilt asset $ASSET (tag $TAG) not found — falling back to source build (or cache). Trigger prebuild-cabal-store.yml to populate."
+          if ! assets=$(gh_list_assets "$TAG"); then
+            echo "::warning::Could not query release $TAG after retries (API error or release absent) — falling back to source build (or cache)."
+            echo "populated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -qx "$ASSET" <<<"$assets"; then
+            echo "::warning::Cabal-store prebuilt asset $ASSET (tag $TAG) absent on the release — falling back to source build (or cache). Trigger prebuild-cabal-store.yml to populate."
             echo "populated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
