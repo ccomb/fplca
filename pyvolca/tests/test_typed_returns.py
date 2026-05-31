@@ -33,6 +33,7 @@ from volca import (
     ServerVersion,
     Substitution,
     SupplyChain,
+    SupplyChainEdge,
     SupplyChainEntry,
     TechRole,
     VoLCAError,
@@ -165,25 +166,25 @@ class TestServerVersionTyped:
 
 
 class TestSubstitution:
-    def test_to_wire_uses_servant_keys(self):
+    def test_to_wire_uses_stripped_keys(self):
         s = Substitution(from_pid="old_pid", to_pid="new_pid", consumer="downstream_pid")
         assert s.to_wire() == {
-            "subFrom": "old_pid",
-            "subTo": "new_pid",
-            "subConsumer": "downstream_pid",
+            "from": "old_pid",
+            "to": "new_pid",
+            "consumer": "downstream_pid",
         }
 
     def test_substitution_body_accepts_typed(self):
         s = Substitution(from_pid="A", to_pid="B", consumer="C")
         body = _substitution_body([s])
-        assert body == {"srSubstitutions": [
-            {"subFrom": "A", "subTo": "B", "subConsumer": "C"},
+        assert body == {"substitutions": [
+            {"from": "A", "to": "B", "consumer": "C"},
         ]}
 
     def test_substitution_body_accepts_dict_form(self):
         body = _substitution_body([{"from": "A", "to": "B", "consumer": "C"}])
-        assert body == {"srSubstitutions": [
-            {"subFrom": "A", "subTo": "B", "subConsumer": "C"},
+        assert body == {"substitutions": [
+            {"from": "A", "to": "B", "consumer": "C"},
         ]}
 
     def test_substitution_dict_typo_raises_locally(self):
@@ -195,6 +196,25 @@ class TestSubstitution:
         s = Substitution(from_pid="A", to_pid="B", consumer="C")
         # Frozen — can be used as a set/dict key.
         assert {s}  # builds without error
+
+
+class TestSupplyChainEdge:
+    def test_from_json_captures_db_endpoints(self):
+        # edgeFromDb/edgeToDb are required to route edges across databases.
+        edge = SupplyChainEdge.from_json({
+            "edgeFrom": "supplier_pid",
+            "edgeFromDb": "ecoinvent",
+            "edgeTo": "consumer_pid",
+            "edgeToDb": "agribalyse",
+            "edgeAmount": 0.5,
+        })
+        assert edge == SupplyChainEdge(
+            from_id="supplier_pid",
+            from_db="ecoinvent",
+            to_id="consumer_pid",
+            to_db="agribalyse",
+            amount=0.5,
+        )
 
 
 # ---------------------------------------------------------------------------
