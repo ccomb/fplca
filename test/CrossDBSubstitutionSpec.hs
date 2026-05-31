@@ -10,7 +10,7 @@ database under two names via 'DepSolverLookup'.
 -}
 module CrossDBSubstitutionSpec (spec) where
 
-import API.Types (RootDb (..), Substitution (..), parseSubRef)
+import API.Types (RootDb (..), Substitution (..), SubstitutionScope (..), parseSubRef)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
 import Service (
@@ -47,7 +47,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             solver <- mkSolver db "root"
             let noDeps _ = pure Nothing
-            res <- computeScalingVectorWithSubstitutionsCrossDB noDeps db "root" solver 0 []
+            res <- computeScalingVectorWithSubstitutionsCrossDB defaultUnitConfig noDeps db "root" solver 0 []
             case res of
                 Right (x, links) -> do
                     U.length x `shouldBe` fromIntegral (dbActivityCount db)
@@ -62,9 +62,9 @@ spec = do
                     Substitution
                         { subFrom = "00000000-0000-0000-0000-000000000000_00000000-0000-0000-0000-000000000000"
                         , subTo = "00000000-0000-0000-0000-000000000000_00000000-0000-0000-0000-000000000000"
-                        , subConsumer = "dep-db::00000000-0000-0000-0000-000000000000_00000000-0000-0000-0000-000000000000"
+                        , subScope = OneEdge "dep-db::00000000-0000-0000-0000-000000000000_00000000-0000-0000-0000-000000000000"
                         }
-            res <- computeScalingVectorWithSubstitutionsCrossDB noDeps db "root" solver 0 [badSub]
+            res <- computeScalingVectorWithSubstitutionsCrossDB defaultUnitConfig noDeps db "root" solver 0 [badSub]
             case res of
                 Left (MatrixError msg) ->
                     msg `shouldSatisfy` T.isInfixOf "consumer must live in root"
@@ -82,9 +82,9 @@ spec = do
                     Substitution
                         { subFrom = "missing-dep::" <> realRootPid
                         , subTo = realRootPid
-                        , subConsumer = realRootPid
+                        , subScope = OneEdge realRootPid
                         }
-            res <- computeScalingVectorWithSubstitutionsCrossDB noDeps db "root" solver 0 [sub]
+            res <- computeScalingVectorWithSubstitutionsCrossDB defaultUnitConfig noDeps db "root" solver 0 [sub]
             case res of
                 Left (MatrixError msg) ->
                     msg `shouldSatisfy` T.isInfixOf "unloaded database"

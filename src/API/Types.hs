@@ -802,22 +802,68 @@ newtype SubstitutionRequest = SubstitutionRequest
     deriving (Generic)
     deriving (FromJSON, ToSchema) via (Stripped SubstitutionRequest)
 
+{- | Scope of a supplier substitution.
+
+* 'OneEdge' carries the consumer 'ProcessId' ref and replaces the supplier
+  on that single technosphere edge — the historical per-edge behaviour.
+* 'AllConsumers' replaces @from@ by @to@ on __every__ consumer that sources
+  from @from@, as one rank-1 update. @from@ must live in the root DB.
+
+On the wire the scope is the optional @consumer@ field: present →
+'OneEdge', absent → 'AllConsumers'. Making it a sum type keeps the
+applicator's dispatch total (no "is the consumer empty?" guard).
+-}
+data SubstitutionScope
+    = OneEdge Text
+    | AllConsumers
+
 {- | A single supplier substitution.
 
-Each field is a 'ProcessId' text, either in the bare form
-@"actUUID_prodUUID"@ (resolved in the URL's database, i.e. the root DB)
-or in the cross-DB qualified form @"dbName::actUUID_prodUUID"@ (resolved
-against the named dep DB). See 'parseSubRef'. @subConsumer@ may live in
-the root DB (bare) or in any loaded and reachable dep DB (qualified);
-the per-level applicator will dispatch to the right database.
+@subFrom@/@subTo@ are 'ProcessId' texts, either bare @"actUUID_prodUUID"@
+(resolved in the URL's database, i.e. the root DB) or in the cross-DB
+qualified form @"dbName::actUUID_prodUUID"@ (resolved against the named
+dep DB). See 'parseSubRef'. The 'OneEdge' consumer ref follows the same
+bare/qualified rule and may live in the root DB or any loaded, reachable
+dep DB; the per-level applicator dispatches to the right database.
 -}
 data Substitution = Substitution
     { subFrom :: Text -- Original supplier ProcessId (bare or dbName::pid)
     , subTo :: Text -- Replacement supplier ProcessId (bare or dbName::pid)
-    , subConsumer :: Text -- Consumer activity ProcessId (bare or dbName::pid)
+    , subScope :: SubstitutionScope -- Per-edge consumer, or all consumers
     }
-    deriving (Generic)
-    deriving (FromJSON, ToSchema) via (Stripped Substitution)
+
+{- | The DB-qualified ref that decides which recursion level processes a
+substitution: the consumer for 'OneEdge', the replaced supplier @from@ for
+'AllConsumers' (whose consumers are enumerated where @from@ lives).
+-}
+subAnchorRef :: Substitution -> Text
+subAnchorRef sub = case subScope sub of
+    OneEdge cRef -> cRef
+    AllConsumers -> subFrom sub
+
+-- | @consumer@ present → 'OneEdge'; absent → 'AllConsumers' (global swap).
+instance FromJSON Substitution where
+    parseJSON = withObject "Substitution" $ \o ->
+        Substitution
+            <$> o .: "from"
+            <*> o .: "to"
+            <*> (maybe AllConsumers OneEdge <$> o .:? "consumer")
+
+-- | @from@/@to@ required; @consumer@ optional (omit for a global swap).
+instance ToSchema Substitution where
+    declareNamedSchema _ = do
+        textRef <- declareSchemaRef (Proxy :: Proxy Text)
+        pure $
+            NamedSchema (Just "Substitution") $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & properties
+                        .~ InsOrdHashMap.fromList
+                            [ ("from", textRef)
+                            , ("to", textRef)
+                            , ("consumer", textRef)
+                            ]
+                    & required .~ ["from", "to"]
 
 {- | A single rank-1 perturbation of a technosphere coefficient @A_ij@.
 

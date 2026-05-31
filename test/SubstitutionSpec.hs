@@ -15,7 +15,7 @@ which is covered by 'CrossDBInventorySpec'.
 -}
 module SubstitutionSpec (spec) where
 
-import API.Types (Substitution (..))
+import API.Types (Substitution (..), SubstitutionScope (..))
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
@@ -84,7 +84,7 @@ spec = do
                     Substitution
                         { subFrom = bogusPid
                         , subTo = bogusPid
-                        , subConsumer = bogusPid
+                        , subScope = OneEdge bogusPid
                         }
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid [badSub]
             case eSub of

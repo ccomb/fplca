@@ -45,7 +45,9 @@ module Matrix (
     computeProcessLCIAContributions,
     perturbA,
     perturbABatch,
+    perturbGlobal,
     applyShermanMorrison,
+    applyShermanMorrisonV,
     buildDemandVectorFromIndex,
     solveSparseLinearSystem,
     applySparseMatrix,
@@ -642,32 +644,74 @@ perturbA ::
 perturbA db mFact x col perturb
     | null perturb = pure (Right x)
     | otherwise = do
-        let n = U.length x
-            u = U.accum (+) (U.replicate n 0.0) perturb
-        z <- case mFact of
-            Just f -> solveSparseLinearSystemWithFactorization f u
-            Nothing -> do
-                let techTriples = dbTechnosphereTriples db
-                    activityCount = dbActivityCount db
-                solveSparseLinearSystem
-                    [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                    (fromIntegral activityCount)
-                    u
+        z <- solveRankOneZ db mFact (U.length x) perturb
         pure $ applyShermanMorrison x col z
 
+{- | Solve @z = inv(I-A) * u@ for a sparse supplier-axis perturbation @u@,
+reusing the cached factorization when present. Shared by the per-edge
+('perturbA') and global ('perturbGlobal') rank-1 paths so the back-sub
+plumbing lives in one place.
+-}
+solveRankOneZ :: Database -> Maybe MatrixFactorization -> Int -> [(Int, Double)] -> IO Vector
+solveRankOneZ db mFact n perturb =
+    let u = U.accum (+) (U.replicate n 0.0) perturb
+     in case mFact of
+            Just f -> solveSparseLinearSystemWithFactorization f u
+            Nothing ->
+                solveSparseLinearSystem
+                    [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples db)]
+                    (fromIntegral (dbActivityCount db))
+                    u
+
 {- | Apply the Sherman-Morrison rank-1 formula given the precomputed
-z = inv(I-A) * u. Pure step shared by 'perturbA' and 'perturbABatch'.
+z = inv(I-A) * u, with the left projection fixed at the basis column
+@e_col@. Thin wrapper over 'applyShermanMorrisonV'.
 -}
 applyShermanMorrison :: Vector -> Int -> Vector -> Either T.Text Vector
-applyShermanMorrison x col z =
-    let vtx = x U.! col
-        vtz = z U.! col
-        denom = 1.0 + vtz
+applyShermanMorrison x col = applyShermanMorrisonV x [(col, 1.0)]
+
+{- | Generalized Sherman-Morrison: the left projection @v@ is an arbitrary
+sparse vector rather than a single basis column. The rank-1 update is
+@(I-A) + u·vᵀ@; with @v = e_col@ this is the per-edge update, while a full
+technosphere row @v = row_A(A)@ applies a __global__ supplier swap (every
+consumer of one activity at once) in a single back-substitution. @z =
+inv(I-A)·u@ is supplied by the caller.
+-}
+applyShermanMorrisonV :: Vector -> [(Int, Double)] -> Vector -> Either T.Text Vector
+applyShermanMorrisonV x v z =
+    let dot w = sum [c * (w U.! i) | (i, c) <- v]
+        denom = 1.0 + dot z
      in if abs denom < 1e-12
             then Left "Sherman-Morrison update is singular \x2014 perturbation drives (I-A) into a degenerate state"
             else
-                let scale = vtx / denom
+                let scale = dot x / denom
                  in Right $ U.imap (\i xi -> xi - scale * (z U.! i)) x
+
+{- | Rank-1 update for a __global__ supplier substitution: replace activity
+@A@ by @B@ in every consumer that sources from @A@, in one solve. @u@ is the
+supplier-axis perturbation (@e_A - κ·e_B@ within a DB, or @e_A@ alone when
+@B@ lives in a dependency DB); @v@ is the consumer-axis projection — @A@'s
+technosphere row (its coefficient at each consumer). The single back-sub
+@z = inv(I-A)·u@ replaces the @N@ solves an edge-by-edge expansion needs.
+
+An empty @u@ or @v@ leaves @x@ unchanged; callers surface "A consumed
+nowhere" as an explicit error before reaching here, so an empty @v@ is
+never a silent no-op in practice.
+-}
+perturbGlobal ::
+    Database ->
+    Maybe MatrixFactorization ->
+    Vector ->
+    -- | u : sparse supplier-axis perturbation
+    [(Int, Double)] ->
+    -- | v : sparse consumer-axis projection (A's technosphere row)
+    [(Int, Double)] ->
+    IO (Either T.Text Vector)
+perturbGlobal db mFact x u v
+    | null u || null v = pure (Right x)
+    | otherwise = do
+        z <- solveRankOneZ db mFact (U.length x) u
+        pure $ applyShermanMorrisonV x v z
 
 {- |
 Batched 'perturbA': computes z_k = inv(I-A) * u_k for every non-empty
