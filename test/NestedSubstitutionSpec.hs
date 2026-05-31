@@ -11,7 +11,7 @@ rely on the shared classifier body already covered by
 -}
 module NestedSubstitutionSpec (spec) where
 
-import API.Types (RootDb (..), Substitution (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..))
+import API.Types (RootDb (..), Substitution (..), SubstitutionScope (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..))
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
@@ -59,10 +59,10 @@ spec = do
                     Substitution
                         { subFrom = qualifiedPid
                         , subTo = qualifiedPid
-                        , subConsumer = qualifiedPid
+                        , subScope = OneEdge qualifiedPid
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] [sub]
+            res <- applySubstitutionsAt defaultUnitConfig noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] [sub]
             case res of
                 Right ([x'], links) -> do
                     links `shouldBe` []
@@ -77,7 +77,7 @@ spec = do
                 demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
             baselineX <- solveWithSharedSolver solver demandVec
             let noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] []
+            res <- applySubstitutionsAt defaultUnitConfig noDeps db (ThisDb "root") (RootDb "root") solver [baselineX] []
             case res of
                 Right (xs, links) -> do
                     links `shouldBe` []
@@ -98,10 +98,10 @@ spec = do
                     Substitution
                         { subFrom = qualifiedToRoot
                         , subTo = qualifiedToRoot
-                        , subConsumer = qualifiedToRoot
+                        , subScope = OneEdge qualifiedToRoot
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX, baselineX, baselineX] [sub]
+            res <- applySubstitutionsAt defaultUnitConfig noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX, baselineX, baselineX] [sub]
             case res of
                 Right (xs, _) -> length xs `shouldBe` 3
                 Left e -> expectationFailure ("K>1 filter failed: " <> show e)
@@ -122,10 +122,10 @@ spec = do
                     Substitution
                         { subFrom = bareRootPid
                         , subTo = bareRootPid
-                        , subConsumer = bareRootPid
+                        , subScope = OneEdge bareRootPid
                         }
                 noDeps _ = pure Nothing
-            res <- applySubstitutionsAt noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX] [sub]
+            res <- applySubstitutionsAt defaultUnitConfig noDeps db (ThisDb "dep") (RootDb "root") solver [baselineX] [sub]
             case res of
                 Right ([x'], links) -> do
                     links `shouldBe` []
@@ -164,7 +164,7 @@ spec = do
                     Substitution
                         { subFrom = realRootPid
                         , subTo = realRootPid
-                        , subConsumer = "phantom-dep::" <> realRootPid
+                        , subScope = OneEdge ("phantom-dep::" <> realRootPid)
                         }
             eFiltered <- inventoryWithSubsAndDeps defaultUnitConfig noDeps db "SAMPLE.min3" solver pid [subWithPhantomConsumer]
             case eFiltered of
@@ -190,7 +190,7 @@ spec = do
                     Substitution
                         { subFrom = "dep::" <> processIdToText dep f
                         , subTo = "dep::" <> processIdToText dep t
-                        , subConsumer = "dep::" <> processIdToText dep consumerPid
+                        , subScope = OneEdge ("dep::" <> processIdToText dep consumerPid)
                         }
             eBase <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 []
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [mkDepSub fromPid toPid]
@@ -218,13 +218,13 @@ spec = do
                     Substitution
                         { subFrom = processIdToText root rootFrom
                         , subTo = processIdToText root rootTo
-                        , subConsumer = processIdToText root rootCons
+                        , subScope = OneEdge (processIdToText root rootCons)
                         }
                 depSub =
                     Substitution
                         { subFrom = "dep::" <> processIdToText dep depFrom
                         , subTo = "dep::" <> processIdToText dep depTo
-                        , subConsumer = "dep::" <> processIdToText dep depCons
+                        , subScope = OneEdge ("dep::" <> processIdToText dep depCons)
                         }
             eBase <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 []
             eChain <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [rootSub, depSub]
@@ -249,7 +249,7 @@ spec = do
                     Substitution
                         { subFrom = "dep::" <> processIdToText dep fromPid
                         , subTo = "dep::" <> processIdToText dep fromPid
-                        , subConsumer = "dep::" <> processIdToText dep consumerPid
+                        , subScope = OneEdge ("dep::" <> processIdToText dep consumerPid)
                         }
             eBase <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 []
             eSub <- inventoryWithSubsAndDeps defaultUnitConfig lookup_ root "root" rootSolver 0 [identitySub]

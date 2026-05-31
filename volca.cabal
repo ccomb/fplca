@@ -247,6 +247,7 @@ test-suite lca-tests
                      , SubstitutionSpec
                      , SensitivitySpec
                      , CrossDBSubstitutionSpec
+                     , GlobalSubstitutionSpec
                      , DatabaseStatusSpec
                      , DependencyChoiceSpec
                      , OlcaSchemaSpec

@@ -185,29 +185,34 @@ def _resolve_page_args(
 SubstitutionLike = Substitution | dict
 """A :class:`Substitution` or a legacy ``{"from", "to", "consumer"}`` dict.
 
-The dict form is accepted for backwards-compat one-liner ergonomics; the
-typed form is preferred (catches typos at construction time)."""
+``consumer`` is optional — omit it for a global swap. The dict form is
+accepted for backwards-compat one-liner ergonomics; the typed form is
+preferred (catches typos at construction time)."""
 
 
 def _substitution_body(substitutions: list[SubstitutionLike]) -> dict:
     """Build the request body for substitution endpoints.
 
     Accepts :class:`Substitution` instances or the legacy dict form with
-    ``from`` / ``to`` / ``consumer`` keys.
+    ``from`` / ``to`` keys and an optional ``consumer`` key (omit it for a
+    global swap).
     """
 
     def coerce(s: SubstitutionLike) -> dict:
         if isinstance(s, Substitution):
             return s.to_wire()
-        # dict form — validate the three required keys here so typos like
+        # dict form — validate the required keys here so typos like
         # ``"comsumer"`` fail with a clear error rather than at the engine.
-        missing = {"from", "to", "consumer"} - set(s)
+        missing = {"from", "to"} - set(s)
         if missing:
             raise VoLCAError(
                 f"Substitution dict missing keys: {sorted(missing)}. "
                 "Use a Substitution(from_pid=, to_pid=, consumer=) instead."
             )
-        return {"from": s["from"], "to": s["to"], "consumer": s["consumer"]}
+        body = {"from": s["from"], "to": s["to"]}
+        if "consumer" in s:
+            body["consumer"] = s["consumer"]
+        return body
 
     return {"substitutions": [coerce(s) for s in substitutions]}
 
@@ -736,7 +741,8 @@ class Client:
             substitutions: When provided, the call is upgraded to POST and
                 the scaling vector is recomputed with the substituted
                 suppliers. Accepts :class:`Substitution` (preferred) or the
-                legacy ``{"from", "to", "consumer"}`` dict form.
+                legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
+                is optional — omit it for a global swap.
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]

@@ -524,7 +524,8 @@ Args:
     substitutions: When provided, the call is upgraded to POST and
         the scaling vector is recomputed with the substituted
         suppliers. Accepts :class:`Substitution` (preferred) or the
-        legacy ``{"from", "to", "consumer"}`` dict form.
+        legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
+        is optional — omit it for a global swap.
 
 ##### `Client.get_tree(process_id: str) -> dict`
 

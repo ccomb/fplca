@@ -187,10 +187,18 @@ class TestSubstitution:
             {"from": "A", "to": "B", "consumer": "C"},
         ]}
 
-    def test_substitution_dict_typo_raises_locally(self):
-        # "comsumer" is a typo — caught before hitting the engine.
+    def test_substitution_consumer_optional_global_swap(self):
+        # Omitting ``consumer`` requests a global swap: the key must be absent
+        # from the wire body (the engine reads absence as "all consumers").
+        typed = _substitution_body([Substitution(from_pid="A", to_pid="B")])
+        assert typed == {"substitutions": [{"from": "A", "to": "B"}]}
+        dict_form = _substitution_body([{"from": "A", "to": "B"}])
+        assert dict_form == {"substitutions": [{"from": "A", "to": "B"}]}
+
+    def test_substitution_dict_missing_required_raises_locally(self):
+        # ``from``/``to`` stay required; a missing one fails before the engine.
         with pytest.raises(VoLCAError, match="missing keys"):
-            _substitution_body([{"from": "A", "to": "B", "comsumer": "C"}])
+            _substitution_body([{"from": "A", "comsumer": "C"}])
 
     def test_substitution_is_frozen_and_hashable(self):
         s = Substitution(from_pid="A", to_pid="B", consumer="C")

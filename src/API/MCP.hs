@@ -294,7 +294,7 @@ paramsToSchema ps =
 
     -- Arrays in the 'Param' schema default to items of type string; the
     -- exception is the shared @substitutions@ parameter, whose entries are
-    -- @{from, to, consumer}@ objects. We special-case the name rather than
+    -- @{from, to, consumer?}@ objects. We special-case the name rather than
     -- extending the 'Param' record to avoid touching every call site.
     arrayItemsFor p
         | paramType p /= "array" = []
@@ -308,9 +308,9 @@ paramsToSchema ps =
                 .= object
                     [ "from" .= stringField "Source supplier ProcessId (bare or dbName::pid)"
                     , "to" .= stringField "Replacement supplier ProcessId (bare or dbName::pid)"
-                    , "consumer" .= stringField "Consumer activity ProcessId (root DB only)"
+                    , "consumer" .= stringField "Consumer activity ProcessId. Omit to substitute on every consumer of 'from' at once (global swap; 'from' must be in the root DB)."
                     ]
-            , "required" .= (["from", "to", "consumer"] :: [Text])
+            , "required" .= (["from", "to"] :: [Text])
             ]
     stringField desc = object ["type" .= ("string" :: Text), "description" .= (desc :: Text)]
 
@@ -686,7 +686,7 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
                 -- Substitution-aware: re-solve the root scaling, then build from it.
                 (processId, _) <- liftShow (Service.resolveActivityAndProcessId db pid)
                 (scalingVec, virtualLinks) <-
-                    liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB depLookup db dbName solver processId subs) >>= liftShow
+                    liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db dbName solver processId subs) >>= liftShow
                 resp <-
                     liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf False) >>= liftShow
                 pure (toJSON resp)

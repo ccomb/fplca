@@ -1260,10 +1260,12 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
             result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
             either throwServiceError pure result
         Just subReq -> do
+            unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
             (processId, _) <- resolveOrThrow db processIdText
             scalingResult <-
                 liftIO $
                     Service.computeScalingVectorWithSubstitutionsCrossDB
+                        unitCfg
                         (DM.mkDepSolverLookup dbManager)
                         db
                         dbName
@@ -1273,7 +1275,6 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
             case scalingResult of
                 Left err -> throwServiceError err
                 Right (scalingVec, virtualLinks) -> do
-                    unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
                     eResp <-
                         liftIO $
                             Service.buildSupplyChainFromScalingVectorCrossDB
