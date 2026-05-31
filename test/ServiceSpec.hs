@@ -21,7 +21,6 @@ import Service (
     extractCompartment,
     filterTreeExport,
     isResourceExtraction,
-    parseProcessIdFromText,
     resolveActivityAndProcessId,
     validateProcessIdInMatrixIndex,
     validateUUID,
@@ -56,32 +55,6 @@ spec = do
             case validateUUID "aaaaaaaa-aaaa-aaaa-aaaa" of
                 Left (InvalidUUID _) -> return ()
                 _ -> expectationFailure "Expected InvalidUUID"
-
-    -- -----------------------------------------------------------------------
-    -- parseProcessIdFromText (requires DB)
-    -- -----------------------------------------------------------------------
-    describe "parseProcessIdFromText" $ do
-        it "parses a valid ProcessId text from SAMPLE.min3" $ do
-            db <- loadSampleDatabase "SAMPLE.min3"
-            let pidText = processIdToText db 0
-            case parseProcessIdFromText db pidText of
-                Right 0 -> return ()
-                Right n -> expectationFailure $ "Expected ProcessId 0 but got " ++ show n
-                Left e -> expectationFailure $ "Expected Right but got: " ++ show e
-
-        it "returns InvalidProcessId for garbage text" $ do
-            db <- loadSampleDatabase "SAMPLE.min3"
-            case parseProcessIdFromText db "not-a-process-id" of
-                Left (InvalidProcessId _) -> return ()
-                _ -> expectationFailure "Expected InvalidProcessId"
-
-        it "returns InvalidProcessId for a single UUID (missing product part)" $ do
-            db <- loadSampleDatabase "SAMPLE.min3"
-            case parseProcessIdFromText db "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" of
-                Left (InvalidProcessId _) -> return ()
-                -- bare UUID fallback is in resolveActivityAndProcessId, not here
-                Left _ -> return ()
-                Right _ -> expectationFailure "Expected Left"
 
     -- -----------------------------------------------------------------------
     -- validateProcessIdInMatrixIndex
@@ -125,13 +98,28 @@ spec = do
                 Right (_, act) -> activityName act `shouldBe` "production of product X"
                 Left err -> expectationFailure $ "Expected Right but got: " ++ show err
 
-        it "returns ActivityNotFound for a non-existent ProcessId text" $ do
+        it "returns ActivityNotFound for a well-formed but non-existent ProcessId text" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
             -- Valid UUID pair format but not in DB
             let ghost = "99999999-9999-9999-9999-999999999999_99999999-9999-9999-9999-999999999999"
             case resolveActivityAndProcessId db ghost of
-                Left _ -> return ()
-                Right _ -> expectationFailure "Expected Left for unknown process"
+                Left (ActivityNotFound _) -> return ()
+                Left err -> expectationFailure $ "Expected ActivityNotFound but got: " ++ show err
+                Right _ -> expectationFailure "Expected ActivityNotFound but got a hit"
+
+        it "returns ActivityNotFound for a valid but absent bare UUID" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            case resolveActivityAndProcessId db "99999999-9999-9999-9999-999999999999" of
+                Left (ActivityNotFound _) -> return ()
+                Left err -> expectationFailure $ "Expected ActivityNotFound but got: " ++ show err
+                Right _ -> expectationFailure "Expected ActivityNotFound but got a hit"
+
+        it "returns InvalidProcessId for a genuinely malformed query" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            case resolveActivityAndProcessId db "not-a-process-id" of
+                Left (InvalidProcessId _) -> return ()
+                Left err -> expectationFailure $ "Expected InvalidProcessId but got: " ++ show err
+                Right _ -> expectationFailure "Expected InvalidProcessId but got a hit"
 
     -- -----------------------------------------------------------------------
     -- isResourceExtraction

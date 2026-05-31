@@ -136,13 +136,6 @@ validateUUID uuidText = case UUID.fromText uuidText of
     Just uuid -> Right uuid
     Nothing -> Left $ InvalidUUID $ "Invalid UUID format: " <> uuidText
 
--- | Parse ProcessId from text (activity_uuid_product_uuid format)
-parseProcessIdFromText :: Database -> Text -> Either ServiceError ProcessId
-parseProcessIdFromText db text =
-    case parseProcessId db text of
-        Just processId -> Right processId
-        Nothing -> Left $ InvalidProcessId $ "Invalid ProcessId format (expected activity_uuid_product_uuid): " <> text
-
 -- | Find activity by ProcessId using direct Vector access
 findActivityByProcessId :: Database -> ProcessId -> Maybe Activity
 findActivityByProcessId db processId =
@@ -162,22 +155,19 @@ This is the preferred function when you need the ProcessId (e.g., for matrix ope
 -}
 resolveActivityAndProcessId :: Database -> Text -> Either ServiceError (ProcessId, Activity)
 resolveActivityAndProcessId db queryText =
-    case parseProcessIdFromText db queryText of
-        Right processId ->
-            case findActivityByProcessId db processId of
-                Just activity -> Right (processId, activity)
-                Nothing -> Left $ ActivityNotFound queryText
-        Left _ ->
-            -- Fallback: try as bare UUID for ECOINVENT data compatibility
-            case UUID.fromText queryText of
-                Just uuid ->
-                    case findProcessIdByActivityUUID db uuid of
-                        Just processId ->
-                            case findActivityByProcessId db processId of
-                                Just activity -> Right (processId, activity)
-                                Nothing -> Left $ ActivityNotFound queryText
-                        Nothing -> Left $ InvalidProcessId $ "Query must be ProcessId format (activity_uuid_product_uuid) or valid UUID: " <> queryText
-                Nothing -> Left $ InvalidProcessId $ "Invalid UUID format: " <> queryText
+    findPid >>= resolveActivity
+  where
+    notFound = ActivityNotFound queryText
+    -- A syntactically valid identifier that does not resolve is not-found, not
+    -- a format error. Only genuinely malformed input is 'InvalidProcessId'.
+    findPid
+        | Just (a, p) <- parseUUIDPair queryText = maybe (Left notFound) Right (findProcessId db a p)
+        -- Bare activity UUID fallback (EcoInvent compatibility).
+        | Just uuid <- UUID.fromText queryText = maybe (Left notFound) Right (findProcessIdByActivityUUID db uuid)
+        | otherwise =
+            Left $ InvalidProcessId $ "Query must be a ProcessId (activityUUID_productUUID) or a valid UUID: " <> queryText
+    resolveActivity pid =
+        maybe (Left notFound) (\act -> Right (pid, act)) (findActivityByProcessId db pid)
 
 {- | Validate that a ProcessId exists in the matrix activity index
 This check ensures we fail fast with clear error messages before expensive matrix operations
@@ -2427,9 +2417,9 @@ applySubstitutionsAt depLookup thisDb thisDbObj rootDb solver scalings allSubs =
     -- Bare consumer/from/to refs all default to the root DB (per the
     -- 'Substitution' docstring), not whichever DB the recursive walker
     -- happens to be visiting. Using 'thisDb' instead would cause a bare
-    -- consumer to be retried in every dep DB and fail with a misleading
-    -- "Invalid UUID format" on the first dep where the activity does
-    -- not exist, and would also misroute bare suppliers in dep-level
+    -- consumer to be retried in every dep DB and fail with a spurious
+    -- 'ActivityNotFound' on the first dep where the activity does not
+    -- exist, and would also misroute bare suppliers in dep-level
     -- recursion. The 'RootDb' newtype on 'parseSubRef' makes the
     -- argument-swap unrepresentable.
     consumerLivesHere sub =

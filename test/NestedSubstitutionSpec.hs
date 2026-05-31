@@ -111,7 +111,7 @@ spec = do
             -- Substitution docstring). Before this fix, the per-level filter
             -- used 'thisDbName' as the parseSubRef default — so bare consumers
             -- were treated as living in EVERY DB the walker visited, and the
-            -- subsequent resolve in a dep DB threw "Invalid UUID format".
+            -- subsequent resolve in a dep DB failed with a spurious not-found.
             db <- loadSampleDatabase "SAMPLE.min3"
             solver <- mkSolver db "dep"
             let pid = 0
