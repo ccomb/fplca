@@ -271,7 +271,7 @@ class TestDispatcher:
         session.get.assert_not_called()
         body = session.post.call_args[1]["json"]
         assert body == {
-            "srSubstitutions": [{"subFrom": "a", "subTo": "b", "subConsumer": "c"}]
+            "substitutions": [{"from": "a", "to": "b", "consumer": "c"}]
         }
 
     def test_get_impacts_batch_parses_scoring_indicators(self, mocked_client, make_response):
@@ -316,7 +316,7 @@ class TestDispatcher:
         session.get.assert_not_called()
         body = session.post.call_args[1]["json"]
         assert body == {
-            "srSubstitutions": [{"subFrom": "a", "subTo": "b", "subConsumer": "c"}]
+            "substitutions": [{"from": "a", "to": "b", "consumer": "c"}]
         }
 
     def test_get_impacts_batch_requires_db(self, fixture_spec, make_response):

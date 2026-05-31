@@ -1110,7 +1110,7 @@ class Substitution:
 
     def to_wire(self) -> dict:
         """Serialise to the wire shape consumed by SubstitutionRequest."""
-        return {"subFrom": self.from_pid, "subTo": self.to_pid, "subConsumer": self.consumer}
+        return {"from": self.from_pid, "to": self.to_pid, "consumer": self.consumer}
 
 
 # ---------------------------------------------------------------------------

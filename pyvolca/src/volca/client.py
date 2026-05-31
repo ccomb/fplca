@@ -207,9 +207,9 @@ def _substitution_body(substitutions: list[SubstitutionLike]) -> dict:
                 f"Substitution dict missing keys: {sorted(missing)}. "
                 "Use a Substitution(from_pid=, to_pid=, consumer=) instead."
             )
-        return {"subFrom": s["from"], "subTo": s["to"], "subConsumer": s["consumer"]}
+        return {"from": s["from"], "to": s["to"], "consumer": s["consumer"]}
 
-    return {"srSubstitutions": [coerce(s) for s in substitutions]}
+    return {"substitutions": [coerce(s) for s in substitutions]}
 
 
 # ---------------------------------------------------------------------------
