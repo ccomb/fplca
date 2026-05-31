@@ -924,13 +924,15 @@ processIdToText db pid =
         Just (actUUID, prodUUID) -> UUID.toText actUUID <> "_" <> UUID.toText prodUUID
         Nothing -> "invalid-process-id-" <> T.pack (show pid)
 
--- | Parse ProcessId from filename stem (requires Database for lookup)
-parseProcessId :: Database -> Text -> Maybe ProcessId
-parseProcessId db filename = case T.splitOn "_" filename of
-    [actUUIDText, prodUUIDText] | not (T.null actUUIDText) && not (T.null prodUUIDText) ->
-        case (UUID.fromText actUUIDText, UUID.fromText prodUUIDText) of
-            (Just actUUID, Just prodUUID) -> findProcessId db actUUID prodUUID
-            _ -> Nothing
+{- | Pure syntactic parse of a ProcessId reference (activityUUID_productUUID).
+Returns the UUID pair when the text has the expected shape, regardless of
+whether that pair exists in any database. 'Nothing' is a genuine format
+error — callers treat a well-formed-but-absent pair as not-found, not malformed.
+-}
+parseUUIDPair :: Text -> Maybe (UUID, UUID)
+parseUUIDPair t = case T.splitOn "_" t of
+    [actText, prodText] | not (T.null actText), not (T.null prodText) ->
+        (,) <$> UUID.fromText actText <*> UUID.fromText prodText
     _ -> Nothing
 
 -- | Add SynonymDB to a Database (used after loading from cache)
