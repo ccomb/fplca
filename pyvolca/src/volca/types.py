@@ -1109,10 +1109,11 @@ class AggregateResult:
 class Substitution:
     """Replace one supplier with another in the upstream supply chain.
 
-    All three fields are process_ids. ``consumer`` identifies which downstream
-    consumer's input to rewrite (substitutions are scoped, not global) — the
-    same upstream supplier can be replaced by different alternatives in
-    different parts of the tree.
+    All fields are process_ids. ``consumer`` identifies which downstream
+    consumer's input to rewrite, scoping the swap to one edge — the same
+    upstream supplier can be replaced by different alternatives in different
+    parts of the tree. Omit it (leave ``None``) to apply the swap globally,
+    replacing the supplier on every consumer at once.
 
     Frozen so callers can put it in a set / dict key and re-use the same
     substitution across multiple calls without aliasing risk.
@@ -1120,11 +1121,14 @@ class Substitution:
 
     from_pid: str  # the supplier being replaced (wire: ``from``)
     to_pid: str  # the replacement supplier (wire: ``to``)
-    consumer: str  # the consumer whose input gets rewritten
+    consumer: str | None = None  # the consumer to scope to; None = global swap
 
     def to_wire(self) -> dict:
         """Serialise to the wire shape consumed by SubstitutionRequest."""
-        return {"from": self.from_pid, "to": self.to_pid, "consumer": self.consumer}
+        d = {"from": self.from_pid, "to": self.to_pid}
+        if self.consumer is not None:
+            d["consumer"] = self.consumer
+        return d
 
 
 # ---------------------------------------------------------------------------
