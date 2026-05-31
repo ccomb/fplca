@@ -103,8 +103,9 @@ instance FromJSON ApiFlow where
             "unresolved" -> ApiUnresolvedFlow <$> o .: "id"
             other -> fail $ "ApiFlow.kind must be \"technosphere\", \"biosphere\", \"waste\", or \"unresolved\", got: " <> T.unpack other
 
--- | Manual schema for ApiFlow — discriminated by 'kind' so OpenAPI consumers
--- see a real tagged union instead of a generic Either.
+{- | Manual schema for ApiFlow — discriminated by 'kind' so OpenAPI consumers
+see a real tagged union instead of a generic Either.
+-}
 instance ToSchema ApiFlow where
     declareNamedSchema _ = do
         techRef <- declareSchemaRef (Proxy :: Proxy TechnosphereFlow)
@@ -155,8 +156,9 @@ instance ToSchema ApiFlow where
                     & required .~ ["kind"]
                     & OA.oneOf ?~ [Inline tech, Inline bio, Inline unresolved]
 
--- | Search response combining results and count. ToSchema is added below
--- via a standalone deriving (needed because of the `(ToSchema a) =>` context).
+{- | Search response combining results and count. ToSchema is added below
+via a standalone deriving (needed because of the `(ToSchema a) =>` context).
+-}
 data SearchResults a = SearchResults
     { srResults :: [a] -- The actual search results
     , srTotal :: Int -- Total count of all matching items (before pagination)
@@ -167,9 +169,9 @@ data SearchResults a = SearchResults
     }
     deriving (Generic)
 
-deriving via (Stripped (SearchResults a)) instance ToJSON a => ToJSON (SearchResults a)
-deriving via (Stripped (SearchResults a)) instance FromJSON a => FromJSON (SearchResults a)
-deriving via (Stripped (SearchResults a)) instance ToSchema a => ToSchema (SearchResults a)
+deriving via (Stripped (SearchResults a)) instance (ToJSON a) => ToJSON (SearchResults a)
+deriving via (Stripped (SearchResults a)) instance (FromJSON a) => FromJSON (SearchResults a)
+deriving via (Stripped (SearchResults a)) instance (ToSchema a) => ToSchema (SearchResults a)
 
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
@@ -569,9 +571,10 @@ data LCIABatchResult = LCIABatchResult
     , lbrScoringIndicators :: M.Map Text (M.Map Text ScoringIndicator)
     -- ^ Scoring set name → (variable name → indicator). One row per scoring variable.
     , lbrCutoffWaste :: [CutoffWasteFlow]
-    -- ^ Orphan waste exchanges on the scored activity — flows the dataset author
-    -- left unmodelled. They contribute 0 to the score; surfacing them lets
-    -- consumers see what's excluded rather than silently undercounting.
+    {- ^ Orphan waste exchanges on the scored activity — flows the dataset author
+    left unmodelled. They contribute 0 to the score; surfacing them lets
+    consumers see what's excluded rather than silently undercounting.
+    -}
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped LCIABatchResult)
@@ -583,8 +586,9 @@ excludes it; this record makes that exclusion visible.
 -}
 data CutoffWasteFlow = CutoffWasteFlow
     { cwfFlowId :: UUID
-    -- ^ Waste flow UUID — lets consumers programmatically address the
-    -- cut-off (e.g. to propose a treatment activity that would close it).
+    {- ^ Waste flow UUID — lets consumers programmatically address the
+    cut-off (e.g. to propose a treatment activity that would close it).
+    -}
     , cwfFlowName :: Text
     , cwfAmount :: Double
     , cwfUnit :: Text
@@ -850,10 +854,11 @@ data PerturbedEntry = PerturbedEntry
     }
     deriving (Generic)
 
--- | Manual schema for PerturbedEntry: the Either inside is flattened by ToJSON
--- to {perturbation, impact, deltaImpact} on success and {perturbation, error}
--- on failure. The Generic-derived schema would expose the Haskell shape
--- (a oneOf wrapper around the Either) instead of the flat wire format.
+{- | Manual schema for PerturbedEntry: the Either inside is flattened by ToJSON
+to {perturbation, impact, deltaImpact} on success and {perturbation, error}
+on failure. The Generic-derived schema would expose the Haskell shape
+(a oneOf wrapper around the Either) instead of the flat wire format.
+-}
 instance ToSchema PerturbedEntry where
     declareNamedSchema _ = do
         pertRef <- declareSchemaRef (Proxy :: Proxy Perturbation)
@@ -1157,11 +1162,12 @@ instance FromJSON NativeActivityType where
             "ilcd" -> pure (ILCDProcessType label)
             other -> fail $ "Unknown NativeActivityType source: " <> T.unpack other
 
--- | Wire schema mirrors the flat ToJSON shape: a single object with a
--- 'source' discriminator and source-specific fields that are null when
--- irrelevant. Co-located with the JSON instances above so that downstream
--- DerivingVia clauses (e.g. ToSchema for ActivitySummary, ActivityForAPI)
--- can resolve the instance without forming a circular dep on API.OpenApi.
+{- | Wire schema mirrors the flat ToJSON shape: a single object with a
+'source' discriminator and source-specific fields that are null when
+irrelevant. Co-located with the JSON instances above so that downstream
+DerivingVia clauses (e.g. ToSchema for ActivitySummary, ActivityForAPI)
+can resolve the instance without forming a circular dep on API.OpenApi.
+-}
 instance ToSchema NativeActivityType where
     declareNamedSchema _ = do
         let sourceEnum =
@@ -1192,9 +1198,11 @@ instance ToSchema NativeActivityType where
                             , ("special_label", Inline nullableTextSchema)
                             ]
                     & required .~ ["source", "label"]
+
 instance ToJSON NodeType
 instance ToJSON EdgeType
 instance ToJSON FlowRole
+
 -- ToJSON / FromJSON / ToSchema for Unit are derived via Stripped alongside
 -- its data declaration in src/Types.hs.
 -- CutoffWasteFlow (added on main) derives via Stripped attached to its data

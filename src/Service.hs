@@ -129,8 +129,9 @@ data ServiceError
     | MatrixError Text -- Generic error from matrix computations
     deriving (Show)
 
--- | Validate UUID format, returning the parsed UUID so callers do not have to
--- re-parse the text afterwards.
+{- | Validate UUID format, returning the parsed UUID so callers do not have to
+re-parse the text afterwards.
+-}
 validateUUID :: Text -> Either ServiceError UUID.UUID
 validateUUID uuidText = case UUID.fromText uuidText of
     Just uuid -> Right uuid
@@ -478,8 +479,9 @@ mkBiosphereExportNode units flow parentPid depth isEmission =
             , enCompartment = Just compartmentTxt
             }
 
--- | Edge linking an activity to a biosphere flow. Direction depends on whether
--- the exchange is an emission (activity -> flow) or a resource (flow -> activity).
+{- | Edge linking an activity to a biosphere flow. Direction depends on whether
+the exchange is an emission (activity -> flow) or a resource (flow -> activity).
+-}
 mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> Bool -> Exchange -> TreeEdge
 mkBiosphereTreeEdge units flow activityPid isEmission ex =
     let flowIdText = UUID.toText (bfId flow)
@@ -531,8 +533,9 @@ mkActivityExportNode db activity nodeId depth parentId =
         , enCompartment = Nothing
         }
 
--- | ExportNode for a TreeLoop. Looks up the referenced activity for its real
--- unit and location; falls back to "N/A" sentinels when the referent is missing.
+{- | ExportNode for a TreeLoop. Looks up the referenced activity for its real
+unit and location; falls back to "N/A" sentinels when the referent is missing.
+-}
 mkLoopExportNode :: Database -> UUID -> Text -> Text -> Int -> Maybe Text -> ExportNode
 mkLoopExportNode db uuid nodeId name loopDepth parentId =
     let (actualLocation, actualUnit) = case findActivityByActivityUUID db uuid of
@@ -556,13 +559,13 @@ mkLoopExportNode db uuid nodeId name loopDepth parentId =
 the tree (depth == 0). Below the root we leave the accumulator untouched to
 keep the graph readable.
 -}
-withRootBiosphere
-    :: Database
-    -> Activity
-    -> Text
-    -> Int
-    -> (M.Map Text ExportNode, [TreeEdge])
-    -> (M.Map Text ExportNode, [TreeEdge])
+withRootBiosphere ::
+    Database ->
+    Activity ->
+    Text ->
+    Int ->
+    (M.Map Text ExportNode, [TreeEdge]) ->
+    (M.Map Text ExportNode, [TreeEdge])
 withRootBiosphere db activity pid depth acc@(nodes, edges)
     | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth nodes edges
     | otherwise = acc
@@ -698,14 +701,14 @@ the triple itself is zero. When the supplier flow can't be resolved we still
 emit the edge — with sentinel name/unit — so the gap is debuggable instead of
 silently dropped.
 -}
-mkGraphEdgeFromTriple
-    :: Database
-    -> V.Vector Activity
-    -> UnitDB
-    -> TechFlowDB
-    -> M.Map ProcessId Int
-    -> SparseTriple
-    -> Maybe GraphEdge
+mkGraphEdgeFromTriple ::
+    Database ->
+    V.Vector Activity ->
+    UnitDB ->
+    TechFlowDB ->
+    M.Map ProcessId Int ->
+    SparseTriple ->
+    Maybe GraphEdge
 mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col value)
     | value == 0.0 = Nothing
     | otherwise = do
@@ -1132,12 +1135,12 @@ links (linkId set but unresolvable) do NOT fall through to the product-flow
 path — that matches the original behaviour. Use '<|>' to chain fallbacks only
 where the original code did.
 -}
-resolveTarget
-    :: UnitConfig
-    -> Database
-    -> M.Map UUID CrossDBLink
-    -> Exchange
-    -> Maybe TargetRef
+resolveTarget ::
+    UnitConfig ->
+    Database ->
+    M.Map UUID CrossDBLink ->
+    Exchange ->
+    Maybe TargetRef
 resolveTarget cfg db links = \case
     TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
@@ -1174,12 +1177,12 @@ buildCrossDBLinkMap db pid = case processIdToUUIDs db pid of
             ]
     Nothing -> M.empty
 
-toExchangeWithUnit
-    :: UnitConfig
-    -> Database
-    -> M.Map UUID CrossDBLink
-    -> Exchange
-    -> ExchangeWithUnit
+toExchangeWithUnit ::
+    UnitConfig ->
+    Database ->
+    M.Map UUID CrossDBLink ->
+    Exchange ->
+    ExchangeWithUnit
 toExchangeWithUnit cfg db links exchange =
     -- Surface the raw UUID when the flow does not resolve — a clear failure
     -- the consumer can debug, not a silent "unknown".
@@ -1335,11 +1338,11 @@ crossDBLinkToSummary link =
 cross-DB link map for unresolved technosphere/waste links. Biosphere flows
 have no target by definition.
 -}
-resolveTargetSummary
-    :: Database
-    -> M.Map UUID CrossDBLink
-    -> Exchange
-    -> Maybe ActivitySummary
+resolveTargetSummary ::
+    Database ->
+    M.Map UUID CrossDBLink ->
+    Exchange ->
+    Maybe ActivitySummary
 resolveTargetSummary db links exchange = case exchange of
     BiosphereExchange{} -> Nothing
     TechnosphereExchange{} -> resolved
@@ -2584,10 +2587,10 @@ mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
      in CrossDBLink
             { cdlConsumerActUUID = cActU
             , cdlConsumerProdUUID = cProdU
-            -- Substitution links never enter 'dbCrossDBLinks' and the API
-            -- surface only indexes load-time links by 'cdlConsumerFlowId',
-            -- so the discriminator is unused for synthetic links.
-            , cdlConsumerFlowId = UUID.nil
+            , -- Substitution links never enter 'dbCrossDBLinks' and the API
+              -- surface only indexes load-time links by 'cdlConsumerFlowId',
+              -- so the discriminator is unused for synthetic links.
+              cdlConsumerFlowId = UUID.nil
             , cdlSupplierActUUID = supActU
             , cdlSupplierProdUUID = supProdU
             , cdlCoefficient = coef

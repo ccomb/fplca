@@ -198,9 +198,10 @@ ecoSpoldNativeType (Just code) special =
             , eatSpecialLabel = ecoSpoldSpecialActivityTypeLabel <$> special
             }
 
--- | ecospold2 activityType enum labels (v3 schema). Unknown codes yield an
--- explicit "Unknown (code N)" sentinel so a future spec extension or a
--- parser bug is visible to consumers, not silently empty.
+{- | ecospold2 activityType enum labels (v3 schema). Unknown codes yield an
+explicit "Unknown (code N)" sentinel so a future spec extension or a
+parser bug is visible to consumers, not silently empty.
+-}
 ecoSpoldActivityTypeLabel :: Int -> Text
 ecoSpoldActivityTypeLabel = \case
     1 -> "Ordinary transforming activity"
@@ -213,8 +214,9 @@ ecoSpoldActivityTypeLabel = \case
     8 -> "Market group"
     n -> "Unknown (code " <> T.pack (show n) <> ")"
 
--- | ecospold2 specialActivityType enum labels (v3 schema). Same unknown-code
--- treatment as 'ecoSpoldActivityTypeLabel'.
+{- | ecospold2 specialActivityType enum labels (v3 schema). Same unknown-code
+treatment as 'ecoSpoldActivityTypeLabel'.
+-}
 ecoSpoldSpecialActivityTypeLabel :: Int -> Text
 ecoSpoldSpecialActivityTypeLabel = \case
     0 -> "Default"
@@ -248,8 +250,9 @@ pathAt depth name st = case drop depth (psPath st) of
     (e : _) -> isElement e name
     [] -> False
 
--- | Transform the open exchange accumulator, leaving non-exchange contexts
--- untouched. The exhaustive match lives here so the call sites stay wildcard-free.
+{- | Transform the open exchange accumulator, leaving non-exchange contexts
+untouched. The exhaustive match lives here so the call sites stay wildcard-free.
+-}
 mapExchange ::
     (IntermediateData -> IntermediateData) ->
     (ElementaryData -> ElementaryData) ->
@@ -307,8 +310,9 @@ mkUnit uuid name
     | T.null name = Unit uuid "UNKNOWN_UNIT" "?" ""
     | otherwise = Unit uuid name name ""
 
--- | Resolve in/out group: prefer the attribute value, fall back to the pending
--- value captured from the child @\<inputGroup\>@ / @\<outputGroup\>@ element.
+{- | Resolve in/out group: prefer the attribute value, fall back to the pending
+value captured from the child @\<inputGroup\>@ / @\<outputGroup\>@ element.
+-}
 resolveGroups :: Text -> Text -> ParseState -> (Text, Text)
 resolveGroups inG outG st =
     ( if T.null inG then psPendingInputGroup st else inG
@@ -348,8 +352,9 @@ addBioFlow f st = st{psBioFlows = f : psBioFlows st}
 addWasteFlow :: WasteFlow -> ParseState -> ParseState
 addWasteFlow f st = st{psWasteFlows = f : psWasteFlows st}
 
--- | Common exchange-close bookkeeping: leave the exchange context, pop the
--- path/text, clear pending groups, record the unit and any warnings.
+{- | Common exchange-close bookkeeping: leave the exchange context, pop the
+path/text, clear pending groups, record the unit and any warnings.
+-}
 finishExchange :: Unit -> [String] -> ParseState -> ParseState
 finishExchange unit warns st =
     (popText st)
@@ -543,8 +548,8 @@ parseWithXeno xmlContent processId = do
                             (Nothing, Nothing) -> Nothing
                             (Just c, sc) -> Just (Compartment c sc)
                             (Nothing, Just _) -> Nothing -- sub without medium is meaningless; drop
-                        -- Biosphere direction: prefer inputGroup/outputGroup, else fall back to the
-                        -- compartment heuristic (natural-resource flows are extractions).
+                            -- Biosphere direction: prefer inputGroup/outputGroup, else fall back to the
+                            -- compartment heuristic (natural-resource flows are extractions).
                         direction
                             | not (T.null finalInputGroup) = Resource
                             | not (T.null finalOutputGroup) = Emission

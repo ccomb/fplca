@@ -156,9 +156,10 @@ popPath s = s{psPath = drop 1 (psPath s)}
 popElement :: ParseState -> ParseState
 popElement s = s{psPath = drop 1 (psPath s), psTextAccum = []}
 
--- | Open tag: push the element onto the path and switch context on the
--- structural elements we care about. Groups only enter their context from
--- within an exchange; any other current context is preserved.
+{- | Open tag: push the element onto the path and switch context on the
+structural elements we care about. Groups only enter their context from
+within an exchange; any other current context is preserved.
+-}
 onOpenTag :: ParseState -> BS.ByteString -> ParseState
 onOpenTag state tagName =
     state{psPath = tagName : psPath state, psContext = newContext, psTextAccum = []}
@@ -199,7 +200,8 @@ setRefFunctionAttr name value st
     | isElement name "unit" = st{psRefUnit = Just (bsToText value)}
     | isElement name "category" = st{psActivityCategory = bsToText value}
     | isElement name "subCategory" = st{psActivitySubCategory = bsToText value}
-    | isElement name "generalComment", not (BS.null value) =
+    | isElement name "generalComment"
+    , not (BS.null value) =
         st{psDescription = bsToText value : psDescription st}
     | otherwise = st
 
@@ -242,12 +244,13 @@ onCloseTag state tagName
     | isElement tagName "dataset" = closeDataset state
     | otherwise = popPath state
 
--- | Close an input/output group: fold its accumulated text into the parent
--- exchange's matching group field and return to the exchange context.
--- @ownGroup@ yields the exchange data to restore when the current context is
--- the group being closed (or, defensively, a bare exchange); any other context
--- just pops the element. The opposite group never restores, so a stray
--- </inputGroup> inside an <outputGroup> (malformed) is ignored, not merged.
+{- | Close an input/output group: fold its accumulated text into the parent
+exchange's matching group field and return to the exchange context.
+@ownGroup@ yields the exchange data to restore when the current context is
+the group being closed (or, defensively, a bare exchange); any other context
+just pops the element. The opposite group never restores, so a stray
+</inputGroup> inside an <outputGroup> (malformed) is ignored, not merged.
+-}
 closeGroup :: (ElementContext -> Maybe ExchangeData) -> (ExchangeData -> Text -> ExchangeData) -> ParseState -> ParseState
 closeGroup ownGroup setField state =
     case ownGroup (psContext state) of
@@ -256,8 +259,9 @@ closeGroup ownGroup setField state =
   where
     txt = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state)
 
--- | Exchange data to restore when closing an <inputGroup>: the group we opened,
--- or (defensively) a bare exchange. The opposite group does not restore.
+{- | Exchange data to restore when closing an <inputGroup>: the group we opened,
+or (defensively) a bare exchange. The opposite group does not restore.
+-}
 restoreInputGroup :: ElementContext -> Maybe ExchangeData
 restoreInputGroup (InInputGroup edata) = Just edata
 restoreInputGroup (InExchange edata) = Just edata
@@ -266,8 +270,9 @@ restoreInputGroup InReferenceFunction = Nothing
 restoreInputGroup InGeography = Nothing
 restoreInputGroup Other = Nothing
 
--- | Exchange data to restore when closing an <outputGroup>: the group we opened,
--- or (defensively) a bare exchange. The opposite group does not restore.
+{- | Exchange data to restore when closing an <outputGroup>: the group we opened,
+or (defensively) a bare exchange. The opposite group does not restore.
+-}
 restoreOutputGroup :: ElementContext -> Maybe ExchangeData
 restoreOutputGroup (InOutputGroup edata) = Just edata
 restoreOutputGroup (InExchange edata) = Just edata
@@ -276,8 +281,9 @@ restoreOutputGroup InReferenceFunction = Nothing
 restoreOutputGroup InGeography = Nothing
 restoreOutputGroup Other = Nothing
 
--- | Close an exchange: build its exchange/flow/unit, accumulate them, and
--- record the supplier link for technosphere inputs.
+{- | Close an exchange: build its exchange/flow/unit, accumulate them, and
+record the supplier link for technosphere inputs.
+-}
 closeExchange :: ParseState -> ParseState
 closeExchange state = case psContext state of
     InExchange edata ->
@@ -308,15 +314,17 @@ closeExchange state = case psContext state of
     InGeography -> popPath state
     Other -> popPath state
 
--- | Close a dataset: snapshot the completed activity and reset per-dataset
--- accumulators for the next one (multi-dataset files).
+{- | Close a dataset: snapshot the completed activity and reset per-dataset
+accumulators for the next one (multi-dataset files).
+-}
 closeDataset :: ParseState -> ParseState
 closeDataset state =
     let !result = buildResult state
      in popPath ((resetDataset state){psCompletedActivities = result : psCompletedActivities state})
 
--- | Clear per-dataset accumulators, preserving cross-dataset state
--- (psPath and psCompletedActivities).
+{- | Clear per-dataset accumulators, preserving cross-dataset state
+(psPath and psCompletedActivities).
+-}
 resetDataset :: ParseState -> ParseState
 resetDataset state =
     state

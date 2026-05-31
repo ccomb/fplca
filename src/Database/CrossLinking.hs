@@ -104,11 +104,13 @@ data IndexedDatabase = IndexedDatabase
     , idbByProductName :: !(M.Map Text [SupplierEntry]) -- Normalized product name → suppliers
     , idbBySynonymGroup :: !(M.Map Int [SupplierEntry]) -- Synonym group ID → suppliers
     , idbWasteTreatmentByFlowUUID :: !(M.Map UUID [SupplierEntry])
-    -- ^ Waste flow UUID → activities whose reference product is that waste
-    -- (treatment activities). Strict-matched only — no synonym, no scoring.
+    {- ^ Waste flow UUID → activities whose reference product is that waste
+    (treatment activities). Strict-matched only — no synonym, no scoring.
+    -}
     , idbWasteTreatmentByCanonicalName :: !(M.Map Text [SupplierEntry])
-    -- ^ normalizeText (wfName) → same set, for the name-based fallback when
-    -- two databases use different UUIDs for the same canonical waste flow.
+    {- ^ normalizeText (wfName) → same set, for the name-based fallback when
+    two databases use different UUIDs for the same canonical waste flow.
+    -}
     }
 
 {- | Entry in the supplier index
@@ -465,8 +467,10 @@ threshold — those would cross from honoring explicit intent into
 fabricating links.
 -}
 data WasteTreatmentMatch
-    = WasteMatched !SupplierEntry !Text -- ^ entry + source database name
-    | WasteAmbiguous ![Text] -- ^ databases that all offered a candidate
+    = -- | entry + source database name
+      WasteMatched !SupplierEntry !Text
+    | -- | databases that all offered a candidate
+      WasteAmbiguous ![Text]
     | WasteNoMatch
 
 {- | Strict cross-DB waste-treatment lookup. Honors author-provided alignment
@@ -604,11 +608,11 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     lookupBySynonym groupId idb =
         [(idbName idb, entry) | entry <- fromMaybe [] (M.lookup groupId (idbBySynonymGroup idb))]
 
-    {- | First non-empty list in a priority order. This is the @First@ monoid
-    on @Maybe [a]@ (lift each list into @Maybe@ via 'nonEmpty', combine with
-    @<|>@, drop back), collapsed to a single helper because that's the
-    exact shape every match-strategy cascade in this module wants.
-    -}
+    -- \| First non-empty list in a priority order. This is the @First@ monoid
+    --    on @Maybe [a]@ (lift each list into @Maybe@ via 'nonEmpty', combine with
+    --    @<|>@, drop back), collapsed to a single helper because that's the
+    --    exact shape every match-strategy cascade in this module wants.
+    --
     firstNonEmpty :: [[a]] -> [a]
     firstNonEmpty = fromMaybe [] . find (not . null)
 

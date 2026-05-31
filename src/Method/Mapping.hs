@@ -115,9 +115,10 @@ data MatchStrategy
       NoMatch
     deriving (Eq, Show)
 
--- | Per-strategy mapping counters. Forms a 'Monoid' (field-wise sum, all-zero
--- identity) so per-batch stats compose with '<>' and 'computeMappingStats'
--- is a single 'foldMap' pass over the mapping list.
+{- | Per-strategy mapping counters. Forms a 'Monoid' (field-wise sum, all-zero
+identity) so per-batch stats compose with '<>' and 'computeMappingStats'
+is a single 'foldMap' pass over the mapping list.
+-}
 data MappingStats = MappingStats
     { msTotal :: !Int
     -- ^ Total CFs in method
@@ -269,9 +270,10 @@ pickByCompartment (f : fs) (Just comp) = Just $
         | med `T.isInfixOf` cat = True
         | otherwise = False
 
--- | Per-strategy counts of mapping results in one pass.
--- Each 'MatchStrategy' must be named below — adding a new variant is a
--- compile error here until it gets a row.
+{- | Per-strategy counts of mapping results in one pass.
+Each 'MatchStrategy' must be named below — adding a new variant is a
+compile error here until it gets a row.
+-}
 computeMappingStats :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MappingStats
 computeMappingStats = foldMap (tally . fmap snd . snd)
   where

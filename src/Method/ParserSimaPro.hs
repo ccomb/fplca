@@ -74,9 +74,11 @@ isSimaProMethodCSV bs =
 -- Parser State
 -- ============================================================================
 
--- | In-progress accumulators. Each carries exactly the data its stage needs,
--- so the parser can never hold (say) lingering CFs while reading an NW set.
+{- | In-progress accumulators. Each carries exactly the data its stage needs,
+so the parser can never hold (say) lingering CFs while reading an NW set.
+-}
 data CatAccum = CatAccum !Text !Text ![MethodCF]
+
 data DamageAccum = DamageAccum !Text !Text ![(Text, Double)]
 data NWAccum = NWAccum !Text !(M.Map Text Double) !(M.Map Text Double)
 
@@ -180,16 +182,18 @@ step cfg st line = case psStage st of
   where
     stripped = BS8.strip line
 
--- | Append the completed category. A header with zero CF rows still emits an
--- empty 'Method': a category can be declared before its factors are added, and
--- silently dropping it would hide that from downstream.
--- Shared by 'step' (mid-stream, on blanks/markers/End) and 'finalize' (at EOF).
+{- | Append the completed category. A header with zero CF rows still emits an
+empty 'Method': a category can be declared before its factors are added, and
+silently dropping it would hide that from downstream.
+Shared by 'step' (mid-stream, on blanks/markers/End) and 'finalize' (at EOF).
+-}
 finishCat :: CatAccum -> ParseState -> ParseState
 finishCat (CatAccum name unit factors) st =
     st{psMethods = buildMethod (psMethodology st) name unit (reverse factors) : psMethods st}
 
--- | Append the completed damage category, including one with zero impact rows
--- (same rationale as 'finishCat').
+{- | Append the completed damage category, including one with zero impact rows
+(same rationale as 'finishCat').
+-}
 finishDamage :: DamageAccum -> ParseState -> ParseState
 finishDamage (DamageAccum name unit impacts) st =
     st{psDamageCats = DamageCategory name unit (reverse impacts) : psDamageCats st}
@@ -199,8 +203,9 @@ finishNW (NWAccum name norm weight) st
     | M.null norm && M.null weight = st
     | otherwise = st{psNWsets = NormWeightSet name norm weight : psNWsets st}
 
--- | Flush whatever block is in progress at end of input, then read out the
--- accumulated collections in source order.
+{- | Flush whatever block is in progress at end of input, then read out the
+accumulated collections in source order.
+-}
 finalize :: ParseState -> MethodCollection
 finalize st =
     let s = finishCurrent st
@@ -259,8 +264,9 @@ buildMethod methodology name unit factors =
 -- Line parsers
 -- ============================================================================
 
--- | A line that begins a new section. "End" is deliberately not a marker — it
--- only closes the current block — so the reading stages handle it inline.
+{- | A line that begins a new section. "End" is deliberately not a marker — it
+only closes the current block — so the reading stages handle it inline.
+-}
 data Marker = MImpactCat | MDamageCat | MNWSet
 
 detectMarker :: BS.ByteString -> Maybe Marker
@@ -275,8 +281,9 @@ stageFor MImpactCat = NeedCatLine
 stageFor MDamageCat = NeedDcLine
 stageFor MNWSet = NeedNWName
 
--- | Parse one substance/CF row into a 'MethodCF', or 'Nothing' if the row is
--- too short to be a factor line.
+{- | Parse one substance/CF row into a 'MethodCF', or 'Nothing' if the row is
+too short to be a factor line.
+-}
 parseCFRow :: SimaProConfig -> BS.ByteString -> Maybe MethodCF
 parseCFRow cfg line =
     case splitCSV (spDelimiter cfg) line of
@@ -314,8 +321,9 @@ parseCFRow cfg line =
              in Just cf
         _ -> Nothing
 
--- | Parse a two-column @name;value@ row (damage impacts, normalization,
--- weighting), or 'Nothing' if the row lacks both columns.
+{- | Parse a two-column @name;value@ row (damage impacts, normalization,
+weighting), or 'Nothing' if the row lacks both columns.
+-}
 parseNameValue :: SimaProConfig -> BS.ByteString -> Maybe (Text, Double)
 parseNameValue cfg line =
     case splitCSV (spDelimiter cfg) line of
@@ -435,5 +443,6 @@ extractLocationSuffix name =
         | otherwise =
             let firstC = T.head t
                 rest = T.unpack (T.tail t)
-             in firstC >= 'A' && firstC <= 'Z'
+             in firstC >= 'A'
+                    && firstC <= 'Z'
                     && all (\c -> (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') rest

@@ -11,18 +11,19 @@ import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
 import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
+import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Reader (asks)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (asum)
 import Data.List (find, intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Validation as V
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.OpenApi (OpenApi, ToSchema)
@@ -32,6 +33,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
+import qualified Data.Validation as V
 import qualified Data.Vector as V
 import Database
 import Database.Manager (DatabaseManager (..), DatabaseSetupInfo (..), LoadedDatabase (..), MethodCollectionStatus (..), getDatabase, getMergedUnitConfig)
@@ -56,8 +58,6 @@ import qualified SharedSolver
 import Tree (buildLoopAwareTree)
 import Types
 import qualified Version
-import App.Env (AppEnv (..), AppM, runApp)
-import Control.Monad.Reader (asks)
 
 -- | API type definition - RESTful design with focused endpoints
 type LCAAPI =
@@ -922,13 +922,13 @@ parseClassFilter raw =
                  in Just (T.strip sys, T.strip val, isExact)
 
 -- | Merge preset-derived and explicit (system, value, exact) classification filters.
-mergeClassFilters
-    :: [Config.ClassificationPreset]
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> [(Text, Text, Bool)]
+mergeClassFilters ::
+    [Config.ClassificationPreset] ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    [(Text, Text, Bool)]
 mergeClassFilters presets presetParam systems values modes =
     expandPreset presets presetParam
         ++ zipWith3
@@ -938,22 +938,22 @@ mergeClassFilters presets presetParam systems values modes =
             (modes ++ repeat "contains")
 
 -- | Build a 'Service.SupplyChainFilter' shared by GET and POST handlers.
-buildSupplyChainFilter
-    :: [Config.ClassificationPreset]
-    -> Maybe Text
-    -> Maybe Int
-    -> Maybe Double
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> Maybe Text
-    -> Maybe Text
-    -> Service.SupplyChainFilter
+buildSupplyChainFilter ::
+    [Config.ClassificationPreset] ->
+    Maybe Text ->
+    Maybe Int ->
+    Maybe Double ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    Maybe Text ->
+    Maybe Text ->
+    Service.SupplyChainFilter
 buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
     Service.SupplyChainFilter
         { Service.scfCore =
@@ -1026,12 +1026,12 @@ loadMethodByUUID uuidText = do
                 [] -> throwError err404{errBody = "Method not found"}
 
 -- | Resolve (db, solver, ProcessId, Activity, Method) and dispatch.
-withActivityAndMethod
-    :: Text
-    -> Text
-    -> Text
-    -> (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a)
-    -> AppM a
+withActivityAndMethod ::
+    Text ->
+    Text ->
+    Text ->
+    (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a) ->
+    AppM a
 withActivityAndMethod dbName processIdText methodIdText k = do
     (db, sharedSolver) <- requireDatabaseByName dbName
     method <- loadMethodByUUID methodIdText
@@ -1189,8 +1189,9 @@ getActivityTree dbName processId = do
                 let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
                 return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
 
--- | Inventory with optional substitutions; goes through the cross-DB
--- back-substitution path so dep-DB inventories merge into the response.
+{- | Inventory with optional substitutions; goes through the cross-DB
+back-substitution path so dep-DB inventories merge into the response.
+-}
 activityInventoryCore :: Text -> Text -> Maybe SubstitutionRequest -> AppM InventoryExport
 activityInventoryCore dbName processIdText mSub = do
     dbManager <- asks aeDbManager
@@ -1210,27 +1211,28 @@ getActivityGraph dbName processId maybeCutoff = do
     result <- liftIO $ Service.buildActivityGraph db sharedSolver processId cutoffPercent
     either throwServiceError pure result
 
--- | Supply-chain core (scaling-vector based). 'Nothing' takes the cached
--- solve; 'Just' applies substitutions via the cross-DB resolver.
-activitySupplyChainCore
-    :: Text
-    -> Text
-    -> Maybe Text
-    -> Maybe Int
-    -> Maybe Double
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> Maybe SubstitutionRequest
-    -> AppM SupplyChainResponse
+{- | Supply-chain core (scaling-vector based). 'Nothing' takes the cached
+solve; 'Just' applies substitutions via the cross-DB resolver.
+-}
+activitySupplyChainCore ::
+    Text ->
+    Text ->
+    Maybe Text ->
+    Maybe Int ->
+    Maybe Double ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    Maybe SubstitutionRequest ->
+    AppM SupplyChainResponse
 activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam mSub = do
     dbManager <- asks aeDbManager
     presets <- asks aeClassificationPresets
@@ -1286,46 +1288,47 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
                                 includeEdges
                     either throwServiceError pure eResp
 
-getActivitySupplyChain
-    :: Text
-    -> Text
-    -> Maybe Text
-    -> Maybe Int
-    -> Maybe Double
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> AppM SupplyChainResponse
+getActivitySupplyChain ::
+    Text ->
+    Text ->
+    Maybe Text ->
+    Maybe Int ->
+    Maybe Double ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    AppM SupplyChainResponse
 getActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam =
     activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam Nothing
 
--- | Aggregate endpoint with accumulating field-level validation (a single
--- request can report invalid `scope` and invalid `aggregate` together).
-getActivityAggregate
-    :: Text
-    -> Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> Maybe Text
-    -> Maybe Text
-    -> AppM Aggregation
+{- | Aggregate endpoint with accumulating field-level validation (a single
+request can report invalid `scope` and invalid `aggregate` together).
+-}
+getActivityAggregate ::
+    Text ->
+    Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    Maybe Text ->
+    Maybe Text ->
+    AppM Aggregation
 getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnameParam fnameNotParam funitParam presetParam fclassParams ftargetParam fexchangeTypeParam freferenceParam groupByParam aggregateParam = do
     dbManager <- asks aeDbManager
     presets <- asks aeClassificationPresets
@@ -1379,8 +1382,9 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
     result <- liftIO $ Agg.aggregate unitCfg mFlows mUnits db dbName sharedSolver (DM.mkDepSolverLookup dbManager) processId params
     either throwServiceError pure result
 
--- | LCIA single-method core. GET passes a top-flows param and logs;
--- POST carries substitutions instead and skips logging.
+{- | LCIA single-method core. GET passes a top-flows param and logs;
+POST carries substitutions instead and skips logging.
+-}
 activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
 activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
     dbManager <- asks aeDbManager
@@ -1400,8 +1404,9 @@ postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> AppM 
 postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
     activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
 
--- | Sensitivity sweep: rank-1 perturbations on the root scaling, scored
--- through the cross-DB graph (regional CFs on dep DBs still apply).
+{- | Sensitivity sweep: rank-1 perturbations on the root scaling, scored
+through the cross-DB graph (regional CFs on dep DBs still apply).
+-}
 postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> AppM SensitivityResponse
 postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
     dbManager <- asks aeDbManager
@@ -1461,45 +1466,45 @@ postActivityLCIABatch dbName processIdText collectionName subReq =
 postActivityInventory :: Text -> Text -> SubstitutionRequest -> AppM InventoryExport
 postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
 
-postActivitySupplyChain
-    :: Text
-    -> Text
-    -> Maybe Text
-    -> Maybe Int
-    -> Maybe Double
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> SubstitutionRequest
-    -> AppM SupplyChainResponse
+postActivitySupplyChain ::
+    Text ->
+    Text ->
+    Maybe Text ->
+    Maybe Int ->
+    Maybe Double ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    SubstitutionRequest ->
+    AppM SupplyChainResponse
 postActivitySupplyChain dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam subReq =
     activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam includeEdgesParam (Just subReq)
 
-getActivityConsumers
-    :: Text
-    -> Text
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Text
-    -> [Text]
-    -> [Text]
-    -> [Text]
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Int
-    -> Maybe Text
-    -> Maybe Text
-    -> Maybe Bool
-    -> AppM ConsumersResponse
+getActivityConsumers ::
+    Text ->
+    Text ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
+    [Text] ->
+    [Text] ->
+    [Text] ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Int ->
+    Maybe Text ->
+    Maybe Text ->
+    Maybe Bool ->
+    AppM ConsumersResponse
 getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam includeEdgesParam = do
     presets <- asks aeClassificationPresets
     (db, _) <- requireDatabaseByName dbName
@@ -1886,79 +1891,79 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
   where
     handlers =
         getActivityInfo
-        :<|> getActivityFlows
-        :<|> getActivityInputs
-        :<|> getActivityOutputs
-        :<|> getActivityReferenceProduct
-        :<|> getActivityTree
-        :<|> getActivityInventory
-        :<|> getActivityGraph
-        :<|> getActivitySupplyChain
-        :<|> getActivityAggregate
-        :<|> getActivityLCIABatch
-        :<|> postActivityLCIABatch
-        :<|> getActivityLCIA
-        :<|> postActivityLCIA
-        :<|> postActivitySensitivity
-        :<|> postActivityInventory
-        :<|> postActivitySupplyChain
-        :<|> getActivityConsumers
-        :<|> getActivityPathTo
-        :<|> getActivityAnalyze
-        :<|> getContributingFlows
-        :<|> getContributingActivities
-        :<|> getFlowDetail
-        :<|> getFlowActivities
-        :<|> getMethods
-        :<|> getMethodDetail
-        :<|> getMethodFactors
-        :<|> getMethodMapping
-        :<|> getFlowCFMapping
-        :<|> getCharacterization
-        :<|> searchFlows
-        :<|> searchActivitiesWithCount
-        :<|> getClassifications
-        :<|> postImpactsBatch
-        :<|> DBHandlers.getDatabases
-        :<|> DBHandlers.loadDatabaseHandler
-        :<|> DBHandlers.unloadDatabaseHandler
-        :<|> DBHandlers.relinkDatabaseHandler
-        :<|> DBHandlers.deleteDatabaseHandler
-        :<|> DBHandlers.uploadDatabaseHandler
-        :<|> DBHandlers.getDatabaseSetupHandler
-        :<|> DBHandlers.addDependencyHandler
-        :<|> DBHandlers.removeDependencyHandler
-        :<|> DBHandlers.setDataPathHandler
-        :<|> DBHandlers.finalizeDatabaseHandler
-        :<|> getMethodCollections
-        :<|> loadMethodCollectionHandler
-        :<|> unloadMethodCollectionHandler
-        :<|> DBHandlers.deleteMethodHandler
-        :<|> DBHandlers.uploadMethodHandler
-        :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms
-        :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms
-        :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms
-        :<|> DBHandlers.deleteRefData DBHandlers.FlowSynonyms
-        :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms
-        :<|> DBHandlers.getFlowSynonymGroupsHandler
-        :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms
-        :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings
-        :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings
-        :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings
-        :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings
-        :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings
-        :<|> DBHandlers.listRefData DBHandlers.UnitDefs
-        :<|> DBHandlers.loadRefData DBHandlers.UnitDefs
-        :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs
-        :<|> DBHandlers.deleteRefData DBHandlers.UnitDefs
-        :<|> DBHandlers.uploadRefData DBHandlers.UnitDefs
-        :<|> getLogsHandler
-        :<|> postAuth
-        :<|> getVersion
-        :<|> getHosting
-        :<|> getStats
-        :<|> getClassificationPresets
-        :<|> getOpenApiSpec
+            :<|> getActivityFlows
+            :<|> getActivityInputs
+            :<|> getActivityOutputs
+            :<|> getActivityReferenceProduct
+            :<|> getActivityTree
+            :<|> getActivityInventory
+            :<|> getActivityGraph
+            :<|> getActivitySupplyChain
+            :<|> getActivityAggregate
+            :<|> getActivityLCIABatch
+            :<|> postActivityLCIABatch
+            :<|> getActivityLCIA
+            :<|> postActivityLCIA
+            :<|> postActivitySensitivity
+            :<|> postActivityInventory
+            :<|> postActivitySupplyChain
+            :<|> getActivityConsumers
+            :<|> getActivityPathTo
+            :<|> getActivityAnalyze
+            :<|> getContributingFlows
+            :<|> getContributingActivities
+            :<|> getFlowDetail
+            :<|> getFlowActivities
+            :<|> getMethods
+            :<|> getMethodDetail
+            :<|> getMethodFactors
+            :<|> getMethodMapping
+            :<|> getFlowCFMapping
+            :<|> getCharacterization
+            :<|> searchFlows
+            :<|> searchActivitiesWithCount
+            :<|> getClassifications
+            :<|> postImpactsBatch
+            :<|> DBHandlers.getDatabases
+            :<|> DBHandlers.loadDatabaseHandler
+            :<|> DBHandlers.unloadDatabaseHandler
+            :<|> DBHandlers.relinkDatabaseHandler
+            :<|> DBHandlers.deleteDatabaseHandler
+            :<|> DBHandlers.uploadDatabaseHandler
+            :<|> DBHandlers.getDatabaseSetupHandler
+            :<|> DBHandlers.addDependencyHandler
+            :<|> DBHandlers.removeDependencyHandler
+            :<|> DBHandlers.setDataPathHandler
+            :<|> DBHandlers.finalizeDatabaseHandler
+            :<|> getMethodCollections
+            :<|> loadMethodCollectionHandler
+            :<|> unloadMethodCollectionHandler
+            :<|> DBHandlers.deleteMethodHandler
+            :<|> DBHandlers.uploadMethodHandler
+            :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms
+            :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms
+            :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms
+            :<|> DBHandlers.deleteRefData DBHandlers.FlowSynonyms
+            :<|> DBHandlers.uploadRefData DBHandlers.FlowSynonyms
+            :<|> DBHandlers.getFlowSynonymGroupsHandler
+            :<|> DBHandlers.downloadRefDataHandler DBHandlers.FlowSynonyms
+            :<|> DBHandlers.listRefData DBHandlers.CompartmentMappings
+            :<|> DBHandlers.loadRefData DBHandlers.CompartmentMappings
+            :<|> DBHandlers.unloadRefData DBHandlers.CompartmentMappings
+            :<|> DBHandlers.deleteRefData DBHandlers.CompartmentMappings
+            :<|> DBHandlers.uploadRefData DBHandlers.CompartmentMappings
+            :<|> DBHandlers.listRefData DBHandlers.UnitDefs
+            :<|> DBHandlers.loadRefData DBHandlers.UnitDefs
+            :<|> DBHandlers.unloadRefData DBHandlers.UnitDefs
+            :<|> DBHandlers.deleteRefData DBHandlers.UnitDefs
+            :<|> DBHandlers.uploadRefData DBHandlers.UnitDefs
+            :<|> getLogsHandler
+            :<|> postAuth
+            :<|> getVersion
+            :<|> getHosting
+            :<|> getStats
+            :<|> getClassificationPresets
+            :<|> getOpenApiSpec
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).

@@ -100,15 +100,14 @@ module Database.Manager (
     buildDependencyChoices,
 ) where
 
+import API.JsonOptions (Stripped (..))
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
-import Control.Monad (forM, forM_, unless, when)
-import API.JsonOptions (Stripped (..))
-import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import Control.Lens ((&), (?~))
-import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
+import Control.Monad (forM, forM_, unless, when)
+import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
@@ -117,6 +116,7 @@ import Data.List (isPrefixOf, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -272,10 +272,11 @@ instance ToJSON DependencyStatus where
     toJSON AvailableDep = A.String "available"
     toJSON RedundantDep = A.String "redundant"
 
--- | String-enum schema matching the lowercase wire codes from ToJSON above.
--- The previous default-Generic schema advertised the raw Haskell constructor
--- names (SelectedDep / AvailableDep / RedundantDep), which is what the schema
--- said but never what the wire emitted.
+{- | String-enum schema matching the lowercase wire codes from ToJSON above.
+The previous default-Generic schema advertised the raw Haskell constructor
+names (SelectedDep / AvailableDep / RedundantDep), which is what the schema
+said but never what the wire emitted.
+-}
 instance ToSchema DependencyStatus where
     declareNamedSchema _ =
         pure $
@@ -1451,10 +1452,11 @@ data RelinkResult = RelinkResult
     }
     deriving (Show, Eq)
 
--- | Order-insensitive equality for lists that are semantically sets
--- (cross-DB links, dependency names). Avoids spurious cache re-saves when
--- only the element order differs.
-sameSet :: Ord a => [a] -> [a] -> Bool
+{- | Order-insensitive equality for lists that are semantically sets
+(cross-DB links, dependency names). Avoids spurious cache re-saves when
+only the element order differs.
+-}
+sameSet :: (Ord a) => [a] -> [a] -> Bool
 sameSet xs ys = S.fromList xs == S.fromList ys
 
 {- | Re-run cross-DB linking for an already-loaded DB against its pinned

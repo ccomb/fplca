@@ -306,7 +306,7 @@ parseCompartment cats@(firstCat : _) =
         medium = case drop 1 cats of
             (lvl1 : _) -> extractMedium lvl1
             [] -> extractMedium firstCat
-            -- Level 2 is the subcompartment
+        -- Level 2 is the subcompartment
         subcomp = case drop 2 cats of
             (lvl2 : _) -> extractSubcompartment lvl2
             [] -> ""
