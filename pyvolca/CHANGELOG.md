@@ -18,6 +18,19 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.5.1] - 2026-05-31
+
+Two bug fixes for engine 0.7.0. No API change — just upgrade.
+
+### Fixes
+
+- Substitutions now reach the engine. The client was sending field names
+  0.7.0 no longer recognised, so substitutions were silently ignored; it
+  now sends the names the engine expects. (#108)
+- Cross-database supply-chain edges now resolve. Each edge keeps its source
+  and target database, so a process id that exists in more than one loaded
+  database is routed to the right one. (#108)
+
 ## [0.5.0] - 2026-05-27
 
 Three convergent themes: surface pagination truthfully (no silent
