@@ -33,6 +33,7 @@ from volca import (
     ServerVersion,
     Substitution,
     SupplyChain,
+    SupplyChainEdge,
     SupplyChainEntry,
     TechRole,
     VoLCAError,
@@ -195,6 +196,25 @@ class TestSubstitution:
         s = Substitution(from_pid="A", to_pid="B", consumer="C")
         # Frozen — can be used as a set/dict key.
         assert {s}  # builds without error
+
+
+class TestSupplyChainEdge:
+    def test_from_json_captures_db_endpoints(self):
+        # edgeFromDb/edgeToDb are required to route edges across databases.
+        edge = SupplyChainEdge.from_json({
+            "edgeFrom": "supplier_pid",
+            "edgeFromDb": "ecoinvent",
+            "edgeTo": "consumer_pid",
+            "edgeToDb": "agribalyse",
+            "edgeAmount": 0.5,
+        })
+        assert edge == SupplyChainEdge(
+            from_id="supplier_pid",
+            from_db="ecoinvent",
+            to_id="consumer_pid",
+            to_db="agribalyse",
+            amount=0.5,
+        )
 
 
 # ---------------------------------------------------------------------------

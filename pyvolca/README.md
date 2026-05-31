@@ -1205,8 +1205,9 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 One LCIA method, returned by :meth:`Client.list_methods`.
 
 Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
-is the parent method collection (e.g. ``"ef-31"``) — load it with
-:meth:`Client.load_method_collection` if not already loaded.
+is the parent method collection (e.g. ``"ef-31"``), forwarded to
+:meth:`Client.get_impacts` / :meth:`Client.get_impacts_batch` as their
+``collection`` argument.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1365,12 +1366,19 @@ lengths by hand.
 
 ### `SupplyChainEdge`
 
-`from`/`to` are Python keywords, so they're stored under from_id/to_id.
+A consumer→supplier link in the supply chain.
+
+``from``/``to`` are Python keywords, so the process ids are stored under
+``from_id``/``to_id``. ``from_db``/``to_db`` carry each endpoint's database
+name, which is required to route edges across databases (the same process
+id can exist in more than one loaded DB).
 
 | Field | Type | Default |
 |-------|------|---------|
 | `from_id` | `str` | — |
+| `from_db` | `str` | — |
 | `to_id` | `str` | — |
+| `to_db` | `str` | — |
 | `amount` | `float` | — |
 
 ### `SupplyChainEntry`
@@ -1470,7 +1478,6 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
-
 <!-- END: api-reference -->
 
 ## See also

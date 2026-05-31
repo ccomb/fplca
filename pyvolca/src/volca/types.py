@@ -545,14 +545,28 @@ class PathResult:
 
 @dataclass
 class SupplyChainEdge:
-    """`from`/`to` are Python keywords, so they're stored under from_id/to_id."""
+    """A consumer→supplier link in the supply chain.
+
+    ``from``/``to`` are Python keywords, so the process ids are stored under
+    ``from_id``/``to_id``. ``from_db``/``to_db`` carry each endpoint's database
+    name, which is required to route edges across databases (the same process
+    id can exist in more than one loaded DB).
+    """
     from_id: str
+    from_db: str
     to_id: str
+    to_db: str
     amount: float
 
     @classmethod
     def from_json(cls, d: dict) -> "SupplyChainEdge":
-        return cls(from_id=d["edgeFrom"], to_id=d["edgeTo"], amount=d["edgeAmount"])
+        return cls(
+            from_id=d["edgeFrom"],
+            from_db=d["edgeFromDb"],
+            to_id=d["edgeTo"],
+            to_db=d["edgeToDb"],
+            amount=d["edgeAmount"],
+        )
 
 
 @dataclass
