@@ -32,12 +32,12 @@ import qualified Data.Vector.Generic.Mutable as VGM
 import qualified Data.Vector.Unboxed as VU
 import GHC.Generics (Generic)
 
+import Control.Lens ((&), (?~))
 import Data.List (nub)
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
-import Control.Lens ((&), (?~))
-import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -426,9 +426,10 @@ Wire-layer JSON flattens these three variants into a single unified record
 (see ToJSON instance in API.Types).
 -}
 data NativeActivityType
-    = -- | ecospold 2 @\<activity@ @activityType@ attribute (1..8) and optional
-      -- @specialActivityType@. Codes are the spec's enumeration; labels are
-      -- the spec's documented strings.
+    = {- | ecospold 2 @\<activity@ @activityType@ attribute (1..8) and optional
+      @specialActivityType@. Codes are the spec's enumeration; labels are
+      the spec's documented strings.
+      -}
       EcoSpoldActivityType
         { eatCode :: !Int
         , eatLabel :: !Text
@@ -931,8 +932,10 @@ error — callers treat a well-formed-but-absent pair as not-found, not malforme
 -}
 parseUUIDPair :: Text -> Maybe (UUID, UUID)
 parseUUIDPair t = case T.splitOn "_" t of
-    [actText, prodText] | not (T.null actText), not (T.null prodText) ->
-        (,) <$> UUID.fromText actText <*> UUID.fromText prodText
+    [actText, prodText]
+        | not (T.null actText)
+        , not (T.null prodText) ->
+            (,) <$> UUID.fromText actText <*> UUID.fromText prodText
     _ -> Nothing
 
 -- | Add SynonymDB to a Database (used after loading from cache)
@@ -1098,9 +1101,10 @@ locationKindCode ParentLoc = "parent"
 locationKindCode GlobalLoc = "global"
 locationKindCode UnrelatedLoc = "unrelated"
 
--- | Lowercase-wire-code ToJSON for 'LocationKind'. Stays in lock-step with
--- 'locationKindCode' so the JSON output and the rejection-reason text can
--- never drift apart.
+{- | Lowercase-wire-code ToJSON for 'LocationKind'. Stays in lock-step with
+'locationKindCode' so the JSON output and the rejection-reason text can
+never drift apart.
+-}
 instance ToJSON LocationKind where
     toJSON = toJSON . locationKindCode
 
@@ -1114,9 +1118,10 @@ instance FromJSON LocationKind where
             "unrelated" -> pure UnrelatedLoc
             other -> fail $ "Invalid LocationKind: " <> T.unpack other
 
--- | OpenAPI schema for 'LocationKind' as a string-enum matching the wire codes
--- produced by 'locationKindCode'. The generic schema would expose the raw
--- Haskell constructor names; this keeps the spec in sync with the ToJSON.
+{- | OpenAPI schema for 'LocationKind' as a string-enum matching the wire codes
+produced by 'locationKindCode'. The generic schema would expose the raw
+Haskell constructor names; this keeps the spec in sync with the ToJSON.
+-}
 instance ToSchema LocationKind where
     declareNamedSchema _ =
         pure $
@@ -1175,10 +1180,11 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     }
     deriving (Generic, NFData, Store)
 
--- | Field-wise '<>'. On unresolved-product collision counts are summed
--- and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
--- has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
--- not itself a 'Monoid'.
+{- | Field-wise '<>'. On unresolved-product collision counts are summed
+and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
+has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
+not itself a 'Monoid'.
+-}
 instance Semigroup CrossDBLinkingStats where
     s1 <> s2 =
         CrossDBLinkingStats

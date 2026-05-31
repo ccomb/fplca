@@ -97,8 +97,9 @@ type Vector = U.Vector Double
 -- | Final inventory vector mapping biosphere flow UUIDs to quantities.
 type Inventory = M.Map UUID Double
 
--- | Demand a consumer DB places on one supplier @(activityUUID, productUUID)@:
--- the amount plus the consumer's exchange unit (for cross-DB unit conversion).
+{- | Demand a consumer DB places on one supplier @(activityUUID, productUUID)@:
+the amount plus the consumer's exchange unit (for cross-DB unit conversion).
+-}
 type SupplierDemands = M.Map (UUID, UUID) (Double, Text)
 
 -- | Per-dependency-DB supplier demands, keyed by source database name.

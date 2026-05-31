@@ -33,7 +33,7 @@ instance Functor (Validation e) where
 are 'Failure', their error payloads are combined via @(\<\>)@. This is the
 defining behaviour that distinguishes 'Validation' from 'Either'.
 -}
-instance Semigroup e => Applicative (Validation e) where
+instance (Semigroup e) => Applicative (Validation e) where
     pure = Success
     Failure e1 <*> Failure e2 = Failure (e1 <> e2)
     Failure e <*> Success _ = Failure e
@@ -45,7 +45,8 @@ toEither :: Validation e a -> Either e a
 toEither (Failure e) = Left e
 toEither (Success a) = Right a
 
--- | Build a singleton-error failure. Convenient for 'NonEmpty'-keyed
--- validators where each leaf check produces exactly one error message.
+{- | Build a singleton-error failure. Convenient for 'NonEmpty'-keyed
+validators where each leaf check produces exactly one error message.
+-}
 failure :: e -> Validation (NonEmpty e) a
 failure = Failure . NE.singleton

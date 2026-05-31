@@ -67,8 +67,9 @@ import Data.Word (Word8)
 
 import Method.Types
 
--- | Quick structural sniff: a JSON object with @\"@type\": \"ImpactCategory\"@.
--- Used by 'Database.Manager' to dispatch @.json@ files to this parser.
+{- | Quick structural sniff: a JSON object with @\"@type\": \"ImpactCategory\"@.
+Used by 'Database.Manager' to dispatch @.json@ files to this parser.
+-}
 isOlcaImpactCategoryJson :: BS.ByteString -> Bool
 isOlcaImpactCategoryJson bytes = case eitherDecodeStrict bytes of
     Right (Object o) -> case KM.lookup "@type" o of
@@ -138,14 +139,15 @@ parseImpactFactor (Object o) = do
                     }
 parseImpactFactor _ = Nothing
 
--- | Read the optional @flow.category@ Ref and turn it into a 'Compartment'.
--- The category's @name@ is treated as a slash-separated path: the first
--- segment is the medium ('resource', 'air', 'water', …) and the rest is the
--- subcompartment ('land', 'urban air close to ground', …). Without this,
--- VoLCA's matcher cannot disambiguate DB flows that share a name across
--- compartments (e.g. Agribalyse has 3 flows literally named
--- @"Occupation, annual crop"@ in @resource@, @resource/land@, and
--- @resource/biotic@; only the @resource/land@ one is what activities emit).
+{- | Read the optional @flow.category@ Ref and turn it into a 'Compartment'.
+The category's @name@ is treated as a slash-separated path: the first
+segment is the medium ('resource', 'air', 'water', …) and the rest is the
+subcompartment ('land', 'urban air close to ground', …). Without this,
+VoLCA's matcher cannot disambiguate DB flows that share a name across
+compartments (e.g. Agribalyse has 3 flows literally named
+@"Occupation, annual crop"@ in @resource@, @resource/land@, and
+@resource/biotic@; only the @resource/land@ one is what activities emit).
+-}
 parseCompartment :: KM.KeyMap Value -> Maybe Compartment
 parseCompartment flow = do
     cat <- objectField flow "category"
@@ -161,9 +163,10 @@ parseCompartment flow = do
                     then Nothing
                     else Just (Compartment med sub "")
 
--- | Direction is carried by 'ImpactFactor.direction' (Direction enum) when
--- present, otherwise default to 'Output' since the vast majority of
--- environmental CFs are emissions.
+{- | Direction is carried by 'ImpactFactor.direction' (Direction enum) when
+present, otherwise default to 'Output' since the vast majority of
+environmental CFs are emissions.
+-}
 directionFromFlow :: KM.KeyMap Value -> FlowDirection
 directionFromFlow o = case lookupText o "direction" of
     Just "INPUT" -> Input
@@ -208,8 +211,9 @@ parseUuidField o k = lookupText o k >>= UUID.fromText
 textKey :: Text -> [Word8]
 textKey = BS.unpack . TE.encodeUtf8
 
--- | Stable, deterministic UUID for a method that didn't carry an @\@id@ field.
--- Falls back to a UUIDv5 derived from the method name.
+{- | Stable, deterministic UUID for a method that didn't carry an @\@id@ field.
+Falls back to a UUIDv5 derived from the method name.
+-}
 synthMethodId :: Text -> UUID
 synthMethodId name =
     UUID5.generateNamed UUID5.namespaceURL (textKey ("volca:olca-method:" <> name))

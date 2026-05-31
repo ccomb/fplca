@@ -63,7 +63,7 @@ import Method.Types (Method (..), MethodCF (..))
 import SynonymDB (emptySynonymDB)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
-import Types (Database (..), BiosphereFlow (..))
+import Types (BiosphereFlow (..), Database (..))
 
 -- | Default registry with all built-in plugins
 defaultRegistry :: PluginRegistry

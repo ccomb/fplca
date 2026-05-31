@@ -235,9 +235,10 @@ data UnlinkedExchange = UnlinkedExchange
     }
     deriving (Eq, Ord, Show)
 
--- | Summary of unlinked exchanges grouped by consumer activity.
--- 'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
--- 'Sum Int' would force every reader to unwrap.
+{- | Summary of unlinked exchanges grouped by consumer activity.
+'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
+'Sum Int' would force every reader to unwrap.
+-}
 data UnlinkedSummary = UnlinkedSummary
     { usActivities :: !(M.Map T.Text [UnlinkedExchange]) -- consumer name → list of unlinked exchanges
     , usTotalLinks :: !Int

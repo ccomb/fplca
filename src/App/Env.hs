@@ -1,18 +1,19 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
--- | 'AppM' is @'ReaderT' 'AppEnv' 'Handler'@; 'runApp' is the @AppM ~> Handler@
--- mapping passed to Servant's 'hoistServer'.
+{- | 'AppM' is @'ReaderT' 'AppEnv' 'Handler'@; 'runApp' is the @AppM ~> Handler@
+mapping passed to Servant's 'hoistServer'.
+-}
 module App.Env (
     AppEnv (..),
     AppM (..),
     runApp,
 ) where
 
+import qualified Config
 import Control.Monad.Except (MonadError)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Reader (MonadReader, ReaderT (..))
-import qualified Config
 import Database.Manager (DatabaseManager)
 import Servant (Handler, ServerError)
 
