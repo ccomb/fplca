@@ -1966,9 +1966,12 @@ getReferenceProductAmount activity =
         (amt : _) -> amt
         [] -> 1.0
 
-{- | Compute a scaling vector with optional Sherman-Morrison substitutions.
-Returns the (possibly modified) scaling vector. When substitutions is empty,
-this is the same as a plain solve.
+{- | Root-only scaling vector: solve @(I-A)x = d@. Substitutions are applied by
+the cross-DB applicator ('applySubstitutionsAt', via
+'computeScalingVectorWithSubstitutionsCrossDB'), never here — this path is only
+ever called with an empty list. A non-empty list is a programmer error, surfaced
+loudly rather than silently mishandled (the previous in-place applicator used a
+'defaultUnitConfig' and could never see the merged unit table).
 -}
 computeScalingVectorWithSubstitutions ::
     Database ->
@@ -1976,61 +1979,14 @@ computeScalingVectorWithSubstitutions ::
     ProcessId ->
     [Substitution] ->
     IO (Either ServiceError (U.Vector Double))
-computeScalingVectorWithSubstitutions db sharedSolver processId subs = do
-    let activityIndex = dbActivityIndex db
-        demandVec = buildDemandVectorFromIndex activityIndex processId
-    originalX <- solveWithSharedSolver sharedSolver demandVec
+computeScalingVectorWithSubstitutions db sharedSolver processId subs =
     case subs of
-        [] -> return $ Right originalX
-        _ -> do
-            mFact <- getFactorization sharedSolver
-            foldSubstitutions originalX subs (applySubstitution mFact)
+        [] -> Right <$> solveWithSharedSolver sharedSolver demandVec
+        _ ->
+            pure . Left . MatrixError $
+                "computeScalingVectorWithSubstitutions: substitutions must be applied via the cross-DB path"
   where
-    -- This root-only path predates cross-DB support and is now only reached
-    -- with an empty sub list; the cross-DB applicator ('applySubstitutionsAt')
-    -- carries the production substitution logic. Both scopes are handled here
-    -- regardless, sharing 'planGlobalWithinDB' so the two paths can't diverge.
-    applySubstitution mFact x sub = case subScope sub of
-        OneEdge cRef ->
-            case ( resolveActivityAndProcessId db (subFrom sub)
-                 , resolveActivityAndProcessId db (subTo sub)
-                 , resolveActivityAndProcessId db cRef
-                 ) of
-                (Left err, _, _) -> return $ Left err
-                (_, Left err, _) -> return $ Left err
-                (_, _, Left err) -> return $ Left err
-                (Right (oldPid, _), Right (newPid, _), Right (consumerPid, _)) ->
-                    case findTechCoefficient db consumerPid oldPid of
-                        Nothing ->
-                            return $
-                                Left $
-                                    MatrixError $
-                                        "No technosphere link from "
-                                            <> processIdToText db consumerPid
-                                            <> " to supplier "
-                                            <> subFrom sub
-                        Just a -> do
-                            -- Symmetric root-only swap: +a at old supplier, -a at new.
-                            let perturb = [(fromIntegral oldPid, a), (fromIntegral newPid, -a)]
-                            smResult <- perturbA db mFact x (fromIntegral consumerPid) perturb
-                            return $ either (Left . MatrixError) Right smResult
-        AllConsumers ->
-            case (resolveActivityAndProcessId db (subFrom sub), resolveActivityAndProcessId db (subTo sub)) of
-                (Left err, _) -> return $ Left err
-                (_, Left err) -> return $ Left err
-                (Right (fromPid, _), Right (toPid, _)) ->
-                    case planGlobalWithinDB defaultUnitConfig db fromPid toPid of
-                        Left err -> return $ Left err
-                        Right gupd -> do
-                            smResult <- perturbGlobal db mFact x (gruU gupd) (gruV gupd)
-                            return $ either (Left . MatrixError) Right smResult
-
-    foldSubstitutions x [] _ = return $ Right x
-    foldSubstitutions x (s : ss) f = do
-        result <- f x s
-        case result of
-            Left err -> return $ Left err
-            Right x' -> foldSubstitutions x' ss f
+    demandVec = buildDemandVectorFromIndex (dbActivityIndex db) processId
 
 {- | Run sensitivity analysis on a process: compute the baseline scaling
 vector @x₀@ once, then resolve every 'Perturbation' to a (consumer column,
@@ -2162,7 +2118,7 @@ inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs =
     case globalFromMustLiveInRoot rootDb subs of
         Left e -> pure (Left e)
         Right () -> do
-            eValid <- validateConsumerDbs depLookup db rootDb subs
+            eValid <- validateAnchorDbs depLookup db rootDb subs
             case eValid of
                 Left e -> pure (Left e)
                 Right () -> do
@@ -2179,32 +2135,33 @@ inventoryWithSubsAndDeps unitCfg depLookup db rootDbName solver pid subs =
   where
     rootDb = RootDb rootDbName
 
-{- | Reject substitutions whose consumer is qualified to a DB that is either
+{- | Reject substitutions whose anchor DB (the 'OneEdge' consumer, or the
+'AllConsumers' replaced supplier) is qualified to a DB that is either
 unloaded or not reachable from @rootDbName@ via 'dbCrossDBLinks'. Such
 subs would otherwise be silently filtered at every level of the
-recursion (because the consumer DB never appears as @thisDbName@),
+recursion (because the anchor DB never appears as @thisDbName@),
 which violates the no-silent-errors invariant.
 -}
-validateConsumerDbs ::
+validateAnchorDbs ::
     SharedSolver.DepSolverLookup ->
     Database ->
     RootDb ->
     [Substitution] ->
     IO (Either ServiceError ())
-validateConsumerDbs depLookup rootDbObj rootDb subs = do
+validateAnchorDbs depLookup rootDbObj rootDb subs = do
     let rootDbName = unRootDb rootDb
-        externalConsumerDbs =
+        externalAnchorDbs =
             S.delete rootDbName $
                 S.fromList
                     [ cDb
                     | sub <- subs
                     , let (cDb, _) = parseSubRef rootDb (subAnchorRef sub)
                     ]
-    if S.null externalConsumerDbs
+    if S.null externalAnchorDbs
         then pure (Right ())
         else do
             reachable <- reachableDepDbs depLookup rootDbName rootDbObj
-            let unreachable = externalConsumerDbs `S.difference` reachable
+            let unreachable = externalAnchorDbs `S.difference` reachable
             case S.toList unreachable of
                 [] -> pure (Right ())
                 (d : _) -> do
@@ -2218,7 +2175,7 @@ validateConsumerDbs depLookup rootDbObj rootDb subs = do
 
 {- | BFS the loaded portion of the dep-DB DAG from @rootDbName@. Returns
 the set of DB names that are statically reachable via 'dbCrossDBLinks'
-chains (including unloaded leaves — 'validateConsumerDbs' distinguishes
+chains (including unloaded leaves — 'validateAnchorDbs' distinguishes
 loaded-but-unreachable from unloaded).
 -}
 reachableDepDbs ::
@@ -2346,25 +2303,29 @@ computeScalingVectorWithSubstitutionsCrossDB ::
     ProcessId ->
     [Substitution] ->
     IO (Either ServiceError (U.Vector Double, [CrossDBLink]))
-computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db rootDbName solver pid subs = do
-    let rootDb = RootDb rootDbName
-    case firstNonRootAnchor rootDb of
-        Just cDb ->
-            pure $
-                Left $
-                    MatrixError $
-                        "substitution consumer must live in root database (got: " <> cDb <> ")"
-        Nothing -> do
-            let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
-            originalX <- solveWithSharedSolver solver demandVec
-            res <- applySubstitutionsAt unitCfg depLookup db (ThisDb rootDbName) rootDb solver [originalX] subs
-            pure $ case res of
-                Left e -> Left e
-                Right ([x'], links) -> Right (x', links)
-                Right (x' : _, links) -> Right (x', links) -- unreachable: K=1
-                Right ([], _) -> Right (originalX, []) -- unreachable
+computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db rootDbName solver pid subs =
+    -- A global @from@ outside root is reported as such (not as a "consumer"
+    -- error); the per-edge consumer guard below then applies only to 'OneEdge'.
+    case globalFromMustLiveInRoot rootDb subs of
+        Left e -> pure (Left e)
+        Right () -> case firstNonRootAnchor of
+            Just cDb ->
+                pure $
+                    Left $
+                        MatrixError $
+                            "substitution consumer must live in root database (got: " <> cDb <> ")"
+            Nothing -> do
+                let demandVec = buildDemandVectorFromIndex (dbActivityIndex db) pid
+                originalX <- solveWithSharedSolver solver demandVec
+                res <- applySubstitutionsAt unitCfg depLookup db (ThisDb rootDbName) rootDb solver [originalX] subs
+                pure $ case res of
+                    Left e -> Left e
+                    Right ([x'], links) -> Right (x', links)
+                    Right (x' : _, links) -> Right (x', links) -- unreachable: K=1
+                    Right ([], _) -> Right (originalX, []) -- unreachable
   where
-    firstNonRootAnchor rootDb =
+    rootDb = RootDb rootDbName
+    firstNonRootAnchor =
         case [ cDb
              | sub <- subs
              , let (cDb, _) = parseSubRef rootDb (subAnchorRef sub)

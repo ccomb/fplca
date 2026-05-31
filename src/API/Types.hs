@@ -841,7 +841,10 @@ subAnchorRef sub = case subScope sub of
     OneEdge cRef -> cRef
     AllConsumers -> subFrom sub
 
--- | @consumer@ present → 'OneEdge'; absent → 'AllConsumers' (global swap).
+{- | @consumer@ present → 'OneEdge'; absent or @null@ → 'AllConsumers' (global
+swap). An empty-string @consumer@ is taken literally as a 'OneEdge' ref and
+fails to resolve, never silently promoted to a global swap.
+-}
 instance FromJSON Substitution where
     parseJSON = withObject "Substitution" $ \o ->
         Substitution
