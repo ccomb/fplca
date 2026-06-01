@@ -250,8 +250,9 @@ deleteSelectionBody args =
         _ -> [] :: [Value]
 
 {- | Body for POST /api/v1/db/{db}/relink with an inline alias mapping.
-Keys mirror 'API.Types.RelinkMappingRequest' after the @Stripped@ prefix
-transform (@rmrDepDb@ → @depDb@, @rmrMappingCsv@ → @mappingCsv@).
+Keys mirror 'API.Types.RelinkRequest' after the @Stripped@ prefix transform
+(@rmrDepDb@ → @depDb@, @rmrMappingCsv@ → @mappingCsv@); both are populated here,
+which the handler reads as mapping mode (an empty @{}@ body is a plain relink).
 -}
 relinkMappingBody :: Text -> Text -> Value
 relinkMappingBody depDb csv =

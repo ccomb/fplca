@@ -718,19 +718,21 @@ data RelinkResponse = RelinkResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkResponse)
 
-{- | Request body for the relink-with-mapping endpoint. Re-links the captured
-database against @rmrDepDb@ using a name→name supplier-alias mapping. The
-mapping travels inline as CSV text (@rmrMappingCsv@) so the client can send a
-local file without the server needing filesystem access to it.
+{- | Request body for the relink endpoint. Both fields absent (an empty @{}@
+body) means a plain relink — re-resolve links within the existing pin. Both
+present switches to mapping mode: relink against @rmrDepDb@ using the inline
+name→name supplier-alias CSV in @rmrMappingCsv@ (sent inline so the client can
+forward a local file without the server needing filesystem access). Supplying
+exactly one is rejected — they are only meaningful together.
 -}
-data RelinkMappingRequest = RelinkMappingRequest
-    { rmrDepDb :: Text
+data RelinkRequest = RelinkRequest
+    { rmrDepDb :: Maybe Text
     -- ^ Dependency database to link against (must be a declared dependency)
-    , rmrMappingCsv :: Text
+    , rmrMappingCsv :: Maybe Text
     -- ^ Mapping CSV content (header row + source/target columns)
     }
     deriving (Generic)
-    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkMappingRequest)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkRequest)
 
 -- | Result of auto-loading a single dependency
 data DepLoadResult
