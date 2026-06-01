@@ -202,7 +202,7 @@ requireDatabaseByName dbName = do
         Nothing -> throwError err404{errBody = notLoadedBody databaseNotLoadedPrefix dbName}
 
 {- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
-the user to load the missing dep DBs (or POST /relink) rather than
+the user to load the missing dep DBs (or POST {} to /relink) rather than
 silently undercounting impacts.
 -}
 requireFullyLinked :: Text -> Database -> AppM ()
@@ -221,7 +221,7 @@ requireFullyLinked dbName db =
                                     <> " unresolved cross-DB products. Load the missing dependency "
                                     <> "databases (see GET /api/v1/db/"
                                     <> dbName
-                                    <> "/setup) then POST /api/v1/db/"
+                                    <> "/setup) then POST {} to /api/v1/db/"
                                     <> dbName
                                     <> "/relink."
                     }

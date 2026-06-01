@@ -240,9 +240,7 @@ extractLoadedDbNames = fromMaybe [] . parseMaybe go
 dbPath :: Text -> String
 dbPath name = "/api/v1/db/" ++ T.unpack name
 
-{- | Build query string from optional parameters
-| JSON body for the delete-by-selection endpoint (field names match the API).
--}
+-- | JSON body for the delete-by-selection endpoint (field names match the API).
 deleteSelectionBody :: DbDeleteArgs -> Value
 deleteSelectionBody args =
     object
@@ -296,6 +294,7 @@ executeRemoteExport mgr rc fmt jp args = do
     parseExportResponse = withObject "ExportResponse" $ \o ->
         (,,) <$> o .: "success" <*> o .: "message" <*> o .:? "data"
 
+-- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String
 buildQuery params =
     case [(k, v) | (k, Just v) <- params] of
