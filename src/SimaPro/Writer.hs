@@ -249,18 +249,22 @@ bioSection _ WasteExchange{} = Nothing
 data BioSec = SecRes | SecAir | SecWater | SecSoil
     deriving (Eq)
 
--- | Reference + coproduct output rows for the Products section.
-productLines :: TechFlowDB -> UnitDB -> Maybe Double -> Text -> [Exchange] -> [Text]
-productLines techDB units allocPct category exchs =
+{- | Output rows (@name;unit;amount;allocation;waste_type;category;comment@) for
+the technosphere outputs matching @keep@. Used for both the @Products@ section
+(references) and the @Avoided products@ section (coproducts) — the two are
+rendered identically but the parser routes them to different exchange roles, so
+they must be emitted under their own headers, never merged.
+-}
+productLines :: (Exchange -> Bool) -> TechFlowDB -> UnitDB -> Maybe Double -> Text -> [Exchange] -> [Text]
+productLines keep techDB units allocPct category exchs =
     let outputs =
             [ (flow, ex)
             | ex@TechnosphereExchange{} <- exchs
-            , exchangeIsReference ex || isCoproduct ex
+            , keep ex
             , Just flow <- [M.lookup (exchangeFlowId ex) techDB]
             ]
         alloc = formatAmount (fromMaybe 100 allocPct)
         mkRow (flow, TechnosphereExchange{..}) =
-            -- name;unit;amount;allocation;waste_type;category;comment
             row
                 [ tfName flow
                 , unitNameOf units techUnitId
@@ -273,9 +277,22 @@ productLines techDB units allocPct category exchs =
         mkRow (_, _) = ""
         sortKey (flow, ex) = (tfName flow, unitNameOf units (exchangeUnitId ex), exchangeAmount ex)
      in map mkRow (sortOn sortKey outputs)
-  where
-    isCoproduct TechnosphereExchange{techRole = Coproduct} = True
-    isCoproduct _ = False
+
+-- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
+-- the parser reads back as a 'Coproduct' role).
+isCoproduct :: Exchange -> Bool
+isCoproduct ex = case ex of
+    TechnosphereExchange{techRole = Coproduct} -> True
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+    WasteExchange{} -> False
+
+{- | Prepend the @Avoided products@ header to coproduct rows, or emit nothing
+when there are none (an empty section would be noise the parser ignores).
+-}
+avoidedHeader :: [Text] -> [Text]
+avoidedHeader [] = []
+avoidedHeader rows = "Avoided products" : rows
 
 {- | Render one section: a header line followed by its sorted rows. Emits
 nothing when there are no rows, matching the parser (it tolerates absent
@@ -336,8 +353,11 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
             , meta "Geography" activityLocation
             , meta "Comment" comment
             , -- Products section is always present (an activity has a reference).
-              "Products" : productLines techDB units activityAllocationPercent category exchanges
+              -- Coproducts go to "Avoided products" so the parser reads them back
+              -- as coproducts, not as extra reference-product activities.
+              "Products" : productLines exchangeIsReference techDB units activityAllocationPercent category exchanges
             , [""]
+            , withBlank (avoidedHeader (productLines isCoproduct techDB units activityAllocationPercent category exchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))

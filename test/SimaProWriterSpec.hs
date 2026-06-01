@@ -112,6 +112,39 @@ fixtureCSV =
         , "End"
         ]
 
+-- | A single process with one reference product and one coproduct (in the
+-- @Avoided products@ section, which the parser reads back as a 'Coproduct').
+coproductCSV :: BS.ByteString
+coproductCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: Semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Margarine production"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Geography"
+        , "FR"
+        , ""
+        , "Products"
+        , "Margarine;kg;1;100;not defined;material;"
+        , ""
+        , "Avoided products"
+        , "Butter;kg;0.3;100;not defined;material;"
+        , ""
+        , "End"
+        ]
+
 -- | Parse a SimaPro CSV blob through a temp file.
 parseBytes :: BS.ByteString -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
 parseBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
@@ -299,3 +332,18 @@ spec = describe "SimaPro.Writer round-trip" $ do
                 , let b = M.findWithDefault 0 k invRound
                 ]
         all (< 1e-9) diffs `shouldBe` True
+
+    it "(regression) routes coproducts to Avoided products, not Products" $ do
+        original <- parseBytes coproductCSV
+        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        reparsed <- parseBytes f0
+        let acts0 = activitiesOf original
+            acts1 = activitiesOf reparsed
+            roles = [techRole e | a <- acts1, e@TechnosphereExchange{} <- exchanges a]
+        -- A coproduct written to "Products" would re-parse into a second
+        -- reference-product activity; routing it to "Avoided products" keeps the
+        -- activity count stable and preserves the Coproduct role.
+        length acts1 `shouldBe` length acts0
+        (Coproduct `elem` roles) `shouldBe` True
+  where
+    activitiesOf (acts, _, _, _, _) = acts
