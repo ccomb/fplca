@@ -23,15 +23,18 @@ Three properties are pinned, exactly as for the SimaPro/Brightway writers:
 -}
 module ILCDWriterSpec (spec) where
 
+import Data.Either (isLeft)
 import Data.List (isPrefixOf, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
 import ILCD.Parser (parseILCDDirectory)
 import ILCD.Writer (
+    checkILCDExportable,
     defaultWriteOptions,
     escapeXml,
     formatDouble,
@@ -216,6 +219,16 @@ spec = describe "ILCD.Writer round-trip" $ do
         let procFiles = [p | (p, _) <- ilcdFiles defaultWriteOptions db, "processes/" `isPrefixOfFp` p]
         length procFiles `shouldBe` M.size (sdbActivities db)
 
+    describe "checkILCDExportable (multi-output guard)" $ do
+        it "accepts a single-output database" $ do
+            db <- loadFixture
+            checkILCDExportable db `shouldBe` Right ()
+
+        it "rejects a multi-output activity rather than silently dropping a product" $
+            -- Two reference products share one activity UUID, so both would write
+            -- to the same processes/<actUUID>.xml. The guard must fail loudly.
+            checkILCDExportable multiOutputDb `shouldSatisfy` isLeft
+
     it "produces a parseable ILCD tree with the same activity count" $ do
         db <- loadFixture
         db' <- roundTrip db
@@ -253,3 +266,53 @@ spec = describe "ILCD.Writer round-trip" $ do
 
 isPrefixOfFp :: String -> FilePath -> Bool
 isPrefixOfFp = isPrefixOf
+
+-- ---------------------------------------------------------------------------
+-- Multi-output fixture (two products sharing one activity UUID)
+-- ---------------------------------------------------------------------------
+
+{- | A degenerate database where one activity UUID exposes two reference
+products — the shape an ES2/SimaPro multi-output activity takes internally.
+ILCD cannot represent it (one process per UUID), so 'checkILCDExportable'
+rejects it.
+-}
+multiOutputDb :: SimpleDatabase
+multiOutputDb =
+    SimpleDatabase
+        { sdbActivities =
+            M.fromList
+                [ ((actU, prodA), prodAct "co-product A" prodA)
+                , ((actU, prodB), prodAct "co-product B" prodB)
+                ]
+        , sdbTechFlows =
+            M.fromList
+                [ (prodA, techFlow prodA "product A")
+                , (prodB, techFlow prodB "product B")
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodA, prodB, unitU :: UUID
+    actU = read "aaaaaaaa-0000-4000-8000-000000000001"
+    prodA = read "aaaaaaaa-0000-4000-8000-0000000000a1"
+    prodB = read "aaaaaaaa-0000-4000-8000-0000000000b2"
+    unitU = read "11111111-0000-4000-8000-000000000001"
+    techFlow :: UUID -> Text -> TechnosphereFlow
+    techFlow fid nm = TechnosphereFlow fid nm unitU M.empty Nothing Nothing
+    prodAct :: Text -> UUID -> Activity
+    prodAct nm prod =
+        Activity
+            nm
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [TechnosphereExchange prod 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            Nothing

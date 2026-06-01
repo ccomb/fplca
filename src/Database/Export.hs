@@ -37,13 +37,15 @@ writer.
 -}
 serializeDatabase :: DatabaseFormat -> Database -> Either Text BL.ByteString
 serializeDatabase fmt db = case fmt of
-    SimaProCSV ->
+    SimaProCSV -> do
+        SP.checkSimaProExportable sdb
         Right (BL.fromStrict (SP.serializeSimaProCSV SP.defaultWriterConfig sdb))
     EcoSpold1 ->
         Right (BL.fromStrict (TE.encodeUtf8 (ES1.writeDatabase ES1.canonicalWriterOptions db)))
     EcoSpold2 ->
         Right (zipText (ES2.writeEcoSpold2 ES2.noVolatileMeta sdb))
-    ILCDProcess ->
+    ILCDProcess -> do
+        ILCD.checkILCDExportable sdb
         Right (ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb)
     BrightwayExcel ->
         Right (BE.renderWorkbook BE.defaultWriterConfig sdb)

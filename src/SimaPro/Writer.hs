@@ -36,6 +36,7 @@ module SimaPro.Writer (
     defaultWriterConfig,
     writeSimaProCSV,
     serializeSimaProCSV,
+    checkSimaProExportable,
 
     -- * Pure helpers (exposed for testing)
     escapeField,
@@ -69,6 +70,40 @@ newtype WriterConfig = WriterConfig
 -- | Default config: a fixed, neutral version banner (no timestamp).
 defaultWriterConfig :: WriterConfig
 defaultWriterConfig = WriterConfig{wcVersion = "SimaPro 9.6.0.1"}
+
+-- ============================================================================
+-- Export guard
+-- ============================================================================
+
+{- | SimaPro CSV files emissions into air / water / soil sections only. An
+emission whose compartment medium is some other non-empty value has no faithful
+section, so report it rather than silently filing it under @Emissions to air@.
+An unspecified (empty) medium is allowed — it carries no medium to lose and
+follows SimaPro's air default. Resources are bucketed by direction, not medium,
+so they never offend. This is the export-boundary check; 'serializeSimaProCSV'
+itself stays pure and total.
+-}
+checkSimaProExportable :: SimpleDatabase -> Either Text ()
+checkSimaProExportable db =
+    case offenders of
+        [] -> Right ()
+        ((name, medium) : _) ->
+            Left $
+                "SimaPro export cannot represent emission \""
+                    <> name
+                    <> "\": compartment medium \""
+                    <> medium
+                    <> "\" is not one of air, water, soil."
+  where
+    offenders =
+        [ (bfName flow, bfCompartmentName flow)
+        | act <- M.elems (sdbActivities db)
+        , ex@BiosphereExchange{bioDirection = Emission} <- exchanges act
+        , Just flow <- [M.lookup (exchangeFlowId ex) (sdbBioFlows db)]
+        , let medium = T.toLower (bfCompartmentName flow)
+        , not (T.null medium)
+        , medium `notElem` ["air", "water", "soil"]
+        ]
 
 -- ============================================================================
 -- Constants
@@ -242,6 +277,9 @@ bioSection bioDB ex@BiosphereExchange{bioDirection = dir} =
                 "soil" -> Just SecSoil
                 "air" -> Just SecAir
                 "" -> Just SecAir
+                -- Any other medium has no faithful SimaPro section.
+                -- 'checkSimaProExportable' rejects it at the export boundary, so
+                -- this air fallback only ever fires for a direct (un-guarded) caller.
                 _ -> Just SecAir
 bioSection _ TechnosphereExchange{} = Nothing
 bioSection _ WasteExchange{} = Nothing

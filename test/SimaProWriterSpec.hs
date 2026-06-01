@@ -35,6 +35,7 @@ import Database (buildDatabaseWithMatrices)
 import Matrix (computeInventoryMatrix)
 import SimaPro.Parser (parseSimaProCSV)
 import SimaPro.Writer (
+    checkSimaProExportable,
     defaultWriterConfig,
     escapeField,
     formatAmount,
@@ -379,5 +380,56 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- No Type line written → re-parse yields Nothing again, not the
         -- invented "Unit process".
         map activityNativeType (activitiesOf reparsed) `shouldBe` [Nothing]
+
+    describe "checkSimaProExportable (emission-medium guard)" $ do
+        it "accepts air / water / soil emissions" $
+            checkSimaProExportable (emissionDb (Compartment "air" Nothing))
+                `shouldBe` Right ()
+
+        it "rejects an emission whose medium has no faithful SimaPro section" $
+            -- A "raw" medium would otherwise be silently filed under
+            -- "Emissions to air" and re-parse as air; reject it loudly instead.
+            checkSimaProExportable (emissionDb (Compartment "raw" Nothing))
+                `shouldSatisfy` either (const True) (const False)
   where
     activitiesOf (acts, _, _, _, _) = acts
+
+-- ---------------------------------------------------------------------------
+-- Emission-medium guard fixture
+-- ---------------------------------------------------------------------------
+
+{- | One activity emitting a single biosphere flow whose compartment is @comp@.
+Used to exercise 'checkSimaProExportable': air/water/soil pass, anything else is
+rejected.
+-}
+emissionDb :: Compartment -> SimpleDatabase
+emissionDb comp =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "thing" unitU M.empty Nothing Nothing)
+        , sdbBioFlows = M.singleton bioU (BiosphereFlow bioU "Some emission" unitU M.empty Nothing Nothing (Just comp))
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, bioU, unitU :: UUID
+    actU = read "aaaaaaaa-0000-4000-8000-000000000010"
+    prodU = read "aaaaaaaa-0000-4000-8000-0000000000a0"
+    bioU = read "cccccccc-0000-4000-8000-0000000000c0"
+    unitU = read "11111111-0000-4000-8000-000000000001"
+    act =
+        Activity
+            "thing maker"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , BiosphereExchange bioU 0.5 unitU Emission "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            Nothing

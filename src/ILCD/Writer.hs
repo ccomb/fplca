@@ -44,6 +44,7 @@ module ILCD.Writer (
     writeILCDDatabase,
     writeILCDArchive,
     ilcdFiles,
+    checkILCDExportable,
 
     -- * Pure helpers (exported for testing)
     escapeXml,
@@ -120,6 +121,36 @@ ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
 
     -- Render the list of lines to canonical UTF-8 bytes.
     render = TE.encodeUtf8 . renderLines
+
+{- | Guard an ILCD export against multi-output activities. ILCD identifies a
+process by a single dataset UUID with one process per file, keyed here on the
+activity UUID alone. A multi-output activity — several @(actUUID, prodUUID)@
+entries sharing one @actUUID@ — would therefore write two processes to the same
+filename and the same @common:UUID@, and re-import could only keep one. Rather
+than silently dropping all but one product's process dataset, report the first
+offending activity so the caller can fail loudly. Single-output databases (every
+@actUUID@ unique) pass unchanged.
+-}
+checkILCDExportable :: SimpleDatabase -> Either Text ()
+checkILCDExportable db =
+    case M.toList collisions of
+        [] -> Right ()
+        ((actUUID, n) : _) ->
+            Left $
+                "ILCD export cannot represent multi-output activity \""
+                    <> nameOf actUUID
+                    <> "\" (UUID "
+                    <> uuidText actUUID
+                    <> "): "
+                    <> T.pack (show n)
+                    <> " reference products share one activity UUID, which ILCD keys a process by."
+  where
+    counts = M.fromListWith (+) [(actUUID, 1 :: Int) | (actUUID, _prodUUID) <- M.keys (sdbActivities db)]
+    collisions = M.filter (> 1) counts
+    nameOf actUUID =
+        case [activityName act | ((a, _), act) <- M.toList (sdbActivities db), a == actUUID] of
+            (nm : _) -> nm
+            [] -> "?"
 
 -- | Write the ILCD package as a directory tree rooted at @dir@.
 writeILCDDatabase :: WriteOptions -> FilePath -> SimpleDatabase -> IO ()
