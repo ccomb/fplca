@@ -38,6 +38,7 @@ module Database.Loader (
     -- * Cache Operations
     loadCachedDatabaseWithMatrices,
     saveCachedDatabaseWithMatrices,
+    invalidateMatrixCache,
     loadDatabaseFromCacheFile,
     generateMatrixCacheFilename,
 
@@ -898,6 +899,25 @@ generateMatrixCacheFilename dbName sourcePath = do
         cacheDir = takeDirectory sourcePath
     createDirectoryIfMissing True cacheDir
     return $ cacheDir </> cacheFilename
+
+{- |
+Invalidate (remove) the on-disk matrix cache for a database.
+
+In-memory edits that change the activity set — notably 'deleteActivitiesInDB'
+— rebuild the live matrices but leave the @.zst@ matrix cache untouched. A
+later unload/reload would then resurrect the pre-edit activity set from the
+stale cache. Removing the cache here forces the next load to rebuild from
+source (or from a freshly-written cache), keeping disk and memory in agreement.
+No-op when no cache file is present.
+-}
+invalidateMatrixCache :: T.Text -> FilePath -> IO ()
+invalidateMatrixCache dbName sourcePath = do
+    cacheFile <- generateMatrixCacheFilename dbName sourcePath
+    mapM_ removeIfExists [cacheFile, cacheFile ++ ".zst"]
+  where
+    removeIfExists f = do
+        exists <- doesFileExist f
+        when exists $ removeFile f
 
 {- |
 Validate cache file integrity before attempting to decode.

@@ -60,6 +60,7 @@ import Database (
     findActivitiesByFields,
  )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
+import Database.Loader (invalidateMatrixCache)
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
@@ -434,4 +435,9 @@ deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch kee
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                                 modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
                             clearMethodMappingCacheForDb manager dbName
+                            -- The live matrices were rebuilt above, but the on-disk
+                            -- matrix cache still reflects the pre-delete activity set.
+                            -- Drop it so a later unload/reload can't resurrect the
+                            -- deleted activities from a stale cache.
+                            invalidateMatrixCache dbName (dcPath (ldConfig loaded))
                             pure $ Right (length toDelete)
