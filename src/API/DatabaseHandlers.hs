@@ -16,7 +16,11 @@ module API.DatabaseHandlers (
     loadDatabaseHandler,
     unloadDatabaseHandler,
     relinkDatabaseHandler,
+    relinkDatabaseWithMappingHandler,
+    copyDatabaseHandler,
     deleteDatabaseHandler,
+    deleteActivitiesHandler,
+    exportDatabaseHandler,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -73,9 +77,15 @@ import API.Types (
     BinaryContent (..),
     DatabaseListResponse (..),
     DatabaseStatusAPI (..),
+    DeleteClassFilter (..),
+    DeleteSelectionRequest (..),
+    DeleteSelectionResponse (..),
+    ExportRequest (..),
+    ExportResponse (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
+    RelinkMappingRequest (..),
     RelinkResponse (..),
     SynonymGroupsResponse (..),
     UploadRequest (..),
@@ -88,7 +98,10 @@ import Control.Monad.Reader (asks)
 import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
+import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
+import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Export (serializeDatabase)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -105,6 +118,7 @@ import Database.Manager (
     addMethodCollection,
     addUnitDefs,
     finalizeDatabase,
+    getDatabase,
     getDatabaseSetupInfo,
     getFlowSynonymGroups,
     listCompartmentMappings,
@@ -116,6 +130,7 @@ import Database.Manager (
     loadFlowSynonyms,
     loadUnitDefs,
     relinkDatabase,
+    relinkDatabaseWithMapping,
     removeCompartmentMappings,
     removeDatabase,
     removeDependencyFromStaged,
@@ -128,6 +143,7 @@ import Database.Manager (
     unloadFlowSynonyms,
     unloadUnitDefs,
  )
+import Database.RelinkMapping (buildAliasMap, parseAliasCSV)
 import Database.Upload (
     DatabaseFormat (..),
     UploadData (..),
@@ -135,6 +151,7 @@ import Database.Upload (
     findMethodDirectory,
     handleUpload,
  )
+import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Types (Database (..), GeographyPolicy (..), unresolvedCount)
 
@@ -185,11 +202,108 @@ relinkDatabaseHandler dbName = do
                     , rrDependsOn = rresDepsLoaded r
                     }
 
+{- | Re-link a loaded database against one chosen dependency using a name→name
+supplier-alias mapping supplied inline as CSV. Lets an Ecoinvent-named
+background (e.g. Agribalyse) resolve against a differently-named dependency
+(e.g. BAFU). Parse/validation failures and "not a declared dependency"
+surface as 4xx rather than a silent no-op.
+-}
+relinkDatabaseWithMappingHandler :: Text -> RelinkMappingRequest -> AppM RelinkResponse
+relinkDatabaseWithMappingHandler dbName req = do
+    dbManager <- asks aeDbManager
+    let csvBytes = BSL.fromStrict (T.encodeUtf8 (rmrMappingCsv req))
+    case parseAliasCSV csvBytes >>= buildAliasMap of
+        Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right aliases -> do
+            res <- liftIO $ relinkDatabaseWithMapping dbManager dbName (rmrDepDb req) aliases
+            case res of
+                Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+                Right r ->
+                    return
+                        RelinkResponse
+                            { rrDbName = rresDbName r
+                            , rrUnresolvedBefore = rresUnresolvedBefore r
+                            , rrUnresolvedAfter = rresUnresolvedAfter r
+                            , rrCrossDBLinks = rresCrossDBLinks r
+                            , rrDependsOn = rresDepsLoaded r
+                            }
+
+{- | Copy a loaded database under a new name. The copy is an independent
+in-memory database registered under @newName@; the source is untouched.
+-}
+copyDatabaseHandler :: Text -> Text -> AppM ActivateResponse
+copyDatabaseHandler dbName newName = do
+    dbManager <- asks aeDbManager
+    simpleAction (copyDatabase dbManager dbName newName) ("Copied database: " <> dbName <> " -> " <> newName)
+
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: Text -> AppM ActivateResponse
 deleteDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     simpleAction (removeDatabase dbManager dbName) ("Deleted database: " <> dbName)
+
+{- | Delete the whole filtered set of activities from a loaded database, in
+place. The filter selects the full matching set (pagination ignored); the
+keep/extra lists adjust the set individually. Rebuilds matrices and unlinks
+surviving references; returns the count removed.
+-}
+deleteActivitiesHandler :: Text -> DeleteSelectionRequest -> AppM DeleteSelectionResponse
+deleteActivitiesHandler dbName req = do
+    dbManager <- asks aeDbManager
+    let classFilters = [(dcfSystem f, dcfValue f, dcfExact f) | f <- dsqClassifications req]
+    result <-
+        liftIO $
+            deleteActivitiesInDB
+                dbManager
+                dbName
+                (dsqName req)
+                (dsqLocation req)
+                (dsqProduct req)
+                classFilters
+                (fromMaybe False (dsqExact req))
+                (dsqKeep req)
+                (dsqExtra req)
+    case result of
+        Left err -> return $ DeleteSelectionResponse False err 0
+        Right deleted ->
+            return $
+                DeleteSelectionResponse
+                    True
+                    ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
+                    deleted
+
+-- | Parse the export-format keyword into a 'DatabaseFormat'.
+parseExportFormat :: Text -> Either Text Upload.DatabaseFormat
+parseExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right Upload.SimaProCSV
+    "ecospold1" -> Right Upload.EcoSpold1
+    "ecospold2" -> Right Upload.EcoSpold2
+    "ilcd" -> Right Upload.ILCDProcess
+    "brightway" -> Right Upload.BrightwayExcel
+    other -> Left ("unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)")
+
+{- | Export a loaded database, returning the serialized bytes base64-encoded.
+EcoSpold 2 / ILCD multi-file trees are zipped; single-file formats carry their
+bytes directly. Mirrors the upload endpoint's base64 convention.
+-}
+exportDatabaseHandler :: Text -> ExportRequest -> AppM ExportResponse
+exportDatabaseHandler dbName req = do
+    dbManager <- asks aeDbManager
+    case parseExportFormat (exrFormat req) of
+        Left err -> return (ExportResponse False err Nothing)
+        Right fmt -> do
+            mLoaded <- liftIO (getDatabase dbManager dbName)
+            case mLoaded of
+                Nothing -> return (ExportResponse False ("Database not loaded: " <> dbName) Nothing)
+                Just ld ->
+                    case serializeDatabase fmt (ldDatabase ld) of
+                        Left err -> return (ExportResponse False err Nothing)
+                        Right bytes ->
+                            return $
+                                ExportResponse
+                                    True
+                                    ("Exported " <> dbName)
+                                    (Just (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))))
 
 {- | Enforce the hosting upload-size policy on a decoded payload.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0

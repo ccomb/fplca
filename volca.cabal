@@ -43,8 +43,10 @@ library
                      , SharedSolver
                      , Database
                      , Database.Manager
+                     , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking
+                     , Database.RelinkMapping
                      , Database.MatrixBuild
                      , Database.Upload
                      , Database.UploadedDatabase
@@ -81,11 +83,17 @@ library
                      , EcoSpold.Common
                      , EcoSpold.Cutoff
                      , EcoSpold.Parser2
+                     , EcoSpold.Writer2
                      , EcoSpold.Parser1
+                     , EcoSpold.Writer1
                      , SimaPro.Parser
+                     , SimaPro.Writer
                      , BrightwayExcel.Parser
+                     , BrightwayExcel.Writer
                      , Expr
                      , ILCD.Parser
+                     , ILCD.Writer
+                     , Database.Export
                      , Plugin.Types
                      , Plugin.Builtin
                      , Plugin.Bridge
@@ -198,6 +206,7 @@ test-suite lca-tests
   other-modules:       TestHelpers
                      , GoldenData
                      , AutoRelinkSpec
+                     , RelinkMappingSpec
                      , MatrixConstructionSpec
                      , InventorySpec
                      , MatrixExportSpec
@@ -235,7 +244,12 @@ test-suite lca-tests
                      , UploadSizeSpec
                      , ProgressSpec
                      , EcoSpold1Spec
+                     , EcoSpold1WriterSpec
                      , EcoSpold2Spec
+                     , EcoSpold2WriterSpec
+                     , SimaProWriterSpec
+                     , ILCDWriterSpec
+                     , BrightwayExcelWriterSpec
                      , MCPSchemaSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec
@@ -260,6 +274,8 @@ test-suite lca-tests
                      , NumericEdgesSpec
                      , AggregateSpec
                      , ConfigWriterSpec
+                     , CopySpec
+                     , DeleteSelectionSpec
                      , PropertiesSpec
   build-depends:       base >=4.14 && <5
                      , volca

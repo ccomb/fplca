@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -16,9 +16,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Manager (DatabaseManager (..), LoadedDatabase (..), addDatabase, addMethodCollection)
+import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Export (exportDatabase)
+import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
-import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
+import Database.RelinkMapping (relinkWithMappingFile)
+import Database.Upload (DatabaseFormat (..), UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
 import qualified Database.Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
@@ -98,6 +101,14 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbUpload registry outputFormat manager args
         Database (DbDelete name) ->
             executeDbDelete registry outputFormat manager name
+        Database (DbDeleteActivities args) ->
+            executeDbDeleteActivities registry outputFormat manager args
+        Database (DbCopy srcName newName) ->
+            executeDbCopy registry outputFormat manager srcName newName
+        Database (DbRelinkMapping args) ->
+            executeDbRelinkMapping registry outputFormat manager args
+        Database (DbExport args) ->
+            executeDbExport registry outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -477,6 +488,107 @@ executeDbDelete registry fmt manager name = do
         Right () -> do
             reportProgress Info $ "Deleted database: " ++ T.unpack name
             outputResult registry fmt $ object ["deleted" .= name]
+
+-- | Execute database copy command
+executeDbCopy :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> Text -> IO ()
+executeDbCopy registry fmt manager srcName newName = do
+    result <- copyDatabase manager srcName newName
+    case result of
+        Left err -> do
+            reportError $ "Copy failed: " ++ T.unpack err
+            exitFailure
+        Right () -> do
+            reportProgress Info $ "Copied database: " ++ T.unpack srcName ++ " -> " ++ T.unpack newName
+            outputResult registry fmt $ object ["source" .= srcName, "copy" .= newName]
+
+-- | Execute relink-with-mapping: relink a DB to a dependency via an alias CSV.
+executeDbRelinkMapping :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbRelinkArgs -> IO ()
+executeDbRelinkMapping registry fmt manager args = do
+    result <- relinkWithMappingFile manager (draDb args) (draToDep args) (draMappingCsv args)
+    case result of
+        Left err -> do
+            reportError $ "Relink failed: " ++ T.unpack err
+            exitFailure
+        Right r -> do
+            reportProgress Info $
+                "Re-linked "
+                    ++ T.unpack (rresDbName r)
+                    ++ ": "
+                    ++ show (rresUnresolvedBefore r)
+                    ++ " -> "
+                    ++ show (rresUnresolvedAfter r)
+                    ++ " unresolved ("
+                    ++ show (rresCrossDBLinks r)
+                    ++ " cross-DB links)"
+            outputResult registry fmt $
+                object
+                    [ "database" .= rresDbName r
+                    , "unresolved_before" .= rresUnresolvedBefore r
+                    , "unresolved_after" .= rresUnresolvedAfter r
+                    , "cross_db_links" .= rresCrossDBLinks r
+                    , "depends_on" .= rresDepsLoaded r
+                    ]
+
+-- | Parse the @--format@ keyword for export into a 'DatabaseFormat'.
+parseExportFormat :: Text -> Either Text DatabaseFormat
+parseExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right SimaProCSV
+    "ecospold1" -> Right EcoSpold1
+    "ecospold2" -> Right EcoSpold2
+    "ilcd" -> Right ILCDProcess
+    "brightway" -> Right BrightwayExcel
+    other -> Left $ "unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)"
+
+-- | Execute database export: serialize a loaded database to a file.
+executeDbExport :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbExportArgs -> IO ()
+executeDbExport registry fmt manager args =
+    case parseExportFormat (deaFormat args) of
+        Left err -> reportError (T.unpack err) >> exitFailure
+        Right dbFmt -> do
+            mLoaded <- DM.getDatabase manager (deaDb args)
+            case mLoaded of
+                Nothing -> do
+                    reportError $ "Database '" ++ T.unpack (deaDb args) ++ "' not loaded"
+                    exitFailure
+                Just ld -> do
+                    result <- exportDatabase dbFmt (ldDatabase ld) (deaOut args)
+                    case result of
+                        Left err -> reportError (T.unpack err) >> exitFailure
+                        Right () -> do
+                            reportProgress Info $ "Exported " ++ T.unpack (deaDb args) ++ " -> " ++ deaOut args
+                            outputResult registry fmt $
+                                object
+                                    [ "database" .= deaDb args
+                                    , "format" .= deaFormat args
+                                    , "out" .= deaOut args
+                                    ]
+
+{- | Execute delete-by-selection: deletes the whole filtered set (pagination
+ignored) plus the explicit @--add@ ProcessIds, sparing @--keep@.
+-}
+executeDbDeleteActivities :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbDeleteArgs -> IO ()
+executeDbDeleteActivities registry fmt manager args = do
+    let classFilters = case (ddaClassSystem args, ddaClassValue args) of
+            (Just sys, Just val) -> [(sys, val, ddaExact args)]
+            _ -> []
+    result <-
+        deleteActivitiesInDB
+            manager
+            (ddaDb args)
+            (ddaName args)
+            (ddaLocation args)
+            (ddaProduct args)
+            classFilters
+            (ddaExact args)
+            (ddaKeep args)
+            (ddaExtra args)
+    case result of
+        Left err -> do
+            reportError $ "Delete failed: " ++ T.unpack err
+            exitFailure
+        Right deleted -> do
+            reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
+            outputResult registry fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
 
 -- | Execute method delete command
 executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()

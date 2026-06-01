@@ -718,6 +718,20 @@ data RelinkResponse = RelinkResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkResponse)
 
+{- | Request body for the relink-with-mapping endpoint. Re-links the captured
+database against @rmrDepDb@ using a name→name supplier-alias mapping. The
+mapping travels inline as CSV text (@rmrMappingCsv@) so the client can send a
+local file without the server needing filesystem access to it.
+-}
+data RelinkMappingRequest = RelinkMappingRequest
+    { rmrDepDb :: Text
+    -- ^ Dependency database to link against (must be a declared dependency)
+    , rmrMappingCsv :: Text
+    -- ^ Mapping CSV content (header row + source/target columns)
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkMappingRequest)
+
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded {dlrName :: Text}
@@ -740,6 +754,66 @@ data UploadRequest = UploadRequest
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped UploadRequest)
+
+{- | One classification filter in a delete request: the @system@ to match, the
+@value@ to look for, and whether the match is exact (else token-contains).
+Mirrors the search endpoint's classification query parameters so the deleted
+set is exactly the searched set.
+-}
+data DeleteClassFilter = DeleteClassFilter
+    { dcfSystem :: Text
+    , dcfValue :: Text
+    , dcfExact :: Bool
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteClassFilter)
+
+{- | Request for delete-by-selection. The filter fields select the whole
+matching set (pagination ignored); @dsqKeep@ spares matched process ids and
+@dsqExtra@ adds ones the filter missed. Process ids are the canonical
+@activityUUID_productUUID@ strings the UI/CLI carry, not matrix indices.
+-}
+data DeleteSelectionRequest = DeleteSelectionRequest
+    { dsqName :: Maybe Text -- Filter by activity name
+    , dsqLocation :: Maybe Text -- Filter by location
+    , dsqProduct :: Maybe Text -- Filter by reference product
+    , dsqClassifications :: [DeleteClassFilter] -- Classification filters (AND across systems)
+    , dsqExact :: Maybe Bool -- Exact name match (default False)
+    , dsqKeep :: [Text] -- Process-id strings to spare from deletion
+    , dsqExtra :: [Text] -- Process-id strings to add to deletion
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionRequest)
+
+-- | Response for delete-by-selection: count of activities removed.
+data DeleteSelectionResponse = DeleteSelectionResponse
+    { dsrSuccess :: Bool
+    , dsrMessage :: Text
+    , dsrDeleted :: Int
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionResponse)
+
+{- | Request for database export. @exrFormat@ is the target-format keyword
+(@simapro|ecospold1|ecospold2|ilcd|brightway@), matching the CLI.
+-}
+newtype ExportRequest = ExportRequest
+    { exrFormat :: Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportRequest)
+
+{- | Response for database export. The serialized database is base64-encoded
+(single-file formats carry their bytes directly; EcoSpold 2 / ILCD are zipped),
+mirroring the upload endpoint's base64 convention.
+-}
+data ExportResponse = ExportResponse
+    { exrespSuccess :: Bool
+    , exrespMessage :: Text
+    , exrespData :: Maybe Text -- Base64-encoded serialized database (if successful)
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportResponse)
 
 -- | Response for database upload
 data UploadResponse = UploadResponse

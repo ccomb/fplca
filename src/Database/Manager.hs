@@ -32,11 +32,13 @@ module Database.Manager (
     getDatabase,
     mkDepSolverLookup,
     listDatabases,
+    clearMethodMappingCacheForDb,
 
     -- * Load/Unload
     loadDatabase,
     unloadDatabase,
     relinkDatabase,
+    relinkDatabaseWithMapping,
     RelinkResult (..),
     addDatabase,
     removeDatabase,
@@ -1475,7 +1477,54 @@ even though we already know the answer. The save is skipped when the
 relink is a no-op (no change vs. the in-memory state).
 -}
 relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
-relinkDatabase manager dbName = do
+relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing
+
+{- | Re-link a loaded DB against a single chosen dependency, applying a
+name→name supplier-alias map. Restricts candidate suppliers to @depDb@
+(which must be in the database's declared dependency set) and threads the
+aliases into the matcher so a consumer's input flow name that only matches a
+target supplier under the mapping still links. Same persistence/no-op
+semantics as 'relinkDatabase'. Errors (DB or dep not loaded, dep not a
+declared dependency) surface as 'Left'.
+-}
+relinkDatabaseWithMapping ::
+    DatabaseManager ->
+    -- | database to relink
+    Text ->
+    -- | dependency database to link against
+    Text ->
+    -- | consumer-flow-name → supplier-name aliases
+    M.Map Text Text ->
+    IO (Either Text RelinkResult)
+relinkDatabaseWithMapping manager dbName depDb aliases = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    case M.lookup dbName loadedDbs of
+        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Just loaded
+            | depDb `notElem` dbDependsOn (ldDatabase loaded) ->
+                return $
+                    Left $
+                        "Not a declared dependency of "
+                            <> dbName
+                            <> ": "
+                            <> depDb
+                            <> " (add it first with add-dependency)"
+            | not (M.member depDb loadedDbs) ->
+                return $ Left $ "Dependency database not loaded: " <> depDb
+            | otherwise -> relinkDatabaseWith manager dbName (Just [depDb]) (Just aliases)
+
+{- | Shared relink core. @depOverride@ restricts the candidate dependency set
+to the given names (still intersected with the declared pin); 'Nothing' uses
+the full pin. @aliases@ feeds 'lcSupplierAliases'. The dependency set stored
+on the database ('dbDependsOn') is never mutated here.
+-}
+relinkDatabaseWith ::
+    DatabaseManager ->
+    Text ->
+    Maybe [Text] ->
+    Maybe (M.Map Text Text) ->
+    IO (Either Text RelinkResult)
+relinkDatabaseWith manager dbName depOverride aliases = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
@@ -1485,8 +1534,12 @@ relinkDatabase manager dbName = do
             -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
             -- This keeps the user's explicit selection authoritative — relink
             -- recomputes links *within* the pin but never expands or shrinks it.
+            -- An optional 'depOverride' narrows further to a single chosen dep.
             let pinnedDeps = dbDependsOn (ldDatabase loaded)
-                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
+                candidateDeps = case depOverride of
+                    Nothing -> pinnedDeps
+                    Just chosen -> filter (`elem` chosen) pinnedDeps
+                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` candidateDeps]
             synonymDB <- getMergedSynonymDB manager
             unitConfig <- getMergedUnitConfig manager
             let db = ldDatabase loaded
@@ -1506,6 +1559,7 @@ relinkDatabase manager dbName = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = M.map snd (dmGeographies manager)
                         , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
+                        , lcSupplierAliases = aliases
                         }
                 !totalInputs = Loader.countTotalTechInputs (toSimpleDatabase db)
                 rawStats =

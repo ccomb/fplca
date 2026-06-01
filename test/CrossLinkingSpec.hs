@@ -253,6 +253,7 @@ spec = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
                         , lcGeographyPolicy = GeoGlobal
+                        , lcSupplierAliases = Nothing
                         }
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "kg" of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
@@ -268,6 +269,7 @@ spec = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
                         , lcGeographyPolicy = GeoGlobal
+                        , lcSupplierAliases = Nothing
                         }
             case findSupplierInIndexedDBs ctx "no such product" "GLO" "kg" of
                 CrossDBNotLinked _ -> return ()
@@ -283,6 +285,7 @@ spec = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
                         , lcGeographyPolicy = GeoGlobal
+                        , lcSupplierAliases = Nothing
                         }
             -- "product Y" exists in kg; asking for m3 should fail unit check
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "m3" of
@@ -302,6 +305,7 @@ spec = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
                         , lcGeographyPolicy = GeoGlobal
+                        , lcSupplierAliases = Nothing
                         }
             -- Synonym lookup: "producto y" → group containing "product y" → supplier
             case findSupplierInIndexedDBs ctx "producto y" "GLO" "kg" of
@@ -318,6 +322,7 @@ spec = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = locationHierarchy
                         , lcGeographyPolicy = GeoGlobal
+                        , lcSupplierAliases = Nothing
                         }
             -- "product Y {GLO}" compound name with empty location arg
             -- extractBracketedLocation will find "GLO"
@@ -368,6 +373,7 @@ spec = do
                     , lcThreshold = defaultLinkingThreshold
                     , lcLocationHierarchy = locationHierarchy
                     , lcGeographyPolicy = policy
+                    , lcSupplierAliases = Nothing
                     }
 
         it "GeoGlobal accepts FR query against a GLO candidate" $ do
@@ -463,8 +469,9 @@ mkRefExchangeAt loc =
   where
     flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"
 
--- | One-activity SimpleDatabase with a single reference exchange. The
--- activity is anchored at @actLoc@; the reference exchange carries @exLoc@.
+{- | One-activity SimpleDatabase with a single reference exchange. The
+activity is anchored at @actLoc@; the reference exchange carries @exLoc@.
+-}
 mkSplitLocationDB :: Text -> Text -> SimpleDatabase
 mkSplitLocationDB actLoc exLoc =
     let flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"

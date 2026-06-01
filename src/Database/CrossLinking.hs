@@ -141,6 +141,15 @@ data LinkingContext = LinkingContext
     -- ^ Location hierarchy (code → parent codes)
     , lcGeographyPolicy :: !GeographyPolicy
     -- ^ How aggressively to widen geography when no exact match is found
+    , lcSupplierAliases :: !(Maybe (M.Map Text Text))
+    {- ^ Optional consumer-flow-name → supplier-name aliases. When a
+    consumer's input flow name does not match any supplier directly, the
+    matcher retries with its alias from this map (e.g. an Ecoinvent-named
+    input rewritten to the BAFU activity name). 'Nothing' disables the
+    feature entirely (the common case for ordinary loads); 'Just' an empty
+    map is equivalent. Keys are matched on the raw (un-normalized) flow
+    name, falling back to 'normalizeText'.
+    -}
     }
 
 -- | A candidate supplier from another database
@@ -532,6 +541,19 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
         --   1. Exact product-name match across all indexed DBs.
         --   2. Synonym-group match if exact yielded nothing.
         --   3. Prefix-splitting fallback for compound names (e.g. SimaPro).
+        -- Alias retry: when the consumer's flow name only matches the target
+        -- supplier under an explicit name→name mapping (e.g. Ecoinvent name →
+        -- BAFU activity name), look the alias up and run the same
+        -- exact/synonym sub-cascade on it. Tried last, so direct matches always
+        -- win over the mapping.
+        aliasOf nm = case lcSupplierAliases of
+            Nothing -> Nothing
+            Just aliases -> case M.lookup nm aliases of
+                Just target -> Just target
+                Nothing -> M.lookup (normalizeText nm) aliases
+        aliasCandidates = case aliasOf productName of
+            Nothing -> []
+            Just aliasName -> firstNonEmpty [tryName aliasName, tryPrefixes (extractProductPrefixes aliasName)]
         allCandidates =
             firstNonEmpty
                 [ concatMap (lookupExact normalizedName) lcIndexedDatabases
@@ -539,6 +561,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                     Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                     Nothing -> []
                 , tryPrefixes (extractProductPrefixes productName)
+                , aliasCandidates
                 ]
         -- Effective location: if raw location is empty, try extracting from compound name
         effectiveLocation =
@@ -616,19 +639,21 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     firstNonEmpty :: [[a]] -> [a]
     firstNonEmpty = fromMaybe [] . find (not . null)
 
+    -- Run the (exact, then synonym) sub-cascade on a single candidate name.
+    tryName :: Text -> [(Text, SupplierEntry)]
+    tryName p =
+        let normalized = normalizeText p
+            byExact = concatMap (lookupExact normalized) lcIndexedDatabases
+            bySynonym = case lookupSynonymGroup lcSynonymDB (normalizeName p) of
+                Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
+                Nothing -> []
+         in firstNonEmpty [byExact, bySynonym]
+
     -- Try each prefix from compound name splitting; for each prefix run the
     -- same (exact, then synonym) sub-cascade; return the first prefix that
     -- yields anything.
     tryPrefixes :: [Text] -> [(Text, SupplierEntry)]
-    tryPrefixes = firstNonEmpty . map candidatesFor
-      where
-        candidatesFor p =
-            let normalized = normalizeText p
-                byExact = concatMap (lookupExact normalized) lcIndexedDatabases
-                bySynonym = case lookupSynonymGroup lcSynonymDB (normalizeName p) of
-                    Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
-                    Nothing -> []
-             in firstNonEmpty [byExact, bySynonym]
+    tryPrefixes = firstNonEmpty . map tryName
 
     classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
     classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =

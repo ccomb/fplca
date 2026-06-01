@@ -63,6 +63,57 @@ data DatabaseAction
     = DbList
     | DbUpload UploadArgs
     | DbDelete Text
+    | {- | Delete the activities matched by a filter (the whole matching set,
+      pagination ignored), keeping/adding explicit ProcessIds.
+      -}
+      DbDeleteActivities DbDeleteArgs
+    | -- | Copy a loaded database (source name → new name)
+      DbCopy Text Text
+    | {- | Relink a database against one dependency using a name→name supplier
+      alias mapping loaded from a local CSV: @db@, @--to depDb@, @--mapping csv@.
+      -}
+      DbRelinkMapping DbRelinkArgs
+    | -- | Export a loaded database to a file: @db@, @--format fmt@, @--out file@.
+      DbExport DbExportArgs
+    deriving (Eq, Show, Generic)
+
+-- | Arguments for @database export@.
+data DbExportArgs = DbExportArgs
+    { deaDb :: Text
+    -- ^ Database to export
+    , deaFormat :: Text
+    -- ^ Target format keyword (@--format@): simapro|ecospold1|ecospold2|ilcd|brightway
+    , deaOut :: FilePath
+    -- ^ Output file path (@--out@)
+    }
+    deriving (Eq, Show, Generic)
+
+-- | Arguments for @database relink@ with a name→name supplier alias mapping.
+data DbRelinkArgs = DbRelinkArgs
+    { draDb :: Text
+    -- ^ Database to relink
+    , draToDep :: Text
+    -- ^ Dependency database to link against (@--to@)
+    , draMappingCsv :: FilePath
+    -- ^ Path to the mapping CSV (@--mapping@)
+    }
+    deriving (Eq, Show, Generic)
+
+{- | Arguments for delete-by-selection. The filter fields mirror the activity
+search filter; @ddaKeep@ spares matched ProcessIds and @ddaExtra@ adds ones
+the filter missed.
+-}
+data DbDeleteArgs = DbDeleteArgs
+    { ddaDb :: Text
+    , ddaName :: Maybe Text
+    , ddaLocation :: Maybe Text
+    , ddaProduct :: Maybe Text
+    , ddaClassSystem :: Maybe Text
+    , ddaClassValue :: Maybe Text
+    , ddaExact :: Bool
+    , ddaKeep :: [Text]
+    , ddaExtra :: [Text]
+    }
     deriving (Eq, Show, Generic)
 
 -- | Plugin management actions

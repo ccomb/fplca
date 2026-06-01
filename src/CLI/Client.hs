@@ -25,6 +25,7 @@ import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
 import Network.HTTP.Client (
     HttpException (..),
@@ -81,6 +82,17 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             executeUpload mgr rc fmt jp "/api/v1/db/upload" args
         Database (DbDelete name) ->
             apiDelete mgr rc ("/api/v1/db/" ++ T.unpack name) >>= output fmt jp
+        Database (DbDeleteActivities args) ->
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack (ddaDb args) ++ "/delete") (deleteSelectionBody args)
+                >>= output fmt jp
+        Database (DbRelinkMapping args) -> do
+            csv <- TIO.readFile (draMappingCsv args)
+            apiPost
+                mgr
+                rc
+                ("/api/v1/db/" ++ T.unpack (draDb args) ++ "/relink")
+                (relinkMappingBody (draToDep args) csv)
+                >>= output fmt jp
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -217,7 +229,37 @@ extractLoadedDbNames = fromMaybe [] . parseMaybe go
 dbPath :: Text -> String
 dbPath name = "/api/v1/db/" ++ T.unpack name
 
--- | Build query string from optional parameters
+{- | Build query string from optional parameters
+| JSON body for the delete-by-selection endpoint (field names match the API).
+-}
+deleteSelectionBody :: DbDeleteArgs -> Value
+deleteSelectionBody args =
+    object
+        [ "name" .= ddaName args
+        , "location" .= ddaLocation args
+        , "product" .= ddaProduct args
+        , "classifications" .= classifications
+        , "exact" .= ddaExact args
+        , "keep" .= ddaKeep args
+        , "extra" .= ddaExtra args
+        ]
+  where
+    classifications = case (ddaClassSystem args, ddaClassValue args) of
+        (Just sys, Just val) ->
+            [object ["system" .= sys, "value" .= val, "exact" .= ddaExact args]]
+        _ -> [] :: [Value]
+
+{- | Body for POST /api/v1/db/{db}/relink with an inline alias mapping.
+Keys mirror 'API.Types.RelinkMappingRequest' after the @Stripped@ prefix
+transform (@rmrDepDb@ → @depDb@, @rmrMappingCsv@ → @mappingCsv@).
+-}
+relinkMappingBody :: Text -> Text -> Value
+relinkMappingBody depDb csv =
+    object
+        [ "depDb" .= depDb
+        , "mappingCsv" .= csv
+        ]
+
 buildQuery :: [(String, Maybe String)] -> String
 buildQuery params =
     case [(k, v) | (k, Just v) <- params] of
