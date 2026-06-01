@@ -197,10 +197,14 @@ isCoproduct = \case
     BiosphereExchange{} -> False
     WasteExchange{} -> False
 
+-- | Ordinary technosphere inputs only. 'ReferenceInput' is intentionally
+-- excluded: it already belongs to the reference group ('exchangeIsReference'),
+-- so matching it here too would emit the exchange twice — double-counting its
+-- coefficient when the workbook is re-imported and duplicate (i,j) entries are
+-- summed. Each role thus lands in exactly one group.
 isTechInput :: Exchange -> Bool
 isTechInput = \case
     TechnosphereExchange{techRole = Input} -> True
-    TechnosphereExchange{techRole = ReferenceInput} -> True
     TechnosphereExchange{} -> False
     BiosphereExchange{} -> False
     WasteExchange{} -> False

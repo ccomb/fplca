@@ -95,6 +95,15 @@ spec = describe "BrightwayExcel.Writer" $ do
                                 abs (a - b) < 1.0e-9 `shouldBe` True
                             other -> expectationFailure ("CO2 inventory missing: " <> show other)
 
+    describe "ReferenceInput regression" $
+        it "emits a reference-input exchange exactly once (not double-counted)" $ do
+            -- A ReferenceInput belongs only to the reference group; before the
+            -- fix it also matched the technosphere-input group and was written
+            -- twice, doubling its coefficient on re-import.
+            let dataRows = activityRows cfg refInputDb refInputAct
+                solventRows = length [() | (CText "spent solvent" : _) <- dataRows]
+            solventRows `shouldBe` 1
+
 -- ---------------------------------------------------------------------------
 -- Fixture database, built with the parser's UUID conventions
 -- ---------------------------------------------------------------------------
@@ -189,6 +198,45 @@ gasFlow =
         M.empty
         Nothing
         Nothing
+
+-- Regression fixtures: a treatment-style activity whose reference is a
+-- technosphere *input* (ReferenceInput), which must serialize as a single row.
+solventFlow :: TechnosphereFlow
+solventFlow =
+    TechnosphereFlow
+        (generateFlowUUID "spent solvent" "" "kilogram")
+        "spent solvent"
+        (generateUnitUUID "kilogram")
+        M.empty
+        Nothing
+        Nothing
+
+refInputAct :: Activity
+refInputAct =
+    elec
+        { activityName = "Solvent treatment"
+        , activityUnit = "kilogram"
+        , exchanges =
+            [ TechnosphereExchange
+                { techFlowId = tfId solventFlow
+                , techAmount = 1
+                , techUnitId = generateUnitUUID "kilogram"
+                , techRole = ReferenceInput
+                , techActivityLinkId = UUID.nil
+                , techProcessLinkId = Nothing
+                , techLocation = "GLO"
+                , techComment = Nothing
+                , techPedigree = Nothing
+                }
+            ]
+        }
+
+refInputDb :: SimpleDatabase
+refInputDb =
+    fixtureDb
+        { sdbTechFlows = M.singleton (tfId solventFlow) solventFlow
+        , sdbUnits = M.singleton (unitId kg) kg
+        }
 
 co2 :: BiosphereFlow
 co2 =
