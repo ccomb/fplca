@@ -317,11 +317,13 @@ lookup' p = foldr (\x acc -> if p x then Just x else acc) Nothing
 {- | Canonical numeric rendering for amount cells. Integers print without a
 decimal point (@1@, not @1.0@); everything else uses the shortest round-tripping
 'show' for a 'Double'. Both forms re-parse via @Data.Text.Read.double@, so the
-written cell reconstructs the same 'Double'.
+written cell reconstructs the same 'Double'. Non-finite values (which cannot
+occur in a parsed database) are clamped to a parseable @0@ rather than the
+unreadable @"NaN"@/@"Infinity"@ in a numeric cell — matching the other writers.
 -}
 formatAmount :: Double -> Text
 formatAmount d
-    | isNaN d || isInfinite d = T.pack (show d)
+    | isNaN d || isInfinite d = "0"
     | d == fromIntegral i && abs d < 1.0e15 = T.pack (show i)
     | otherwise = T.pack (show d)
   where

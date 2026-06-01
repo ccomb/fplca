@@ -58,7 +58,6 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Numeric (showFFloat)
 import Types
 
 -- ----------------------------------------------------------------------------
@@ -321,10 +320,13 @@ escapeXmlAttr =
 {- | Deterministic textual form for a @meanValue@. @show@ on a 'Double' is
 already round-trippable and stable across platforms, but renders whole
 numbers as @1.0@ (which the parser reads back identically), so it is the
-simplest canonical choice. Negative zero is normalised to @0.0@.
+simplest canonical choice. Negative zero is normalised to @0.0@, and the
+non-finite values (which cannot occur in a parsed database) are clamped to a
+parseable @0.0@ rather than the unreadable @"NaN"@/@"Infinity"@ — matching the
+EcoSpold2 / ILCD / SimaPro writers.
 -}
 formatAmount :: Double -> Text
 formatAmount x
+    | isNaN x || isInfinite x = "0.0"
     | x == 0 = "0.0"
-    | isNaN x || isInfinite x = T.pack (showFFloat Nothing x "")
     | otherwise = T.pack (show x)
