@@ -39,7 +39,9 @@ variants in the Servant API.
 
 from __future__ import annotations
 
+import base64
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -118,6 +120,16 @@ def _candidate_wire_names(py_name: str) -> list[str]:
     return seen
 
 
+_EXPORT_FORMATS = frozenset(
+    {"simapro", "ecospold1", "ecospold2", "ilcd", "brightway"}
+)
+"""Target keywords accepted by ``POST /api/v1/db/{dbName}/export``.
+
+Mirrors the engine's ``parseExportFormat`` (case-folded). Validated
+client-side so a typo fails before the round-trip with the same message
+shape the engine would have returned."""
+
+
 _FORMATTED_SCALARS = (str, int, float)
 
 
@@ -140,6 +152,39 @@ def _format_query_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_format_query_value(v) for v in value]
     return str(value)
+
+
+def _coerce_class_filter(c: dict | tuple) -> dict:
+    """Normalize one classification filter to the wire ``DeleteClassFilter``.
+
+    Accepts a ``{"system", "value", "exact"?}`` dict or a
+    ``(system, value, exact?)`` tuple. ``exact`` defaults to False. Raises
+    VoLCAError on a malformed entry rather than silently dropping fields.
+    """
+    if isinstance(c, dict):
+        missing = {"system", "value"} - set(c)
+        if missing:
+            raise VoLCAError(
+                f"Classification filter missing keys: {sorted(missing)}. "
+                "Expected {'system', 'value', 'exact'?}."
+            )
+        return {
+            "system": c["system"],
+            "value": c["value"],
+            "exact": bool(c.get("exact", False)),
+        }
+    if isinstance(c, (tuple, list)):
+        if len(c) not in (2, 3):
+            raise VoLCAError(
+                f"Classification filter tuple must be (system, value[, exact]); "
+                f"got {len(c)} items."
+            )
+        system, value = c[0], c[1]
+        exact = bool(c[2]) if len(c) == 3 else False
+        return {"system": system, "value": value, "exact": exact}
+    raise VoLCAError(
+        f"Classification filter must be a dict or tuple, got {type(c).__name__}."
+    )
 
 
 def _resolve_page_args(
@@ -567,6 +612,194 @@ class Client:
     def unload_database(self, db_name: str) -> dict:
         """Unload a database from memory to free RAM. The disk copy is kept."""
         return self._json(self._session.post(f"{self.base_url}/api/v1/db/{db_name}/unload"))
+
+    # -- Database write operations --
+    #
+    # These mutate a loaded database (copy / delete / relink / export /
+    # dependency wiring). The engine does NOT register them as Resources, so
+    # they carry no operationId and are unreachable through the OpenAPI
+    # dispatcher. Each method therefore builds its URL directly, exactly like
+    # load_database / unload_database above.
+    #
+    # The engine reports failures in-band as ``{"success": false, ...}`` (HTTP
+    # 200) for some of these handlers, so _require_success surfaces those as
+    # VoLCAError rather than letting a failed call look like a success.
+
+    def _db(self, db_name: str | None) -> str:
+        """Resolve the target database, falling back to ``self.db``.
+
+        Raises VoLCAError when neither an explicit ``db_name`` nor a
+        client-level default is available — never silently targets ``""``.
+        """
+        name = db_name or self.db
+        if not name:
+            raise VoLCAError(
+                "No database specified and Client(db=...) is empty. "
+                "Pass db_name= or construct the client with db=...."
+            )
+        return name
+
+    @staticmethod
+    def _require_success(payload: dict, action: str) -> dict:
+        """Raise VoLCAError if the engine reported an in-band failure.
+
+        Handlers that return ``{"success": false, "message": ...}`` with HTTP
+        200 would otherwise look like a success. Surface the engine's own
+        message instead of silently returning the failure envelope.
+        """
+        if payload.get("success") is False:
+            raise VoLCAError(
+                f"{action} failed: {payload.get('message', 'no message')}"
+            )
+        return payload
+
+    def copy_database(self, new_name: str, db_name: str | None = None) -> dict:
+        """Copy a loaded database in memory under a new name.
+
+        ``new_name`` is a path segment; the source defaults to ``self.db``.
+        Returns the engine's ``ActivateResponse`` dict
+        (``{"success", "message", "database"?}``). Raises VoLCAError if the
+        engine reports ``success=false``.
+        """
+        src = self._db(db_name)
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/db/{src}/copy/{new_name}")
+        )
+        return self._require_success(payload, "copy_database")
+
+    def delete_activities(
+        self,
+        *,
+        name: str = "",
+        location: str = "",
+        product: str = "",
+        classifications: list[dict | tuple] | None = None,
+        exact: bool = False,
+        keep: list[str] | None = None,
+        extra: list[str] | None = None,
+        db_name: str | None = None,
+    ) -> dict:
+        """Delete activities selected by filter, sparing/adding explicit ids.
+
+        Builds a ``DeleteSelectionRequest``: the filter fields select the whole
+        matching set, ``keep`` spares matched process ids, and ``extra`` adds
+        ones the filter missed. ``classifications`` is a list of
+        ``{"system", "value", "exact"}`` dicts or ``(system, value, exact)``
+        tuples.
+
+        Returns the ``DeleteSelectionResponse`` dict
+        (``{"success", "message", "deleted"}``); raises VoLCAError on
+        ``success=false``.
+        """
+        body = {
+            "name": name,
+            "location": location,
+            "product": product,
+            "classifications": [
+                _coerce_class_filter(c) for c in (classifications or [])
+            ],
+            "exact": exact,
+            "keep": keep or [],
+            "extra": extra or [],
+        }
+        target = self._db(db_name)
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/delete", json=body
+            )
+        )
+        return self._require_success(payload, "delete_activities")
+
+    def relink(
+        self, dep_db: str, mapping_csv: str, db_name: str | None = None
+    ) -> dict:
+        """Re-link a database against a dependency using a name→name alias CSV.
+
+        ``mapping_csv`` is the CSV *text* (header row + source/target columns),
+        sent inline so the engine needs no filesystem access. Returns the
+        ``RelinkResponse`` dict (``{"dbName", "unresolvedBefore",
+        "unresolvedAfter", "crossDBLinks", "dependsOn"}``).
+        """
+        target = self._db(db_name)
+        body = {"depDb": dep_db, "mappingCsv": mapping_csv}
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/relink", json=body
+            )
+        )
+
+    def relink_from_file(
+        self, dep_db: str, mapping_path: str, db_name: str | None = None
+    ) -> dict:
+        """Read a mapping CSV file and call :meth:`relink` with its text."""
+        csv_text = Path(mapping_path).read_text(encoding="utf-8")
+        return self.relink(dep_db, csv_text, db_name=db_name)
+
+    def export_database(self, fmt: str, db_name: str | None = None) -> bytes:
+        """Export a loaded database, returning the serialized bytes.
+
+        ``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway`` —
+        validated client-side; an unknown value raises VoLCAError before any
+        request. Single-file formats carry their bytes directly; EcoSpold 2 /
+        ILCD multi-file trees come back zipped.
+
+        The engine returns the payload base64-encoded in the ``data`` field;
+        this method base64-decodes it and returns the raw bytes. Raises
+        VoLCAError on ``success=false`` or a missing ``data`` field.
+        """
+        fmt_norm = fmt.strip().lower()
+        if fmt_norm not in _EXPORT_FORMATS:
+            raise VoLCAError(
+                f"unknown export format: {fmt!r} "
+                f"(expected {'|'.join(sorted(_EXPORT_FORMATS))})"
+            )
+        target = self._db(db_name)
+        payload = self._require_success(
+            self._json(
+                self._session.post(
+                    f"{self.base_url}/api/v1/db/{target}/export",
+                    json={"format": fmt_norm},
+                )
+            ),
+            "export_database",
+        )
+        data = payload.get("data")
+        if data is None:
+            raise VoLCAError(
+                "export_database succeeded but the response carried no data field."
+            )
+        return base64.b64decode(data)
+
+    def export_to_file(
+        self, fmt: str, out_path: str, db_name: str | None = None
+    ) -> None:
+        """Export a database (see :meth:`export_database`) and write it to a file."""
+        Path(out_path).write_bytes(self.export_database(fmt, db_name=db_name))
+
+    def add_dependency(self, dep_name: str, db_name: str | None = None) -> dict:
+        """Declare ``dep_name`` as a dependency of the target database.
+
+        Returns the engine's ``DatabaseSetupInfo`` dict describing the updated
+        dependency topology.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/add-dependency/{dep_name}"
+            )
+        )
+
+    def remove_dependency(self, dep_name: str, db_name: str | None = None) -> dict:
+        """Remove ``dep_name`` from the target database's dependencies.
+
+        Returns the updated ``DatabaseSetupInfo`` dict.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/remove-dependency/{dep_name}"
+            )
+        )
 
     def list_presets(self) -> list[Preset]:
         """List classification presets configured in this instance.
