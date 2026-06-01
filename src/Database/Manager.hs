@@ -1480,12 +1480,13 @@ relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
 relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing
 
 {- | Re-link a loaded DB against a single chosen dependency, applying a
-name→name supplier-alias map. Restricts candidate suppliers to @depDb@
-(which must be in the database's declared dependency set) and threads the
-aliases into the matcher so a consumer's input flow name that only matches a
-target supplier under the mapping still links. Same persistence/no-op
-semantics as 'relinkDatabase'. Errors (DB or dep not loaded, dep not a
-declared dependency) surface as 'Left'.
+name→name supplier-alias map. Restricts candidate suppliers to @depDb@ and
+threads the aliases into the matcher so a consumer's input flow name that only
+matches a target supplier under the mapping still links. If @depDb@ is loaded
+but not yet in the database's declared dependency set, it is pinned in-memory
+first — so an in-memory pipeline (copy → delete → relink) composes without
+restaging (which would unload the live database). Same persistence/no-op
+semantics as 'relinkDatabase'. Errors (DB or dep not loaded) surface as 'Left'.
 -}
 relinkDatabaseWithMapping ::
     DatabaseManager ->
@@ -1501,17 +1502,21 @@ relinkDatabaseWithMapping manager dbName depDb aliases = do
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
         Just loaded
-            | depDb `notElem` dbDependsOn (ldDatabase loaded) ->
-                return $
-                    Left $
-                        "Not a declared dependency of "
-                            <> dbName
-                            <> ": "
-                            <> depDb
-                            <> " (add it first with add-dependency)"
             | not (M.member depDb loadedDbs) ->
-                return $ Left $ "Dependency database not loaded: " <> depDb
-            | otherwise -> relinkDatabaseWith manager dbName (Just [depDb]) (Just aliases)
+                return $ Left $ "Dependency database not loaded: " <> depDb <> " (load it first)"
+            | otherwise -> do
+                -- Declare the dependency in-memory if it isn't already pinned, so an
+                -- in-memory pipeline (copy → delete → relink) composes in one pass
+                -- without restaging — which would unload the live database. The new
+                -- pin is persisted by 'relinkDatabaseWith' when links change.
+                unless (depDb `elem` dbDependsOn (ldDatabase loaded)) $
+                    atomically $
+                        modifyTVar' (dmLoadedDbs manager) (M.adjust (addPinnedDep depDb) dbName)
+                relinkDatabaseWith manager dbName (Just [depDb]) (Just aliases)
+  where
+    addPinnedDep dep ld =
+        let db = ldDatabase ld
+         in ld{ldDatabase = db{dbDependsOn = dep : dbDependsOn db}}
 
 {- | Shared relink core. @depOverride@ restricts the candidate dependency set
 to the given names (still intersected with the declared pin); 'Nothing' uses
