@@ -145,6 +145,32 @@ coproductCSV =
         , "End"
         ]
 
+-- | A process with no @Type@ line, so the parser yields @activityNativeType = Nothing@.
+noTypeCSV :: BS.ByteString
+noTypeCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: Semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Untyped process"
+        , ""
+        , "Geography"
+        , "FR"
+        , ""
+        , "Products"
+        , "Thing;kg;1;100;not defined;material;"
+        , ""
+        , "End"
+        ]
+
 -- | Parse a SimaPro CSV blob through a temp file.
 parseBytes :: BS.ByteString -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
 parseBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
@@ -345,5 +371,13 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- activity count stable and preserves the Coproduct role.
         length acts1 `shouldBe` length acts0
         (Coproduct `elem` roles) `shouldBe` True
+
+    it "(regression) omits the Type line for an activity with no native type" $ do
+        original <- parseBytes noTypeCSV
+        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        reparsed <- parseBytes f0
+        -- No Type line written → re-parse yields Nothing again, not the
+        -- invented "Unit process".
+        map activityNativeType (activitiesOf reparsed) `shouldBe` [Nothing]
   where
     activitiesOf (acts, _, _, _, _) = acts

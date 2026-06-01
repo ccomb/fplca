@@ -257,26 +257,18 @@ they must be emitted under their own headers, never merged.
 -}
 productLines :: (Exchange -> Bool) -> TechFlowDB -> UnitDB -> Maybe Double -> Text -> [Exchange] -> [Text]
 productLines keep techDB units allocPct category exchs =
-    let outputs =
-            [ (flow, ex)
+    let alloc = formatAmount (fromMaybe 100 allocPct)
+        -- Extract the row fields in the comprehension, where the exchange is
+        -- known to be a TechnosphereExchange — so mkRow is total (no unreachable
+        -- blank-row arm). Sort by (name, unit, amount) for determinism.
+        entries =
+            [ (tfName flow, unitNameOf units (exchangeUnitId ex), exchangeAmount ex)
             | ex@TechnosphereExchange{} <- exchs
             , keep ex
             , Just flow <- [M.lookup (exchangeFlowId ex) techDB]
             ]
-        alloc = formatAmount (fromMaybe 100 allocPct)
-        mkRow (flow, TechnosphereExchange{..}) =
-            row
-                [ tfName flow
-                , unitNameOf units techUnitId
-                , formatAmount techAmount
-                , alloc
-                , "not defined"
-                , category
-                , ""
-                ]
-        mkRow (_, _) = ""
-        sortKey (flow, ex) = (tfName flow, unitNameOf units (exchangeUnitId ex), exchangeAmount ex)
-     in map mkRow (sortOn sortKey outputs)
+        mkRow (nm, unit, amt) = row [nm, unit, formatAmount amt, alloc, "not defined", category, ""]
+     in map mkRow (sortOn id entries)
 
 -- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
 -- the parser reads back as a 'Coproduct' role).
@@ -327,11 +319,13 @@ serializeActivity ::
 serializeActivity techDB bioDB wasteDB units Activity{..} =
     let catType = M.findWithDefault "" "Category type" activityClassification
         category = M.findWithDefault "" "Category" activityClassification
+        -- No native type → omit the Type line entirely (meta drops empty values),
+        -- so a re-parse yields Nothing again rather than drifting to "Unit process".
         typeLabel = case activityNativeType of
             Just (SimaProProcessType lbl) -> lbl
             Just (EcoSpoldActivityType{eatLabel = lbl}) -> lbl
             Just (ILCDProcessType lbl) -> lbl
-            Nothing -> "Unit process"
+            Nothing -> ""
         comment = T.intercalate " " activityDescription
 
         techLines = mapMaybe (techInputLine techDB units) exchanges
