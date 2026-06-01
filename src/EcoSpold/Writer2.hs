@@ -31,8 +31,10 @@ module EcoSpold.Writer2 (
     writeEcoSpold2,
     activityFileName,
     renderActivity,
+    sortExchanges,
 ) where
 
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -208,15 +210,14 @@ forced first within the technosphere group so the canonical layout matches the
 ecospold convention of leading with the produced product.
 -}
 sortExchanges :: [Exchange] -> [Exchange]
-sortExchanges =
-    sortOnKey exchangeSortKey
-  where
-    sortOnKey f = map snd . M.toAscList . M.fromList . map (\e -> (f e, e))
+sortExchanges = sortOn exchangeSortKey
 
 {- | Sort key: (kindRank, not-reference, flowUUID). @not-reference@ sorts the
 reference product/input ahead of the others within a kind. The flow UUID is the
-stable tiebreaker. Distinct keys are guaranteed because no activity holds two
-exchanges of the same kind referencing the same flow.
+tiebreaker; 'sortOn' is stable, so two exchanges sharing a key keep their input
+order and are both emitted — never collapsed (a 'Map' keyed on this would have
+silently dropped a duplicate biosphere/technosphere line, undercounting the
+inventory).
 -}
 exchangeSortKey :: Exchange -> (Int, Bool, Text)
 exchangeSortKey ex = (kindRank, not (exchangeIsReference ex), UUID.toText (exchangeFlowId ex))

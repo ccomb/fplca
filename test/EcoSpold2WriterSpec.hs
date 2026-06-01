@@ -37,7 +37,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
 import Database.Loader (loadDatabase)
-import EcoSpold.Writer2 (noVolatileMeta, writeEcoSpold2)
+import EcoSpold.Writer2 (noVolatileMeta, sortExchanges, writeEcoSpold2)
 import Matrix (computeInventoryMatrix)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -175,6 +175,14 @@ spec = describe "EcoSpold2 writer round-trip" $ do
         let f1 = writeEcoSpold2 noVolatileMeta sdb'
         -- Compare the sorted (filename, document) sequences byte-for-byte.
         sortOn fst f1 `shouldBe` sortOn fst f0
+
+    -- Regression: two exchanges sharing a sort key (same kind + flow) must both
+    -- survive ordering. The previous Map-based sort silently dropped one,
+    -- undercounting the inventory.
+    it "keeps duplicate exchanges of the same flow (no silent dedup)" $ do
+        let e1 = BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
+            e2 = BiosphereExchange co2 0.3 unitKg Emission "" Nothing Nothing
+        length (sortExchanges [e1, e2]) `shouldBe` 2
 
     -- (b) Semantic round-trip: parse(write(D)) ≅ D, order-insensitive.
     describe "semantic round-trip (structural equality)" $ do
