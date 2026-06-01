@@ -76,6 +76,7 @@ import Database.MatrixBuild (
     buildTechTriples,
     collectBioFlowOrder,
  )
+import Matrix (clearCachedSolver)
 import qualified Search.BM25 as BM25
 import SharedSolver (createSharedSolver)
 import Types (
@@ -295,6 +296,10 @@ rebuildFromActivities unitConfig db activityMap =
                         , -- Cross-DB links may now reference deleted activities; clear so a
                           -- subsequent relink rebuilds them against the surviving set.
                           dbCrossDBLinks = []
+                        , -- Linking stats describe the pre-delete set (input count, completeness,
+                          -- missing suppliers); reset to the fresh-load default so the setup/status
+                          -- endpoint never reports stale numbers until the next relink.
+                          dbLinkingStats = mempty
                         , -- Runtime-only indexes are reset; re-attached by the effectful caller.
                           dbSynonymDB = Nothing
                         , dbFlowsByName = M.empty
@@ -412,6 +417,12 @@ deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch kee
                                     [ (fromIntegral i, fromIntegral j, v)
                                     | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
                                     ]
+                            -- The MUMPS solver cached under this name is now stale (old
+                            -- dimensions/factorization); drain + destroy it as unload/remove do,
+                            -- before installing the rebuilt one — otherwise the first post-delete
+                            -- solve overwrites the map entry and leaks a worker thread + native
+                            -- instance.
+                            clearCachedSolver dbName
                             solver <-
                                 createSharedSolver
                                     dbName
