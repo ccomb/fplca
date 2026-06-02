@@ -41,7 +41,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Numeric (showFFloat)
+import EcoSpold.Common (showFFloatTrim)
 import Types
 
 {- | Volatile, non-semantic metadata that the parser ignores but a writer would
@@ -69,12 +69,17 @@ noVolatileMeta = VolatileMeta Nothing Nothing
 @(filename, document)@ pairs, one per activity. Sorted by filename so the
 sequence itself is deterministic. Flow names and unit names are resolved from
 the registries because the parser stores them on exchanges, not centrally.
+Runs 'checkEcoSpold2Exportable' first and returns its 'Left' on a database the
+format cannot represent faithfully, so an unguarded caller cannot silently emit
+a corrupt archive.
 -}
-writeEcoSpold2 :: VolatileMeta -> SimpleDatabase -> [(FilePath, Text)]
-writeEcoSpold2 meta sdb =
-    [ (activityFileName actUUID prodUUID, renderActivity meta env act)
-    | ((actUUID, prodUUID), act) <- M.toAscList (sdbActivities sdb)
-    ]
+writeEcoSpold2 :: VolatileMeta -> SimpleDatabase -> Either Text [(FilePath, Text)]
+writeEcoSpold2 meta sdb = do
+    checkEcoSpold2Exportable sdb
+    pure
+        [ (activityFileName actUUID prodUUID, renderActivity meta env act)
+        | ((actUUID, prodUUID), act) <- M.toAscList (sdbActivities sdb)
+        ]
   where
     env =
         ResolveEnv
@@ -512,31 +517,18 @@ indent n = T.replicate n " "
 intText :: Int -> Text
 intText = T.pack . show
 
-{- | Canonical 'Double' rendering for amounts. 'show' gives a stable,
-round-trippable decimal for finite values; the parser reads it back with
-'Data.Text.Read.double'. Non-finite values are clamped to a parseable @0.0@
-(they cannot occur in a parsed database, but we never emit @Infinity@/@NaN@
-which would break re-parsing).
+{- | Canonical 'Double' rendering for amounts via the shared 'showFFloatTrim'
+(fixed-point, never scientific), so the value round-trips byte- and
+value-identically through the parser's 'Data.Text.Read.double'. Non-finite
+values are clamped to a parseable @0.0@ (they cannot occur in a parsed database,
+but we never emit @Infinity@/@NaN@ which would break re-parsing).
 -}
 doubleAttr :: Double -> Text
 doubleAttr d
     | isNaN d || isInfinite d = "0.0"
     | otherwise = T.pack (showFFloatTrim d)
 
-{- | Fixed-notation double without an exponent, trailing-zero-trimmed but always
-keeping at least one fractional digit (so @1@ renders as @"1.0"@, matching the
-fixtures and staying unambiguous to the reader).
--}
-showFFloatTrim :: Double -> String
-showFFloatTrim d =
-    let full = showFFloat Nothing d ""
-     in case break (== '.') full of
-            (intPart, '.' : fracPart) ->
-                let trimmed = reverse (dropWhile (== '0') (reverse fracPart))
-                 in intPart <> "." <> (if null trimmed then "0" else trimmed)
-            (intPart, _) -> intPart <> ".0"
-
--- | Escape the five XML predefined entities for element text content.
+-- | Escape the three XML predefined entities for element text content.
 escapeText :: Text -> Text
 escapeText =
     T.replace "&" "&amp;"

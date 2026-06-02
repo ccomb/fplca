@@ -39,7 +39,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
 import Database.Loader (loadDatabase)
-import EcoSpold.Writer2 (checkEcoSpold2Exportable, noVolatileMeta, writeEcoSpold2)
+import EcoSpold.Writer2 (VolatileMeta, checkEcoSpold2Exportable, noVolatileMeta, writeEcoSpold2)
 import Matrix (computeInventoryMatrix)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -204,6 +204,52 @@ fixtureWithExchange ex =
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
 
+{- | A single activity exercising the subtlest inversion paths: a coproduct
+(outputGroup 2) and waste exchanges in both directions (waIsInput controls
+inputGroup 5 vs outputGroup 1). These round-trip paths were previously
+untested.
+-}
+fixtureWasteCoproduct :: SimpleDatabase
+fixtureWasteCoproduct =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actA, prodA) activity
+        , sdbTechFlows =
+            M.fromList
+                [ (prodA, TechnosphereFlow prodA "product A" unitKg M.empty Nothing Nothing)
+                , (coprodU, TechnosphereFlow coprodU "co-product" unitKg M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows =
+            M.fromList
+                [ (wasteInU, WasteFlow wasteInU "incoming waste" unitKg M.empty Nothing Nothing)
+                , (wasteOutU, WasteFlow wasteOutU "outgoing waste" unitKg M.empty Nothing Nothing)
+                ]
+        , sdbUnits = M.singleton unitKg (Unit unitKg "kg" "kg" "")
+        }
+  where
+    coprodU, wasteInU, wasteOutU :: UUID
+    coprodU = read "dddddddd-0000-4000-8000-000000000001"
+    wasteInU = read "dddddddd-0000-4000-8000-000000000002"
+    wasteOutU = read "dddddddd-0000-4000-8000-000000000003"
+    activity =
+        Activity
+            "waste and coproduct activity"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , TechnosphereExchange coprodU 0.4 unitKg Coproduct UUID.nil Nothing "" Nothing Nothing
+            , WasteExchange wasteInU 0.2 unitKg True UUID.nil Nothing "" Nothing Nothing
+            , WasteExchange wasteOutU 0.3 unitKg False UUID.nil Nothing "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
+
 -- | Build a full 'Database' (with matrices) from a 'SimpleDatabase'.
 buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
@@ -219,6 +265,11 @@ buildDb sdb = do
         Left err -> error $ "matrix build failed: " ++ T.unpack err
         Right db -> pure db
 
+-- | Unwrap the guard-returning writer for a fixture known to be exportable.
+writeOrFail :: VolatileMeta -> SimpleDatabase -> [(FilePath, Text)]
+writeOrFail meta sdb =
+    either (\e -> error ("writeEcoSpold2: " <> T.unpack e)) id (writeEcoSpold2 meta sdb)
+
 {- | Write a 'SimpleDatabase' to a fresh temp directory and re-load it through
 the production loader, returning the round-tripped 'SimpleDatabase'.
 -}
@@ -226,7 +277,7 @@ roundTrip :: SimpleDatabase -> IO SimpleDatabase
 roundTrip sdb = withSystemTempDirectory "es2-writer" $ \dir -> do
     -- Write UTF-8 bytes explicitly so the unicode round-trip does not depend on
     -- the test runner's locale encoding (the loader always decodes UTF-8).
-    forM_ (writeEcoSpold2 noVolatileMeta sdb) $ \(fname, doc) ->
+    forM_ (writeOrFail noVolatileMeta sdb) $ \(fname, doc) ->
         BS.writeFile (dir </> fname) (TE.encodeUtf8 doc)
     res <- loadDatabase defaultUnitConfig dir
     case res of
@@ -238,9 +289,9 @@ spec = describe "EcoSpold2 writer round-trip" $ do
     -- (a) Idempotence modulo volatile metadata.
     it "is idempotent modulo volatile metadata: write . parse . write == write" $ do
         sdb <- loadFixtureSimple
-        let f0 = writeEcoSpold2 noVolatileMeta sdb
+        let f0 = writeOrFail noVolatileMeta sdb
         sdb' <- roundTrip sdb
-        let f1 = writeEcoSpold2 noVolatileMeta sdb'
+        let f1 = writeOrFail noVolatileMeta sdb'
         -- Compare the sorted (filename, document) sequences byte-for-byte.
         sortOn fst f1 `shouldBe` sortOn fst f0
 
@@ -254,6 +305,18 @@ spec = describe "EcoSpold2 writer round-trip" $ do
             Just act ->
                 sort [exchangeAmount ex | ex <- exchanges act, isBiosphereExchange ex]
                     `shouldBe` [0.3, 0.5]
+
+    -- Regression: the subtlest inversion paths. renderWaste maps waIsInput to
+    -- inputGroup 5 / outputGroup 1, and a coproduct goes to outputGroup 2 —
+    -- both must survive write→parse rather than flip direction or role.
+    it "round-trips waste direction (in/out) and a coproduct" $ do
+        sdb' <- roundTrip fixtureWasteCoproduct
+        case M.lookup (actA, prodA) (sdbActivities sdb') of
+            Nothing -> expectationFailure "waste/coproduct activity missing after round-trip"
+            Just act -> do
+                sort [waIsInput ex | ex@WasteExchange{} <- exchanges act] `shouldBe` [False, True]
+                [techRole ex | ex@TechnosphereExchange{techRole = Coproduct} <- exchanges act]
+                    `shouldBe` [Coproduct]
 
     -- Export-boundary guards: data EcoSpold2 cannot faithfully re-encode must be
     -- rejected loudly by 'checkEcoSpold2Exportable' rather than silently
