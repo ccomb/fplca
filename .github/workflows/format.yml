@@ -30,3 +30,4 @@ jobs:
             app/**/*.hs
             test/**/*.hs
             bench/**/*.hs
+            mumps-hs/**/*.hs
