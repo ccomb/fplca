@@ -358,6 +358,13 @@ supplier — fast::
 
 #### Methods
 
+##### `Client.add_dependency(dep_name: str, db_name: str | None = None) -> dict`
+
+Declare ``dep_name`` as a dependency of the target database.
+
+Returns the engine's ``DatabaseSetupInfo`` dict describing the updated
+dependency topology.
+
 ##### `Client.aggregate(process_id: str, scope: AggregateScope | str, *, is_input: bool | None = None, max_depth: int | None = None, filter_name: str | None = None, filter_name_not: list[str] | str | None = None, filter_unit: str | None = None, preset: str | None = None, filter_classification: list[ClassificationFilter] | None = None, filter_target_name: str | None = None, filter_is_reference: bool | None = None, group_by: str | None = None, aggregate: AggregateOp | str | None = None) -> AggregateResult`
 
 SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
@@ -606,6 +613,25 @@ Fetch the OpenAPI spec from the server and refresh the dispatch table.
 Also regenerates the `.pyi` type stubs in the installed pyvolca
 package directory so IDE autocomplete reflects the current engine.
 Useful when the engine is upgraded without reinstalling pyvolca.
+
+##### `Client.relink(dep_db: str, mapping_csv: str, db_name: str | None = None) -> dict`
+
+Re-link a database against a dependency using a name→name alias CSV.
+
+``mapping_csv`` is the CSV *text* (header row + source/target columns),
+sent inline so the engine needs no filesystem access. Returns the
+``RelinkResponse`` dict (``{"dbName", "unresolvedBefore",
+"unresolvedAfter", "crossDBLinks", "dependsOn"}``).
+
+##### `Client.relink_from_file(dep_db: str, mapping_path: str, db_name: str | None = None) -> dict`
+
+Read a mapping CSV file and call :meth:`relink` with its text.
+
+##### `Client.remove_dependency(dep_name: str, db_name: str | None = None) -> dict`
+
+Remove ``dep_name`` from the target database's dependencies.
+
+Returns the updated ``DatabaseSetupInfo`` dict.
 
 ##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
 
