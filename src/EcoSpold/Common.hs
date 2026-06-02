@@ -10,6 +10,7 @@ module EcoSpold.Common (
     isElement,
     distributeFiles,
     nonEmptyText,
+    showFFloatTrim,
 ) where
 
 import qualified Data.ByteString as BS
@@ -17,6 +18,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
+import Numeric (showFFloat)
 
 -- | ByteString to Text conversion with UTF-8 decoding and XML entity decoding
 bsToText :: BS.ByteString -> Text
@@ -84,3 +86,18 @@ distributeFiles n xs =
     go [] _ = []
     go _ [] = []
     go (s : ss) ys = let (h, t) = splitAt s ys in h : go ss t
+
+{- | Render a 'Double' in fixed-point notation (never scientific) with trailing
+zeros trimmed but at least one fractional digit kept. This is the canonical
+amount format for the EcoSpold/ILCD writers: it round-trips byte- and
+value-identically through 'Data.Text.Read.double', unlike 'show' which emits
+scientific notation for small/large magnitudes that re-reads lossily
+(e.g. @show 3.3e-20@ → @3.2999999999999994e-20@).
+-}
+showFFloatTrim :: Double -> String
+showFFloatTrim d =
+    case break (== '.') (showFFloat Nothing d "") of
+        (intPart, '.' : fracPart) ->
+            let trimmed = reverse (dropWhile (== '0') (reverse fracPart))
+             in intPart <> "." <> (if null trimmed then "0" else trimmed)
+        (intPart, _) -> intPart <> ".0"
