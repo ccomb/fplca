@@ -47,6 +47,7 @@ module BrightwayExcel.Parser (
     sheetToActivities,
     skippedSheetWarning,
     splitCategories,
+    isResourceCompartment,
 ) where
 
 import Codec.Archive.Zip (Archive, findEntryByPath, fromEntry, toArchiveOrFail)
@@ -434,7 +435,7 @@ biosphereRowOut actName f
             , bioAmount = amount
             , bioUnitId = unitUUID
             , bioDirection = if isResourceCompartment comp then Resource else Emission
-            , bioLocation = ""
+            , bioLocation = fromMaybe "" (fieldText f "location")
             , bioComment = fieldText f "comment"
             , bioPedigree = Nothing
             }
