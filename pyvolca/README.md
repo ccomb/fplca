@@ -309,6 +309,7 @@ Pyvolca dispatches dynamically against the engine's OpenAPI spec, so it ships wi
 ## API reference
 
 <!-- BEGIN: api-reference -->
+
 _This reference is generated from the installed package. Run `python scripts/gen_api_md.py` to regenerate._
 
 ## Classes
@@ -321,8 +322,6 @@ How values are reduced within a bucket.
 matching entries. ``SHARE`` — each bucket's percentage of the filtered
 total (0..100).
 
-**Constructor**: `AggregateOp(*values)`
-
 ### `AggregateScope`
 
 What the ``/aggregate`` primitive groups over.
@@ -331,16 +330,12 @@ What the ``/aggregate`` primitive groups over.
 upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
 biosphere flows in the supply chain.
 
-**Constructor**: `AggregateScope(*values)`
-
 ### `BioDirection`
 
 Direction of a biosphere exchange.
 
 ``RESOURCE`` — extraction from the environment (input).
 ``EMISSION`` — release to the environment (output).
-
-**Constructor**: `BioDirection(*values)`
 
 ### `Client`
 
@@ -658,8 +653,6 @@ not be resolved against currently-loaded dependencies.
 Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
 serialises as the bare wire string.
 
-**Constructor**: `DatabaseStatus(*values)`
-
 ### `MatchMode`
 
 How a :class:`ClassificationFilter` value is compared against the entry.
@@ -668,8 +661,6 @@ How a :class:`ClassificationFilter` value is compared against the entry.
 substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
 and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
 string ``"exact"`` / ``"contains"``.
-
-**Constructor**: `MatchMode(*values)`
 
 ### `Server`
 
@@ -721,8 +712,6 @@ Role a technosphere exchange plays within its host activity.
 ``COPRODUCT`` — a secondary output (in allocated activities).
 ``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
 ``INPUT`` — any other technosphere input.
-
-**Constructor**: `TechRole(*values)`
 
 ## Exceptions
 
@@ -1332,10 +1321,11 @@ platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
 
 Replace one supplier with another in the upstream supply chain.
 
-All three fields are process_ids. ``consumer`` identifies which downstream
-consumer's input to rewrite (substitutions are scoped, not global) — the
-same upstream supplier can be replaced by different alternatives in
-different parts of the tree.
+All fields are process_ids. ``consumer`` identifies which downstream
+consumer's input to rewrite, scoping the swap to one edge — the same
+upstream supplier can be replaced by different alternatives in different
+parts of the tree. Omit it (leave ``None``) to apply the swap globally,
+replacing the supplier on every consumer at once.
 
 Frozen so callers can put it in a set / dict key and re-use the same
 substitution across multiple calls without aliasing risk.
@@ -1344,7 +1334,7 @@ substitution across multiple calls without aliasing risk.
 |-------|------|---------|
 | `from_pid` | `str` | — |
 | `to_pid` | `str` | — |
-| `consumer` | `str` | — |
+| `consumer` | `str \| None` | None |
 
 ### `SupplyChain`
 
@@ -1479,6 +1469,7 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
+
 <!-- END: api-reference -->
 
 ## See also
