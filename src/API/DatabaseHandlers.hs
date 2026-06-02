@@ -101,7 +101,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
-import Database.Export (serializeDatabase)
+import Database.Export (parseExportFormat, serializeDatabase)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -275,16 +275,6 @@ deleteActivitiesHandler dbName req = do
                     True
                     ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
                     deleted
-
--- | Parse the export-format keyword into a 'DatabaseFormat'.
-parseExportFormat :: Text -> Either Text Upload.DatabaseFormat
-parseExportFormat raw = case T.toLower (T.strip raw) of
-    "simapro" -> Right Upload.SimaProCSV
-    "ecospold1" -> Right Upload.EcoSpold1
-    "ecospold2" -> Right Upload.EcoSpold2
-    "ilcd" -> Right Upload.ILCDProcess
-    "brightway" -> Right Upload.BrightwayExcel
-    other -> Left ("unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)")
 
 {- | Export a loaded database, returning the serialized bytes base64-encoded.
 EcoSpold 2 / ILCD multi-file trees are zipped; single-file formats carry their

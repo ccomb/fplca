@@ -14,6 +14,7 @@ has no writer and 'UnknownFormat' is not a real target, so both fail loudly
 module Database.Export (
     serializeDatabase,
     exportDatabase,
+    parseExportFormat,
 ) where
 
 import qualified Codec.Archive.Zip as Zip
@@ -37,27 +38,32 @@ writer.
 -}
 serializeDatabase :: DatabaseFormat -> Database -> Either Text BL.ByteString
 serializeDatabase fmt db = case fmt of
-    SimaProCSV -> do
-        SP.checkSimaProExportable sdb
-        Right (BL.fromStrict (SP.serializeSimaProCSV SP.defaultWriterConfig sdb))
-    EcoSpold1 -> do
-        ES1.checkEcoSpold1Exportable sdb
-        Right (BL.fromStrict (TE.encodeUtf8 (ES1.writeDatabase ES1.canonicalWriterOptions db)))
-    EcoSpold2 -> do
-        ES2.checkEcoSpold2Exportable sdb
-        Right (zipText (ES2.writeEcoSpold2 ES2.noVolatileMeta sdb))
-    ILCDProcess -> do
-        ILCD.checkILCDExportable sdb
-        Right (ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb)
-    BrightwayExcel -> do
-        BE.checkBrightwayExportable sdb
-        Right (BE.renderWorkbook BE.defaultWriterConfig sdb)
+    -- Each writer runs its own check*Exportable and returns 'Left' on a database
+    -- the format cannot represent faithfully, so the guard is unskippable.
+    SimaProCSV -> BL.fromStrict <$> SP.serializeSimaProCSV SP.defaultWriterConfig sdb
+    EcoSpold1 -> BL.fromStrict . TE.encodeUtf8 <$> ES1.writeDatabase ES1.canonicalWriterOptions db
+    EcoSpold2 -> zipText <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb
+    ILCDProcess -> ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb
+    BrightwayExcel -> BE.renderWorkbook BE.defaultWriterConfig sdb
     OpenLcaJsonLd ->
         Left "openLCA JSON-LD export is not supported"
     UnknownFormat ->
         Left "cannot export to an unknown format"
   where
     sdb = toSimpleDatabase db
+
+{- | Parse a user-facing export-format name (case- and whitespace-insensitive)
+to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted
+spellings and the error message stay in one place.
+-}
+parseExportFormat :: Text -> Either Text DatabaseFormat
+parseExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right SimaProCSV
+    "ecospold1" -> Right EcoSpold1
+    "ecospold2" -> Right EcoSpold2
+    "ilcd" -> Right ILCDProcess
+    "brightway" -> Right BrightwayExcel
+    other -> Left ("unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)")
 
 -- | Serialize a database and write it to @path@.
 exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text ())

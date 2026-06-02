@@ -17,7 +17,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
-import Database.Export (exportDatabase)
+import Database.Export (exportDatabase, parseExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.RelinkMapping (relinkWithMappingFile)
@@ -555,16 +555,6 @@ executeDbRelinkMapping registry fmt manager args = do
                     , "cross_db_links" .= rresCrossDBLinks r
                     , "depends_on" .= rresDepsLoaded r
                     ]
-
--- | Parse the @--format@ keyword for export into a 'DatabaseFormat'.
-parseExportFormat :: Text -> Either Text DatabaseFormat
-parseExportFormat raw = case T.toLower (T.strip raw) of
-    "simapro" -> Right SimaProCSV
-    "ecospold1" -> Right EcoSpold1
-    "ecospold2" -> Right EcoSpold2
-    "ilcd" -> Right ILCDProcess
-    "brightway" -> Right BrightwayExcel
-    other -> Left $ "unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)"
 
 -- | Execute database export: serialize a loaded database to a file.
 executeDbExport :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbExportArgs -> IO ()
