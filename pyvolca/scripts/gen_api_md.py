@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """Generate the pyvolca API reference as markdown.
 
-Walks every name in ``volca.__all__`` and emits a structured reference.
-The output is appended to README.md (between BEGIN/END markers) so PyPI
-sees it, and also written as a standalone artifact under
-``www/generated/pyvolca/`` so the Starlight guide can pull it in.
+Walks every name in ``volca.__all__`` and emits a structured reference,
+spliced into README.md between the api-reference markers so PyPI sees the
+full package reference. The same body is also written as a standalone
+artifact under ``www/generated/pyvolca/`` so the Starlight guide can pull
+it in.
 
 Usage:
-    python scripts/gen_api_md.py        # writes to stdout
+    python scripts/gen_api_md.py            # write the reference block to stdout
+    python scripts/gen_api_md.py --write    # splice it into README.md in place
+    python scripts/gen_api_md.py --check    # exit non-zero if README.md is stale
 
 Stdlib only — pyvolca's only dependency stays ``requests``.
 """
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import enum
 import inspect
 import io
+import re
 import sys
 import typing
 from pathlib import Path
@@ -27,6 +32,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 import volca  # noqa: E402
+
+# The README hosts the generated reference between these markers; the
+# generator owns the splice so the on-disk copy can't drift from the source.
+README = ROOT / "README.md"
+BEGIN_MARKER = "<!-- BEGIN: api-reference -->"
+END_MARKER = "<!-- END: api-reference -->"
 
 
 def _first_line(doc: str | None) -> str:
@@ -244,7 +255,8 @@ def categorize(name: str) -> tuple[str, object]:
     return "alias", value
 
 
-def main() -> int:
+def render_reference() -> str:
+    """Render the full api-reference block as markdown (no surrounding markers)."""
     buf = io.StringIO()
     buf.write(
         "_This reference is generated from the installed package. "
@@ -295,7 +307,54 @@ def main() -> int:
         for name, alias in aliases:
             render_alias(name, alias, buf)
 
-    sys.stdout.write(buf.getvalue())
+    return buf.getvalue()
+
+
+def splice_readme(readme_text: str, body: str) -> str:
+    """Replace the api-reference block between the markers with ``body``.
+
+    Pure: returns the rewritten text and raises ``ValueError`` if the markers
+    are missing (a corrupt README must fail loudly, never silently no-op).
+    """
+    pattern = re.compile(
+        re.escape(BEGIN_MARKER) + r".*?" + re.escape(END_MARKER), re.DOTALL
+    )
+    if pattern.search(readme_text) is None:
+        raise ValueError(f"{BEGIN_MARKER} / {END_MARKER} markers missing from README")
+    replacement = f"{BEGIN_MARKER}\n\n{body.rstrip()}\n\n{END_MARKER}"
+    return pattern.sub(lambda _m: replacement, readme_text)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate the pyvolca API reference.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--write", action="store_true", help="splice the reference into README.md in place"
+    )
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="exit non-zero if README.md's reference block is stale (no write)",
+    )
+    ns = parser.parse_args(argv)
+
+    body = render_reference()
+    if not (ns.write or ns.check):
+        sys.stdout.write(body)
+        return 0
+
+    current = README.read_text(encoding="utf-8")
+    updated = splice_readme(current, body)
+    if ns.check:
+        if updated != current:
+            sys.stderr.write(
+                "README.md api-reference block is stale — run "
+                "`python scripts/gen_api_md.py --write` and commit the result.\n"
+            )
+            return 1
+        return 0
+    if updated != current:
+        README.write_text(updated, encoding="utf-8")
     return 0
 
 
