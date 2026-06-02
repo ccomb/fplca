@@ -1,0 +1,32 @@
+name: Format
+
+# Gate PRs on fourmolu formatting. Fast, build-independent — runs in parallel
+# with the heavy build matrix rather than after it. fourmolu version comes from
+# versions.env so CI, the .githooks/pre-commit hook, and Claude Code's
+# PostToolUse hook all format identically.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: format-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fourmolu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin fourmolu version from versions.env
+        run: grep -E '^FOURMOLU_VERSION=' versions.env >> "$GITHUB_ENV"
+      - uses: haskell-actions/run-fourmolu@v12
+        with:
+          version: ${{ env.FOURMOLU_VERSION }}
+          pattern: |
+            src/**/*.hs
+            app/**/*.hs
+            test/**/*.hs
+            bench/**/*.hs

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Auto-format staged Haskell with fourmolu before each commit.
+# fourmolu version is pinned in versions.env (FOURMOLU_VERSION).
+# Enable once per clone:  git config core.hooksPath .githooks
+
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.hs')
+[ -z "$files" ] && exit 0
+
+if ! command -v fourmolu >/dev/null 2>&1; then
+    echo "pre-commit: fourmolu not on PATH — install the version from versions.env (FOURMOLU_VERSION)" >&2
+    exit 1
+fi
+
+for f in $files; do
+    fourmolu -i "$f" || exit 1
+    git add "$f"
+done
