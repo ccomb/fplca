@@ -63,6 +63,27 @@ data DatabaseAction
     = DbList
     | DbUpload UploadArgs
     | DbDelete Text
+    | {- | Delete the activities matched by a filter (the whole matching set,
+      pagination ignored), keeping/adding explicit ProcessIds.
+      -}
+      DbDeleteActivities DbDeleteArgs
+    deriving (Eq, Show, Generic)
+
+{- | Arguments for delete-by-selection. The filter fields mirror the activity
+search filter; @ddaKeep@ spares matched ProcessIds and @ddaExtra@ adds ones
+the filter missed.
+-}
+data DbDeleteArgs = DbDeleteArgs
+    { ddaDb :: Text
+    , ddaName :: Maybe Text
+    , ddaLocation :: Maybe Text
+    , ddaProduct :: Maybe Text
+    , ddaClassSystem :: Maybe Text
+    , ddaClassValue :: Maybe Text
+    , ddaExact :: Bool
+    , ddaKeep :: [Text]
+    , ddaExtra :: [Text]
+    }
     deriving (Eq, Show, Generic)
 
 -- | Plugin management actions

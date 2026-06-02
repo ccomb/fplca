@@ -81,6 +81,9 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             executeUpload mgr rc fmt jp "/api/v1/db/upload" args
         Database (DbDelete name) ->
             apiDelete mgr rc ("/api/v1/db/" ++ T.unpack name) >>= output fmt jp
+        Database (DbDeleteActivities args) ->
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack (ddaDb args) ++ "/delete") (deleteSelectionBody args)
+                >>= outputStatus fmt jp "delete"
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -217,6 +220,24 @@ extractLoadedDbNames = fromMaybe [] . parseMaybe go
 dbPath :: Text -> String
 dbPath name = "/api/v1/db/" ++ T.unpack name
 
+-- | JSON body for the delete-by-selection endpoint (field names match the API).
+deleteSelectionBody :: DbDeleteArgs -> Value
+deleteSelectionBody args =
+    object
+        [ "name" .= ddaName args
+        , "location" .= ddaLocation args
+        , "product" .= ddaProduct args
+        , "classifications" .= classifications
+        , "exact" .= ddaExact args
+        , "keep" .= ddaKeep args
+        , "extra" .= ddaExtra args
+        ]
+  where
+    classifications = case (ddaClassSystem args, ddaClassValue args) of
+        (Just sys, Just val) ->
+            [object ["system" .= sys, "value" .= val, "exact" .= ddaExact args]]
+        _ -> [] :: [Value]
+
 -- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String
 buildQuery params =
@@ -248,6 +269,22 @@ executeUpload mgr rc fmt jp path args = do
                 , "urFileData" .= encoded
                 ]
     apiPost mgr rc path body >>= output fmt jp
+
+{- | Output a response whose body carries an in-band @{"success",..,"message"}@
+status (the handlers return HTTP 200 even on failure, so a bare 'output' would
+exit 0 on a failed delete). Inspect the @success@ field and fail loudly when it
+is false; otherwise render normally. Covers both 'ActivateResponse' and
+'DeleteSelectionResponse', which share these keys after the @Stripped@ transform.
+-}
+outputStatus :: OutputFormat -> Maybe Text -> String -> Either String Value -> IO ()
+outputStatus _ _ _ (Left err) = reportError err >> exitFailure
+outputStatus fmt jp action (Right val) = case parseMaybe parseStatus val of
+    Nothing -> reportError (action ++ ": malformed server response") >> exitFailure
+    Just (False, msg) -> reportError (action ++ " failed: " ++ T.unpack msg) >> exitFailure
+    Just (True, _) -> output fmt jp (Right val)
+  where
+    parseStatus :: Value -> Parser (Bool, Text)
+    parseStatus = withObject "StatusResponse" $ \o -> (,) <$> o .: "success" <*> o .: "message"
 
 -- | Format and output a result
 output :: OutputFormat -> Maybe Text -> Either String Value -> IO ()

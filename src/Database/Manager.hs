@@ -32,6 +32,7 @@ module Database.Manager (
     getDatabase,
     mkDepSolverLookup,
     listDatabases,
+    clearMethodMappingCacheForDb,
 
     -- * Load/Unload
     loadDatabase,
@@ -1309,7 +1310,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                 (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
                 reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
                 let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
-                linkedDb <- Loader.fixSimaProActivityLinks simpleDb
+                linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
                 dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
                 case dbResult of
                     Left err -> return $ Left err

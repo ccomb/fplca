@@ -116,8 +116,25 @@ databaseParser =
                 ( OA.command "list" (info (pure DbList) (progDesc "List databases"))
                     <> OA.command "upload" (info (DbUpload <$> uploadArgsParser) (progDesc "Upload a database from a local file"))
                     <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
+                    <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
                 )
             )
+
+{- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
+@--add@ may be repeated; they spare or add individual ProcessIds.
+-}
+deleteActivitiesArgsParser :: Parser DbDeleteArgs
+deleteActivitiesArgsParser =
+    DbDeleteArgs
+        <$> textArg "DB" "Name of the loaded database to edit"
+        <*> optTextOpt "name" Nothing "NAME" "Filter by activity name"
+        <*> optTextOpt "location" Nothing "GEO" "Filter by location"
+        <*> optTextOpt "product" Nothing "PRODUCT" "Filter by reference product name"
+        <*> optTextOpt "class-system" Nothing "SYSTEM" "Classification system to filter on"
+        <*> optTextOpt "class-value" Nothing "VALUE" "Classification value to filter on"
+        <*> switch (long "exact" <> help "Exact (case-insensitive) name match instead of token-contains")
+        <*> many (textOpt "keep" Nothing "PID" "Process id (activityUUID_productUUID) to spare from deletion (repeatable)")
+        <*> many (textOpt "add" Nothing "PID" "Process id to add to deletion (repeatable)")
 
 -- | Method command parser with optional subcommand (defaults to list)
 methodParser :: Parser Command
