@@ -20,7 +20,7 @@ module DeleteSelectionSpec (spec) where
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Text (Text)
+import Data.Text (Text, isInfixOf)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
@@ -211,6 +211,30 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
             r <- deleteActivitiesInDB manager "ghost" Nothing Nothing Nothing [] False [] []
             r `shouldBe` Left "Database not loaded: ghost"
+
+        it "refuses to delete while a loaded database depends on it" $ do
+            -- Deleting from "base" would renumber/remove activities that the loaded
+            -- "dependent" links to across databases; those links would then silently
+            -- drop at solve time. The delete must be refused, mirroring unloadDatabase.
+            manager <- initDatabaseManager defaultConfig True Nothing
+            base <- buildOrFail (classifiedDB 800)
+            installLoaded manager "base" base
+            dep <- buildOrFail (classifiedDB 900)
+            installLoaded manager "dependent" dep{dbDependsOn = ["base"]}
+            r <-
+                deleteActivitiesInDB
+                    manager
+                    "base"
+                    Nothing
+                    Nothing
+                    Nothing
+                    [("category", "food", False)]
+                    False
+                    []
+                    []
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "still required by"
+                Right _ -> expectationFailure "expected delete to be refused while a dependent is loaded"
 
 -- ---------------------------------------------------------------------------
 -- Helpers

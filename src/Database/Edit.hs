@@ -28,7 +28,7 @@ module Database.Edit (
     deleteActivitiesInDB,
 ) where
 
-import Control.Concurrent.STM (atomically, modifyTVar')
+import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -331,8 +331,28 @@ deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch kee
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
+            -- Deleting activities renumbers/removes them, which would leave any loaded
+            -- database that depends on this one holding cross-DB links that no longer
+            -- resolve — and those silently drop at solve time, undercounting the
+            -- dependent. Refuse while dependents are loaded (mirrors 'unloadDatabase').
+            loadedDbs <- readTVarIO (dmLoadedDbs manager)
             let db = ldDatabase loaded
-            case (,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra of
+                dependents =
+                    [ name
+                    | (name, ld) <- M.toList loadedDbs
+                    , name /= dbName
+                    , dbName `elem` dbDependsOn (ldDatabase ld)
+                    ]
+                guardDeps
+                    | null dependents = Right ()
+                    | otherwise =
+                        Left $
+                            "Cannot delete from "
+                                <> dbName
+                                <> ": still required by "
+                                <> T.intercalate ", " dependents
+                                <> ". Unload dependents first."
+            case guardDeps *> ((,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra) of
                 Left err -> pure $ Left err
                 Right (keepPids, extraPids) -> do
                     let filtered = filteredProcessIds db nameP geoP prodP classFilters exactMatch

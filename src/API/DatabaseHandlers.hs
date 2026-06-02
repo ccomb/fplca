@@ -225,7 +225,10 @@ deleteActivitiesHandler dbName req = do
                 (dsqKeep req)
                 (dsqExtra req)
     case result of
-        Left err -> return $ DeleteSelectionResponse False err 0
+        -- A failed delete is a client error (bad filter, unknown DB, loaded
+        -- dependents). Surface it as 4xx so a raw HTTP client can't read the
+        -- 200 envelope as success.
+        Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
         Right deleted ->
             return $
                 DeleteSelectionResponse
