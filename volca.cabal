@@ -91,6 +91,7 @@ library
                      , BrightwayExcel.Parser
                      , Expr
                      , ILCD.Parser
+                     , ILCD.Writer
                      , Plugin.Types
                      , Plugin.Builtin
                      , Plugin.Bridge
@@ -249,6 +250,7 @@ test-suite lca-tests
                      , EcoSpold2Spec
                      , EcoSpold2WriterSpec
                      , SimaProWriterSpec
+                     , ILCDWriterSpec
                      , MCPSchemaSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec
