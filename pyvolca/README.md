@@ -322,8 +322,6 @@ How values are reduced within a bucket.
 matching entries. ``SHARE`` — each bucket's percentage of the filtered
 total (0..100).
 
-**Constructor**: `AggregateOp(*values)`
-
 ### `AggregateScope`
 
 What the ``/aggregate`` primitive groups over.
@@ -332,16 +330,12 @@ What the ``/aggregate`` primitive groups over.
 upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
 biosphere flows in the supply chain.
 
-**Constructor**: `AggregateScope(*values)`
-
 ### `BioDirection`
 
 Direction of a biosphere exchange.
 
 ``RESOURCE`` — extraction from the environment (input).
 ``EMISSION`` — release to the environment (output).
-
-**Constructor**: `BioDirection(*values)`
 
 ### `Client`
 
@@ -659,8 +653,6 @@ not be resolved against currently-loaded dependencies.
 Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
 serialises as the bare wire string.
 
-**Constructor**: `DatabaseStatus(*values)`
-
 ### `MatchMode`
 
 How a :class:`ClassificationFilter` value is compared against the entry.
@@ -669,8 +661,6 @@ How a :class:`ClassificationFilter` value is compared against the entry.
 substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
 and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
 string ``"exact"`` / ``"contains"``.
-
-**Constructor**: `MatchMode(*values)`
 
 ### `Server`
 
@@ -722,8 +712,6 @@ Role a technosphere exchange plays within its host activity.
 ``COPRODUCT`` — a secondary output (in allocated activities).
 ``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
 ``INPUT`` — any other technosphere input.
-
-**Constructor**: `TechRole(*values)`
 
 ## Exceptions
 

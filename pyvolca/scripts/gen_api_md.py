@@ -15,6 +15,7 @@ Stdlib only — pyvolca's only dependency stays ``requests``.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import inspect
 import io
 import sys
@@ -149,11 +150,16 @@ def render_class(cls: type, buf: io.StringIO) -> None:
     cls_doc = inspect.getdoc(cls)
     if cls_doc:
         buf.write(cls_doc + "\n\n")
-    try:
-        init_sig = _format_signature(inspect.signature(cls))
-        buf.write(f"**Constructor**: `{cls.__name__}{init_sig}`\n\n")
-    except (TypeError, ValueError):
-        pass
+    # Enum members are referenced as ``Cls.MEMBER``, never constructed, and
+    # their introspected constructor signature is Python-version-dependent
+    # (``EnumMeta.__call__`` on ≤3.11, ``(*values)`` on 3.12+), so it only adds
+    # noise and spurious regeneration diffs.
+    if not issubclass(cls, enum.Enum):
+        try:
+            init_sig = _format_signature(inspect.signature(cls))
+            buf.write(f"**Constructor**: `{cls.__name__}{init_sig}`\n\n")
+        except (TypeError, ValueError):
+            pass
     methods, properties = _public_members(cls)
     if properties:
         buf.write("#### Properties\n\n")
