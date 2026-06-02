@@ -94,7 +94,7 @@ apart and corrupts or drops it. Reject such fields rather than emit a row the
 parser cannot read back.
 -}
 checkSimaProExportable :: SimpleDatabase -> Either Text ()
-checkSimaProExportable db = checkMedia *> checkAmounts *> checkNewlines
+checkSimaProExportable db = checkMedia *> checkAmounts *> checkAllocation *> checkUnits *> checkNewlines
   where
     checkMedia =
         case mediumOffenders of
@@ -125,6 +125,29 @@ checkSimaProExportable db = checkMedia *> checkAmounts *> checkNewlines
                         <> field
                         <> "\": it contains a newline, which the line-based parser"
                         <> " would split across rows."
+    checkAllocation =
+        case allocationOffenders of
+            [] -> Right ()
+            ((name, pct) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": allocation percentage "
+                        <> T.pack (show pct)
+                        <> " is not a usable positive number — the writer divides the"
+                        <> " allocation-scaled amounts back out, so 0 (or non-finite)"
+                        <> " would lose them on re-import."
+    checkUnits =
+        case unitOffenders of
+            [] -> Right ()
+            ((name, uid) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": an exchange references unit "
+                        <> T.pack (show uid)
+                        <> ", which is absent from the unit registry (it would be"
+                        <> " written as a blank unit and re-parsed as UNKNOWN)."
     mediumOffenders =
         [ (bfName flow, bfCompartmentName flow)
         | act <- M.elems (sdbActivities db)
@@ -141,13 +164,29 @@ checkSimaProExportable db = checkMedia *> checkAmounts *> checkNewlines
         , let amt = exchangeAmount ex
         , isNaN amt || isInfinite amt
         ]
+    allocationOffenders =
+        [ (activityName act, pct)
+        | act <- M.elems (sdbActivities db)
+        , let pct = fromMaybe 100 (activityAllocationPercent act)
+        , isNaN pct || isInfinite pct || pct == 0
+        ]
+    unitOffenders =
+        [ (activityName act, exchangeUnitId ex)
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , M.notMember (exchangeUnitId ex) (sdbUnits db)
+        ]
     hasNewline = T.any (\c -> c == '\n' || c == '\r')
     newlineOffenders =
         filter hasNewline $
             concat
-                [ activityName act : activityDescription act
+                [ activityName act : activityLocation act : activityDescription act
                 | act <- M.elems (sdbActivities db)
                 ]
+                ++ [ v
+                   | act <- M.elems (sdbActivities db)
+                   , v <- M.elems (activityClassification act)
+                   ]
                 ++ map tfName (M.elems (sdbTechFlows db))
                 ++ map bfName (M.elems (sdbBioFlows db))
                 ++ map wfName (M.elems (sdbWasteFlows db))
@@ -360,8 +399,9 @@ productLines keep techDB units allocPct category exchs =
         mkRow (nm, unit, amt) = row [nm, unit, formatAmount amt, alloc, "not defined", category, ""]
      in map mkRow (sortOn id entries)
 
--- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
--- the parser reads back as a 'Coproduct' role).
+{- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
+the parser reads back as a 'Coproduct' role).
+-}
 isCoproduct :: Exchange -> Bool
 isCoproduct ex = case ex of
     TechnosphereExchange{techRole = Coproduct} -> True
@@ -384,23 +424,33 @@ section :: Text -> (Line -> Text) -> [Line] -> [Text]
 section _ _ [] = []
 section header render ls = header : map render (sortOn lineKey ls)
 
--- | Render a technosphere input row: name;unit;amount;Undefined;0;0;0;comment
--- The parser skips three distribution columns after the uncertainty type
--- (parseTechRow: name:unit:amount:unc:_:_:_:rest), so the comment/pedigree must
--- sit in the eighth column or it lands in a placeholder and is dropped on parse-back.
+{- | Render a technosphere input row: name;unit;amount;Undefined;0;0;0;comment
+The parser skips three distribution columns after the uncertainty type
+(parseTechRow: name:unit:amount:unc:_:_:_:rest), so the comment/pedigree must
+sit in the eighth column or it lands in a placeholder and is dropped on parse-back.
+-}
 techRowText :: Line -> Text
 techRowText Line{..} =
     row [lName, lUnit, formatAmount lAmount, "Undefined", "0", "0", "0", lComment]
 
--- | Render a biosphere/waste row: name;compartment;unit;amount;Undefined;;;;;;comment
--- The parser skips three distribution columns after the uncertainty type
--- (parseBioRow: name:compartment:unit:amount:unc:_:_:_:rest), so the
--- comment/pedigree must land past the eighth column or it is dropped on
--- parse-back. Pad with five empty distribution columns to mirror the parser's
--- expected layout.
+{- | Render a biosphere/waste row: name;compartment;unit;amount;Undefined;;;;;;comment
+The parser skips three distribution columns after the uncertainty type
+(parseBioRow: name:compartment:unit:amount:unc:_:_:_:rest), so the
+comment/pedigree must land past the eighth column or it is dropped on
+parse-back. Pad with five empty distribution columns to mirror the parser's
+expected layout.
+-}
 bioRowText :: Line -> Text
 bioRowText Line{..} =
     row [lName, lCompartment, lUnit, formatAmount lAmount, "Undefined", "", "", "", "", "", lComment]
+
+{- | Scale an exchange's amount by a factor — the inverse of the parser's
+allocation scaling (see 'serializeActivity').
+-}
+scaleExchangeAmount :: Double -> Exchange -> Exchange
+scaleExchangeAmount f ex@TechnosphereExchange{} = ex{techAmount = techAmount ex * f}
+scaleExchangeAmount f ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * f}
+scaleExchangeAmount f ex@WasteExchange{} = ex{waAmount = waAmount ex * f}
 
 {- | Serialize a single activity to a @Process … End@ block (list of lines,
 without trailing terminator). Flow/unit names are resolved through the
@@ -431,15 +481,29 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
         -- paragraph boundaries. Accepted limitation of the SimaPro format.
         comment = T.intercalate " " activityDescription
 
-        techLines = mapMaybe (techInputLine techDB units) exchanges
+        -- The parser scales every shared exchange (everything but the reference
+        -- product) by allocFraction = allocPercent/100 on import. To be its exact
+        -- inverse, emit the *pre-allocation* amounts: divide the shared exchanges
+        -- back out so the re-import lands on the stored amounts again (emitting
+        -- them as-is would let the parser scale a second time). The reference
+        -- product is never scaled, so it passes through untouched.
+        -- 'checkSimaProExportable' rejects a zero/non-finite allocation, so the
+        -- division is finite for any export-validated database.
+        allocFraction = fromMaybe 100 activityAllocationPercent / 100
+        unscale ex
+            | exchangeIsReference ex = ex
+            | otherwise = scaleExchangeAmount (1 / allocFraction) ex
+        unscaledExchanges = map unscale exchanges
+
+        techLines = mapMaybe (techInputLine techDB units) unscaledExchanges
         bioByName name = [l | (sec, l) <- bioPaired, sec == name]
         bioPaired =
             [ (sec, l)
-            | ex@BiosphereExchange{} <- exchanges
+            | ex@BiosphereExchange{} <- unscaledExchanges
             , Just sec <- [bioSection bioDB ex]
             , Just l <- [bioLine bioDB units ex]
             ]
-        wasteLines = mapMaybe (wasteLine wasteDB units) exchanges
+        wasteLines = mapMaybe (wasteLine wasteDB units) unscaledExchanges
 
         meta key val = if T.null val then [] else [key, val, ""]
      in concat
@@ -452,9 +516,9 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
             , -- Products section is always present (an activity has a reference).
               -- Coproducts go to "Avoided products" so the parser reads them back
               -- as coproducts, not as extra reference-product activities.
-              "Products" : productLines exchangeIsReference techDB units activityAllocationPercent category exchanges
+              "Products" : productLines exchangeIsReference techDB units activityAllocationPercent category unscaledExchanges
             , [""]
-            , withBlank (avoidedHeader (productLines isCoproduct techDB units activityAllocationPercent category exchanges))
+            , withBlank (avoidedHeader (productLines isCoproduct techDB units activityAllocationPercent category unscaledExchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))
@@ -489,16 +553,22 @@ headerLines cfg =
 -- ============================================================================
 
 {- | Serialize a 'SimpleDatabase' to canonical SimaPro CSV bytes (UTF-8, CRLF).
-Activities are sorted by (name, location) so the byte stream is independent
-of the underlying 'Map' iteration order.
+Runs 'checkSimaProExportable' first and returns its 'Left' on a database the
+format cannot represent faithfully, so an unguarded caller can never silently
+emit a corrupt or lossy file. Activities are sorted by (name, location) so the
+byte stream is independent of the underlying 'Map' iteration order.
 -}
-serializeSimaProCSV :: WriterConfig -> SimpleDatabase -> BS.ByteString
-serializeSimaProCSV cfg SimpleDatabase{..} =
+serializeSimaProCSV :: WriterConfig -> SimpleDatabase -> Either Text BS.ByteString
+serializeSimaProCSV cfg db@SimpleDatabase{..} = do
+    checkSimaProExportable db
     let acts = sortOn (\a -> (activityName a, activityLocation a)) (M.elems sdbActivities)
         blocks = concatMap (serializeActivity sdbTechFlows sdbBioFlows sdbWasteFlows sdbUnits) acts
         allLines = headerLines cfg ++ blocks
-     in TE.encodeUtf8 (T.intercalate crlf allLines <> crlf)
+    pure (TE.encodeUtf8 (T.intercalate crlf allLines <> crlf))
 
--- | Write canonical SimaPro CSV bytes to a file.
-writeSimaProCSV :: WriterConfig -> FilePath -> SimpleDatabase -> IO ()
-writeSimaProCSV cfg path = BS.writeFile path . serializeSimaProCSV cfg
+-- | Write canonical SimaPro CSV bytes to a file, or return the guard's 'Left'.
+writeSimaProCSV :: WriterConfig -> FilePath -> SimpleDatabase -> IO (Either Text ())
+writeSimaProCSV cfg path db =
+    case serializeSimaProCSV cfg db of
+        Left err -> pure (Left err)
+        Right bytes -> Right <$> BS.writeFile path bytes

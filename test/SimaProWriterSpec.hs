@@ -116,8 +116,9 @@ fixtureCSV =
         , "End"
         ]
 
--- | A single process with one reference product and one coproduct (in the
--- @Avoided products@ section, which the parser reads back as a 'Coproduct').
+{- | A single process with one reference product and one coproduct (in the
+@Avoided products@ section, which the parser reads back as a 'Coproduct').
+-}
 coproductCSV :: BS.ByteString
 coproductCSV =
     BS.intercalate
@@ -229,10 +230,11 @@ data ActivityShape = ActivityShape
     }
     deriving (Eq, Ord, Show)
 
--- | (kind, flow-name, unit-name, rounded-amount, is-input, is-reference,
--- comment, pedigree). Comment and pedigree are carried so the semantic
--- round-trip (property b) actually pins them — without them the per-exchange
--- metadata could be silently dropped on parse-back and the test would not notice.
+{- | (kind, flow-name, unit-name, rounded-amount, is-input, is-reference,
+comment, pedigree). Comment and pedigree are carried so the semantic
+round-trip (property b) actually pins them — without them the per-exchange
+metadata could be silently dropped on parse-back and the test would not notice.
+-}
 data ExchangeShape = ExchangeShape
     { esKind :: Text
     , esFlow :: Text
@@ -316,6 +318,12 @@ activityAtUUID db actU =
 -- Spec
 -- ---------------------------------------------------------------------------
 
+-- | Serialize through the guard-returning writer, failing the test on a 'Left'.
+serBytes :: SimpleDatabase -> IO BS.ByteString
+serBytes db =
+    either (\e -> expectationFailure (T.unpack e) >> pure BS.empty) pure $
+        serializeSimaProCSV defaultWriterConfig db
+
 spec :: Spec
 spec = describe "SimaPro.Writer round-trip" $ do
     it "(pure) formatAmount round-trips integral and fractional values" $ do
@@ -332,7 +340,7 @@ spec = describe "SimaPro.Writer round-trip" $ do
 
     it "produces a parseable CSV with the pinned header" $ do
         original <- parseBytes fixtureCSV
-        let bytes = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        bytes <- serBytes (toSimple original)
         BS.take 16 bytes `shouldSatisfy` (\b -> "{SimaPro" `BS.isInfixOf` b)
         reparsed <- parseBytes bytes
         let (acts, _, _, _, _) = reparsed
@@ -340,14 +348,14 @@ spec = describe "SimaPro.Writer round-trip" $ do
 
     it "(a) is idempotent modulo the volatile version banner" $ do
         original <- parseBytes fixtureCSV
-        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        f0 <- serBytes (toSimple original)
         d' <- parseBytes f0
-        let f1 = serializeSimaProCSV defaultWriterConfig (toSimple d')
+        f1 <- serBytes (toSimple d')
         f1 `shouldBe` f0
 
     it "(b) semantic round-trip: parse(write(D)) is structurally equal to D" $ do
         original <- parseBytes fixtureCSV
-        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         -- The shape now carries esComment/esPedigree, so the structural equality
         -- below also pins per-exchange comment and pedigree across the round-trip.
@@ -361,7 +369,7 @@ spec = describe "SimaPro.Writer round-trip" $ do
 
     it "(c) score-equivalence: same inventory for a sample activity within tolerance" $ do
         original <- parseBytes fixtureCSV
-        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         invOrig <- inventoryByName original "Butter production"
         invRound <- inventoryByName reparsed "Butter production"
@@ -375,7 +383,7 @@ spec = describe "SimaPro.Writer round-trip" $ do
 
     it "(regression) routes coproducts to Avoided products, not Products" $ do
         original <- parseBytes coproductCSV
-        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         let acts0 = activitiesOf original
             acts1 = activitiesOf reparsed
@@ -388,11 +396,25 @@ spec = describe "SimaPro.Writer round-trip" $ do
 
     it "(regression) omits the Type line for an activity with no native type" $ do
         original <- parseBytes noTypeCSV
-        let f0 = serializeSimaProCSV defaultWriterConfig (toSimple original)
+        f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         -- No Type line written → re-parse yields Nothing again, not the
         -- invented "Unit process".
         map activityNativeType (activitiesOf reparsed) `shouldBe` [Nothing]
+
+    it "(regression) allocation ≠ 100% round-trips without double-scaling inputs" $ do
+        -- The in-memory amounts are already allocation-scaled (the parser scales
+        -- shared exchanges by allocFraction on import). A 50%-allocated activity
+        -- stores its 20 kg input as 10 kg; the writer must emit 20 kg again so the
+        -- re-import lands back on 10 kg, not 5 kg (the double-allocation bug).
+        bytes <- serBytes allocationDb
+        (acts, _, _, _, _) <- parseBytes bytes
+        case acts of
+            [a] -> do
+                [techAmount e | e@TechnosphereExchange{techRole = Input} <- exchanges a]
+                    `shouldBe` [10.0]
+                activityAllocationPercent a `shouldBe` Just 50
+            other -> expectationFailure ("expected one activity, got " <> show (length other))
 
     describe "checkSimaProExportable (emission-medium guard)" $ do
         it "accepts air / water / soil emissions" $
@@ -444,5 +466,50 @@ emissionDb comp =
             M.empty
             M.empty
             Nothing
+            Nothing
+            Nothing
+
+-- ---------------------------------------------------------------------------
+-- Allocation round-trip fixture
+-- ---------------------------------------------------------------------------
+
+{- | One 50%-allocated activity: a reference product (never scaled) and a
+material input stored at its allocation-scaled amount (10 kg = 20 kg × 0.5).
+A correct writer emits the 20 kg pre-allocation amount so the parser's re-scale
+returns 10 kg.
+-}
+allocationDb :: SimpleDatabase
+allocationDb =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows =
+            M.fromList
+                [ (prodU, TechnosphereFlow prodU "main product" unitU M.empty Nothing Nothing)
+                , (matU, TechnosphereFlow matU "some material" unitU M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, matU, unitU :: UUID
+    actU = read "aaaaaaaa-0000-4000-8000-000000000020"
+    prodU = read "aaaaaaaa-0000-4000-8000-0000000000b0"
+    matU = read "aaaaaaaa-0000-4000-8000-0000000000b1"
+    unitU = read "11111111-0000-4000-8000-000000000002"
+    act =
+        Activity
+            "alloc maker"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            (Just 50)
             Nothing
             Nothing
