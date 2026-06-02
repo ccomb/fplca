@@ -19,6 +19,7 @@ module API.DatabaseHandlers (
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
+    exportDatabaseHandler,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -79,6 +80,8 @@ import API.Types (
     DeleteClassFilter (..),
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
+    ExportRequest (..),
+    ExportResponse (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
@@ -98,6 +101,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Export (serializeDatabase)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -114,6 +118,7 @@ import Database.Manager (
     addMethodCollection,
     addUnitDefs,
     finalizeDatabase,
+    getDatabase,
     getDatabaseSetupInfo,
     getFlowSynonymGroups,
     listCompartmentMappings,
@@ -146,6 +151,7 @@ import Database.Upload (
     findMethodDirectory,
     handleUpload,
  )
+import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Types (Database (..), GeographyPolicy (..), unresolvedCount)
 
@@ -269,6 +275,39 @@ deleteActivitiesHandler dbName req = do
                     True
                     ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
                     deleted
+
+-- | Parse the export-format keyword into a 'DatabaseFormat'.
+parseExportFormat :: Text -> Either Text Upload.DatabaseFormat
+parseExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right Upload.SimaProCSV
+    "ecospold1" -> Right Upload.EcoSpold1
+    "ecospold2" -> Right Upload.EcoSpold2
+    "ilcd" -> Right Upload.ILCDProcess
+    "brightway" -> Right Upload.BrightwayExcel
+    other -> Left ("unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)")
+
+{- | Export a loaded database, returning the serialized bytes base64-encoded.
+EcoSpold 2 / ILCD multi-file trees are zipped; single-file formats carry their
+bytes directly. Mirrors the upload endpoint's base64 convention.
+-}
+exportDatabaseHandler :: Text -> ExportRequest -> AppM ExportResponse
+exportDatabaseHandler dbName req = do
+    dbManager <- asks aeDbManager
+    case parseExportFormat (exrFormat req) of
+        Left err -> return (ExportResponse False err Nothing)
+        Right fmt -> do
+            mLoaded <- liftIO (getDatabase dbManager dbName)
+            case mLoaded of
+                Nothing -> return (ExportResponse False ("Database not loaded: " <> dbName) Nothing)
+                Just ld ->
+                    case serializeDatabase fmt (ldDatabase ld) of
+                        Left err -> return (ExportResponse False err Nothing)
+                        Right bytes ->
+                            return $
+                                ExportResponse
+                                    True
+                                    ("Exported " <> dbName)
+                                    (Just (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))))
 
 {- | Enforce the hosting upload-size policy on a decoded payload.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0

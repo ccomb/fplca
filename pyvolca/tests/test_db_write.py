@@ -10,6 +10,8 @@ engine: they mock ``Client._session`` and assert on the wire shape
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from volca.client import Client, VoLCAError
@@ -181,3 +183,73 @@ class TestDependencies:
         client.remove_dependency("dep", db_name="other")
         url = session.post.call_args[0][0]
         assert url == "http://test.local/api/v1/db/other/remove-dependency/dep"
+
+
+# ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+
+class TestExport:
+    def test_base64_decode_returns_raw_bytes(self, mocked_client):
+        client, session = mocked_client
+        raw = b"PK\x03\x04 zipped db bytes"
+        _ok(session, {"success": True, "message": "ok",
+                      "data": base64.b64encode(raw).decode()})
+        out = client.export_database("ecospold2")
+        assert out == raw
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/testdb/export"
+        assert session.post.call_args[1]["json"] == {"format": "ecospold2"}
+
+    def test_format_normalized_before_send(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": True, "message": "ok",
+                      "data": base64.b64encode(b"x").decode()})
+        client.export_database("  SimaPro  ")
+        assert session.post.call_args[1]["json"] == {"format": "simapro"}
+
+    def test_unknown_format_raises_before_request(self, mocked_client):
+        client, session = mocked_client
+        with pytest.raises(VoLCAError, match="unknown export format"):
+            client.export_database("parquet")
+        session.post.assert_not_called()
+
+    def test_in_band_failure_raises(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": False, "message": "not loaded", "data": None})
+        with pytest.raises(VoLCAError, match="not loaded"):
+            client.export_database("simapro")
+
+    def test_missing_data_raises(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": True, "message": "ok", "data": None})
+        with pytest.raises(VoLCAError, match="no data field"):
+            client.export_database("simapro")
+
+    def test_to_file_writes_decoded_bytes(self, mocked_client, tmp_path):
+        client, session = mocked_client
+        raw = b"hello bytes"
+        _ok(session, {"success": True, "message": "ok",
+                      "data": base64.b64encode(raw).decode()})
+        out = tmp_path / "export.csv"
+        client.export_to_file("simapro", str(out))
+        assert out.read_bytes() == raw
+
+
+# ---------------------------------------------------------------------------
+# default-db guard
+# ---------------------------------------------------------------------------
+
+
+class TestNoDefaultDb:
+    def _client(self):
+        return Client(base_url="http://test.local", db="")
+
+    def test_copy_without_db_raises(self):
+        with pytest.raises(VoLCAError, match="No database specified"):
+            self._client().copy_database("clone")
+
+    def test_export_without_db_raises(self):
+        with pytest.raises(VoLCAError, match="No database specified"):
+            self._client().export_database("simapro")

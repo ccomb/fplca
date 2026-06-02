@@ -796,6 +796,27 @@ data DeleteSelectionResponse = DeleteSelectionResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionResponse)
 
+{- | Request for database export. @exrFormat@ is the target-format keyword
+(@simapro|ecospold1|ecospold2|ilcd|brightway@), matching the CLI.
+-}
+newtype ExportRequest = ExportRequest
+    { exrFormat :: Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportRequest)
+
+{- | Response for database export. The serialized database is base64-encoded
+(single-file formats carry their bytes directly; EcoSpold 2 / ILCD are zipped),
+mirroring the upload endpoint's base64 convention.
+-}
+data ExportResponse = ExportResponse
+    { exrespSuccess :: Bool
+    , exrespMessage :: Text
+    , exrespData :: Maybe Text -- Base64-encoded serialized database (if successful)
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportResponse)
+
 -- | Response for database upload
 data UploadResponse = UploadResponse
     { uprSuccess :: Bool

@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -17,10 +17,11 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Export (exportDatabase)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.RelinkMapping (relinkWithMappingFile)
-import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
+import Database.Upload (DatabaseFormat (..), UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
 import qualified Database.Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
@@ -106,6 +107,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbCopy registry outputFormat manager srcName newName
         Database (DbRelinkMapping args) ->
             executeDbRelinkMapping registry outputFormat manager args
+        Database (DbExport args) ->
+            executeDbExport registry outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -552,6 +555,40 @@ executeDbRelinkMapping registry fmt manager args = do
                     , "cross_db_links" .= rresCrossDBLinks r
                     , "depends_on" .= rresDepsLoaded r
                     ]
+
+-- | Parse the @--format@ keyword for export into a 'DatabaseFormat'.
+parseExportFormat :: Text -> Either Text DatabaseFormat
+parseExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right SimaProCSV
+    "ecospold1" -> Right EcoSpold1
+    "ecospold2" -> Right EcoSpold2
+    "ilcd" -> Right ILCDProcess
+    "brightway" -> Right BrightwayExcel
+    other -> Left $ "unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)"
+
+-- | Execute database export: serialize a loaded database to a file.
+executeDbExport :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbExportArgs -> IO ()
+executeDbExport registry fmt manager args =
+    case parseExportFormat (deaFormat args) of
+        Left err -> reportError (T.unpack err) >> exitFailure
+        Right dbFmt -> do
+            mLoaded <- DM.getDatabase manager (deaDb args)
+            case mLoaded of
+                Nothing -> do
+                    reportError $ "Database '" ++ T.unpack (deaDb args) ++ "' not loaded"
+                    exitFailure
+                Just ld -> do
+                    result <- exportDatabase dbFmt (ldDatabase ld) (deaOut args)
+                    case result of
+                        Left err -> reportError (T.unpack err) >> exitFailure
+                        Right () -> do
+                            reportProgress Info $ "Exported " ++ T.unpack (deaDb args) ++ " -> " ++ deaOut args
+                            outputResult registry fmt $
+                                object
+                                    [ "database" .= deaDb args
+                                    , "format" .= deaFormat args
+                                    , "out" .= deaOut args
+                                    ]
 
 -- | Execute method delete command
 executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()

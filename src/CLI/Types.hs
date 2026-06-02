@@ -73,6 +73,19 @@ data DatabaseAction
       alias mapping loaded from a local CSV: @db@, @--to depDb@, @--mapping csv@.
       -}
       DbRelinkMapping DbRelinkArgs
+    | -- | Export a loaded database to a file: @db@, @--format fmt@, @--out file@.
+      DbExport DbExportArgs
+    deriving (Eq, Show, Generic)
+
+-- | Arguments for @database export@.
+data DbExportArgs = DbExportArgs
+    { deaDb :: Text
+    -- ^ Database to export
+    , deaFormat :: Text
+    -- ^ Target format keyword (@--format@): simapro|ecospold1|ecospold2|ilcd|brightway
+    , deaOut :: FilePath
+    -- ^ Output file path (@--out@)
+    }
     deriving (Eq, Show, Generic)
 
 -- | Arguments for @database relink@ with a name→name supplier alias mapping.

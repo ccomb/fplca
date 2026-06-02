@@ -93,6 +93,7 @@ library
                      , Expr
                      , ILCD.Parser
                      , ILCD.Writer
+                     , Database.Export
                      , Plugin.Types
                      , Plugin.Builtin
                      , Plugin.Bridge
