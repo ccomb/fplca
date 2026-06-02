@@ -85,6 +85,7 @@ library
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
                      , SimaPro.Parser
+                     , SimaPro.Writer
                      , BrightwayExcel.Parser
                      , Expr
                      , ILCD.Parser
@@ -243,6 +244,7 @@ test-suite lca-tests
                      , ProgressSpec
                      , EcoSpold1Spec
                      , EcoSpold2Spec
+                     , SimaProWriterSpec
                      , MCPSchemaSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec
