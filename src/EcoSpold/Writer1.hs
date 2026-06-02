@@ -68,6 +68,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import Database.Loader (generateActivityUUIDFromActivity)
+import EcoSpold.Common (showFFloatTrim)
 import Types
 
 -- ----------------------------------------------------------------------------
@@ -102,19 +103,25 @@ canonicalWriterOptions = WriterOptions Nothing Nothing
 -- ----------------------------------------------------------------------------
 
 -- | Serialize a built 'Database' (via 'toSimpleDatabase').
-writeDatabase :: WriterOptions -> Database -> Text
+writeDatabase :: WriterOptions -> Database -> Either Text Text
 writeDatabase opts = writeSimpleDatabase opts . toSimpleDatabase
 
--- | Serialize a 'SimpleDatabase'. Flow / unit names are resolved from its tables.
-writeSimpleDatabase :: WriterOptions -> SimpleDatabase -> Text
-writeSimpleDatabase opts sdb =
-    writeActivities
-        opts
-        (sdbTechFlows sdb)
-        (sdbBioFlows sdb)
-        (sdbWasteFlows sdb)
-        (sdbUnits sdb)
-        (M.elems (sdbActivities sdb))
+{- | Serialize a 'SimpleDatabase'. Flow / unit names are resolved from its
+tables. Runs 'checkEcoSpold1Exportable' first and returns its 'Left' on a
+database the format cannot represent faithfully, so an unguarded caller can
+never silently emit a lossy or role-flipped file.
+-}
+writeSimpleDatabase :: WriterOptions -> SimpleDatabase -> Either Text Text
+writeSimpleDatabase opts sdb = do
+    checkEcoSpold1Exportable sdb
+    pure $
+        writeActivities
+            opts
+            (sdbTechFlows sdb)
+            (sdbBioFlows sdb)
+            (sdbWasteFlows sdb)
+            (sdbUnits sdb)
+            (M.elems (sdbActivities sdb))
 
 {- | Serialize a list of activities against the flow / unit tables that
 resolve their exchange UUIDs.
@@ -178,7 +185,7 @@ Either case reports the first offender and fails loudly rather than emit
 silently wrong data. Databases free of both pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
-checkEcoSpold1Exportable db = checkLinks *> checkAmounts
+checkEcoSpold1Exportable db = checkLinks *> checkRefInputs *> checkFlows *> checkUnits *> checkAmounts
   where
     checkLinks =
         case danglingLinks of
@@ -190,6 +197,35 @@ checkEcoSpold1Exportable db = checkLinks *> checkAmounts
                         <> "\": linked activity "
                         <> UUID.toText link
                         <> " is not among the exported datasets, so its dataset number is unknown."
+    checkRefInputs =
+        case refInputOffenders of
+            [] -> Right ()
+            (consumer : _) ->
+                Left $
+                    "EcoSpold1 export cannot encode a reference input (treatment process) in \""
+                        <> consumer
+                        <> "\": the format has no marker for it, so the writer would emit"
+                        <> " outputGroup 0 and the parser would read it back as a reference"
+                        <> " product — a direction flip from input to output."
+    checkFlows =
+        case flowOffenders of
+            [] -> Right ()
+            (consumer : _) ->
+                Left $
+                    "EcoSpold1 export cannot represent activity \""
+                        <> consumer
+                        <> "\": an exchange references a flow absent from the database,"
+                        <> " which would be written with a blank name."
+    checkUnits =
+        case unitOffenders of
+            [] -> Right ()
+            ((consumer, uid) : _) ->
+                Left $
+                    "EcoSpold1 export cannot represent activity \""
+                        <> consumer
+                        <> "\": an exchange references unit "
+                        <> UUID.toText uid
+                        <> ", absent from the registry (it would be written with a blank unit)."
     checkAmounts =
         case amountOffenders of
             [] -> Right ()
@@ -214,6 +250,27 @@ checkEcoSpold1Exportable db = checkLinks *> checkAmounts
         , ex <- exchanges act
         , let amt = exchangeAmount ex
         , isNaN amt || isInfinite amt
+        ]
+    refInputOffenders =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
+        ]
+    flowOffenders =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , flowMissing ex
+        ]
+    flowMissing ex = case ex of
+        TechnosphereExchange{techFlowId = fid} -> M.notMember fid (sdbTechFlows db)
+        BiosphereExchange{bioFlowId = fid} -> M.notMember fid (sdbBioFlows db)
+        WasteExchange{waFlowId = fid} -> M.notMember fid (sdbWasteFlows db)
+    unitOffenders =
+        [ (activityName act, exchangeUnitId ex)
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , M.notMember (exchangeUnitId ex) (sdbUnits db)
         ]
 
 -- | Bundle of lookup tables threaded through the per-exchange renderers.
@@ -426,16 +483,15 @@ escapeXmlAttr =
         . T.replace "<" "&lt;"
         . T.replace "&" "&amp;"
 
-{- | Deterministic textual form for a @meanValue@. @show@ on a 'Double' is
-already round-trippable and stable across platforms, but renders whole
-numbers as @1.0@ (which the parser reads back identically), so it is the
-simplest canonical choice. Negative zero is normalised to @0.0@, and the
-non-finite values (which cannot occur in a parsed database) are clamped to a
-parseable @0.0@ rather than the unreadable @"NaN"@/@"Infinity"@ — matching the
-EcoSpold2 / ILCD / SimaPro writers.
+{- | Deterministic textual form for a @meanValue@. Uses the shared
+'showFFloatTrim' (fixed-point, never scientific) so the value round-trips
+byte- and value-identically through the parser's 'Data.Text.Read.double' —
+unlike @show@, which emits scientific notation for small/large magnitudes that
+re-reads lossily. Non-finite values (which cannot occur in a parsed database)
+are clamped to a parseable @0.0@ rather than the unreadable @"NaN"@/@"Infinity"@.
 -}
 formatAmount :: Double -> Text
 formatAmount x
     | isNaN x || isInfinite x = "0.0"
-    | x == 0 = "0.0"
-    | otherwise = T.pack (show x)
+    | x == 0 = "0.0" -- normalise negative zero (showFFloat would emit "-0.0")
+    | otherwise = T.pack (showFFloatTrim x)

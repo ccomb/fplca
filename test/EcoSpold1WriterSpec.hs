@@ -28,7 +28,6 @@ import Test.Hspec
 
 import qualified Database as DB
 import Database.Loader (generateActivityUUIDFromActivity)
-import EcoSpold.Cutoff (applyCutoffStrategy)
 import EcoSpold.Parser1 (parseAllWithXeno)
 import EcoSpold.Writer1
 import qualified Matrix
@@ -127,8 +126,9 @@ kgUnit = read "11111111-0000-4000-8000-000000000001"
 units1 :: UnitDB
 units1 = M.singleton kgUnit (Unit kgUnit "kg" "kg" "")
 
--- | A single-activity database with one reference product and the given
--- extra exchanges, named @name@ so its flows resolve from @techs@/@bios@/@wastes@.
+{- | A single-activity database with one reference product and the given
+extra exchanges, named @name@ so its flows resolve from @techs@/@bios@/@wastes@.
+-}
 soloDb :: Text -> UUID -> [Exchange] -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> SimpleDatabase
 soloDb name prodU extra techs bios wastes =
     SimpleDatabase
@@ -195,11 +195,13 @@ shows up here as the supplier's dataset number.
 -}
 roundTripSupplierLinks :: SimpleDatabase -> Either String [Int]
 roundTripSupplierLinks sdb =
-    let xml = TE.encodeUtf8 (writeSimpleDatabase canonicalWriterOptions sdb)
-     in case parseAllWithXeno xml of
-            Left err -> Left err
-            Right results ->
-                concatMap (\(_, _, _, _, _, _, links) -> M.elems links) <$> sequence results
+    case writeSimpleDatabase canonicalWriterOptions sdb of
+        Left e -> Left (T.unpack e)
+        Right txt ->
+            case parseAllWithXeno (TE.encodeUtf8 txt) of
+                Left err -> Left err
+                Right results ->
+                    concatMap (\(_, _, _, _, _, _, links) -> M.elems links) <$> sequence results
 
 -- ---------------------------------------------------------------------------
 -- Order-insensitive observable projection of an activity, for semantic equality
@@ -290,10 +292,20 @@ dbViews sdb =
 
 roundTrip :: SimpleDatabase -> Either String SimpleDatabase
 roundTrip sdb =
-    let xml = TE.encodeUtf8 (writeSimpleDatabase canonicalWriterOptions sdb)
-     in case parseAllWithXeno xml of
-            Left err -> Left err
-            Right results -> assembleSimpleDb <$> sequence results
+    case writeSimpleDatabase canonicalWriterOptions sdb of
+        Left e -> Left (T.unpack e)
+        Right txt ->
+            case parseAllWithXeno (TE.encodeUtf8 txt) of
+                Left err -> Left err
+                Right results -> assembleSimpleDb <$> sequence results
+
+{- | Unwrap the guard-returning writer for a fixture known to be exportable,
+failing the test on an unexpected 'Left'.
+-}
+writeOk :: WriterOptions -> SimpleDatabase -> IO Text
+writeOk opts sdb =
+    either (\e -> expectationFailure (T.unpack e) >> pure "") pure $
+        writeSimpleDatabase opts sdb
 
 -- | Build a full 'Database' from a 'SimpleDatabase' so we can score it.
 buildDb :: SimpleDatabase -> IO Database
@@ -350,7 +362,7 @@ spec = do
     describe "writeSimpleDatabase" $ do
         it "emits a well-formed EcoSpold1 document the parser accepts" $ do
             sdb <- fixtureDb
-            let xml = writeSimpleDatabase canonicalWriterOptions sdb
+            xml <- writeOk canonicalWriterOptions sdb
             T.isInfixOf "<ecoSpold" xml `shouldBe` True
             case parseAllWithXeno (TE.encodeUtf8 xml) of
                 Left err -> expectationFailure ("re-parse failed: " ++ err)
@@ -358,27 +370,27 @@ spec = do
 
         it "omits volatile attributes under canonicalWriterOptions" $ do
             sdb <- fixtureDb
-            let xml = writeSimpleDatabase canonicalWriterOptions sdb
+            xml <- writeOk canonicalWriterOptions sdb
             T.isInfixOf "generator=" xml `shouldBe` False
             T.isInfixOf "timestamp=" xml `shouldBe` False
 
         it "includes a pinned generator under defaultWriterOptions" $ do
             sdb <- fixtureDb
-            let xml = writeSimpleDatabase defaultWriterOptions sdb
+            xml <- writeOk defaultWriterOptions sdb
             T.isInfixOf "generator=\"VoLCA\"" xml `shouldBe` True
 
     describe "round-trip (a) idempotence modulo volatile metadata" $
         it "write . parse . write == write (canonical)" $ do
             sdb <- fixtureDb
-            let f0 = writeSimpleDatabase canonicalWriterOptions sdb
+            f0 <- writeOk canonicalWriterOptions sdb
             case parseAllWithXeno (TE.encodeUtf8 f0) of
                 Left err -> expectationFailure ("re-parse failed: " ++ err)
                 Right results -> case sequence results of
                     Left err -> expectationFailure ("dataset failed: " ++ err)
-                    Right datasets ->
+                    Right datasets -> do
                         let sdb' = assembleSimpleDb datasets
-                            f1 = writeSimpleDatabase canonicalWriterOptions sdb'
-                         in f1 `shouldBe` f0
+                        f1 <- writeOk canonicalWriterOptions sdb'
+                        f1 `shouldBe` f0
 
     describe "round-trip (b) semantic equality (order-insensitive)" $
         it "parse(write(D)) reproduces the observable structure of D" $ do
@@ -417,8 +429,9 @@ spec = do
             checkEcoSpold1Exportable (linkedDb danglingLink) `shouldSatisfy` isLeft
 
     describe "empty database" $ do
-        it "writes a well-formed, dataset-free document the parser accepts" $
-            case parseAllWithXeno (TE.encodeUtf8 (writeSimpleDatabase canonicalWriterOptions emptyDb)) of
+        it "writes a well-formed, dataset-free document the parser accepts" $ do
+            xml <- writeOk canonicalWriterOptions emptyDb
+            case parseAllWithXeno (TE.encodeUtf8 xml) of
                 Left err -> expectationFailure ("re-parse failed: " ++ err)
                 Right results -> length results `shouldBe` 0
 
@@ -458,3 +471,29 @@ spec = do
                 bios = M.singleton bioU (BiosphereFlow bioU "Carbon dioxide" kgUnit M.empty Nothing Nothing Nothing)
                 sdb = soloDb "leaky process" prodU [bioEx] M.empty bios M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+
+    describe "reference input (treatment process)" $
+        it "rejects a ReferenceInput rather than flipping it to a reference product" $ do
+            -- EcoSpold1 has no marker for a reference input; emitting outputGroup 0
+            -- would re-parse it as a reference product (input → output flip).
+            let prodU = read "77777777-0000-4000-8000-000000000001" :: UUID
+                refInU = read "77777777-0000-4000-8000-0000000000a0" :: UUID
+                refInEx = TechnosphereExchange refInU 1.0 kgUnit ReferenceInput UUID.nil Nothing "" Nothing Nothing
+                techs = M.singleton refInU (TechnosphereFlow refInU "waste to treat" kgUnit M.empty Nothing Nothing)
+                sdb = soloDb "treatment process" prodU [refInEx] techs M.empty M.empty
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+
+    describe "numeric round-trip" $
+        it "round-trips a small-exponent amount without scientific-notation loss" $ do
+            -- show 3.3e-20 emits scientific notation that re-reads lossily;
+            -- showFFloatTrim keeps it value-identical across the round-trip.
+            let prodU = read "88888888-0000-4000-8000-000000000001" :: UUID
+                bioU = read "88888888-0000-4000-8000-0000000000c0" :: UUID
+                bioEx = BiosphereExchange bioU 3.3e-20 kgUnit Emission "" Nothing Nothing
+                bios = M.singleton bioU (BiosphereFlow bioU "dioxin" kgUnit M.empty Nothing Nothing Nothing)
+                sdb = soloDb "trace emitter" prodU [bioEx] M.empty bios M.empty
+            case roundTrip sdb of
+                Left err -> expectationFailure ("round-trip failed: " ++ err)
+                Right sdb' ->
+                    concatMap (exchangeViews sdb') (M.elems (sdbActivities sdb'))
+                        `shouldSatisfy` any ((== 3.3e-20) . evAmount)
