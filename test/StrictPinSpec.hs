@@ -35,6 +35,7 @@ import Database.Manager (
     LoadedDatabase (..),
     initDatabaseManager,
     relinkDatabase,
+    relinkDatabaseWithMapping,
  )
 import SharedSolver (SharedSolver, createSharedSolver)
 import SynonymDB (emptySynonymDB)
@@ -95,6 +96,44 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             -- p1 resolves against alpha; p2 (beta-only) stays unresolved.
             length (dbCrossDBLinks relinked) `shouldBe` 1
 
+    it "a mapping relink against one dependency preserves links to the others" $
+        withSystemTempDirectory "volca-relink-multidep" $ \tmp -> do
+            -- alpha supplies p1, beta supplies p2; consumer is pinned to both.
+            alphaDb <- buildOrFail (supplierDB 100 ["p1"])
+            betaDb <- buildOrFail (supplierDB 200 ["p2"])
+            consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
+            let consumerDb = consumerDb0{dbDependsOn = ["alpha", "beta"], dbCrossDBLinks = []}
+
+            manager <- initDatabaseManager defaultConfig True Nothing
+            consumerSolver <- mkSolver "consumer" consumerDb
+            alphaSolver <- mkSolver "alpha" alphaDb
+            betaSolver <- mkSolver "beta" betaDb
+            -- The deps must be loaded (mapping relink requires depDb loaded) and
+            -- indexed (the matcher scans indexed deps).
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) $
+                    M.insert "consumer" (loadedFor consumerDb consumerSolver (consumerConfig (tmp </> "consumer-data")))
+                        . M.insert "alpha" (loadedFor alphaDb alphaSolver (supplierLoadedConfig "alpha"))
+                        . M.insert "beta" (loadedFor betaDb betaSolver (supplierLoadedConfig "beta"))
+                modifyTVar' (dmIndexedDbs manager) $
+                    M.insert "alpha" (buildIndexedDatabaseFromDB "alpha" emptySynonymDB alphaDb)
+                        . M.insert "beta" (buildIndexedDatabaseFromDB "beta" emptySynonymDB betaDb)
+
+            -- Populate the links first: p1 → alpha, p2 → beta.
+            _ <- relinkDatabase manager "consumer"
+            -- A mapping relink scoped to beta must re-resolve the whole pin, not
+            -- drop the alpha link. (The alias is inert here; it only exercises the
+            -- mapping path.)
+            result <- relinkDatabaseWithMapping manager "consumer" "beta" (M.singleton "no-such-input" "no-such-supplier")
+            result `shouldSatisfy` isRight
+
+            loaded <- readTVarIO (dmLoadedDbs manager)
+            let relinked = ldDatabase (loaded M.! "consumer")
+                linkSources = S.fromList (map cdlSourceDatabase (dbCrossDBLinks relinked))
+            -- Both dependency links survive; the alpha link is not silently dropped.
+            linkSources `shouldBe` S.fromList ["alpha", "beta"]
+            length (dbCrossDBLinks relinked) `shouldBe` 2
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -102,6 +141,15 @@ spec = describe "relinkDatabase strict dependency pin" $ do
 isRight :: Either a b -> Bool
 isRight (Right _) = True
 isRight (Left _) = False
+
+loadedFor :: Database -> SharedSolver -> DatabaseConfig -> LoadedDatabase
+loadedFor db solver cfg =
+    LoadedDatabase{ldDatabase = db, ldSharedSolver = solver, ldConfig = cfg}
+
+-- | A minimal loaded-supplier config (no own dependencies, no cache path).
+supplierLoadedConfig :: Text -> DatabaseConfig
+supplierLoadedConfig name =
+    (consumerConfig ""){dcName = name, dcDisplayName = name, dcDepends = []}
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do

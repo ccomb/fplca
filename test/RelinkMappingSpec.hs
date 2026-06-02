@@ -15,8 +15,8 @@ import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.UUID as UUID
-import System.IO.Temp (withSystemTempFile)
 import System.IO (hClose)
+import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 
 import Database.CrossLinking (
@@ -33,6 +33,7 @@ import Database.RelinkMapping (
     buildAliasMap,
     loadAliasMap,
     parseAliasCSV,
+    rejectEmpty,
  )
 import SynonymDB (emptySynonymDB)
 import Types (
@@ -163,6 +164,12 @@ spec = do
                 hClose h
                 result <- loadAliasMap path
                 result `shouldSatisfy` either (const True) (const False)
+
+        it "rejectEmpty rejects an empty map and passes a non-empty one" $ do
+            -- The HTTP relink handler relies on this so a header-only CSV is a 4xx,
+            -- not a silent 200 no-op (matching the CLI's loadAliasMap).
+            rejectEmpty M.empty `shouldSatisfy` either (const True) (const False)
+            rejectEmpty (M.singleton "a" "b") `shouldBe` Right (M.singleton "a" "b")
 
         it "collapses two identical duplicate rows harmlessly" $ do
             let rows =

@@ -25,6 +25,7 @@ module Database.RelinkMapping (
     AliasRow (..),
     parseAliasCSV,
     buildAliasMap,
+    rejectEmpty,
     loadAliasMap,
 
     -- * Relink entry
@@ -157,10 +158,15 @@ loadAliasMap path = do
     case result of
         Left e -> pure $ Left $ "cannot read mapping file " <> T.pack path <> ": " <> T.pack (show e)
         Right bytes -> pure (parseAliasCSV bytes >>= buildAliasMap >>= rejectEmpty)
-  where
-    rejectEmpty m
-        | M.null m = Left "mapping file contains no usable source→target rows"
-        | otherwise = Right m
+
+{- | Reject an alias map with no usable rows (header-only / all-blank). Such a
+map would relink as a silent no-op, so both the CLI ('loadAliasMap') and the
+HTTP relink handler reject it loudly rather than return 200 with no effect.
+-}
+rejectEmpty :: Map Text Text -> Either Text (Map Text Text)
+rejectEmpty m
+    | M.null m = Left "mapping file contains no usable source→target rows"
+    | otherwise = Right m
 
 {- | Relink @dbName@ against @depDb@ using the alias mapping in @csvPath@.
 Loads + validates the CSV, then delegates to 'relinkDatabaseWithMapping'.

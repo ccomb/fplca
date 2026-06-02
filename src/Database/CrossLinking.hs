@@ -569,9 +569,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
         -- win over the mapping.
         aliasOf nm = case lcSupplierAliases of
             Nothing -> Nothing
-            Just aliases -> case M.lookup nm aliases of
-                Just target -> Just target
-                Nothing -> M.lookup (normalizeText nm) aliases
+            Just aliases -> M.lookup nm aliases
         aliasCandidates = case aliasOf productName of
             Nothing -> []
             Just aliasName -> firstNonEmpty [tryName aliasName, tryPrefixes (extractProductPrefixes aliasName)]

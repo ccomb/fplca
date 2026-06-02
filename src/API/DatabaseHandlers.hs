@@ -138,7 +138,7 @@ import Database.Manager (
     unloadFlowSynonyms,
     unloadUnitDefs,
  )
-import Database.RelinkMapping (buildAliasMap, parseAliasCSV)
+import Database.RelinkMapping (buildAliasMap, parseAliasCSV, rejectEmpty)
 import Database.Upload (
     DatabaseFormat (..),
     UploadData (..),
@@ -195,7 +195,7 @@ relinkDatabaseHandler dbName req = do
         (Nothing, Nothing) ->
             runRelink (relinkDatabase dbManager dbName)
         (Just depDb, Just csv) ->
-            case parseAliasCSV (BSL.fromStrict (T.encodeUtf8 csv)) >>= buildAliasMap of
+            case parseAliasCSV (BSL.fromStrict (T.encodeUtf8 csv)) >>= buildAliasMap >>= rejectEmpty of
                 Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
                 Right aliases -> runRelink (relinkDatabaseWithMapping dbManager dbName depDb aliases)
         (Just _, Nothing) -> incomplete

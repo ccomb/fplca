@@ -1490,16 +1490,17 @@ even though we already know the answer. The save is skipped when the
 relink is a no-op (no change vs. the in-memory state).
 -}
 relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
-relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing Nothing
+relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing
 
-{- | Re-link a loaded DB against a single chosen dependency, applying a
-name→name supplier-alias map. Restricts candidate suppliers to @depDb@ and
-threads the aliases into the matcher so a consumer's input flow name that only
-matches a target supplier under the mapping still links. If @depDb@ is loaded
-but not yet in the database's declared dependency set, it is pinned in-memory
-first — so an in-memory pipeline (copy → delete → relink) composes without
-restaging (which would unload the live database). Same persistence/no-op
-semantics as 'relinkDatabase'. Errors (DB or dep not loaded) surface as 'Left'.
+{- | Re-link a loaded DB across its full pinned dependency set, applying a
+name→name supplier-alias map. The aliases let a consumer's input flow name that
+only matches a target supplier (typically in @depDb@) under the mapping still
+link; links to the other pinned dependencies are re-resolved unchanged rather
+than dropped. If @depDb@ is loaded but not yet in the database's declared
+dependency set, it is pinned in-memory first — so an in-memory pipeline
+(copy → delete → relink) composes without restaging (which would unload the
+live database). Same persistence/no-op semantics as 'relinkDatabase'. Errors
+(DB or dep not loaded) surface as 'Left'.
 -}
 relinkDatabaseWithMapping ::
     DatabaseManager ->
@@ -1528,16 +1529,22 @@ relinkDatabaseWithMapping manager dbName depDb aliases = do
                 unless (depDb `elem` persistedDeps) $
                     atomically $
                         modifyTVar' (dmLoadedDbs manager) (M.adjust (addPinnedDep depDb) dbName)
-                relinkDatabaseWith manager dbName (Just [depDb]) (Just aliases) (Just persistedDeps)
+                relinkDatabaseWith manager dbName (Just aliases) (Just persistedDeps)
   where
+    -- Idempotent: a concurrent relink may have pinned the dep between the
+    -- snapshot above and this transaction, so never prepend a duplicate.
     addPinnedDep dep ld =
         let db = ldDatabase ld
-         in ld{ldDatabase = db{dbDependsOn = dep : dbDependsOn db}}
+         in if dep `elem` dbDependsOn db
+                then ld
+                else ld{ldDatabase = db{dbDependsOn = dep : dbDependsOn db}}
 
-{- | Shared relink core. @depOverride@ restricts the candidate dependency set
-to the given names (still intersected with the declared pin); 'Nothing' uses
-the full pin. @aliases@ feeds 'lcSupplierAliases'. The dependency set stored
-on the database ('dbDependsOn') is never mutated here.
+{- | Shared relink core. Candidates are the database's full declared pin
+('dbDependsOn'); relink recomputes the links within it but never grows or
+shrinks the set. @aliases@ feeds 'lcSupplierAliases' — a mapping relink passes
+the user's name→name map (which retargets a chosen dependency without dropping
+links to the others), a plain relink passes 'Nothing'. The dependency set
+stored on the database is never mutated here.
 
 @persistedDeps@ is the dependency set as it stands in the matrix cache on disk
 ('Just' when the caller pinned a new dep in-memory before calling). The cache
@@ -1548,11 +1555,10 @@ that divergence. 'Nothing' means the pin is unchanged from disk.
 relinkDatabaseWith ::
     DatabaseManager ->
     Text ->
-    Maybe [Text] ->
     Maybe (M.Map Text Text) ->
     Maybe [Text] ->
     IO (Either Text RelinkResult)
-relinkDatabaseWith manager dbName depOverride aliases persistedDeps = do
+relinkDatabaseWith manager dbName aliases persistedDeps = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
@@ -1561,13 +1567,11 @@ relinkDatabaseWith manager dbName depOverride aliases persistedDeps = do
             -- Strict pin: candidates are restricted to the database's declared
             -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
             -- This keeps the user's explicit selection authoritative — relink
-            -- recomputes links *within* the pin but never expands or shrinks it.
-            -- An optional 'depOverride' narrows further to a single chosen dep.
+            -- recomputes links *within* the whole pin (so a mapping relink against
+            -- one dependency re-resolves the others unchanged instead of dropping
+            -- them) but never expands or shrinks the set.
             let pinnedDeps = dbDependsOn (ldDatabase loaded)
-                candidateDeps = case depOverride of
-                    Nothing -> pinnedDeps
-                    Just chosen -> filter (`elem` chosen) pinnedDeps
-                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` candidateDeps]
+                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
             synonymDB <- getMergedSynonymDB manager
             unitConfig <- getMergedUnitConfig manager
             let db = ldDatabase loaded
