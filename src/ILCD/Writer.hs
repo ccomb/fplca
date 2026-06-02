@@ -48,6 +48,7 @@ module ILCD.Writer (
 
     -- * Pure helpers (exported for testing)
     escapeXml,
+    escapeXmlAttr,
     formatDouble,
     processXML,
     flowXML,
@@ -67,6 +68,7 @@ import qualified Data.UUID as UUID
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
+import EcoSpold.Common (showFFloatTrim)
 import Types
 
 --------------------------------------------------------------------------------
@@ -209,21 +211,31 @@ checkILCDExportable db = checkMedia >> checkMultiOutput >> checkClassifications
                         <> "): an empty classification level does not round-trip "
                         <> "because the ILCD parser drops empty levels."
 
--- | Write the ILCD package as a directory tree rooted at @dir@.
-writeILCDDatabase :: WriteOptions -> FilePath -> SimpleDatabase -> IO ()
-writeILCDDatabase opts dir db = do
-    createDirectoryIfMissing True (dir </> "processes")
-    createDirectoryIfMissing True (dir </> "flows")
-    createDirectoryIfMissing True (dir </> "flowproperties")
-    createDirectoryIfMissing True (dir </> "unitgroups")
-    mapM_ (\(rel, bytes) -> BS.writeFile (dir </> rel) bytes) (ilcdFiles opts db)
+{- | Write the ILCD package as a directory tree rooted at @dir@, or return the
+export guard's 'Left' without touching disk.
+-}
+writeILCDDatabase :: WriteOptions -> FilePath -> SimpleDatabase -> IO (Either Text ())
+writeILCDDatabase opts dir db =
+    case checkILCDExportable db of
+        Left err -> pure (Left err)
+        Right () -> do
+            createDirectoryIfMissing True (dir </> "processes")
+            createDirectoryIfMissing True (dir </> "flows")
+            createDirectoryIfMissing True (dir </> "flowproperties")
+            createDirectoryIfMissing True (dir </> "unitgroups")
+            mapM_ (\(rel, bytes) -> BS.writeFile (dir </> rel) bytes) (ilcdFiles opts db)
+            pure (Right ())
 
 {- | Build a deterministic zip 'Archive' of the ILCD package and return its
 serialized bytes. Entry modification times are pinned to epoch 0 so the
-archive bytes are reproducible.
+archive bytes are reproducible. Runs 'checkILCDExportable' first and returns its
+'Left' on a database the format cannot represent faithfully, so an unguarded
+caller cannot silently emit a corrupt archive.
 -}
-writeILCDArchive :: WriteOptions -> SimpleDatabase -> BL.ByteString
-writeILCDArchive opts db = fromArchive (buildArchive (ilcdFiles opts db))
+writeILCDArchive :: WriteOptions -> SimpleDatabase -> Either Text BL.ByteString
+writeILCDArchive opts db = do
+    checkILCDExportable db
+    pure (fromArchive (buildArchive (ilcdFiles opts db)))
   where
     buildArchive = foldl addOne emptyArchive
     -- Fixed epoch (0) keeps archive bytes stable across runs.
@@ -346,8 +358,9 @@ processTypeBlock nt = case nativeTypeLabel nt of
     Just _ -> []
     Nothing -> []
 
--- | Native-type display label, across all source formats (the value carried
--- into @<processType>@). 'Nothing' when no native type is set.
+{- | Native-type display label, across all source formats (the value carried
+into @<processType>@). 'Nothing' when no native type is set.
+-}
 nativeTypeLabel :: Maybe NativeActivityType -> Maybe Text
 nativeTypeLabel nt = case nt of
     Just (ILCDProcessType label) -> Just label
@@ -450,18 +463,15 @@ compartmentBlock (Just (Compartment medium sub)) =
   where
     isResource = medium == "natural resource"
     level0 = if isResource then "Resources" else "Emissions"
-    mediumWord = case medium of
-        "natural resource" -> "natural resource"
-        other -> other
     level1
         | isResource = "Resources"
-        | otherwise = "Emissions to " <> mediumWord
+        | otherwise = "Emissions to " <> medium
     level2 = case sub of
         Nothing -> []
         Just s
             | T.null s -> []
             | isResource -> [attrElem "common:category" [("level", "2")] ("Resources " <> s)]
-            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> mediumWord <> ", " <> s)]
+            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> medium <> ", " <> s)]
 
 --------------------------------------------------------------------------------
 -- FlowProperty XML  (one per unit; shares the unit's UUID)
@@ -538,9 +548,9 @@ attrOnlyOpen tag attrs = "        <" <> tag <> attrsText attrs <> ">"
 attrsText :: [(Text, Text)] -> Text
 attrsText = T.concat . map (\(k, v) -> " " <> k <> "=\"" <> escapeXmlAttr v <> "\"")
 
-{- | XML text-node escaping. Covers the five predefined entities. The parser
-(Xeno SAX) un-escapes these, so escaping here keeps the round-trip faithful
-for names/comments containing @&@, @<@, etc.
+{- | XML text-node escaping. Covers the three entities that matter in element
+content (@&@, @<@, @>@). The parser (Xeno SAX) un-escapes these, so escaping
+here keeps the round-trip faithful for names/comments containing @&@, @<@, etc.
 -}
 escapeXml :: Text -> Text
 escapeXml =
@@ -548,26 +558,33 @@ escapeXml =
         . T.replace "<" "&lt;"
         . T.replace "&" "&amp;"
 
--- | Attribute-value escaping: text entities plus the quote characters.
+{- | Attribute-value escaping: the text entities, the quote characters, and the
+newline/carriage-return control characters. A raw @\\n@/@\\r@ inside an attribute
+value is normalised to a space by XML parsers, so encode it as a numeric
+character reference (matching the EcoSpold2 writer) to keep it verbatim across a
+round trip.
+-}
 escapeXmlAttr :: Text -> Text
 escapeXmlAttr =
-    T.replace "'" "&apos;"
+    T.replace "\r" "&#13;"
+        . T.replace "\n" "&#10;"
+        . T.replace "'" "&apos;"
         . T.replace "\"" "&quot;"
         . escapeXml
 
-{- | Canonical 'Double' formatting. Integral values print without a trailing
-@.0@-noise beyond a single @.0@ is avoided by emitting whole numbers as
-integers (matching how the fixtures write @1@ for unit mean values), and
-fractional values use 'show', which is round-trippable through
-'Data.Text.Read.double' (the parser's reader). The two together make
-write→parse→write stable.
+{- | Canonical 'Double' formatting via the shared 'showFFloatTrim' (fixed-point,
+never scientific), so the value round-trips byte- and value-identically through
+the parser's 'Data.Text.Read.double' — unlike @show@, which emits scientific
+notation for small/large magnitudes that re-reads lossily (e.g. @show 3.3e-20@ →
+@3.2999999999999994e-20@, and @5.0e-324@ → @0@). Non-finite values (which cannot
+occur in a parsed database) are clamped to a parseable @0.0@; negative zero is
+normalised to @0.0@.
 -}
 formatDouble :: Double -> Text
 formatDouble x
-    | isNaN x = "0"
-    | isInfinite x = "0"
-    | x == fromIntegral (round x :: Integer) = T.pack (show (round x :: Integer))
-    | otherwise = T.pack (show x)
+    | isNaN x || isInfinite x = "0.0"
+    | x == 0 = "0.0"
+    | otherwise = T.pack (showFFloatTrim x)
 
 --------------------------------------------------------------------------------
 -- UUID rendering

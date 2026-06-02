@@ -36,9 +36,11 @@ import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
 import ILCD.Parser (parseILCDDirectory)
 import ILCD.Writer (
+    WriteOptions,
     checkILCDExportable,
     defaultWriteOptions,
     escapeXml,
+    escapeXmlAttr,
     formatDouble,
     ilcdFiles,
     writeILCDArchive,
@@ -68,10 +70,16 @@ between round-trips.
 roundTrip :: SimpleDatabase -> IO SimpleDatabase
 roundTrip db = withSystemTempDirectory "ilcd-writer-spec" $ \dir -> do
     writeILCDDatabase defaultWriteOptions dir db
+        >>= either (\e -> error ("ILCD write failed: " <> T.unpack e)) pure
     r <- parseILCDDirectory dir
     case r of
         Left err -> error ("round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
+
+-- | Unwrap the guard-returning archive writer for a fixture known to be exportable.
+archiveOrFail :: WriteOptions -> SimpleDatabase -> BL.ByteString
+archiveOrFail opts db =
+    either (\e -> error ("writeILCDArchive: " <> T.unpack e)) id (writeILCDArchive opts db)
 
 {- | Round-trip through the production zip export path: serialize with
 'writeILCDArchive', extract the archive to a fresh temp tree and parse it back.
@@ -79,7 +87,7 @@ This is the byte stream 'Database.Export' ships to clients.
 -}
 archiveRoundTrip :: SimpleDatabase -> IO SimpleDatabase
 archiveRoundTrip db = withSystemTempDirectory "ilcd-archive-spec" $ \dir -> do
-    extractFilesFromArchive [OptDestination dir] (toArchive (writeILCDArchive defaultWriteOptions db))
+    extractFilesFromArchive [OptDestination dir] (toArchive (archiveOrFail defaultWriteOptions db))
     r <- parseILCDDirectory dir
     case r of
         Left err -> error ("archive round-trip parse failed: " <> T.unpack err)
@@ -219,15 +227,38 @@ inventoryByName db target = do
 
 spec :: Spec
 spec = describe "ILCD.Writer round-trip" $ do
-    it "(pure) formatDouble round-trips integral and fractional values" $ do
-        formatDouble 1.0 `shouldBe` "1"
+    it "(pure) formatDouble emits fixed-point (never scientific) doubles" $ do
+        formatDouble 1.0 `shouldBe` "1.0"
         formatDouble 2.5 `shouldBe` "2.5"
-        formatDouble 0.001 `shouldBe` "1.0e-3"
-        formatDouble (-3.0) `shouldBe` "-3"
+        formatDouble (-3.0) `shouldBe` "-3.0"
+        formatDouble (-0.0) `shouldBe` "0.0"
+        -- The fix: small magnitudes stay fixed-point so they re-read losslessly.
+        T.isInfixOf "e" (formatDouble 3.3e-20) `shouldBe` False
 
     it "(pure) escapeXml escapes the predefined entities" $ do
         escapeXml "a & b < c > d" `shouldBe` "a &amp; b &lt; c &gt; d"
         escapeXml "plain" `shouldBe` "plain"
+
+    it "(pure) escapeXmlAttr encodes newlines so they survive in an attribute" $
+        -- A raw \n/\r in an attribute value is normalised to a space by XML
+        -- parsers; encode it as a numeric character reference instead.
+        escapeXmlAttr "line1\nline2\rx" `shouldBe` "line1&#10;line2&#13;x"
+
+    it "round-trips a small-exponent amount without scientific-notation loss" $ do
+        -- show 3.3e-20 emits scientific notation the parser re-reads lossily;
+        -- showFFloatTrim keeps it value-identical end-to-end through the writer.
+        let sdb =
+                oneActivityDb
+                    (M.singleton fEmitU fEmission)
+                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+                    , BiosphereExchange fEmitU 3.3e-20 fUnitU Emission "" Nothing Nothing
+                    ]
+        db' <- roundTrip sdb
+        [ bioAmount ex
+          | a <- M.elems (sdbActivities db')
+          , ex@BiosphereExchange{} <- exchanges a
+          ]
+            `shouldSatisfy` elem 3.3e-20
 
     it "emits one process file per activity" $ do
         db <- loadFixture
@@ -269,8 +300,8 @@ spec = describe "ILCD.Writer round-trip" $ do
     describe "writeILCDArchive (production export path)" $ do
         it "is byte-deterministic across runs (epoch-0 mtimes)" $ do
             db <- loadFixture
-            let bytes = writeILCDArchive defaultWriteOptions db
-            writeILCDArchive defaultWriteOptions db `shouldBe` bytes
+            let bytes = archiveOrFail defaultWriteOptions db
+            archiveOrFail defaultWriteOptions db `shouldBe` bytes
             BL.null bytes `shouldBe` False
 
         it "extracts and reparses to a structurally equal database" $ do
@@ -343,8 +374,8 @@ spec = describe "ILCD.Writer round-trip" $ do
             refs `shouldBe` []
 
         it "clamps a NaN or Infinity amount to zero on export" $ do
-            formatDouble (0 / 0) `shouldBe` "0"
-            formatDouble (1 / 0) `shouldBe` "0"
+            formatDouble (0 / 0) `shouldBe` "0.0"
+            formatDouble (1 / 0) `shouldBe` "0.0"
             db' <- roundTrip (nonFiniteDb (1 / 0))
             let amounts =
                     [ exchangeAmount ex
