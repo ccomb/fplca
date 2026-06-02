@@ -18,7 +18,7 @@ module CopySpec (spec) where
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, isNothing)
-import Data.Text (Text)
+import Data.Text (Text, isInfixOf)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Test.Hspec
@@ -26,7 +26,7 @@ import Test.Hspec
 import Config (DatabaseConfig (..), defaultConfig)
 import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
-import Database.Edit (copyDatabase, copyDatabaseAs)
+import Database.Edit (copyDatabase)
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
@@ -144,11 +144,28 @@ spec = describe "Database.Edit copy primitive" $ do
         result <- copyDatabase manager "ghost" "mycopy"
         result `shouldBe` Left "Database not loaded: ghost"
 
-    it "copyDatabaseAs preserves the source value structurally" $ do
-        srcDb <- buildOrFail (supplierDB 600 ["p1", "p2"])
-        let copied = copyDatabaseAs "whatever" srcDb
-        V.length (dbActivities copied) `shouldBe` V.length (dbActivities srcDb)
-        dbActivityCount copied `shouldBe` dbActivityCount srcDb
+    it "slugifies a path-traversal copy name to a filesystem-safe slug" $ do
+        -- The copy is registered as an uploaded database and later deleted by
+        -- name via removeDirectoryRecursive, so the name must never carry a
+        -- path separator or parent ref that could escape the uploads directory.
+        manager <- initDatabaseManager defaultConfig True Nothing
+        srcDb <- buildOrFail (supplierDB 800 ["p1", "p2"])
+        installLoaded manager "source" srcDb
+        result <- copyDatabase manager "source" "../../etc/passwd"
+        result `shouldBe` Right ()
+        loaded <- readTVarIO (dmLoadedDbs manager)
+        let copyNames = filter (/= "source") (M.keys loaded)
+        copyNames `shouldSatisfy` (not . null)
+        copyNames `shouldSatisfy` all (\n -> not ("/" `isInfixOf` n) && not (".." `isInfixOf` n))
+
+    it "rejects a copy name with no usable characters" $ do
+        manager <- initDatabaseManager defaultConfig True Nothing
+        srcDb <- buildOrFail (supplierDB 900 ["p1", "p2"])
+        installLoaded manager "source" srcDb
+        result <- copyDatabase manager "source" "///"
+        case result of
+            Left msg -> msg `shouldSatisfy` isInfixOf "Invalid copy name"
+            Right () -> expectationFailure "expected empty-slug copy name to be rejected"
 
 -- ---------------------------------------------------------------------------
 -- Helpers
