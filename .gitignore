@@ -32,14 +32,6 @@ DBs/
 uploads/
 cache/
 
-# docs
-*.md
-!README.md
-!CHANGELOG.md
-!THIRD_PARTY_LICENSES.md
-!docs/**/*.md
-!scripts/verify-pr41-regression.md
-
 # temporary python stuff (not pyvolca/)
 /pyproject.toml
 **/__pycache__/
@@ -47,14 +39,15 @@ cache/
 pyvolca/build/
 pyvolca/dist/
 
-# hidden files
-.*
-!.gitattributes
-!.gitignore
-!.gitmodules
-!.python-version
-!.github
-!.github/**
+# local agent settings (shared .claude/settings.json IS tracked)
+.claude/settings.local.json
+
+# editor / OS cruft
+.DS_Store
+.vscode/
+.idea/
+.direnv/
+.ghc.environment.*
 
 # debug stuff
 debug/
