@@ -3,12 +3,13 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Integration tests for the HTTP API surface (Servant routes).
---
--- We boot the real volca binary as a subprocess ONCE (via beforeAll +
--- afterAll), threading the bundled resources into each test rather than
--- relying on top-level mutable state. The subprocess listens on an
--- OS-assigned ephemeral port so parallel CI runners do not collide.
+{- | Integration tests for the HTTP API surface (Servant routes).
+
+We boot the real volca binary as a subprocess ONCE (via beforeAll +
+afterAll), threading the bundled resources into each test rather than
+relying on top-level mutable state. The subprocess listens on an
+OS-assigned ephemeral port so parallel CI runners do not collide.
+-}
 module RoutesSpec (spec) where
 
 import Control.Concurrent (threadDelay)
@@ -89,10 +90,11 @@ findVolcaExe = do
         then pure exe
         else error $ "volca executable not found at " <> exe <> ". Run 'cabal build' first."
 
--- | Ask the OS for a free TCP port on 127.0.0.1. There is a small race
--- between closing this socket and the child binding to it, but it is
--- accepted as the cost of avoiding hardcoded ports clashing under
--- concurrent CI on the same host.
+{- | Ask the OS for a free TCP port on 127.0.0.1. There is a small race
+between closing this socket and the child binding to it, but it is
+accepted as the cost of avoiding hardcoded ports clashing under
+concurrent CI on the same host.
+-}
 findFreePort :: IO Int
 findFreePort =
     bracket
@@ -179,9 +181,10 @@ spec = do
     errorMappingSpec
     integrationSpec
 
--- | Pure regression guard for the ServiceError -> HTTP status contract. Lives
--- outside the booted-server block so it runs everywhere (incl. Windows) and
--- needs no loaded database.
+{- | Pure regression guard for the ServiceError -> HTTP status contract. Lives
+outside the booted-server block so it runs everywhere (incl. Windows) and
+needs no loaded database.
+-}
 errorMappingSpec :: Spec
 errorMappingSpec = describe "serviceErrorToServerError (HTTP status contract)" $ do
     it "maps InvalidUUID to 400 (malformed client id, never 5xx)" $

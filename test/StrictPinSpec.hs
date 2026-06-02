@@ -27,6 +27,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Config (DatabaseConfig (..), defaultConfig)
+import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
 import Database.Manager (
@@ -37,6 +38,8 @@ import Database.Manager (
  )
 import SharedSolver (SharedSolver, createSharedSolver)
 import SynonymDB (emptySynonymDB)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Types (
     Activity (..),
     CrossDBLink (..),
@@ -49,51 +52,48 @@ import Types (
     UUID,
     Unit (..),
  )
-import qualified Data.Vector.Unboxed as U
-import System.FilePath ((</>))
-import System.IO.Temp (withSystemTempDirectory)
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
 spec = describe "relinkDatabase strict dependency pin" $ do
     it "keeps dbDependsOn at the pinned set and never re-expands to other loaded DBs" $
-      withSystemTempDirectory "volca-strict-pin" $ \tmp -> do
-        -- alpha supplies p1 only; beta supplies p1 and p2.
-        alphaDb <- buildOrFail (supplierDB 100 ["p1"])
-        betaDb <- buildOrFail (supplierDB 200 ["p1", "p2"])
-        -- consumer needs both p1 and p2.
-        consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
-        -- Pin the consumer to alpha only, with no links yet — relink populates them.
-        let consumerDb = consumerDb0{dbDependsOn = ["alpha"], dbCrossDBLinks = []}
+        withSystemTempDirectory "volca-strict-pin" $ \tmp -> do
+            -- alpha supplies p1 only; beta supplies p1 and p2.
+            alphaDb <- buildOrFail (supplierDB 100 ["p1"])
+            betaDb <- buildOrFail (supplierDB 200 ["p1", "p2"])
+            -- consumer needs both p1 and p2.
+            consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
+            -- Pin the consumer to alpha only, with no links yet — relink populates them.
+            let consumerDb = consumerDb0{dbDependsOn = ["alpha"], dbCrossDBLinks = []}
 
-        manager <- initDatabaseManager defaultConfig True Nothing
-        solver <- mkSolver "consumer" consumerDb
-        let consumerLoaded =
-                LoadedDatabase
-                    { ldDatabase = consumerDb
-                    , ldSharedSolver = solver
-                    , ldConfig = consumerConfig (tmp </> "consumer-data")
-                    }
-        atomically $ do
-            modifyTVar' (dmLoadedDbs manager) (M.insert "consumer" consumerLoaded)
-            modifyTVar' (dmIndexedDbs manager) $
-                M.insert "alpha" (buildIndexedDatabaseFromDB "alpha" emptySynonymDB alphaDb)
-                    . M.insert "beta" (buildIndexedDatabaseFromDB "beta" emptySynonymDB betaDb)
+            manager <- initDatabaseManager defaultConfig True Nothing
+            solver <- mkSolver "consumer" consumerDb
+            let consumerLoaded =
+                    LoadedDatabase
+                        { ldDatabase = consumerDb
+                        , ldSharedSolver = solver
+                        , ldConfig = consumerConfig (tmp </> "consumer-data")
+                        }
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) (M.insert "consumer" consumerLoaded)
+                modifyTVar' (dmIndexedDbs manager) $
+                    M.insert "alpha" (buildIndexedDatabaseFromDB "alpha" emptySynonymDB alphaDb)
+                        . M.insert "beta" (buildIndexedDatabaseFromDB "beta" emptySynonymDB betaDb)
 
-        result <- relinkDatabase manager "consumer"
-        result `shouldSatisfy` isRight
+            result <- relinkDatabase manager "consumer"
+            result `shouldSatisfy` isRight
 
-        loaded <- readTVarIO (dmLoadedDbs manager)
-        let relinked = ldDatabase (loaded M.! "consumer")
-            linkSources = S.fromList (map cdlSourceDatabase (dbCrossDBLinks relinked))
+            loaded <- readTVarIO (dmLoadedDbs manager)
+            let relinked = ldDatabase (loaded M.! "consumer")
+                linkSources = S.fromList (map cdlSourceDatabase (dbCrossDBLinks relinked))
 
-        -- The pin is preserved exactly — beta is NOT added even though it is
-        -- loaded and is the only supplier of p2.
-        dbDependsOn relinked `shouldBe` ["alpha"]
-        -- Every resolved link points into the pinned DB; beta never leaks in.
-        linkSources `shouldSatisfy` (`S.isSubsetOf` S.fromList ["alpha"])
-        -- p1 resolves against alpha; p2 (beta-only) stays unresolved.
-        length (dbCrossDBLinks relinked) `shouldBe` 1
+            -- The pin is preserved exactly — beta is NOT added even though it is
+            -- loaded and is the only supplier of p2.
+            dbDependsOn relinked `shouldBe` ["alpha"]
+            -- Every resolved link points into the pinned DB; beta never leaks in.
+            linkSources `shouldSatisfy` (`S.isSubsetOf` S.fromList ["alpha"])
+            -- p1 resolves against alpha; p2 (beta-only) stays unresolved.
+            length (dbCrossDBLinks relinked) `shouldBe` 1
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -136,10 +136,11 @@ consumerConfig path =
 -- Fixture builders (in-memory, single unit "kg", all activities at GLO)
 -- ---------------------------------------------------------------------------
 
-data SimpleParts = SimpleParts
-    (M.Map (UUID, UUID) Activity)
-    (M.Map UUID TechnosphereFlow)
-    (M.Map UUID Unit)
+data SimpleParts
+    = SimpleParts
+        (M.Map (UUID, UUID) Activity)
+        (M.Map UUID TechnosphereFlow)
+        (M.Map UUID Unit)
 
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
@@ -172,32 +173,32 @@ supplierDB offset products =
                   flowUUID = mkUUID (offset + 10 * i + 3)
                   flow = mkTechFlow flowUUID name
                   refOut =
-                      TechnosphereExchange
-                          { techFlowId = flowUUID
-                          , techAmount = 1.0
-                          , techUnitId = kgUnitId
-                          , techRole = ReferenceProduct
-                          , techActivityLinkId = actUUID
-                          , techProcessLinkId = Nothing
-                          , techLocation = ""
-                          , techComment = Nothing
-                          , techPedigree = Nothing
-                          }
+                    TechnosphereExchange
+                        { techFlowId = flowUUID
+                        , techAmount = 1.0
+                        , techUnitId = kgUnitId
+                        , techRole = ReferenceProduct
+                        , techActivityLinkId = actUUID
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
                   act =
-                      Activity
-                          { activityName = "supplier-of-" <> name
-                          , activityDescription = []
-                          , activitySynonyms = M.empty
-                          , activityClassification = M.empty
-                          , activityLocation = "GLO"
-                          , activityUnit = "kg"
-                          , exchanges = [refOut]
-                          , activityParams = M.empty
-                          , activityParamExprs = M.empty
-                          , activityAllocationPercent = Nothing
-                          , activityAllocationFormula = Nothing
-                          , activityNativeType = Nothing
-                          }
+                    Activity
+                        { activityName = "supplier-of-" <> name
+                        , activityDescription = []
+                        , activitySynonyms = M.empty
+                        , activityClassification = M.empty
+                        , activityLocation = "GLO"
+                        , activityUnit = "kg"
+                        , exchanges = [refOut]
+                        , activityParams = M.empty
+                        , activityParamExprs = M.empty
+                        , activityAllocationPercent = Nothing
+                        , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
+                        }
                in (((actUUID, prodUUID), act), (flowUUID, flow))
             | (i, name) <- zip [0 ..] products
             ]
@@ -220,44 +221,44 @@ consumerDB offset products =
                   inFlow = mkTechFlow inFlowUUID name
                   outFlow = mkTechFlow outFlowUUID ("consumer-out-" <> name)
                   refOut =
-                      TechnosphereExchange
-                          { techFlowId = outFlowUUID
-                          , techAmount = 1.0
-                          , techUnitId = kgUnitId
-                          , techRole = ReferenceProduct
-                          , techActivityLinkId = actUUID
-                          , techProcessLinkId = Nothing
-                          , techLocation = ""
-                          , techComment = Nothing
-                          , techPedigree = Nothing
-                          }
+                    TechnosphereExchange
+                        { techFlowId = outFlowUUID
+                        , techAmount = 1.0
+                        , techUnitId = kgUnitId
+                        , techRole = ReferenceProduct
+                        , techActivityLinkId = actUUID
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
                   unlinkedInput =
-                      TechnosphereExchange
-                          { techFlowId = inFlowUUID
-                          , techAmount = 1.0
-                          , techUnitId = kgUnitId
-                          , techRole = Input
-                          , techActivityLinkId = UUID.nil
-                          , techProcessLinkId = Nothing
-                          , techLocation = "GLO"
-                          , techComment = Nothing
-                          , techPedigree = Nothing
-                          }
+                    TechnosphereExchange
+                        { techFlowId = inFlowUUID
+                        , techAmount = 1.0
+                        , techUnitId = kgUnitId
+                        , techRole = Input
+                        , techActivityLinkId = UUID.nil
+                        , techProcessLinkId = Nothing
+                        , techLocation = "GLO"
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
                   act =
-                      Activity
-                          { activityName = "consumer-" <> name
-                          , activityDescription = []
-                          , activitySynonyms = M.empty
-                          , activityClassification = M.empty
-                          , activityLocation = "GLO"
-                          , activityUnit = "kg"
-                          , exchanges = [refOut, unlinkedInput]
-                          , activityParams = M.empty
-                          , activityParamExprs = M.empty
-                          , activityAllocationPercent = Nothing
-                          , activityAllocationFormula = Nothing
-                          , activityNativeType = Nothing
-                          }
+                    Activity
+                        { activityName = "consumer-" <> name
+                        , activityDescription = []
+                        , activitySynonyms = M.empty
+                        , activityClassification = M.empty
+                        , activityLocation = "GLO"
+                        , activityUnit = "kg"
+                        , exchanges = [refOut, unlinkedInput]
+                        , activityParams = M.empty
+                        , activityParamExprs = M.empty
+                        , activityAllocationPercent = Nothing
+                        , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
+                        }
                in (((actUUID, prodUUID), act), [(inFlowUUID, inFlow), (outFlowUUID, outFlow)])
             | (i, name) <- zip [0 ..] products
             ]

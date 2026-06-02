@@ -35,8 +35,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import System.Random (mkStdGen, randoms)
 
-import qualified Matrix
 import Matrix (Inventory)
+import qualified Matrix
 import Method.Mapping
 import qualified Method.Parser as MP
 import Method.Types (Method (..), MethodCF (..))
@@ -54,8 +54,8 @@ import Types (
 import qualified UnitConversion as UC
 
 import qualified Bench.Helpers as H
-import qualified Bench.Json as J
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
+import qualified Bench.Json as J
 import qualified Fixtures as F
 
 -- ---------------------------------------------------------------------------
@@ -215,8 +215,9 @@ buildFixture =
             , fxSetTables = setTables
             }
 
--- | Score one inventory against each of the 27 methods, sequentially —
--- mirrors the per-method HTTP route loop without parallelism overhead.
+{- | Score one inventory against each of the 27 methods, sequentially —
+mirrors the per-method HTTP route loop without parallelism overhead.
+-}
 benchFanout :: SynFixture -> [Double]
 benchFanout fx =
     [ loScore $

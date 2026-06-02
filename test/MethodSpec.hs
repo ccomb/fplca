@@ -20,8 +20,8 @@ import Method.ParserNW (parseNormWeightCSVBytes)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import Method.Types
 import SynonymDB
-import qualified Types as VT
 import Types (BiosphereFlow (..))
+import qualified Types as VT
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec

@@ -27,8 +27,8 @@ import Service (
  )
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
-import qualified Types as VT
 import Types
+import qualified Types as VT
 
 spec :: Spec
 spec = do
@@ -136,7 +136,7 @@ spec = do
         it "returns False for air emission" $ do
             let flow = mkBioFlow "air"
             isResourceExtraction flow `shouldBe` False
-        -- Technosphere flows can't reach this function under the new type system.
+    -- Technosphere flows can't reach this function under the new type system.
 
     -- -----------------------------------------------------------------------
     -- extractCompartment

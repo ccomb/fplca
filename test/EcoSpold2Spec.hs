@@ -166,25 +166,25 @@ activityTypeFixtureXml actType mSpec =
         \  <activityDataset>\n\
         \    <activityDescription>\n\
         \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"attr-test\""
-        <> " activityType=\""
-        <> actType
-        <> "\""
-        <> specAttr
-        <> ">\n\
-           \        <activityName xml:lang=\"en\">attr test activity</activityName>\n\
-           \      </activity>\n\
-           \      <geography geographyId=\"TEST\"><shortname xml:lang=\"en\">TEST</shortname></geography>\n\
-           \    </activityDescription>\n\
-           \    <flowData>\n\
-           \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
-           \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
-           \        <name xml:lang=\"en\">attr test product</name>\n\
-           \        <unitName xml:lang=\"en\">kg</unitName>\n\
-           \        <outputGroup>0</outputGroup>\n\
-           \      </intermediateExchange>\n\
-           \    </flowData>\n\
-           \  </activityDataset>\n\
-           \</ecoSpold>\n"
+            <> " activityType=\""
+            <> actType
+            <> "\""
+            <> specAttr
+            <> ">\n\
+               \        <activityName xml:lang=\"en\">attr test activity</activityName>\n\
+               \      </activity>\n\
+               \      <geography geographyId=\"TEST\"><shortname xml:lang=\"en\">TEST</shortname></geography>\n\
+               \    </activityDescription>\n\
+               \    <flowData>\n\
+               \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
+               \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+               \        <name xml:lang=\"en\">attr test product</name>\n\
+               \        <unitName xml:lang=\"en\">kg</unitName>\n\
+               \        <outputGroup>0</outputGroup>\n\
+               \      </intermediateExchange>\n\
+               \    </flowData>\n\
+               \  </activityDataset>\n\
+               \</ecoSpold>\n"
 
 withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do

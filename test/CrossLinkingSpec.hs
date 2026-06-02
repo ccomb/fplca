@@ -463,8 +463,9 @@ mkRefExchangeAt loc =
   where
     flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"
 
--- | One-activity SimpleDatabase with a single reference exchange. The
--- activity is anchored at @actLoc@; the reference exchange carries @exLoc@.
+{- | One-activity SimpleDatabase with a single reference exchange. The
+activity is anchored at @actLoc@; the reference exchange carries @exLoc@.
+-}
 mkSplitLocationDB :: Text -> Text -> SimpleDatabase
 mkSplitLocationDB actLoc exLoc =
     let flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"

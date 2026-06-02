@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Pure numeric edge cases for the matrix pipeline.
---
--- These exercise the *pure* helpers in "Matrix" — the ones that run without
--- touching MUMPS — so we can keep them in the fast unit-test tier. The
--- MUMPS-backed paths are already covered by MatrixConstructionSpec /
--- CoalescingSolverSpec via the per-database loaders.
+{- | Pure numeric edge cases for the matrix pipeline.
+
+These exercise the *pure* helpers in "Matrix" — the ones that run without
+touching MUMPS — so we can keep them in the fast unit-test tier. The
+MUMPS-backed paths are already covered by MatrixConstructionSpec /
+CoalescingSolverSpec via the per-database loaders.
+-}
 module NumericEdgesSpec (spec) where
 
 import qualified Data.Text as T

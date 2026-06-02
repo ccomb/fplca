@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Roundtrip tests for the flat JSON encoding of NativeActivityType.
---   ToJSON flattens the three variants to a single-shape record; FromJSON
---   reconstructs the right variant from the `source` discriminator.
+{- | Roundtrip tests for the flat JSON encoding of NativeActivityType.
+  ToJSON flattens the three variants to a single-shape record; FromJSON
+  reconstructs the right variant from the `source` discriminator.
+-}
 module NativeActivityTypeSpec (spec) where
 
 import API.Types ()

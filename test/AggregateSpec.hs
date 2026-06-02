@@ -1,12 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for "Service.Aggregate".
---
--- The aggregate API is documented but had zero direct test coverage. We
--- exercise it end-to-end against SAMPLE.min3, focusing on ScopeDirect (no
--- MUMPS solve required) and ScopeBiosphere (driven by mkSolverFromDb), with
--- emphasis on the filter / group-by / aggregate-function semantics that the
--- HTTP layer relies on for correctness.
+{- | Tests for "Service.Aggregate".
+
+The aggregate API is documented but had zero direct test coverage. We
+exercise it end-to-end against SAMPLE.min3, focusing on ScopeDirect (no
+MUMPS solve required) and ScopeBiosphere (driven by mkSolverFromDb), with
+emphasis on the filter / group-by / aggregate-function semantics that the
+HTTP layer relies on for correctness.
+-}
 module AggregateSpec (spec) where
 
 import qualified Data.Set as S
@@ -17,8 +18,8 @@ import qualified API.Types as API
 import qualified Service.Aggregate as Agg
 import qualified SharedSolver as SS
 import TestHelpers (loadSampleDatabase, mkSolverFromDb)
-import qualified Types
 import Types (Database (..), processIdToText)
+import qualified Types
 import qualified UnitConversion as UC
 
 -- A no-op DepSolverLookup — SAMPLE.min3 has no cross-DB deps.
