@@ -46,6 +46,7 @@ library
                      , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking
+                     , Database.RelinkMapping
                      , Database.MatrixBuild
                      , Database.Upload
                      , Database.UploadedDatabase
@@ -199,6 +200,7 @@ test-suite lca-tests
   other-modules:       TestHelpers
                      , GoldenData
                      , AutoRelinkSpec
+                     , RelinkMappingSpec
                      , MatrixConstructionSpec
                      , InventorySpec
                      , MatrixExportSpec

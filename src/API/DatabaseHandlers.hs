@@ -82,6 +82,7 @@ import API.Types (
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
+    RelinkRequest (..),
     RelinkResponse (..),
     SynonymGroupsResponse (..),
     UploadRequest (..),
@@ -124,6 +125,7 @@ import Database.Manager (
     loadFlowSynonyms,
     loadUnitDefs,
     relinkDatabase,
+    relinkDatabaseWithMapping,
     removeCompartmentMappings,
     removeDatabase,
     removeDependencyFromStaged,
@@ -136,6 +138,7 @@ import Database.Manager (
     unloadFlowSynonyms,
     unloadUnitDefs,
  )
+import Database.RelinkMapping (buildAliasMap, parseAliasCSV)
 import Database.Upload (
     DatabaseFormat (..),
     UploadData (..),
@@ -173,25 +176,47 @@ unloadDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     simpleAction (unloadDatabase dbManager dbName) ("Unloaded database: " <> dbName)
 
-{- | Re-run cross-DB linking for a loaded database against the currently-loaded
-dependency databases. Lets the user recover from loads that happened in a
-suboptimal order without reloading the whole database.
+{- | Re-run cross-DB linking for a loaded database. An empty @{}@ body
+re-resolves links within the existing dependency pin (plain relink) — letting
+the user recover from loads that happened in a suboptimal order without
+reloading. A body carrying both @depDb@ and @mappingCsv@ switches to mapping
+mode: relink against that one dependency using an inline name→name
+supplier-alias CSV, so an Ecoinvent-named background (e.g. Agribalyse) resolves
+against a differently-named dependency (e.g. BAFU). A loaded-but-undeclared
+dependency is auto-pinned in-memory rather than rejected. Supplying exactly one
+of the two is a client error. Parse/validation failures surface as 4xx rather
+than a silent no-op; the only 404 from this path is an unloaded database or
+dependency.
 -}
-relinkDatabaseHandler :: Text -> AppM RelinkResponse
-relinkDatabaseHandler dbName = do
+relinkDatabaseHandler :: Text -> RelinkRequest -> AppM RelinkResponse
+relinkDatabaseHandler dbName req = do
     dbManager <- asks aeDbManager
-    res <- liftIO $ relinkDatabase dbManager dbName
-    case res of
-        Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-        Right r ->
-            return
-                RelinkResponse
-                    { rrDbName = rresDbName r
-                    , rrUnresolvedBefore = rresUnresolvedBefore r
-                    , rrUnresolvedAfter = rresUnresolvedAfter r
-                    , rrCrossDBLinks = rresCrossDBLinks r
-                    , rrDependsOn = rresDepsLoaded r
-                    }
+    case (rmrDepDb req, rmrMappingCsv req) of
+        (Nothing, Nothing) ->
+            runRelink (relinkDatabase dbManager dbName)
+        (Just depDb, Just csv) ->
+            case parseAliasCSV (BSL.fromStrict (T.encodeUtf8 csv)) >>= buildAliasMap of
+                Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+                Right aliases -> runRelink (relinkDatabaseWithMapping dbManager dbName depDb aliases)
+        (Just _, Nothing) -> incomplete
+        (Nothing, Just _) -> incomplete
+  where
+    incomplete =
+        throwError err400{errBody = "relink: depDb and mappingCsv must be supplied together"}
+    runRelink :: IO (Either Text RelinkResult) -> AppM RelinkResponse
+    runRelink act = do
+        res <- liftIO act
+        case res of
+            Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+            Right r ->
+                return
+                    RelinkResponse
+                        { rrDbName = rresDbName r
+                        , rrUnresolvedBefore = rresUnresolvedBefore r
+                        , rrUnresolvedAfter = rresUnresolvedAfter r
+                        , rrCrossDBLinks = rresCrossDBLinks r
+                        , rrDependsOn = rresDepsLoaded r
+                        }
 
 {- | Copy a loaded database under a new name. The copy is an independent
 in-memory database registered under @newName@; the source is untouched.

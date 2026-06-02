@@ -69,6 +69,21 @@ data DatabaseAction
       DbDeleteActivities DbDeleteArgs
     | -- | Copy a loaded database (source name → new name)
       DbCopy Text Text
+    | {- | Relink a database against one dependency using a name→name supplier
+      alias mapping loaded from a local CSV: @db@, @--to depDb@, @--mapping csv@.
+      -}
+      DbRelinkMapping DbRelinkArgs
+    deriving (Eq, Show, Generic)
+
+-- | Arguments for @database relink@ with a name→name supplier alias mapping.
+data DbRelinkArgs = DbRelinkArgs
+    { draDb :: Text
+    -- ^ Database to relink
+    , draToDep :: Text
+    -- ^ Dependency database to link against (@--to@)
+    , draMappingCsv :: FilePath
+    -- ^ Path to the mapping CSV (@--mapping@)
+    }
     deriving (Eq, Show, Generic)
 
 {- | Arguments for delete-by-selection. The filter fields mirror the activity

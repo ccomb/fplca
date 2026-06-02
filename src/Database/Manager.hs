@@ -38,6 +38,7 @@ module Database.Manager (
     loadDatabase,
     unloadDatabase,
     relinkDatabase,
+    relinkDatabaseWithMapping,
     RelinkResult (..),
     addDatabase,
     removeDatabase,
@@ -1489,7 +1490,69 @@ even though we already know the answer. The save is skipped when the
 relink is a no-op (no change vs. the in-memory state).
 -}
 relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
-relinkDatabase manager dbName = do
+relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing Nothing
+
+{- | Re-link a loaded DB against a single chosen dependency, applying a
+name→name supplier-alias map. Restricts candidate suppliers to @depDb@ and
+threads the aliases into the matcher so a consumer's input flow name that only
+matches a target supplier under the mapping still links. If @depDb@ is loaded
+but not yet in the database's declared dependency set, it is pinned in-memory
+first — so an in-memory pipeline (copy → delete → relink) composes without
+restaging (which would unload the live database). Same persistence/no-op
+semantics as 'relinkDatabase'. Errors (DB or dep not loaded) surface as 'Left'.
+-}
+relinkDatabaseWithMapping ::
+    DatabaseManager ->
+    -- | database to relink
+    Text ->
+    -- | dependency database to link against
+    Text ->
+    -- | consumer-flow-name → supplier-name aliases
+    M.Map Text Text ->
+    IO (Either Text RelinkResult)
+relinkDatabaseWithMapping manager dbName depDb aliases = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    case M.lookup dbName loadedDbs of
+        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Just loaded
+            | not (M.member depDb loadedDbs) ->
+                return $ Left $ "Dependency database not loaded: " <> depDb <> " (load it first)"
+            | otherwise -> do
+                -- Declare the dependency in-memory if it isn't already pinned, so an
+                -- in-memory pipeline (copy → delete → relink) composes in one pass
+                -- without restaging — which would unload the live database. The pin
+                -- set on disk is the current one *before* this in-memory addition;
+                -- pass it so 'relinkDatabaseWith' persists the cache when the pin
+                -- diverges from disk even if no new links are discovered.
+                let persistedDeps = dbDependsOn (ldDatabase loaded)
+                unless (depDb `elem` persistedDeps) $
+                    atomically $
+                        modifyTVar' (dmLoadedDbs manager) (M.adjust (addPinnedDep depDb) dbName)
+                relinkDatabaseWith manager dbName (Just [depDb]) (Just aliases) (Just persistedDeps)
+  where
+    addPinnedDep dep ld =
+        let db = ldDatabase ld
+         in ld{ldDatabase = db{dbDependsOn = dep : dbDependsOn db}}
+
+{- | Shared relink core. @depOverride@ restricts the candidate dependency set
+to the given names (still intersected with the declared pin); 'Nothing' uses
+the full pin. @aliases@ feeds 'lcSupplierAliases'. The dependency set stored
+on the database ('dbDependsOn') is never mutated here.
+
+@persistedDeps@ is the dependency set as it stands in the matrix cache on disk
+('Just' when the caller pinned a new dep in-memory before calling). The cache
+is the only durable store of 'dbDependsOn', so a pin that yields zero new links
+must still be written; comparing the live pin against @persistedDeps@ surfaces
+that divergence. 'Nothing' means the pin is unchanged from disk.
+-}
+relinkDatabaseWith ::
+    DatabaseManager ->
+    Text ->
+    Maybe [Text] ->
+    Maybe (M.Map Text Text) ->
+    Maybe [Text] ->
+    IO (Either Text RelinkResult)
+relinkDatabaseWith manager dbName depOverride aliases persistedDeps = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
@@ -1499,8 +1562,12 @@ relinkDatabase manager dbName = do
             -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
             -- This keeps the user's explicit selection authoritative — relink
             -- recomputes links *within* the pin but never expands or shrinks it.
+            -- An optional 'depOverride' narrows further to a single chosen dep.
             let pinnedDeps = dbDependsOn (ldDatabase loaded)
-                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
+                candidateDeps = case depOverride of
+                    Nothing -> pinnedDeps
+                    Just chosen -> filter (`elem` chosen) pinnedDeps
+                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` candidateDeps]
             synonymDB <- getMergedSynonymDB manager
             unitConfig <- getMergedUnitConfig manager
             let db = ldDatabase loaded
@@ -1520,6 +1587,7 @@ relinkDatabase manager dbName = do
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = M.map snd (dmGeographies manager)
                         , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
+                        , lcSupplierAliases = aliases
                         }
                 !totalInputs = Loader.countTotalTechInputs (toSimpleDatabase db)
                 rawStats =
@@ -1546,6 +1614,12 @@ relinkDatabase manager dbName = do
                 -- change can only be in the links. Compare as sets: link order is
                 -- not significant and must not trigger a redundant cache write.
                 linksChanged = not (sameSet newLinks beforeLinks)
+                -- A caller may have pinned a new dependency in-memory before this
+                -- call. The cache is the only durable store of 'dbDependsOn', so
+                -- if the live pin diverges from what is on disk the cache must be
+                -- rewritten even when no new links were discovered.
+                depsChanged = maybe False (not . sameSet newDeps) persistedDeps
+                cacheChanged = linksChanged || depsChanged
             atomically $ do
                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                 modifyTVar'
@@ -1553,8 +1627,9 @@ relinkDatabase manager dbName = do
                     (M.insert dbName (buildIndexedDatabaseFromDB dbName synonymDB db'))
             clearMethodMappingCacheForDb manager dbName
             -- Persist the relinked Database back to its matrix cache so the
-            -- next startup doesn't have to re-discover the same links.
-            when linksChanged $
+            -- next startup doesn't have to re-discover the same links or lose
+            -- the pin.
+            when cacheChanged $
                 Loader.saveCachedDatabaseWithMatrices
                     dbName
                     (dcPath (ldConfig loaded'))
@@ -1563,7 +1638,7 @@ relinkDatabase manager dbName = do
             -- and deps already matched the in-memory state. This is the
             -- common case for warm Loads after the previous commits and
             -- carries no information worth a log line.
-            when linksChanged $
+            when cacheChanged $
                 reportProgress Info $
                     "Re-linked "
                         <> T.unpack dbName

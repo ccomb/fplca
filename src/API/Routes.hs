@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -120,7 +120,8 @@ type LCAAPI =
                 -- Load/Unload/Delete endpoints
                 :<|> "db" :> Capture "dbName" Text :> "load" :> Post '[JSON] LoadDatabaseResponse
                 :<|> "db" :> Capture "dbName" Text :> "unload" :> Post '[JSON] ActivateResponse
-                :<|> "db" :> Capture "dbName" Text :> "relink" :> Post '[JSON] RelinkResponse
+                -- Relink: empty {} body = plain relink; {depDb,mappingCsv} = mapping relink
+                :<|> "db" :> Capture "dbName" Text :> "relink" :> ReqBody '[JSON] RelinkRequest :> Post '[JSON] RelinkResponse
                 :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Delete the whole filtered set of activities (selection in JSON body)
@@ -199,7 +200,7 @@ requireDatabaseByName dbName = do
         Nothing -> throwError err404{errBody = notLoadedBody databaseNotLoadedPrefix dbName}
 
 {- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
-the user to load the missing dep DBs (or POST /relink) rather than
+the user to load the missing dep DBs (or POST {} to /relink) rather than
 silently undercounting impacts.
 -}
 requireFullyLinked :: Text -> Database -> AppM ()
@@ -218,7 +219,7 @@ requireFullyLinked dbName db =
                                     <> " unresolved cross-DB products. Load the missing dependency "
                                     <> "databases (see GET /api/v1/db/"
                                     <> dbName
-                                    <> "/setup) then POST /api/v1/db/"
+                                    <> "/setup) then POST {} to /api/v1/db/"
                                     <> dbName
                                     <> "/relink."
                     }

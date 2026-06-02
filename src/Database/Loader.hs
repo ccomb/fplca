@@ -1250,6 +1250,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = if M.null locationHier then locationHierarchy else locationHier
                         , lcGeographyPolicy = policy
+                        , lcSupplierAliases = Nothing
                         }
 
             -- Process all activities to find cross-DB links

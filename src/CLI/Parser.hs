@@ -118,6 +118,7 @@ databaseParser =
                     <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
                     <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
+                    <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a name->name supplier alias CSV"))
                 )
             )
 
@@ -127,6 +128,16 @@ copyArgsParser =
     DbCopy
         <$> textArg "SRC" "Name of the loaded database to copy"
         <*> textArg "NEW_NAME" "Name for the copy"
+
+{- | Relink-with-mapping parser: positional DB, @--to@ dependency, @--mapping@
+CSV path. Mirrors @db relink <db> --to <depDb> --mapping <csv>@.
+-}
+relinkArgsParser :: Parser DbRelinkArgs
+relinkArgsParser =
+    DbRelinkArgs
+        <$> textArg "DB" "Name of the loaded database to relink"
+        <*> textOpt "to" Nothing "DEP_DB" "Dependency database to link against"
+        <*> strOpt "mapping" Nothing "CSV" "Path to the name->name supplier alias CSV"
 
 {- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
 @--add@ may be repeated; they spare or add individual ProcessIds.
