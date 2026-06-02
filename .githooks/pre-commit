@@ -12,6 +12,12 @@ if ! command -v fourmolu >/dev/null 2>&1; then
 fi
 
 for f in $files; do
+    # A file with unstaged changes is only partially staged; `fourmolu -i` + `git add`
+    # would sweep the unstaged hunks into the commit. Skip it — the Format CI still gates.
+    if ! git diff --quiet -- "$f"; then
+        echo "pre-commit: $f is partially staged — not auto-formatting (run fourmolu on it yourself)" >&2
+        continue
+    fi
     fourmolu -i "$f" || exit 1
     git add "$f"
 done
