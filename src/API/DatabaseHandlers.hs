@@ -16,6 +16,7 @@ module API.DatabaseHandlers (
     loadDatabaseHandler,
     unloadDatabaseHandler,
     relinkDatabaseHandler,
+    copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
     uploadDatabaseHandler,
@@ -95,7 +96,7 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
-import Database.Edit (deleteActivitiesInDB)
+import Database.Edit (copyDatabase, deleteActivitiesInDB)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -191,6 +192,14 @@ relinkDatabaseHandler dbName = do
                     , rrCrossDBLinks = rresCrossDBLinks r
                     , rrDependsOn = rresDepsLoaded r
                     }
+
+{- | Copy a loaded database under a new name. The copy is an independent
+in-memory database registered under @newName@; the source is untouched.
+-}
+copyDatabaseHandler :: Text -> Text -> AppM ActivateResponse
+copyDatabaseHandler dbName newName = do
+    dbManager <- asks aeDbManager
+    simpleAction (copyDatabase dbManager dbName newName) ("Copied database: " <> dbName <> " -> " <> newName)
 
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: Text -> AppM ActivateResponse

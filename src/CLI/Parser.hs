@@ -117,8 +117,16 @@ databaseParser =
                     <> OA.command "upload" (info (DbUpload <$> uploadArgsParser) (progDesc "Upload a database from a local file"))
                     <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
+                    <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
                 )
             )
+
+-- | Copy arguments parser (positional SRC and NEW_NAME)
+copyArgsParser :: Parser DatabaseAction
+copyArgsParser =
+    DbCopy
+        <$> textArg "SRC" "Name of the loaded database to copy"
+        <*> textArg "NEW_NAME" "Name for the copy"
 
 {- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
 @--add@ may be repeated; they spare or add individual ProcessIds.

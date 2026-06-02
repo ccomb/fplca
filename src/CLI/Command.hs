@@ -16,7 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (deleteActivitiesInDB)
+import Database.Edit (copyDatabase, deleteActivitiesInDB)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
@@ -101,6 +101,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbDelete registry outputFormat manager name
         Database (DbDeleteActivities args) ->
             executeDbDeleteActivities registry outputFormat manager args
+        Database (DbCopy srcName newName) ->
+            executeDbCopy registry outputFormat manager srcName newName
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -507,6 +509,18 @@ executeDbDeleteActivities registry fmt manager args = do
         Right deleted -> do
             reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
             outputResult registry fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
+
+-- | Execute database copy command
+executeDbCopy :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> Text -> IO ()
+executeDbCopy registry fmt manager srcName newName = do
+    result <- copyDatabase manager srcName newName
+    case result of
+        Left err -> do
+            reportError $ "Copy failed: " ++ T.unpack err
+            exitFailure
+        Right () -> do
+            reportProgress Info $ "Copied database: " ++ T.unpack srcName ++ " -> " ++ T.unpack newName
+            outputResult registry fmt $ object ["source" .= srcName, "copy" .= newName]
 
 -- | Execute method delete command
 executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()

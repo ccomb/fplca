@@ -84,6 +84,15 @@ executeRemoteCommand mgr rc globalOpts cmd = do
         Database (DbDeleteActivities args) ->
             apiPost mgr rc ("/api/v1/db/" ++ T.unpack (ddaDb args) ++ "/delete") (deleteSelectionBody args)
                 >>= outputStatus fmt jp "delete"
+        Database (DbCopy srcName newName) ->
+            -- The copy endpoint takes no body (newName is a path capture); the
+            -- empty object is ignored server-side.
+            apiPost
+                mgr
+                rc
+                ("/api/v1/db/" ++ T.unpack srcName ++ "/copy/" ++ T.unpack newName)
+                (object [])
+                >>= outputStatus fmt jp "copy"
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -272,8 +281,8 @@ executeUpload mgr rc fmt jp path args = do
 
 {- | Output a response whose body carries an in-band @{"success",..,"message"}@
 status (the handlers return HTTP 200 even on failure, so a bare 'output' would
-exit 0 on a failed delete). Inspect the @success@ field and fail loudly when it
-is false; otherwise render normally. Covers both 'ActivateResponse' and
+exit 0 on a failed copy/delete). Inspect the @success@ field and fail loudly
+when it is false; otherwise render normally. Covers both 'ActivateResponse' and
 'DeleteSelectionResponse', which share these keys after the @Stripped@ transform.
 -}
 outputStatus :: OutputFormat -> Maybe Text -> String -> Either String Value -> IO ()

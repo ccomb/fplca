@@ -4,10 +4,18 @@
 
 {- |
 Module      : Database.Edit
-Description : In-memory database editing primitives (delete-by-selection)
+Description : In-memory database editing primitives (copy, delete-by-selection)
 
 Shared home for operations that produce a *new* loaded database from an
 existing one without touching disk.
+
+COPY is construction, not mutation. 'Database' is a pure, immutable value
+(see "Types"), so duplicating it is just sharing the same persistent
+structure under a second registry key: nothing observable can alias because
+nothing is mutable. The only fresh allocation is the solver (it holds an
+'MVar' factorization cache keyed by name); reusing the source solver would
+let the two registry entries share a factorization cache, so the copy gets
+its own.
 
 DELETE is reconstruction, not mutation either. 'deleteActivities' drops a set
 of activities and rebuilds every dependent structure (interning tables,
@@ -19,8 +27,15 @@ database is byte-for-byte indistinguishable from one that never carried the
 removed rows. Exchanges in surviving activities that referenced a deleted
 activity are UNLINKED (their activity link reset to nil), leaving the value
 ready for relinking — never silently dropped.
+
+Memory cost (copy): the copy keeps the source 'Database' alive for as long as
+it is loaded. Structural sharing means we don't re-allocate the activity/flow
+vectors, but a large database that would otherwise be unloaded stays resident
+while any copy of it is loaded.
 -}
 module Database.Edit (
+    copyDatabaseAs,
+    copyDatabase,
     deleteActivities,
     deleteActivitiesWith,
     resolveDeleteSelection,
@@ -38,6 +53,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 
+import Config (DatabaseConfig (..))
 import Database (
     applyStructuredFilters,
     buildIndexesWithProcessIds,
@@ -78,6 +94,79 @@ import Types (
     parseUUIDPair,
  )
 import UnitConversion (UnitConfig, defaultUnitConfig)
+
+{- | Produce a copy of a loaded database under a new internal name.
+
+The returned 'Database' is the source value unchanged — it carries no
+self-name (the name lives in the registry 'DatabaseConfig'), and because the
+value is immutable the copy is automatically independent of the source. The
+@newName@ is the registry identity the copy will be inserted under; see
+'copyDatabase' for the effectful registration that applies it.
+
+Kept as a named, total function so the rename intent is explicit at call
+sites and so future deep-edit primitives (which *will* transform the value)
+share this entry point.
+-}
+copyDatabaseAs :: Text -> Database -> Database
+copyDatabaseAs _newName = id
+
+{- | Copy a loaded database into the runtime registry under @newName@.
+
+Looks up the loaded source, builds an independent 'LoadedDatabase' (renamed
+config + fresh solver, see module note), and inserts it into the loaded /
+available / indexed maps. Fails (Left) when the source is not loaded or when
+@newName@ already names a loaded or configured database — a copy must never
+silently overwrite an existing entry.
+-}
+copyDatabase :: DatabaseManager -> Text -> Text -> IO (Either Text ())
+copyDatabase manager srcName newName = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    if M.member newName loadedDbs || M.member newName availableDbs
+        then pure $ Left $ "Database already exists: " <> newName
+        else
+            getDatabase manager srcName >>= \case
+                Nothing -> pure $ Left $ "Database not loaded: " <> srcName
+                Just src -> do
+                    let copiedDb = copyDatabaseAs newName (ldDatabase src)
+                        newConfig = renameConfig newName (ldConfig src)
+                    -- Fresh solver: a distinct name keys a distinct factorization cache.
+                    let techTriplesInt =
+                            [ (fromIntegral i, fromIntegral j, v)
+                            | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
+                            ]
+                    solver <-
+                        createSharedSolver
+                            newName
+                            techTriplesInt
+                            (fromIntegral (dbActivityCount copiedDb))
+                    let copied =
+                            LoadedDatabase
+                                { ldDatabase = copiedDb
+                                , ldSharedSolver = solver
+                                , ldConfig = newConfig
+                                }
+                    synonymDB <- getMergedSynonymDB manager
+                    let indexedDb = buildIndexedDatabaseFromDB newName synonymDB copiedDb
+                    atomically $ do
+                        modifyTVar' (dmLoadedDbs manager) (M.insert newName copied)
+                        modifyTVar' (dmAvailableDbs manager) (M.insert newName newConfig)
+                        modifyTVar' (dmIndexedDbs manager) (M.insert newName indexedDb)
+                    clearMethodMappingCacheForDb manager newName
+                    pure $ Right ()
+
+{- | Rename a config for the copy: new internal name, derived display name, and
+forced deletable/uploaded so the copy can be removed again via the normal
+delete path (the source may be a TOML-pinned, non-deletable database).
+-}
+renameConfig :: Text -> DatabaseConfig -> DatabaseConfig
+renameConfig newName cfg =
+    cfg
+        { dcName = newName
+        , dcDisplayName = newName
+        , dcIsUploaded = True
+        , dcDeletable = True
+        }
 
 -- ---------------------------------------------------------------------------
 -- Delete by selection
