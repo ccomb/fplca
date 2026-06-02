@@ -77,9 +77,10 @@ spec = do
                 multiBatch = take 6 (cycle (basicDemands db))
             expectedSingles <- mapM (oracleSolve db) singles
             expectedMulti <- mapM (oracleSolve db) multiBatch
-            (actualSingles, actualMulti) <- concurrently
-                (mapConcurrently (solveSparseLinearSystemWithFactorization fact) singles)
-                (solveSparseLinearSystemWithFactorizationMulti fact multiBatch)
+            (actualSingles, actualMulti) <-
+                concurrently
+                    (mapConcurrently (solveSparseLinearSystemWithFactorization fact) singles)
+                    (solveSparseLinearSystemWithFactorizationMulti fact multiBatch)
             actualSingles `shouldSatisfy` allCloseTo expectedSingles
             actualMulti `shouldSatisfy` allCloseTo expectedMulti
 
@@ -99,13 +100,15 @@ spec = do
 -- Fixtures and helpers
 -- ---------------------------------------------------------------------------
 
--- | Cache key shared by every test in this spec. Distinct from the keys used
--- by other specs so they don't clobber each other.
+{- | Cache key shared by every test in this spec. Distinct from the keys used
+by other specs so they don't clobber each other.
+-}
 cacheKey :: T.Text
 cacheKey = "SAMPLE.min3.coalescing"
 
--- | Build a SharedSolver on SAMPLE.min3, trigger factorization (so the
--- coalescing worker is running), and return the bits the tests need.
+{- | Build a SharedSolver on SAMPLE.min3, trigger factorization (so the
+coalescing worker is running), and return the bits the tests need.
+-}
 min3CachedSolver :: IO (SS.SharedSolver, MatrixFactorization, Database)
 min3CachedSolver = do
     db <- loadSampleDatabase "SAMPLE.min3"
@@ -115,8 +118,9 @@ min3CachedSolver = do
     Just fact <- SS.getFactorization solver
     pure (solver, fact, db)
 
--- | A small set of distinct demand vectors that exercise different RHS shapes.
--- Repeating these via 'cycle' gives us many varied (but reproducible) inputs.
+{- | A small set of distinct demand vectors that exercise different RHS shapes.
+Repeating these via 'cycle' gives us many varied (but reproducible) inputs.
+-}
 basicDemands :: Database -> [Vector]
 basicDemands db =
     let n = U.length (buildDemandVectorFromIndex (dbActivityIndex db) 0)
@@ -137,8 +141,9 @@ scaleVec c = U.map (* c)
 addVec :: Vector -> Vector -> Vector
 addVec = U.zipWith (+)
 
--- | Cold-path oracle: assemble (I-A) and solve from scratch via MUMPS.
--- Bypasses the worker entirely — what we compare against.
+{- | Cold-path oracle: assemble (I-A) and solve from scratch via MUMPS.
+Bypasses the worker entirely — what we compare against.
+-}
 oracleSolve :: Database -> Vector -> IO Vector
 oracleSolve db demand =
     let triples =
@@ -161,4 +166,3 @@ allCloseTo :: [Vector] -> [Vector] -> Bool
 allCloseTo expected actual =
     length expected == length actual
         && and (zipWith (\e a -> closeTo (U.toList e) (U.toList a)) expected actual)
-

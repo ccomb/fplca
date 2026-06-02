@@ -15,12 +15,12 @@ module Main (main) where
 
 import Control.Exception (SomeException, try)
 import Data.Maybe (fromMaybe)
-import GHC.IO.Exception (ExitCode (ExitSuccess))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Conc (getNumProcessors)
+import GHC.IO.Exception (ExitCode (ExitSuccess))
 import System.Environment (getArgs, lookupEnv)
 import System.IO (hFlush, stdout)
 import System.Process (readProcessWithExitCode)
@@ -120,17 +120,19 @@ runOne spec = do
             , J.brDerived = J.Derived{J.dItemsPerSecond = ips}
             }
 
--- | Time one full iteration of a 'Benchmarkable', and collect heap so the
--- next iteration starts from a known state.
+{- | Time one full iteration of a 'Benchmarkable', and collect heap so the
+next iteration starts from a known state.
+-}
 runIter :: MeasTypes.Benchmarkable -> IO Double
 runIter act = do
     performMajorGC
     (m, _) <- Meas.measure act 1
     pure (MeasTypes.measTime m)
 
--- | Pick a sample count that balances accuracy with total wall time. Small
--- benches (<100 ms expected) get more samples; heavy ones (>1 s) get
--- fewer to keep the overall run reasonable.
+{- | Pick a sample count that balances accuracy with total wall time. Small
+benches (<100 ms expected) get more samples; heavy ones (>1 s) get
+fewer to keep the overall run reasonable.
+-}
 chooseSampleCount :: J.BenchSpec -> Int
 chooseSampleCount spec = case J.bsMetric spec of
     "milliseconds" -> 11
@@ -207,10 +209,11 @@ readRamGb = do
 -- Helpers
 -- ---------------------------------------------------------------------------
 
--- | Run a sub-process and return its stdout only on @ExitSuccess@. Spawn
--- failures and non-zero exits both collapse to 'Nothing' so the
--- 'Metadata' field stays absent rather than carrying garbage (e.g. an
--- empty string when @git rev-parse HEAD@ fails outside a checkout).
+{- | Run a sub-process and return its stdout only on @ExitSuccess@. Spawn
+failures and non-zero exits both collapse to 'Nothing' so the
+'Metadata' field stays absent rather than carrying garbage (e.g. an
+empty string when @git rev-parse HEAD@ fails outside a checkout).
+-}
 safeRead :: FilePath -> [String] -> IO (Maybe Text)
 safeRead cmd args = do
     r <- try (readProcessWithExitCode cmd args "") :: IO (Either SomeException (ExitCode, String, String))
@@ -225,8 +228,9 @@ safeReadFile path = do
         Right s -> Just s
         Left _ -> Nothing
 
--- | Strip whitespace and demote @Just ""@ to 'Nothing' — handy when the
--- underlying command exits cleanly but prints nothing useful.
+{- | Strip whitespace and demote @Just ""@ to 'Nothing' — handy when the
+underlying command exits cleanly but prints nothing useful.
+-}
 trimResult :: Maybe Text -> Maybe Text
 trimResult m = case T.strip <$> m of
     Just t | not (T.null t) -> Just t

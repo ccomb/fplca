@@ -13,8 +13,8 @@ import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..))
 import SynonymDB (buildFromPairs, emptySynonymDB)
-import qualified Types as VT
 import Types (BiosphereFlow (..), Unit (..))
+import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------

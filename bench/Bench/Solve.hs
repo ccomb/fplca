@@ -40,8 +40,8 @@ import Types (
  )
 
 import qualified Bench.Helpers as H
-import qualified Bench.Json as J
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
+import qualified Bench.Json as J
 import qualified Fixtures as F
 
 -- ---------------------------------------------------------------------------
@@ -151,9 +151,10 @@ pickSolveFixture = go [F.Agribalyse, F.Bafu, F.Ecoinvent]
             Just p -> pure (Just (s, p))
             Nothing -> go ss
 
--- | First N ProcessIds in the database (deterministic by matrix ordering).
--- Returns at most as many as the database has; falls back gracefully on
--- small fixtures.
+{- | First N ProcessIds in the database (deterministic by matrix ordering).
+Returns at most as many as the database has; falls back gracefully on
+small fixtures.
+-}
 pickProcessIds :: Database -> Int -> [ProcessId]
 pickProcessIds db n =
     let total = fromIntegral (dbActivityCount db) :: Int

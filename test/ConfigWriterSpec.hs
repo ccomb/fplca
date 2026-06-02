@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tests for "ConfigWriter".
---
--- ConfigWriter is the persistence layer for uploaded databases: it mutates
--- the operator's TOML file. The mutations are atomic (lock + rename) and
--- preserve manually-edited non-database sections — both invariants the test
--- file should pin.
+{- | Tests for "ConfigWriter".
+
+ConfigWriter is the persistence layer for uploaded databases: it mutates
+the operator's TOML file. The mutations are atomic (lock + rename) and
+preserve manually-edited non-database sections — both invariants the test
+file should pin.
+-}
 module ConfigWriterSpec (spec) where
 
 import qualified Data.Map.Strict as M

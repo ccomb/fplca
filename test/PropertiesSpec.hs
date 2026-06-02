@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A small set of property-based tests covering invariants that ARE
--- expected to hold on every legitimate input — not just the ones in our
--- fixtures. Property tests catch cases that example-based tests miss
--- because we never thought to write the example down.
+{- | A small set of property-based tests covering invariants that ARE
+expected to hold on every legitimate input — not just the ones in our
+fixtures. Property tests catch cases that example-based tests miss
+because we never thought to write the example down.
+-}
 module PropertiesSpec (spec) where
 
 import qualified Data.Text as T
@@ -14,18 +15,20 @@ import Test.QuickCheck (Arbitrary (..), arbitraryASCIIChar, choose, listOf)
 import qualified Search.Normalize as N
 import qualified UnitConversion as UC
 
--- | An ASCII-only Text generator — keeps the surface small so a failing
--- counterexample is readable and avoids irrelevant unicode noise the
--- normalizer already handles via its own test cases.
+{- | An ASCII-only Text generator — keeps the surface small so a failing
+counterexample is readable and avoids irrelevant unicode noise the
+normalizer already handles via its own test cases.
+-}
 newtype AsciiText = AsciiText {unAscii :: T.Text}
     deriving (Show)
 
 instance Arbitrary AsciiText where
     arbitrary = AsciiText . T.pack <$> listOf arbitraryASCIIChar
 
--- | A positive finite Double bounded so unit conversions don't overflow or
--- underflow to denormals — the actual application domain (kg, MJ, etc.)
--- stays well within these bounds.
+{- | A positive finite Double bounded so unit conversions don't overflow or
+underflow to denormals — the actual application domain (kg, MJ, etc.)
+stays well within these bounds.
+-}
 newtype DomainAmount = DomainAmount {unAmount :: Double}
     deriving (Show)
 
@@ -59,7 +62,6 @@ spec = do
                         Just qBack -> abs (qBack - q) < 1e-9 * abs q + 1e-9
                         Nothing -> False
                     Nothing -> True -- defaultUnitConfig might not know g; that's ok
-
         prop "returns Nothing on dimensionally incompatible conversions (kg → m)" $
             \(DomainAmount q) ->
                 -- kg (mass) → m (length) MUST refuse — this is a correctness

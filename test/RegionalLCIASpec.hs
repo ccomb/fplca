@@ -23,7 +23,6 @@ import Method.Types (
     FlowDirection (..),
     MethodCF (..),
  )
-import qualified Types as VT
 import Types (
     Activity (..),
     BiosphereFlow (..),
@@ -33,6 +32,7 @@ import Types (
     Unit (..),
     emptyProductIndex,
  )
+import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..))
 
 -- ---------------------------------------------------------------------------

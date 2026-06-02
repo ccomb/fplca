@@ -39,8 +39,9 @@ fixtureEnvVar MethodCsv = "VOLCA_BENCH_METHOD_CSV"
 fixtureEnvVar MethodSimaProCsv = "VOLCA_BENCH_METHOD_SIMAPRO_CSV"
 fixtureEnvVar MethodOlcaJson = "VOLCA_BENCH_METHOD_OLCA_JSON"
 
--- | Stable provenance string emitted into bench-results.json. Does not name a
--- specific version on purpose — the path on disk is what gives the version.
+{- | Stable provenance string emitted into bench-results.json. Does not name a
+specific version on purpose — the path on disk is what gives the version.
+-}
 fixtureSourceLabel :: FixtureSource -> Text
 fixtureSourceLabel Agribalyse = T.pack "agribalyse"
 fixtureSourceLabel Ecoinvent = T.pack "ecoinvent"
@@ -51,9 +52,10 @@ fixtureSourceLabel MethodCsv = T.pack "method-csv"
 fixtureSourceLabel MethodSimaProCsv = T.pack "method-simapro-csv"
 fixtureSourceLabel MethodOlcaJson = T.pack "method-olca-json"
 
--- | Returns the path if the env var is set AND the path exists (file or
--- directory). Prints a single-line « [bench] skipping … » note when absent so
--- the run log makes it obvious which benchs were left out and why.
+{- | Returns the path if the env var is set AND the path exists (file or
+directory). Prints a single-line « [bench] skipping … » note when absent so
+the run log makes it obvious which benchs were left out and why.
+-}
 lookupFixture :: FixtureSource -> IO (Maybe FilePath)
 lookupFixture src = do
     let var = fixtureEnvVar src

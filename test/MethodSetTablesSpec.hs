@@ -22,10 +22,10 @@ import Test.Hspec
 
 import Matrix (Inventory)
 import Method.Mapping
-import qualified Method.Types as MT
 import Method.Types (Compartment (..), Method (..), MethodCF (..))
-import qualified Types as VT
+import qualified Method.Types as MT
 import Types (BiosphereFlow (..), Database, Unit (..))
+import qualified Types as VT
 import qualified UnitConversion
 
 -- ---------------------------------------------------------------------------

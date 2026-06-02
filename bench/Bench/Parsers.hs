@@ -39,8 +39,8 @@ import qualified SimaPro.Parser as SP
 import Types (sdbActivities)
 import qualified UnitConversion as UC
 
-import qualified Bench.Json as J
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
+import qualified Bench.Json as J
 import qualified Fixtures as F
 
 -- ---------------------------------------------------------------------------
@@ -107,9 +107,10 @@ registerEcoSpold2 = do
                                         }
                                     ]
 
--- | Ecoinvent's 7z extracts to ./datasets/ inside a sibling .d/ directory.
--- Accept either the dataset directory directly or its parent (so users can
--- point the env var at either).
+{- | Ecoinvent's 7z extracts to ./datasets/ inside a sibling .d/ directory.
+Accept either the dataset directory directly or its parent (so users can
+point the env var at either).
+-}
 locateDatasetsDir :: FilePath -> IO (Maybe FilePath)
 locateDatasetsDir path = do
     isDir <- doesDirectoryExist path
@@ -371,8 +372,9 @@ listFilesByExt ext dir = do
     let matching = sort [n | n <- names, takeExtension n == ext]
     pure (map (dir </>) matching)
 
--- | Parse a list of files in parallel, fully evaluating every result so the
--- bench reflects end-to-end work (XML decode + structure build + force).
+{- | Parse a list of files in parallel, fully evaluating every result so the
+bench reflects end-to-end work (XML decode + structure build + force).
+-}
 parallelParseFiles ::
     (NFData a) =>
     (FilePath -> IO a) ->
@@ -382,9 +384,10 @@ parallelParseFiles parser files = nfIO $ do
     results <- mapConcurrently parser files
     evaluate (results `deepseq` length results)
 
--- | Parse a file's bytes through a pure parser; the file is re-read each
--- iteration so the timing covers both I/O and parsing — what the
--- application does on a fresh request.
+{- | Parse a file's bytes through a pure parser; the file is re-read each
+iteration so the timing covers both I/O and parsing — what the
+application does on a fresh request.
+-}
 parseBytesBench ::
     (NFData a) =>
     (BS.ByteString -> Either String a) ->

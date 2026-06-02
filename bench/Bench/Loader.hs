@@ -30,8 +30,8 @@ import qualified SynonymDB.Types as Syn
 import Types (cdlTotalInputs, sdbActivities)
 import qualified UnitConversion as UC
 
-import qualified Bench.Json as J
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
+import qualified Bench.Json as J
 import qualified Fixtures as F
 
 register :: IO [BenchSpec]
