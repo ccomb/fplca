@@ -309,6 +309,7 @@ Pyvolca dispatches dynamically against the engine's OpenAPI spec, so it ships wi
 ## API reference
 
 <!-- BEGIN: api-reference -->
+
 _This reference is generated from the installed package. Run `python scripts/gen_api_md.py` to regenerate._
 
 ## Classes
@@ -1332,10 +1333,11 @@ platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
 
 Replace one supplier with another in the upstream supply chain.
 
-All three fields are process_ids. ``consumer`` identifies which downstream
-consumer's input to rewrite (substitutions are scoped, not global) — the
-same upstream supplier can be replaced by different alternatives in
-different parts of the tree.
+All fields are process_ids. ``consumer`` identifies which downstream
+consumer's input to rewrite, scoping the swap to one edge — the same
+upstream supplier can be replaced by different alternatives in different
+parts of the tree. Omit it (leave ``None``) to apply the swap globally,
+replacing the supplier on every consumer at once.
 
 Frozen so callers can put it in a set / dict key and re-use the same
 substitution across multiple calls without aliasing risk.
@@ -1344,7 +1346,7 @@ substitution across multiple calls without aliasing risk.
 |-------|------|---------|
 | `from_pid` | `str` | — |
 | `to_pid` | `str` | — |
-| `consumer` | `str` | — |
+| `consumer` | `str \| None` | None |
 
 ### `SupplyChain`
 
@@ -1479,6 +1481,7 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
+
 <!-- END: api-reference -->
 
 ## See also
