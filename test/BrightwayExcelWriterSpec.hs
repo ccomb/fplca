@@ -34,8 +34,8 @@ import BrightwayExcel.Writer (
     renderCategories,
     renderWorkbook,
  )
-import Data.Either (isLeft)
 import qualified Data.ByteString.Lazy as BL
+import Data.Either (isLeft)
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -142,6 +142,18 @@ spec = describe "BrightwayExcel.Writer" $ do
                         [a] -> map techAmount [ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a] `shouldBe` [1.0e15]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
+        it "(h) round-trips exchange-level comments via the comment column" $
+            withWritten commentDb $ \path ->
+                parseBrightwayExcel defaultUnitConfig path >>= \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (acts, _, _, _, _) -> case acts of
+                        [a] -> do
+                            [techComment ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a]
+                                `shouldBe` [Just "input note"]
+                            [bioComment ex | ex@BiosphereExchange{} <- exchanges a]
+                                `shouldBe` [Just "emission note"]
+                        other -> expectationFailure ("expected one activity, got " <> show (length other))
+
     describe "export guard" $ do
         it "rejects a waste exchange (Brightway has no waste type)" $
             -- Per the export boundary: emitting a WasteExchange would re-parse as a
@@ -153,13 +165,16 @@ spec = describe "BrightwayExcel.Writer" $ do
             checkBrightwayExportable nonFiniteDb `shouldSatisfy` isLeft
 
     describe "ReferenceInput regression" $
-        it "emits a reference-input exchange exactly once (not double-counted)" $ do
-            -- A ReferenceInput belongs only to the reference group; before the
-            -- fix it also matched the technosphere-input group and was written
-            -- twice, doubling its coefficient on re-import.
-            let dataRows = activityRows cfg refInputDb refInputAct
-                solventRows = length [() | (CText "spent solvent" : _) <- dataRows]
-            solventRows `shouldBe` 1
+        it "rejects a reference input rather than round-tripping it to a duplicated row" $ do
+            -- Brightway has no marker for a reference input. Emitting it would
+            -- re-parse to a synthetic reference product (from the meta row) PLUS an
+            -- ordinary input (from the data row) — two exchanges on one flow, whose
+            -- duplicate (i,j) matrix entries sum and double the coefficient.
+            let db =
+                    refInputDb
+                        { sdbActivities = M.singleton (generateActivityUUID refInputAct, tfId solventFlow) refInputAct
+                        }
+            checkBrightwayExportable db `shouldSatisfy` isLeft
 
 -- ---------------------------------------------------------------------------
 -- Fixture database, built with the parser's UUID conventions
@@ -263,7 +278,8 @@ gasFlow =
 {- | An activity whose name and every flow name carry the four entity-escaped
 characters (@& < > "@) and non-ASCII (accents + CJK), to exercise the writer's
 'escapeXml' / UTF-8 emit and the parser's entity decode end to end. Units stay
-canonical ("kilogram") so unit normalization does not perturb the names. -}
+canonical ("kilogram") so unit normalization does not perturb the names.
+-}
 specialDb :: SimpleDatabase
 specialDb =
     SimpleDatabase
@@ -395,12 +411,27 @@ refInputDb =
         , sdbUnits = M.singleton (unitId kg) kg
         }
 
+{- | The base fixture with a comment attached to its technosphere input and its
+biosphere emission, to prove exchange-level comments survive the round-trip.
+-}
+commentDb :: SimpleDatabase
+commentDb =
+    fixtureDb{sdbActivities = M.singleton (generateActivityUUID a, getReferenceProductUUID a) a}
+  where
+    a = elec{exchanges = map withComment (exchanges elec)}
+    withComment ex = case ex of
+        TechnosphereExchange{techRole = Input} -> ex{techComment = Just "input note"}
+        TechnosphereExchange{} -> ex
+        BiosphereExchange{} -> ex{bioComment = Just "emission note"}
+        WasteExchange{} -> ex
+
 -- ---------------------------------------------------------------------------
 -- Coproduct / empty / boundary-amount fixtures
 -- ---------------------------------------------------------------------------
 
--- | The CHP reference output and its coproduct, both in canonical kilograms so
--- amounts are preserved verbatim across the round-trip.
+{- | The CHP reference output and its coproduct, both in canonical kilograms so
+amounts are preserved verbatim across the round-trip.
+-}
 chpRefFlow, chpHeatFlow :: TechnosphereFlow
 chpRefFlow = kgFlow "electricity, high voltage"
 chpHeatFlow = kgFlow "recovered heat"
@@ -415,9 +446,10 @@ kgFlow n =
         Nothing
         Nothing
 
--- | An activity with a reference product and a coproduct, both emitted as
--- @production@ rows; the parser maps the first to 'ReferenceProduct' and the
--- second to 'Coproduct'.
+{- | An activity with a reference product and a coproduct, both emitted as
+@production@ rows; the parser maps the first to 'ReferenceProduct' and the
+second to 'Coproduct'.
+-}
 coproductAct :: Activity
 coproductAct =
     elec
@@ -453,8 +485,9 @@ coproductDb =
         , sdbUnits = M.singleton (unitId kg) kg
         }
 
--- | The (role, amount) pairs of an activity's technosphere production rows,
--- in exchange order.
+{- | The (role, amount) pairs of an activity's technosphere production rows,
+in exchange order.
+-}
 roleAmounts :: Activity -> [(TechRole, Double)]
 roleAmounts a = [(role, techAmount ex) | ex@TechnosphereExchange{techRole = role} <- exchanges a]
 
@@ -462,8 +495,9 @@ roleAmounts a = [(role, techAmount ex) | ex@TechnosphereExchange{techRole = role
 emptyDb :: SimpleDatabase
 emptyDb = SimpleDatabase M.empty M.empty M.empty M.empty M.empty
 
--- | A single input exchange whose amount sits at the 1e15 integer/scientific
--- boundary of 'formatAmount'.
+{- | A single input exchange whose amount sits at the 1e15 integer/scientific
+boundary of 'formatAmount'.
+-}
 bigAmountDb :: SimpleDatabase
 bigAmountDb =
     fixtureDb
@@ -476,8 +510,9 @@ bigAmountDb =
 -- Export-guard fixtures (rejected at the boundary)
 -- ---------------------------------------------------------------------------
 
--- | A database whose activity carries a waste exchange (B4): rejected, since
--- Brightway has no native waste type and would invert it on re-parse.
+{- | A database whose activity carries a waste exchange (B4): rejected, since
+Brightway has no native waste type and would invert it on re-parse.
+-}
 wasteDb :: SimpleDatabase
 wasteDb =
     fixtureDb
@@ -512,8 +547,9 @@ scrapExch =
         , waPedigree = Nothing
         }
 
--- | A database whose input exchange carries a non-finite amount (B6): rejected,
--- since 'formatAmount' would clamp it to a misleading 0.
+{- | A database whose input exchange carries a non-finite amount (B6): rejected,
+since 'formatAmount' would clamp it to a misleading 0.
+-}
 nonFiniteDb :: SimpleDatabase
 nonFiniteDb =
     fixtureDb
@@ -662,6 +698,7 @@ co2Inventory sdb = do
 withWritten :: SimpleDatabase -> (FilePath -> IO a) -> IO a
 withWritten db action =
     withSystemTempFile "brightway-writer.xlsx" $ \path h -> do
-        BL.hPut h (renderWorkbook cfg db)
+        bytes <- either (\e -> error ("renderWorkbook: " <> T.unpack e)) pure (renderWorkbook cfg db)
+        BL.hPut h bytes
         hClose h
         action path

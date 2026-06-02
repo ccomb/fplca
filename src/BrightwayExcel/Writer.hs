@@ -109,23 +109,28 @@ data Cell
 -- Top-level
 -- ---------------------------------------------------------------------------
 
-{- | Serialize a 'SimpleDatabase' to a Brightway @.xlsx@ workbook on disk. Pure
-construction ('renderWorkbook') wrapped in a single write effect.
+{- | Serialize a 'SimpleDatabase' to a Brightway @.xlsx@ workbook on disk, or
+return the export guard's 'Left' without touching disk.
 -}
-writeBrightwayExcel :: WriterConfig -> SimpleDatabase -> FilePath -> IO ()
-writeBrightwayExcel cfg db = flip BL.writeFile (renderWorkbook cfg db)
+writeBrightwayExcel :: WriterConfig -> SimpleDatabase -> FilePath -> IO (Either Text ())
+writeBrightwayExcel cfg db path =
+    case renderWorkbook cfg db of
+        Left err -> pure (Left err)
+        Right bytes -> Right <$> BL.writeFile path bytes
 
 -- | Pure: assemble the full @.xlsx@ byte stream from the database.
-renderWorkbook :: WriterConfig -> SimpleDatabase -> BL.ByteString
-renderWorkbook cfg db =
-    fromArchive $
-        foldr
-            addEntryToArchive
-            emptyArchive
-            [ toEntry "xl/workbook.xml" 0 (enc workbookXml)
-            , toEntry "xl/_rels/workbook.xml.rels" 0 (enc relsXml)
-            , toEntry "xl/worksheets/sheet1.xml" 0 (enc (sheetXml (sheetRows cfg db)))
-            ]
+renderWorkbook :: WriterConfig -> SimpleDatabase -> Either Text BL.ByteString
+renderWorkbook cfg db = do
+    checkBrightwayExportable db
+    pure $
+        fromArchive $
+            foldr
+                addEntryToArchive
+                emptyArchive
+                [ toEntry "xl/workbook.xml" 0 (enc workbookXml)
+                , toEntry "xl/_rels/workbook.xml.rels" 0 (enc relsXml)
+                , toEntry "xl/worksheets/sheet1.xml" 0 (enc (sheetXml (sheetRows cfg db)))
+                ]
   where
     enc = BL.fromStrict . TE.encodeUtf8
 
@@ -157,36 +162,47 @@ direction recoverable, and have finite amounts pass unchanged.
 -}
 checkBrightwayExportable :: SimpleDatabase -> Either Text ()
 checkBrightwayExportable db =
-    case (flowOffenders, unitOffenders, wasteOffenders, directionOffenders, finiteOffenders) of
-        (consumer : _, _, _, _, _) ->
+    case (flowOffenders, unitOffenders, wasteOffenders, refInputOffenders, directionOffenders, finiteOffenders) of
+        (consumer : _, _, _, _, _, _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
                     <> consumer
                     <> "\": an exchange references a flow absent from the database."
-        ([], consumer : _, _, _, _) ->
+        ([], consumer : _, _, _, _, _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
                     <> consumer
                     <> "\": an exchange references a unit absent from the registry."
-        ([], [], consumer : _, _, _) ->
+        ([], [], consumer : _, _, _, _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
                     <> consumer
                     <> "\": it has a waste exchange, which Brightway has no type for."
-        ([], [], [], consumer : _, _) ->
+        ([], [], [], consumer : _, _, _) ->
+            Left $
+                "Brightway Excel export cannot represent activity \""
+                    <> consumer
+                    <> "\": a reference input (treatment process) has no Brightway encoding;"
+                    <> " it would round-trip to a duplicated, role-flipped exchange."
+        ([], [], [], [], consumer : _, _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
                     <> consumer
                     <> "\": a resource biosphere flow's compartment would re-parse as an emission."
-        ([], [], [], [], (consumer, amt) : _) ->
+        ([], [], [], [], [], (consumer, amt) : _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
                     <> consumer
                     <> "\": exchange amount "
                     <> tshow amt
                     <> " is not finite."
-        ([], [], [], [], []) -> Right ()
+        ([], [], [], [], [], []) -> Right ()
   where
+    refInputOffenders =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
+        ]
     flowOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -218,11 +234,12 @@ checkBrightwayExportable db =
         , isNaN amt || isInfinite amt
         ]
 
--- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
--- resource: the writer never records the direction, so the parser reconstructs
--- it from the @categories@ compartment via 'isResourceCompartment'. When that
--- whitelist rejects the compartment, 'Resource' silently flips to 'Emission'.
--- A flow absent from the map is left to 'flowResolvable' to report.
+{- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
+resource: the writer never records the direction, so the parser reconstructs
+it from the @categories@ compartment via 'isResourceCompartment'. When that
+whitelist rejects the compartment, 'Resource' silently flips to 'Emission'.
+A flow absent from the map is left to 'flowResolvable' to report.
+-}
 resourceDirectionLost :: SimpleDatabase -> Exchange -> Bool
 resourceDirectionLost db = \case
     ex@BiosphereExchange{bioDirection = Resource} ->
@@ -233,9 +250,10 @@ resourceDirectionLost db = \case
     TechnosphereExchange{} -> False
     WasteExchange{} -> False
 
--- | Whether an exchange's flow is present in the map 'exchangeRow' reads it
--- from — the same per-role lookup as 'flowNameOf', so this predicts exactly the
--- rows the writer would drop.
+{- | Whether an exchange's flow is present in the map 'exchangeRow' reads it
+from — the same per-role lookup as 'flowNameOf', so this predicts exactly the
+rows the writer would drop.
+-}
 flowResolvable :: SimpleDatabase -> Exchange -> Bool
 flowResolvable db ex = case ex of
     TechnosphereExchange{} -> M.member (exchangeFlowId ex) (sdbTechFlows db)
@@ -265,7 +283,7 @@ exchangeHeader :: [Cell]
 exchangeHeader =
     map
         CText
-        ["name", "amount", "reference product", "location", "unit", "categories", "type", "database"]
+        ["name", "amount", "reference product", "location", "unit", "categories", "type", "comment", "database"]
 
 {- | One activity block: the @Activity@ row, metadata key/value rows, the
 @Exchanges@ header, then one row per exchange in canonical order. The metadata
@@ -316,11 +334,12 @@ isCoproduct = \case
     BiosphereExchange{} -> False
     WasteExchange{} -> False
 
--- | Ordinary technosphere inputs only. 'ReferenceInput' is intentionally
--- excluded: it already belongs to the reference group ('exchangeIsReference'),
--- so matching it here too would emit the exchange twice — double-counting its
--- coefficient when the workbook is re-imported and duplicate (i,j) entries are
--- summed. Each role thus lands in exactly one group.
+{- | Ordinary technosphere inputs only. 'ReferenceInput' is intentionally
+excluded: it already belongs to the reference group ('exchangeIsReference'),
+so matching it here too would emit the exchange twice — double-counting its
+coefficient when the workbook is re-imported and duplicate (i,j) entries are
+summed. Each role thus lands in exactly one group.
+-}
 isTechInput :: Exchange -> Bool
 isTechInput = \case
     TechnosphereExchange{techRole = Input} -> True
@@ -359,6 +378,7 @@ exchangeRow cfg db = \case
             , CText unit
             , CEmpty
             , CText (techTypeLabel role)
+            , commentCell (techComment ex)
             , CText (wcDatabaseName cfg)
             ]
     ex@BiosphereExchange{bioAmount = amt, bioLocation = loc} -> do
@@ -372,6 +392,7 @@ exchangeRow cfg db = \case
             , CText unit
             , CText (renderCategories (bfCompartment flow))
             , CText "biosphere"
+            , commentCell (bioComment ex)
             , CText (wcDatabaseName cfg)
             ]
     ex@WasteExchange{waAmount = amt, waLocation = loc} -> do
@@ -387,10 +408,12 @@ exchangeRow cfg db = \case
             , CText unit
             , CEmpty
             , CText "technosphere"
+            , commentCell (waComment ex)
             , CText (wcDatabaseName cfg)
             ]
   where
     locCell l = if T.null l then CEmpty else CText l
+    commentCell = maybe CEmpty CText
 
 -- | Brightway @type@ label for a technosphere role.
 techTypeLabel :: TechRole -> Text
