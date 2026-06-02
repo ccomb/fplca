@@ -84,6 +84,7 @@ library
                      , EcoSpold.Cutoff
                      , EcoSpold.Parser2
                      , EcoSpold.Parser1
+                     , EcoSpold.Writer1
                      , SimaPro.Parser
                      , SimaPro.Writer
                      , BrightwayExcel.Parser
@@ -243,6 +244,7 @@ test-suite lca-tests
                      , UploadSizeSpec
                      , ProgressSpec
                      , EcoSpold1Spec
+                     , EcoSpold1WriterSpec
                      , EcoSpold2Spec
                      , SimaProWriterSpec
                      , MCPSchemaSpec
