@@ -38,7 +38,6 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 
-import Config (DatabaseConfig (..))
 import Database (
     applyStructuredFilters,
     buildIndexesWithProcessIds,
@@ -46,7 +45,6 @@ import Database (
     findActivitiesByFields,
  )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
-import Database.Loader (invalidateMatrixCache)
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
@@ -386,9 +384,11 @@ deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch kee
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                                 modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
                             clearMethodMappingCacheForDb manager dbName
-                            -- The live matrices were rebuilt above, but the on-disk
-                            -- matrix cache still reflects the pre-delete activity set.
-                            -- Drop it so a later unload/reload can't resurrect the
-                            -- deleted activities from a stale cache.
-                            invalidateMatrixCache dbName (dcPath (ldConfig loaded))
+                            -- Edits are transient by design. The on-disk matrix cache
+                            -- and the source still hold the pre-delete set, so an
+                            -- unload/reload deliberately restores the original
+                            -- database; persisting an edited database is a separate,
+                            -- explicit step (exporting it to a new file). We therefore
+                            -- leave the cache in place rather than forcing the next
+                            -- load to rebuild from source.
                             pure $ Right (length toDelete)
