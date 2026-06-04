@@ -170,6 +170,7 @@ import qualified SharedSolver
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
 import Types (
     Activity (..),
+    AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
     CrossDBLink (..),
@@ -189,6 +190,7 @@ import Types (
     computeMinimalSelectedDeps,
     crossDBBySource,
     crossDBRedundantSources,
+    deduplicateAttributeFallbacks,
     deduplicateFallbacks,
     deduplicateUnresolved,
     exchangeFlowId,
@@ -342,6 +344,11 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     , dsiLocationUnresolved :: ![LocationUnresolved]
     {- ^ Inputs that could not be linked because the database's
     'GeographyPolicy' rejected every candidate (or no candidate existed)
+    -}
+    , dsiAttributeFallbacks :: ![AttributeFallback]
+    {- ^ Source-identity inputs (non-nil 'activityLinkId') matched by attributes
+    because no loaded dependency shipped the exact activity — a likely
+    cross-version stitch the consumer should verify against the source release.
     -}
     , dsiDataPath :: !Text
     -- ^ Current selected data path (relative)
@@ -1749,17 +1756,12 @@ stageUploadedDatabase manager dbConfig = do
                                         simpleDb
                                 return (stats', simpleDb')
 
-                    let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts finalStats)]
-                        fromScan =
-                            if null fromStats && Loader.crossDBLinksCount finalStats == 0
-                                then [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList (Loader.collectUnlinkedProductNames finalDB)]
-                                else fromStats
-                        staged =
+                    let staged =
                             StagedDatabase
                                 { sdSimpleDB = finalDB
                                 , sdConfig = dbConfig
                                 , sdUnlinkedCount = Loader.unresolvedCount finalStats
-                                , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) fromScan
+                                , sdMissingProducts = stagedMissingProducts finalDB finalStats
                                 , sdSelectedDeps = minimalDeps
                                 , sdCrossDBLinks = Loader.cdlLinks finalStats
                                 , sdLinkingStats = finalStats
@@ -1960,6 +1962,22 @@ buildSetupResult manager dbName = do
                  in return $ Right info{dsiIsLoaded = False}
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
+{- | Missing-supplier list for a staged database. Nil-link gaps carry the rich
+blockers the attribute matcher produced ('cdlUnresolvedProducts'); non-nil
+dangling gaps — a partial EcoSpold2 import whose background activities no loaded
+dependency ships, even after UUID + attribute linking — are scanned separately
+and named. The two sets are disjoint (nil vs non-nil), so the concatenation
+never duplicates. Sorted by activity count, descending.
+-}
+stagedMissingProducts :: SimpleDatabase -> CrossDBLinkingStats -> [(Text, Int, LinkBlocker)]
+stagedMissingProducts sdb stats =
+    let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (cdlUnresolvedProducts stats)]
+        fromDangling =
+            [ (name, cnt, NoNameMatch)
+            | (name, cnt) <- M.toList (Loader.collectStagedDanglingProductNames sdb (cdlLinks stats))
+            ]
+     in sortOn (\(_, cnt, _) -> Down cnt) (fromStats <> fromDangling)
+
 {- | Build setup info from a staged database
 dataPath and availablePaths are filled in by buildSetupResult (requires IO)
 -}
@@ -2013,6 +2031,7 @@ buildStagedSetupInfo staged configs indexedDbs =
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
             , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
+            , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
             , dsiDataPath = T.pack (dcPath (sdConfig staged))
             , dsiAvailablePaths = [] -- Filled in by buildSetupResult (requires IO)
             , dsiIsLoaded = False
@@ -2072,6 +2091,7 @@ buildLoadedSetupInfo config db configs indexedDbs =
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
             , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
+            , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
             , dsiDataPath = T.pack (dcPath config)
             , dsiAvailablePaths = [] -- No picker for loaded/configured databases
             , dsiIsLoaded = True
@@ -2208,10 +2228,7 @@ restageLoadedDatabase manager dbName ld = do
                 { sdSimpleDB = toSimpleDatabase db
                 , sdConfig = ldConfig ld
                 , sdUnlinkedCount = unresolvedCount stats
-                , sdMissingProducts =
-                    sortOn
-                        (\(_, cnt, _) -> Down cnt)
-                        [(n, cnt, blocker) | (n, (cnt, blocker)) <- M.toList (cdlUnresolvedProducts stats)]
+                , sdMissingProducts = stagedMissingProducts (toSimpleDatabase db) stats
                 , sdSelectedDeps = dbDependsOn db
                 , sdCrossDBLinks = dbCrossDBLinks db
                 , sdLinkingStats = stats
@@ -2272,7 +2289,7 @@ addDependencyToStaged manager dbName depName = do
                             { sdSelectedDeps = newDeps
                             , sdCrossDBLinks = Loader.cdlLinks newStats
                             , sdLinkingStats = newStats
-                            , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                            , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
                             }
 
                 -- Save updated staged database
@@ -2311,7 +2328,7 @@ removeDependencyFromStaged manager dbName depName = do
                         { sdSelectedDeps = newDeps
                         , sdCrossDBLinks = Loader.cdlLinks newStats
                         , sdLinkingStats = newStats
-                        , sdMissingProducts = sortOn (\(_, cnt, _) -> Down cnt) [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                        , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
                         }
 
             atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)

@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- A partial EcoSpold2 import (a handful of `.spold` files cut from a full
+  database) now becomes analyzable by loading its matching ecoinvent background
+  as a dependency: each input is linked to the exact background activity it
+  names, by `activityLinkId` identity. Previously only nil-link inputs were
+  resolved, so partial imports stayed unresolved however the background was
+  loaded.
+- When the loaded background is a *different* release than the import was cut
+  from, the exact identity won't be present, so linking falls back to the usual
+  attribute matching (name, location, unit). Those approximate links are flagged
+  on the database setup view (and in the load log) so you can verify the
+  dependency is the release you intended rather than trust a cross-version match
+  as exact.
+
 ## [0.7.0] - 2026-05-29
 
 A month of engine work: a third flow kind for waste, regionalized impact

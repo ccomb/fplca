@@ -43,6 +43,7 @@ indexedWith name n =
         , idbBySynonymGroup = M.empty
         , idbWasteTreatmentByFlowUUID = M.empty
         , idbWasteTreatmentByCanonicalName = M.empty
+        , idbByActivityProduct = M.empty
         }
   where
     keys :: [Text]

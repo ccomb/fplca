@@ -43,6 +43,7 @@ module Database.CrossLinking (
     -- * Main Functions
     findSupplierAcrossDatabases,
     findSupplierInIndexedDBs,
+    findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
     WasteTreatmentMatch (..),
 
@@ -110,6 +111,13 @@ data IndexedDatabase = IndexedDatabase
     , idbWasteTreatmentByCanonicalName :: !(M.Map Text [SupplierEntry])
     {- ^ normalizeText (wfName) → same set, for the name-based fallback when
     two databases use different UUIDs for the same canonical waste flow.
+    -}
+    , idbByActivityProduct :: !(M.Map (UUID, UUID) SupplierEntry)
+    {- ^ (activityUUID, productUUID) → supplier. The exact-identity index for
+    EcoSpold2↔EcoSpold2 linking: an input's @(activityLinkId, flowId)@ is the
+    supplier's @(activityUUID, referenceProductUUID)@ key, so this resolves a
+    partial import's background references with no name/location guessing. One
+    supplier per key (location variants of the same activity coincide here).
     -}
     }
 
@@ -342,13 +350,23 @@ buildIndexedDatabase dbName synDB db =
         wasteEntries = buildWasteTreatmentEntries db
         wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
         wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
+        byActProd = indexByActivityProduct entries
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
             , idbWasteTreatmentByFlowUUID = wasteByUUID
             , idbWasteTreatmentByCanonicalName = wasteByName
+            , idbByActivityProduct = byActProd
             }
+
+{- | Index supplier entries by their @(activityUUID, productUUID)@ identity.
+Location variants of one activity share that key, so last-wins is harmless —
+they carry the same activity, product, unit and name.
+-}
+indexByActivityProduct :: [(Text, SupplierEntry)] -> M.Map (UUID, UUID) SupplierEntry
+indexByActivityProduct entries =
+    M.fromList [((seActivityUUID e, seProductUUID e), e) | (_, e) <- entries]
 
 {- | Build supplier entries from a SimpleDatabase. Reference exchanges of
 production processes are always technosphere outputs, so the supplier flow
@@ -404,12 +422,14 @@ buildIndexedDatabaseFromDB dbName synDB db =
         wasteEntries = buildWasteTreatmentEntriesFromDB db
         wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
         wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
+        byActProd = indexByActivityProduct entries
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
             , idbWasteTreatmentByFlowUUID = wasteByUUID
             , idbWasteTreatmentByCanonicalName = wasteByName
+            , idbByActivityProduct = byActProd
             }
 
 {- | Build supplier entries from a full Database. Same invariant as
@@ -670,6 +690,25 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 , cdbLocation = seLocation
                 , cdbProductName = seProductName
                 }
+
+{- | Resolve a supplier by exact @(activityUUID, productUUID)@ identity across
+the indexed databases. An EcoSpold2 input's @(activityLinkId, flowId)@ is
+exactly the supplier's @(activityUUID, referenceProductUUID)@ key, so this is
+how a partial import resolves its background references with no name/location
+guessing — the dataset author's own disambiguation, honoured verbatim.
+
+Returns every database that ships the identical activity+product, in the order
+of the indexed-database list. Callers take the head as the supplier and the
+remaining database names as tied alternatives (for minimal-dependency
+pre-selection). Empty when no loaded dependency provides this exact identity —
+the cross-version case, where the caller falls back to attribute matching.
+-}
+findSupplierByActivityProduct :: [IndexedDatabase] -> UUID -> UUID -> [(SupplierEntry, Text)]
+findSupplierByActivityProduct idbs actUUID prodUUID =
+    [ (entry, idbName idb)
+    | idb <- idbs
+    , Just entry <- [M.lookup (actUUID, prodUUID) (idbByActivityProduct idb)]
+    ]
 
 -- | Legacy function for backward compatibility (slower, builds indexes on the fly)
 findSupplierAcrossDatabases ::

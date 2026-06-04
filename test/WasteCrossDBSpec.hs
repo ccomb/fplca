@@ -39,6 +39,7 @@ spec = describe "findWasteTreatmentAcrossDatabases" $ do
                 , idbBySynonymGroup = M.empty
                 , idbWasteTreatmentByFlowUUID = M.fromListWith (++) [(u, [e]) | (u, e) <- uuidEntries]
                 , idbWasteTreatmentByCanonicalName = M.fromListWith (++) [(n, [e]) | (n, e) <- nameEntries]
+                , idbByActivityProduct = M.empty
                 }
 
         ctxWith :: [IndexedDatabase] -> LinkingContext
@@ -97,6 +98,7 @@ spec = describe "findWasteTreatmentAcrossDatabases" $ do
                     , idbBySynonymGroup = M.empty
                     , idbWasteTreatmentByFlowUUID = M.singleton wasteUUID [entryFR, entryDE]
                     , idbWasteTreatmentByCanonicalName = M.empty
+                    , idbByActivityProduct = M.empty
                     }
             ctx = ctxWith [ecoinventMulti]
         expectNoMatch (findWasteTreatmentAcrossDatabases ctx wasteUUID "Organic carbon")

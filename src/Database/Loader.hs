@@ -54,6 +54,7 @@ module Database.Loader (
     countTotalTechInputs,
     countUnlinkedExchanges,
     collectDanglingProductNames,
+    collectStagedDanglingProductNames,
 
     -- * Internal Linking
     fixSimaProActivityLinks,
@@ -109,6 +110,7 @@ import Database.CrossLinking (
     defaultLinkingThreshold,
     extractProductPrefixes,
     findSupplierAcrossDatabases,
+    findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
     locationHierarchy,
     normalizeUnicode,
@@ -1314,29 +1316,61 @@ countTotalTechInputs db =
         , isSupplierDemand ex
         ]
 
+{- | Consumer @(activityUUID, productUUID, flowId)@ triples already resolved by a
+cross-DB link. A dangling non-nil input whose triple is in this set is supplied
+from a dependency (by identity or attributes) and must not be reported as a gap.
+-}
+crossDBCoveredFlows :: [CrossDBLink] -> S.Set (UUID.UUID, UUID.UUID, UUID.UUID)
+crossDBCoveredFlows links =
+    S.fromList [(cdlConsumerActUUID l, cdlConsumerProdUUID l, cdlConsumerFlowId l) | l <- links]
+
 {- | Product names of a *loaded* database's dangling internal links: non-nil
 @activityLinkId@ inputs that 'findProducer' cannot resolve against the
-database's own process lookup (the matrix builder silently drops them). The
-loaded-path counterpart that names the supplier gaps a partial EcoSpold2 import
-leaves behind — distinct from nil-link inputs, the cross-DB candidates already
-tracked in the linking stats.
+database's own process lookup (the matrix builder silently drops them) *and*
+that no cross-DB link supplies. The loaded-path counterpart that names the
+supplier gaps a partial EcoSpold2 import leaves behind — distinct from nil-link
+inputs, the cross-DB candidates already tracked in the linking stats.
 
 Sharing 'findProducer' keeps this honest with the matrix even once
 @techProcessLinkId@ is populated: an input whose process link resolves is not
-dangling, however its activity link looks.
+dangling, however its activity link looks. Excluding 'dbCrossDBLinks' keeps it
+honest the other way: once the matching background is loaded, a UUID- or
+attribute-resolved input is supplied, not missing.
 -}
 collectDanglingProductNames :: Database -> M.Map T.Text Int
 collectDanglingProductNames db =
-    M.fromListWith
-        (+)
-        [ (tfName flow, 1)
-        | act <- V.toList (dbActivities db)
-        , ex@TechnosphereExchange{} <- exchanges act
-        , isSupplierDemand ex
-        , isNothing (findProducer (dbProcessIdLookup db) ex)
-        , Just _ <- [exchangeActivityLinkId ex]
-        , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
-        ]
+    let covered = crossDBCoveredFlows (dbCrossDBLinks db)
+     in M.fromListWith
+            (+)
+            [ (tfName flow, 1)
+            | ((actUUID, prodUUID), act) <- zip (V.toList (dbProcessIdTable db)) (V.toList (dbActivities db))
+            , ex@TechnosphereExchange{} <- exchanges act
+            , isSupplierDemand ex
+            , isNothing (findProducer (dbProcessIdLookup db) ex)
+            , Just _ <- [exchangeActivityLinkId ex]
+            , S.notMember (actUUID, prodUUID, exchangeFlowId ex) covered
+            , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
+            ]
+
+{- | Staged-path counterpart of 'collectDanglingProductNames' on a
+'SimpleDatabase' plus its just-computed links. A 'SimpleDatabase' has no process
+lookup yet, so internal resolution is checked with 'hasInternalProducer' and
+coverage against the supplied links rather than 'dbCrossDBLinks'.
+-}
+collectStagedDanglingProductNames :: SimpleDatabase -> [CrossDBLink] -> M.Map T.Text Int
+collectStagedDanglingProductNames db links =
+    let covered = crossDBCoveredFlows links
+     in M.fromListWith
+            (+)
+            [ (tfName flow, 1)
+            | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
+            , ex@TechnosphereExchange{} <- exchanges act
+            , isSupplierDemand ex
+            , not (hasInternalProducer db ex)
+            , Just _ <- [exchangeActivityLinkId ex]
+            , S.notMember (actUUID, prodUUID, exchangeFlowId ex) covered
+            , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
+            ]
 
 {- | Find all cross-database links without modifying activities
 Returns statistics including the CrossDBLinks for chained solving
@@ -1349,12 +1383,19 @@ findAllCrossDBLinks ::
     ActivityMap ->
     CrossDBLinkingStats
 findAllCrossDBLinks ctx techFlowDb wasteFlowDb unitDb activities =
-    let results = M.mapWithKey (findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb) activities
+    -- The own-key set lets the per-exchange matcher tell a non-nil link that
+    -- resolves *internally* (the matrix builder handles it) from a dangling
+    -- one that needs a cross-DB supplier — so we never emit a redundant
+    -- cross-DB link for an input already satisfied in place.
+    let !ownKeys = M.keysSet activities
+        results = M.mapWithKey (findActivityCrossDBLinks ctx ownKeys techFlowDb wasteFlowDb unitDb) activities
      in mconcat (M.elems results)
 
 -- | Find cross-database links for one activity's exchanges
 findActivityCrossDBLinks ::
     LinkingContext ->
+    -- | Activity keys present in this database (for internal-resolution check)
+    S.Set (UUID.UUID, UUID.UUID) ->
     TechFlowDB ->
     WasteFlowDB ->
     UnitDB ->
@@ -1362,21 +1403,35 @@ findActivityCrossDBLinks ::
     (UUID.UUID, UUID.UUID) ->
     Activity ->
     CrossDBLinkingStats
-findActivityCrossDBLinks ctx techFlowDb wasteFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
-    let stats = map (findExchangeCrossDBLink ctx techFlowDb wasteFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
+findActivityCrossDBLinks ctx ownKeys techFlowDb wasteFlowDb unitDb (consumerActUUID, consumerProdUUID) act =
+    let stats = map (findExchangeCrossDBLink ctx ownKeys techFlowDb wasteFlowDb unitDb consumerActUUID consumerProdUUID) (exchanges act)
      in mconcat stats
 
 {- | Find cross-database link for a single exchange.
 
-Two paths:
-* Technosphere inputs whose linkId is nil: use the existing scored matcher
-  ('findSupplierAcrossDatabases').
-* Orphan waste outputs (waIsInput=False, linkId=nil): strict-match only via
-  'findWasteTreatmentAcrossDatabases' — no synonym, no widening; one DB
-  wins or stays orphan, multi-DB matches count as ambiguous.
+Technosphere inputs that need a supplier (nil-link, or a non-nil
+'activityLinkId' to an activity this database does not ship) resolve via a
+cascade:
+
+1. __Exact source identity__ — @(activityLinkId, flowId)@ matched verbatim in a
+   dependency ('findSupplierByActivityProduct'). The same-release case; the
+   dataset author's own disambiguation, no guessing. Nil-link inputs skip this
+   tier (they carry no identity).
+2. __Attribute matching__ — name / location / unit scoring
+   ('findSupplierAcrossDatabases'), the matcher every other cross-link uses.
+   When a *non-nil* input falls through to here its source activity was absent
+   from every dependency, so the match is a likely cross-version stitch,
+   recorded in 'cdlAttributeFallbacks' for the consumer to verify.
+
+A non-nil link whose target *is* in this database resolves in the internal
+matrix; emitting a cross-DB link too would double-count it, so 'ownKeys' gates
+it out. Orphan waste outputs (waIsInput=False, linkId=nil) use the strict
+'findWasteTreatmentAcrossDatabases' — no synonym, no widening.
 -}
 findExchangeCrossDBLink ::
     LinkingContext ->
+    -- | Activity keys present in this database (internal-resolution check)
+    S.Set (UUID.UUID, UUID.UUID) ->
     TechFlowDB ->
     WasteFlowDB ->
     UnitDB ->
@@ -1384,61 +1439,100 @@ findExchangeCrossDBLink ::
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink ctx techFlowDb _wasteFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
-    | exchangeIsInput ex && linkId == UUID.nil =
-        case M.lookup fid techFlowDb of
-            Nothing -> mempty
-            Just flow ->
-                let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
-                 in case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
-                        result@CrossDBLinked{} ->
-                            let !crossLink =
-                                    CrossDBLink
-                                        { cdlConsumerActUUID = consumerActUUID
-                                        , cdlConsumerProdUUID = consumerProdUUID
-                                        , cdlConsumerFlowId = fid
-                                        , cdlSupplierActUUID = cdlrActivityUUID result
-                                        , cdlSupplierProdUUID = cdlrProductUUID result
-                                        , cdlCoefficient = amt
-                                        , cdlExchangeUnit = flowUnitName
-                                        , cdlFlowName = cdlrProductName result
-                                        , cdlLocation = cdlrLocation result
-                                        , cdlSourceDatabase = cdlrDatabaseName result
-                                        , cdlTiedAlternatives = cdlrTiedDatabases result
-                                        }
-                                fallbacks =
-                                    [ LocationFallback (cdlrProductName result) req actLoc kind
-                                    | UpperLocationUsed req actLoc kind <- cdlrWarnings result
-                                    ]
-                             in mempty{cdlLinks = [crossLink], cdlLocationFallbacks = fallbacks}
-                        CrossDBNotLinked blocker ->
-                            let unresolved = case blocker of
-                                    LocationRejectedByPolicy req actLoc kind ->
-                                        [ LocationUnresolved
-                                            (tfName flow)
-                                            req
-                                            ( "policy rejected "
-                                                <> locationKindCode kind
-                                                <> " candidate "
-                                                <> actLoc
-                                            )
-                                        ]
-                                    LocationUnavailable req ->
-                                        [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
-                                    NoNameMatch -> []
-                                    UnitIncompatible _ _ -> []
-                             in mempty
-                                    { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
-                                    , cdlLocationUnresolved = unresolved
-                                    }
+findExchangeCrossDBLink ctx ownKeys techFlowDb _wasteFlowDb unitDb consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
+    | exchangeIsInput ex && not resolvesInternally =
+        maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
-findExchangeCrossDBLink _ _ _ _ _ _ BiosphereExchange{} = mempty
+  where
+    resolvesInternally = linkId /= UUID.nil && S.member (linkId, fid) ownKeys
+    mkTechLink supAct supProd supName supLoc srcDb tied flowUnitName =
+        CrossDBLink
+            { cdlConsumerActUUID = consumerActUUID
+            , cdlConsumerProdUUID = consumerProdUUID
+            , cdlConsumerFlowId = fid
+            , cdlSupplierActUUID = supAct
+            , cdlSupplierProdUUID = supProd
+            , cdlCoefficient = amt
+            , cdlExchangeUnit = flowUnitName
+            , cdlFlowName = supName
+            , cdlLocation = supLoc
+            , cdlSourceDatabase = srcDb
+            , cdlTiedAlternatives = tied
+            }
+    resolveTechInput flow =
+        let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
+            identityMatches =
+                if linkId == UUID.nil
+                    then []
+                    else findSupplierByActivityProduct (lcIndexedDatabases ctx) linkId fid
+         in case identityMatches of
+                ((entry, srcDb) : rest) ->
+                    let !crossLink =
+                            mkTechLink
+                                (seActivityUUID entry)
+                                (seProductUUID entry)
+                                (seProductName entry)
+                                (seLocation entry)
+                                srcDb
+                                (sort (map snd rest))
+                                flowUnitName
+                     in mempty{cdlLinks = [crossLink]}
+                [] -> attributeMatch flow flowUnitName
+    attributeMatch flow flowUnitName =
+        case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
+            result@CrossDBLinked{} ->
+                let !crossLink =
+                        mkTechLink
+                            (cdlrActivityUUID result)
+                            (cdlrProductUUID result)
+                            (cdlrProductName result)
+                            (cdlrLocation result)
+                            (cdlrDatabaseName result)
+                            (cdlrTiedDatabases result)
+                            flowUnitName
+                    locFallbacks =
+                        [ LocationFallback (cdlrProductName result) req actLoc kind
+                        | UpperLocationUsed req actLoc kind <- cdlrWarnings result
+                        ]
+                    -- Non-nil input matched only by attributes: its named source
+                    -- activity was in no dependency — flag the cross-version risk.
+                    attrFallbacks =
+                        [ AttributeFallback (tfName flow) loc (cdlrLocation result) (cdlrDatabaseName result)
+                        | linkId /= UUID.nil
+                        ]
+                 in mempty
+                        { cdlLinks = [crossLink]
+                        , cdlLocationFallbacks = locFallbacks
+                        , cdlAttributeFallbacks = attrFallbacks
+                        }
+            CrossDBNotLinked blocker
+                -- Nil-link inputs report a rich blocker; a non-nil dangling input
+                -- (no identity, no attribute match) is left for the dangling scan.
+                | linkId == UUID.nil -> unresolvedStats flow blocker
+                | otherwise -> mempty
+    unresolvedStats flow blocker =
+        let unresolved = case blocker of
+                LocationRejectedByPolicy req actLoc kind ->
+                    [ LocationUnresolved
+                        (tfName flow)
+                        req
+                        ("policy rejected " <> locationKindCode kind <> " candidate " <> actLoc)
+                    ]
+                LocationUnavailable req ->
+                    [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
+                NoNameMatch -> []
+                UnitIncompatible _ _ -> []
+         in mempty
+                { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
+                , cdlLocationUnresolved = unresolved
+                }
+findExchangeCrossDBLink _ _ _ _ _ _ _ BiosphereExchange{} = mempty
 -- Cross-DB linking for orphan waste OUTPUTS: strict match only — see
 -- 'findWasteTreatmentAcrossDatabases'. No synonym, no fuzzy name match, no
 -- location widening. Multi-DB matches stay orphan as 'cdlWasteAmbiguous'.
 -- Waste inputs (treatment side) are left alone: they have no clean LCA
 -- semantic as a cross-DB demand.
-findExchangeCrossDBLink ctx _ wasteFlowDb _ consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
+findExchangeCrossDBLink ctx _ _ wasteFlowDb _ consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
     | not isInp && lid == UUID.nil =
         let flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
          in case findWasteTreatmentAcrossDatabases ctx fid flowName of
@@ -1551,6 +1645,24 @@ reportCrossDBLinkingStats nActivities stats = do
                     (T.unpack luProduct)
                     (T.unpack luRequested)
                     (T.unpack luReason)
+
+    -- Attribute fallbacks: source-identity inputs matched by attributes because
+    -- no dependency shipped the exact activity — a likely cross-version stitch.
+    let !uniqueAttrFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
+        !nAttrFallbacks = length uniqueAttrFallbacks
+    when (nAttrFallbacks > 0) $ do
+        reportProgress Warning $
+            printf
+                "%d background link(s) matched by attributes, not source identity — verify the dependency is the same source release"
+                nAttrFallbacks
+        forM_ uniqueAttrFallbacks $ \AttributeFallback{afProduct, afRequested, afMatched, afSourceDatabase} ->
+            reportProgress Warning $
+                printf
+                    "  - %s [%s] → %s in %s"
+                    (T.unpack afProduct)
+                    (T.unpack afRequested)
+                    (T.unpack afMatched)
+                    (T.unpack afSourceDatabase)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"

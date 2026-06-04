@@ -1155,6 +1155,31 @@ data LocationUnresolved = LocationUnresolved
     deriving (Show, Eq, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped LocationUnresolved)
 
+{- | An input that named a specific source supplier by @activityLinkId@ which no
+loaded dependency provides, so it was resolved by attribute matching (name /
+location / unit) instead of exact identity.
+
+This is the cross-version signal: a partial EcoSpold2 import carries the
+activity UUIDs of the exact ecoinvent release it was cut from. Linking it
+against a *different* release leaves those UUIDs unmatched, and the attribute
+matcher stitches an approximate supplier in their place. Surfacing these lets a
+consumer verify the dependency is the intended release rather than trust an
+approximate match as exact. Distinct from nil-link inputs (SimaPro), which never
+had a source identity and whose attribute match is expected, not a caveat.
+-}
+data AttributeFallback = AttributeFallback
+    { afProduct :: !Text
+    -- ^ Consumer-side product name that was matched
+    , afRequested :: !Text
+    -- ^ Location requested by the consumer input
+    , afMatched :: !Text
+    -- ^ Location of the supplier actually linked
+    , afSourceDatabase :: !Text
+    -- ^ Dependency that supplied the attribute match
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped AttributeFallback)
+
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.
 -}
@@ -1169,6 +1194,8 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     -- ^ Accepted links with widened geography, tagged with 'LocationKind'
     , cdlLocationUnresolved :: ![LocationUnresolved]
     -- ^ Inputs rejected by policy or with no candidate
+    , cdlAttributeFallbacks :: ![AttributeFallback]
+    -- ^ Source-identity inputs matched by attributes instead (cross-version)
     , cdlTotalInputs :: !Int
     -- ^ Total technosphere inputs at time of linking
     , cdlWasteExactLinks :: !Int
@@ -1193,6 +1220,7 @@ instance Semigroup CrossDBLinkingStats where
             , cdlUnknownUnits = cdlUnknownUnits s1 <> cdlUnknownUnits s2
             , cdlLocationFallbacks = cdlLocationFallbacks s1 <> cdlLocationFallbacks s2
             , cdlLocationUnresolved = cdlLocationUnresolved s1 <> cdlLocationUnresolved s2
+            , cdlAttributeFallbacks = cdlAttributeFallbacks s1 <> cdlAttributeFallbacks s2
             , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
             , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
             , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
@@ -1202,7 +1230,7 @@ instance Semigroup CrossDBLinkingStats where
         mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
 instance Monoid CrossDBLinkingStats where
-    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] 0 0 0 0
+    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] [] 0 0 0 0
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
 deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]
@@ -1219,6 +1247,14 @@ deduplicateUnresolved =
         . M.toList
         . M.fromListWith (\_ b -> b)
         . map (\u -> ((luProduct u, luRequested u), u))
+
+-- | Deduplicate attribute fallbacks by (product, requestedLoc)
+deduplicateAttributeFallbacks :: [AttributeFallback] -> [AttributeFallback]
+deduplicateAttributeFallbacks =
+    map snd
+        . M.toList
+        . M.fromListWith (\_ b -> b)
+        . map (\a -> ((afProduct a, afRequested a), a))
 
 -- | Number of resolved cross-DB links
 crossDBLinksCount :: CrossDBLinkingStats -> Int
