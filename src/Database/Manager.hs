@@ -79,6 +79,7 @@ module Database.Manager (
     -- * Staged Database Operations
     getStagedDatabase,
     getDatabaseSetupInfo,
+    buildLoadedSetupInfo,
     addDependencyToStaged,
     removeDependencyFromStaged,
     setDataPath,
@@ -1947,14 +1948,11 @@ buildSetupResult manager dbName = do
                 else return $ Right info
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded ->
+                -- 'buildLoadedSetupInfo' already derives dsiIsReady honestly
+                -- (it sees dangling internal links); only the loaded flag needs
+                -- flipping here.
                 let info = buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded) availableDbs indexedDbs
-                    nUnresolved = unresolvedCount (dbLinkingStats (ldDatabase loaded))
-                 in return $
-                        Right
-                            info
-                                { dsiIsLoaded = False
-                                , dsiIsReady = nUnresolved == 0
-                                }
+                 in return $ Right info{dsiIsLoaded = False}
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
 {- | Build setup info from a staged database
@@ -2015,22 +2013,31 @@ buildStagedSetupInfo staged configs indexedDbs =
             , dsiIsLoaded = False
             }
 
-{- | Build setup info from a loaded database (already finalized)
-Uses dbLinkingStats for real completeness/fallback data
+{- | Build setup info from a loaded database (already finalized).
+
+Counts are recomputed from the activity set via the same predicate as the
+staged path ('Loader.countUnlinkedExchanges'), not read from 'dbLinkingStats':
+the stats only track nil-link / cross-DB resolution and are blind to dangling
+internal links (non-nil 'activityLinkId' pointing at an activity the database
+doesn't ship). A database bulk-loaded from config bypasses the finalize gate,
+so without this it would report a partial EcoSpold2 import as 100% ready while
+the matrix silently drops those inputs. Rich blocker reasons still come from
+the stats; dangling links are appended.
 -}
 buildLoadedSetupInfo :: DatabaseConfig -> Database -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildLoadedSetupInfo config db configs indexedDbs =
-    let stats = dbLinkingStats db
-        totalInputs = cdlTotalInputs stats
+    let sdb = toSimpleDatabase db
+        stats = dbLinkingStats db
+        totalInputs = Loader.countTotalTechInputs sdb
+        unlinked = Loader.countUnlinkedExchanges sdb
         nCrossDBLinks = length (dbCrossDBLinks db)
-        nUnresolved = unresolvedCount stats
-        resolved = totalInputs - nUnresolved
+        internalLinks = max 0 (totalInputs - unlinked)
+        unresolvedLinks = max 0 (unlinked - nCrossDBLinks)
+        resolved = internalLinks + nCrossDBLinks
         completeness =
             if totalInputs > 0
                 then 100.0 * fromIntegral resolved / fromIntegral totalInputs
                 else 100.0
-        internalLinks = max 0 (resolved - nCrossDBLinks)
-        missingSuppliers = take 10 $ map blockerToMissingSupplier (M.toList (cdlUnresolvedProducts stats))
         blockerToMissingSupplier (name, (cnt, blocker)) =
             let (reason, detail) = case blocker of
                     NoNameMatch -> ("no_name_match", Nothing)
@@ -2039,6 +2046,12 @@ buildLoadedSetupInfo config db configs indexedDbs =
                     LocationRejectedByPolicy req act kind ->
                         ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
              in MissingSupplier name cnt Nothing reason detail
+        statsSuppliers = map blockerToMissingSupplier (M.toList (cdlUnresolvedProducts stats))
+        danglingSuppliers =
+            [ MissingSupplier name cnt Nothing "no_name_match" Nothing
+            | (name, cnt) <- M.toList (Loader.collectDanglingProductNames db)
+            ]
+        missingSuppliers = take 10 (statsSuppliers ++ danglingSuppliers)
      in DatabaseSetupInfo
             { dsiName = dcName config
             , dsiDisplayName = dcDisplayName config
@@ -2047,10 +2060,10 @@ buildLoadedSetupInfo config db configs indexedDbs =
             , dsiCompleteness = completeness
             , dsiInternalLinks = internalLinks
             , dsiCrossDBLinks = nCrossDBLinks
-            , dsiUnresolvedLinks = nUnresolved
+            , dsiUnresolvedLinks = unresolvedLinks
             , dsiMissingSuppliers = missingSuppliers
             , dsiDependencies = buildDependencyChoices (dcName config) (dbDependsOn db) [] configs indexedDbs
-            , dsiIsReady = True
+            , dsiIsReady = dbActivityCount db > 0 && unresolvedLinks == 0
             , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
             , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
             , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
