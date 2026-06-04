@@ -5,7 +5,7 @@ Implements Streamable HTTP transport (MCP spec 2025-03-26).
 POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 -}
-module API.MCP (mcpApp, toolDefinitions) where
+module API.MCP (mcpApp, toolDefinitions, selectMethod) where
 
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
@@ -52,7 +52,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -1231,12 +1231,14 @@ subArgs suffix args = do
     db <- requireSide "database"
     pid <- requireSide "process_id"
     method <- requireSide "method_id"
+    mCol <- optionalText ("collection" <> suffix) args
     pure $
-        KM.fromList
+        KM.fromList $
             [ (fromText "database", String db)
             , (fromText "process_id", String pid)
             , (fromText "method_id", String method)
             ]
+                <> foldMap (\c -> [(fromText "collection", String c)]) mCol
   where
     requireSide key =
         let suffixed = key <> suffix
@@ -1262,9 +1264,9 @@ callListMethods dbManager rid = do
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do
-    (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
+    (dbName, methodIdText, mCol) <- except $ (,,) <$> requireText "database" args <*> requireText "method_id" args <*> optionalText "collection" args
     ld <- requireDatabase dbManager dbName
-    (collection, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    (collection, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
     let db = ldDatabase ld
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
@@ -1372,9 +1374,9 @@ buildUnmatchedDbFlows dbManager dbName collection db method args maxN =
 
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetCharacterization dbManager rid args = runTool rid $ do
-    (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
+    (dbName, methodIdText, mCol) <- except $ (,,) <$> requireText "database" args <*> requireText "method_id" args <*> optionalText "collection" args
     ld <- requireDatabase dbManager dbName
-    (collection, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    (collection, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
     let db = ldDatabase ld
         lim = fromMaybe 20 (intArg "limit" args)
         flowQ = textArg "flow" args
@@ -1471,16 +1473,52 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unit
             ]
                 ++ webUrlPair
 
--- | Helper: resolve method from UUID text, also returning its collection name
-resolveMethod :: DatabaseManager -> Text -> IO (Either Text (Text, Method))
-resolveMethod dbManager methodIdText =
+{- | Choose the (collection, method) for a UUID from the loaded set, optionally
+restricted to a named collection. A method's engine UUID is a UUIDv5 of its
+name, so the *same* UUID can be loaded under several collections (e.g. two EF
+3.1 versions). Resolving must therefore be loud, not first-match:
+
+  * @Just c@   — resolve within collection @c@; a UUID is unique inside one
+                 collection, so this is unambiguous (or a not-found error).
+  * @Nothing@  — infer. One match resolves; more than one is reported as an
+                 error listing the collections to choose from, rather than
+                 silently picking whichever loaded first.
+
+Pure so the disambiguation is total and testable without a 'DatabaseManager'.
+-}
+selectMethod :: Maybe Text -> UUID -> [(Text, Method)] -> Either Text (Text, Method)
+selectMethod mCollection uuid loaded =
+    case filter keep loaded of
+        [] -> Left notFound
+        [hit] -> Right hit
+        hit : _ -> maybe (Left ambiguous) (const (Right hit)) mCollection
+  where
+    keep (col, m) = methodId m == uuid && maybe True (== col) mCollection
+    uuidText = UUID.toText uuid
+    notFound = case mCollection of
+        Nothing -> "Method not found: " <> uuidText
+        Just c ->
+            "Method "
+                <> uuidText
+                <> " not found in collection '"
+                <> c
+                <> "'. Loaded collections: "
+                <> T.intercalate ", " (L.nub (map fst loaded))
+    ambiguous =
+        "Method UUID "
+            <> uuidText
+            <> " is loaded in multiple collections: "
+            <> T.intercalate ", " (L.nub [col | (col, m) <- loaded, methodId m == uuid])
+            <> ". Pass 'collection' to disambiguate."
+
+{- | Resolve a method UUID (raw text) to its collection name and 'Method',
+optionally pinned to a collection. Thin IO edge over 'selectMethod'.
+-}
+resolveMethod :: DatabaseManager -> Maybe Text -> Text -> IO (Either Text (Text, Method))
+resolveMethod dbManager mCollection methodIdText =
     case UUID.fromText methodIdText of
         Nothing -> return $ Left "Invalid method UUID format"
-        Just uuid -> do
-            loadedMethods <- DM.getLoadedMethods dbManager
-            case filter (\(_, m) -> methodId m == uuid) loadedMethods of
-                [] -> return $ Left "Method not found"
-                ((col, m) : _) -> return $ Right (col, m)
+        Just uuid -> selectMethod mCollection uuid <$> DM.getLoadedMethods dbManager
 
 {- | Raw text + its parsed 'ProcessId' + the looked-up 'Activity'. Bundled so
 the three entities (which must always agree) cannot drift apart: the only
@@ -1512,14 +1550,15 @@ unknown method, unresolvable process id).
 -}
 loadLcaRequest :: DatabaseManager -> KeyMap Value -> ExceptT Text IO LcaRequest
 loadLcaRequest dbManager args = do
-    (dbName, pidText, methodIdText) <-
+    (dbName, pidText, methodIdText, mCol) <-
         except $
-            (,,)
+            (,,,)
                 <$> requireText "database" args
                 <*> requireText "process_id" args
                 <*> requireText "method_id" args
+                <*> optionalText "collection" args
     ld <- requireDatabase dbManager dbName
-    (col, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    (col, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
     (pid, act) <- liftShow (Service.resolveActivityAndProcessId (ldDatabase ld) pidText)
     pure
         LcaRequest

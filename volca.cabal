@@ -231,6 +231,7 @@ test-suite lca-tests
                      , MappingSpec
                      , MethodSetTablesSpec
                      , MethodCollectionCacheSpec
+                     , MethodResolveSpec
                      , ChemSynonymsSpec
                      , UploadedDatabaseSpec
                      , UploadSizeSpec

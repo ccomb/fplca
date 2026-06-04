@@ -432,6 +432,23 @@ pProcessId =
 pMethodId :: Param
 pMethodId = Param "method_id" "string" Required "Method UUID"
 
+{- | Optional collection disambiguator for the @method_id@-only tools. A method
+UUID is a hash of its name, so the same UUID can be loaded under several
+collections (e.g. two EF 3.1 versions). Only needed then: with a single match
+the collection is inferred, and an ambiguous UUID fails loudly listing the
+collections to choose from.
+-}
+pCollection :: Param
+pCollection =
+    Param
+        "collection"
+        "string"
+        Optional
+        "Method collection name (from list_methods). Only needed when the same \
+        \method UUID is loaded in more than one collection (e.g. two EF 3.1 \
+        \versions); otherwise the single match is used, and an ambiguous UUID \
+        \fails with the list of collections to choose from."
+
 pLimit :: Text -> Param
 pLimit = Param "limit" "integer" Optional
 
@@ -565,6 +582,7 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , pMethodId
+        , pCollection
         , Param "top_flows" "integer" Optional "Number of top contributing flows to return (default 5)"
         , pSubstitutions
         , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge). Lets reviewers tell genuine method gaps from mapping bugs."
@@ -573,6 +591,7 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , pMethodId
+        , pCollection
         , Param
             "perturbations"
             "array"
@@ -589,6 +608,7 @@ params r = case r of
     GetFlowMapping ->
         [ pDatabase
         , pMethodId
+        , pCollection
         , Param "verbose" "boolean" Optional "When true, return per-CF and per-flow detail beyond the coverage stats: an unmatched_cfs list (CFs with no DB flow), and an unmatched_db_flows list ranked by inventory contribution to a chosen process when process_id is set."
         , Param "process_id" "string" Optional "Required for the unmatched_db_flows ranking: ranks unmatched flows by their share of this process's inventory."
         , Param "max_unmatched" "integer" Optional "Cap on each unmatched list (default 50)"
@@ -596,6 +616,7 @@ params r = case r of
     GetCharacterization ->
         [ pDatabase
         , pMethodId
+        , pCollection
         , Param "flow" "string" Optional "Filter by flow name (case-insensitive substring, matches both method CF name and database flow name)"
         , pLimit "Max results (default 20)"
         ]
@@ -603,6 +624,7 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , Param "method_id" "string" Required "Method UUID for the impact category"
+        , pCollection
         , pLimit "Max flows to return, sorted by contribution (default 20)"
         , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge)."
         ]
@@ -610,6 +632,7 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , Param "method_id" "string" Required "Method UUID for the impact category"
+        , pCollection
         , pLimit "Max processes to return, sorted by contribution (default 10)"
         ]
     ListGeographies ->
@@ -642,9 +665,11 @@ params r = case r of
         [ Param "database_a" "string" Required "First database name"
         , Param "process_id_a" "string" Required "Process ID in database_a (activityUUID_productUUID format)"
         , Param "method_id_a" "string" Required "Method UUID for the A side"
+        , Param "collection_a" "string" Optional "Method collection for the A side; needed only when method_id_a is loaded in more than one collection."
         , Param "database_b" "string" Required "Second database name"
         , Param "process_id_b" "string" Required "Process ID in database_b (activityUUID_productUUID format)"
         , Param "method_id_b" "string" Required "Method UUID for the B side"
+        , Param "collection_b" "string" Optional "Method collection for the B side; needed only when method_id_b is loaded in more than one collection."
         , Param "top_flows" "integer" Optional "Per-side flow drill-down depth (default 10)"
         ]
     ScoreActivity ->
