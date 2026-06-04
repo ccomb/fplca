@@ -12,6 +12,7 @@ import Test.Hspec
 import Database.Loader
 import TestHelpers (loadSampleDatabase)
 import Types
+import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Minimal fixtures
@@ -230,8 +231,9 @@ spec = do
                         [refExchange flowUUID1]
                 acts = M.fromList [((actUUID1, flowUUID1), act)]
                 flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Wheat Production")]
-                idx = buildSupplierIndexByName acts flows
-            M.lookup "wheat production" idx `shouldBe` Just (actUUID1, flowUUID1)
+                idx = buildSupplierIndexByName M.empty acts flows
+            -- empty UnitDB → reference unit resolves to the "unknown" sentinel
+            M.lookup "wheat production" idx `shouldBe` Just (actUUID1, flowUUID1, "unknown")
 
         it "does not index non-reference exchanges" $ do
             let act =
@@ -241,7 +243,7 @@ spec = do
                         [inputExchange flowUUID1 "GLO"]
                 acts = M.fromList [((actUUID1, flowUUID1), act)]
                 flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Wheat")]
-                idx = buildSupplierIndexByName acts flows
+                idx = buildSupplierIndexByName M.empty acts flows
             M.null idx `shouldBe` True
 
     -- -----------------------------------------------------------------------
@@ -250,9 +252,9 @@ spec = do
     describe "fixExchangeLinkByName" $ do
         it "resolves input exchange when supplier in index" $ do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
-                idx = M.fromList [("wheat", (actUUID1, flowUUID2))]
+                idx = M.fromList [("wheat", (actUUID1, flowUUID2, ""))]
                 ex = inputExchange flowUUID1 "GLO"
-                (fixed, summary) = fixExchangeLinkByName idx flows "consumer" ex
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` actUUID1
             usFoundLinks summary `shouldBe` 1
             usMissingLinks summary `shouldBe` 0
@@ -261,7 +263,7 @@ spec = do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
                 idx = M.empty
                 ex = inputExchange flowUUID1 "GLO"
-                (fixed, summary) = fixExchangeLinkByName idx flows "consumer" ex
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil
             usMissingLinks summary `shouldBe` 1
 
@@ -269,15 +271,15 @@ spec = do
             let flows = M.empty
                 idx = M.empty
                 ex = inputExchange flowUUID1 "GLO"
-                (fixed, summary) = fixExchangeLinkByName idx flows "consumer" ex
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil
             usMissingLinks summary `shouldBe` 1
 
         it "does not touch output reference exchanges" $ do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
-                idx = M.fromList [("wheat", (actUUID1, flowUUID2))]
+                idx = M.fromList [("wheat", (actUUID1, flowUUID2, ""))]
                 ex = refExchange flowUUID1
-                (fixed, summary) = fixExchangeLinkByName idx flows "producer" ex
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "producer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil -- unchanged
             usTotalLinks summary `shouldBe` 0 -- not counted
         it "does not touch biosphere exchanges" $ do
@@ -293,10 +295,42 @@ spec = do
                         , bioComment = Nothing
                         , bioPedigree = Nothing
                         }
-                (fixed, summary) = fixExchangeLinkByName idx flows "act" bioEx
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "act" bioEx
             -- BiosphereExchange is returned unchanged: verify it is still biosphere
             isBiosphereExchange fixed `shouldBe` True
             usTotalLinks summary `shouldBe` 0
+
+        -- Regression: a candidate whose reference-product unit is in a different
+        -- dimension than the consumer exchange must NOT be linked — the matrix
+        -- builder could not convert it, and forming the link aborts the whole
+        -- load. (This is what 'delete then re-export' surfaced on real data: a
+        -- piece-counted input fuzzy-matched a mass-counted survivor.)
+        it "rejects a dimensionally-incompatible candidate (count input vs mass supplier)" $ do
+            let unitItemUUID = read "dddddddd-0000-0000-0000-00000000000a" :: UUID.UUID
+                unitKgUUID = read "dddddddd-0000-0000-0000-00000000000b" :: UUID.UUID
+                unitDB =
+                    M.fromList
+                        [ (unitItemUUID, Unit unitItemUUID "item" "item" "")
+                        , (unitKgUUID, Unit unitKgUUID "kg" "kg" "")
+                        ]
+                flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "pump")]
+                -- supplier indexed with a mass (kg) reference unit
+                idx = M.fromList [("pump", (actUUID1, flowUUID2, "kg"))]
+                -- consumer wants the pump by the piece (item)
+                ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitItemUUID}
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
+            techActivityLinkId fixed `shouldBe` UUID.nil
+            usMissingLinks summary `shouldBe` 1
+
+        it "links a dimensionally-compatible candidate (mass input vs mass supplier)" $ do
+            let unitKgUUID = read "dddddddd-0000-0000-0000-00000000000b" :: UUID.UUID
+                unitDB = M.fromList [(unitKgUUID, Unit unitKgUUID "kg" "kg" "")]
+                flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "pump")]
+                idx = M.fromList [("pump", (actUUID1, flowUUID2, "kg"))]
+                ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitKgUUID}
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
+            techActivityLinkId fixed `shouldBe` actUUID1
+            usFoundLinks summary `shouldBe` 1
 
     -- -----------------------------------------------------------------------
     -- countTotalTechInputs / countUnlinkedExchanges / collectUnlinkedProductNames

@@ -17,6 +17,7 @@ module API.DatabaseHandlers (
     unloadDatabaseHandler,
     relinkDatabaseHandler,
     deleteDatabaseHandler,
+    deleteActivitiesHandler,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -47,6 +48,7 @@ module API.DatabaseHandlers (
 ) where
 
 import Control.Exception (SomeException, try)
+import Control.Monad (mfilter)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
@@ -73,6 +75,9 @@ import API.Types (
     BinaryContent (..),
     DatabaseListResponse (..),
     DatabaseStatusAPI (..),
+    DeleteClassFilter (..),
+    DeleteSelectionRequest (..),
+    DeleteSelectionResponse (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
@@ -88,7 +93,9 @@ import Control.Monad.Reader (asks)
 import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
+import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
+import Database.Edit (deleteActivitiesInDB)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -190,6 +197,44 @@ deleteDatabaseHandler :: Text -> AppM ActivateResponse
 deleteDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
     simpleAction (removeDatabase dbManager dbName) ("Deleted database: " <> dbName)
+
+{- | Delete the whole filtered set of activities from a loaded database, in
+place. The filter selects the full matching set (pagination ignored); the
+keep/extra lists adjust the set individually. Rebuilds matrices and unlinks
+surviving references; returns the count removed.
+-}
+deleteActivitiesHandler :: Text -> DeleteSelectionRequest -> AppM DeleteSelectionResponse
+deleteActivitiesHandler dbName req = do
+    dbManager <- asks aeDbManager
+    let classFilters = [(dcfSystem f, dcfValue f, dcfExact f) | f <- dsqClassifications req]
+        -- A present-but-blank filter (e.g. JSON "name":"") is no filter at all.
+        -- Collapse it to Nothing so name candidates fall back to "all activities"
+        -- instead of a BM25/full-scan path that yields zero (index present) or all
+        -- (index absent) — an index-dependent ALL-vs-NONE divergence.
+        nonBlank = mfilter (not . T.null . T.strip)
+    result <-
+        liftIO $
+            deleteActivitiesInDB
+                dbManager
+                dbName
+                (nonBlank (dsqName req))
+                (nonBlank (dsqLocation req))
+                (nonBlank (dsqProduct req))
+                classFilters
+                (fromMaybe False (dsqExact req))
+                (dsqKeep req)
+                (dsqExtra req)
+    case result of
+        -- A failed delete is a client error (bad filter, unknown DB, loaded
+        -- dependents). Surface it as 4xx so a raw HTTP client can't read the
+        -- 200 envelope as success.
+        Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right deleted ->
+            return $
+                DeleteSelectionResponse
+                    True
+                    ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
+                    deleted
 
 {- | Enforce the hosting upload-size policy on a decoded payload.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0

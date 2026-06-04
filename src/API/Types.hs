@@ -741,6 +741,45 @@ data UploadRequest = UploadRequest
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped UploadRequest)
 
+{- | One classification filter in a delete request: the @system@ to match, the
+@value@ to look for, and whether the match is exact (else token-contains).
+Mirrors the search endpoint's classification query parameters so the deleted
+set is exactly the searched set.
+-}
+data DeleteClassFilter = DeleteClassFilter
+    { dcfSystem :: Text
+    , dcfValue :: Text
+    , dcfExact :: Bool
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteClassFilter)
+
+{- | Request for delete-by-selection. The filter fields select the whole
+matching set (pagination ignored); @dsqKeep@ spares matched process ids and
+@dsqExtra@ adds ones the filter missed. Process ids are the canonical
+@activityUUID_productUUID@ strings the UI/CLI carry, not matrix indices.
+-}
+data DeleteSelectionRequest = DeleteSelectionRequest
+    { dsqName :: Maybe Text -- Filter by activity name
+    , dsqLocation :: Maybe Text -- Filter by location
+    , dsqProduct :: Maybe Text -- Filter by reference product
+    , dsqClassifications :: [DeleteClassFilter] -- Classification filters (AND across systems)
+    , dsqExact :: Maybe Bool -- Exact name match (default False)
+    , dsqKeep :: [Text] -- Process-id strings to spare from deletion
+    , dsqExtra :: [Text] -- Process-id strings to add to deletion
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionRequest)
+
+-- | Response for delete-by-selection: count of activities removed.
+data DeleteSelectionResponse = DeleteSelectionResponse
+    { dsrSuccess :: Bool
+    , dsrMessage :: Text
+    , dsrDeleted :: Int
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionResponse)
+
 -- | Response for database upload
 data UploadResponse = UploadResponse
     { uprSuccess :: Bool

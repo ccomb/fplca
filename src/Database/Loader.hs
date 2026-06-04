@@ -218,9 +218,12 @@ getReferenceProductUUID act =
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
 
 {- | Type alias for name-only supplier lookup (for SimaPro)
-Maps normalizedProductName → (activityUUID, productUUID)
+Maps normalizedProductName → (activityUUID, productUUID, referenceProductUnit).
+The reference-product unit lets the linker reject a candidate whose unit is
+dimensionally incompatible with the consumer exchange (which the matrix builder
+could not convert), instead of forming a link that aborts the whole load.
 -}
-type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID)
+type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
 
 {- | Type alias for name-only supplier lookup with location (for EcoSpold1)
 Maps normalizedProductName → (activityUUID, productUUID, location)
@@ -315,10 +318,10 @@ buildSupplierIndex activities techFlowDb =
 Uses the normalized product name + extracted prefixes (no location required).
 Exact names take priority via M.union.
 -}
-buildSupplierIndexByName :: ActivityMap -> TechFlowDB -> NameOnlyIndex
-buildSupplierIndexByName activities techFlowDb =
+buildSupplierIndexByName :: UnitDB -> ActivityMap -> TechFlowDB -> NameOnlyIndex
+buildSupplierIndexByName unitDB activities techFlowDb =
     let entries =
-            [ (tfName flow, (actUUID, prodUUID))
+            [ (tfName flow, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
             , exchangeIsReference ex
@@ -537,7 +540,7 @@ loadSimaProCSV unitConfig csvPath = do
             let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
 
             -- Fix activity links using supplier lookup (same as EcoSpold1)
-            Right <$> fixSimaProActivityLinks simpleDb
+            Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Load a Brightway Excel (.xlsx) inventory.
 
@@ -561,18 +564,18 @@ loadBrightwayExcel unitConfig xlsxPath = do
                             | act <- activities
                             ]
                     simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
-                Right <$> fixSimaProActivityLinks simpleDb
+                Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references
 Uses name-only matching (no location required) for SimaPro technosphere inputs
 -}
-fixSimaProActivityLinks :: SimpleDatabase -> IO SimpleDatabase
-fixSimaProActivityLinks db = do
-    let nameIndex = buildSupplierIndexByName (sdbActivities db) (sdbTechFlows db)
+fixSimaProActivityLinks :: UC.UnitConfig -> SimpleDatabase -> IO SimpleDatabase
+fixSimaProActivityLinks unitConfig db = do
+    let nameIndex = buildSupplierIndexByName (sdbUnits db) (sdbActivities db) (sdbTechFlows db)
     reportProgress Info $ printf "Built name-only supplier index with %d entries for SimaPro linking" (M.size nameIndex)
 
     -- Count and report statistics
-    let (fixedActivities, summary) = fixAllActivitiesByName nameIndex (sdbTechFlows db) (sdbActivities db)
+    let (fixedActivities, summary) = fixAllActivitiesByName unitConfig (sdbUnits db) nameIndex (sdbTechFlows db) (sdbActivities db)
 
     reportProgress Info $
         printf
@@ -588,39 +591,66 @@ fixSimaProActivityLinks db = do
     return $ db{sdbActivities = fixedActivities}
 
 -- | Fix all activities using name-only matching
-fixAllActivitiesByName :: NameOnlyIndex -> TechFlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
-fixAllActivitiesByName idx techFlowDb activities =
-    let results = M.map (fixActivityExchangesByName idx techFlowDb) activities
+fixAllActivitiesByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> ActivityMap -> (ActivityMap, UnlinkedSummary)
+fixAllActivitiesByName unitConfig unitDB idx techFlowDb activities =
+    let results = M.map (fixActivityExchangesByName unitConfig unitDB idx techFlowDb) activities
         summaries = map snd $ M.elems results
         combinedSummary = mconcat summaries
         fixedActivities = M.map fst results
      in (fixedActivities, combinedSummary)
 
 -- | Fix activity exchanges using name-only matching
-fixActivityExchangesByName :: NameOnlyIndex -> TechFlowDB -> Activity -> (Activity, UnlinkedSummary)
-fixActivityExchangesByName idx techFlowDb act =
-    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName idx techFlowDb (activityName act)) (exchanges act)
+fixActivityExchangesByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> Activity -> (Activity, UnlinkedSummary)
+fixActivityExchangesByName unitConfig unitDB idx techFlowDb act =
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLinkByName unitConfig unitDB idx techFlowDb (activityName act)) (exchanges act)
         combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
+{- | A name-based supplier link is admissible only when the matrix builder could
+later convert the consumer's exchange unit to the supplier's reference-product
+unit. This mirrors the builder's own rule exactly (see 'Database.MatrixBuild'):
+a conversion is needed only when the two units differ and both are non-empty,
+and it must then succeed. So a link is safe when the units are identical, when
+either side is empty, or when they are dimensionally compatible. Forming any
+other link would abort the whole load — better to leave the input unlinked.
+-}
+linkUnitsCompatible :: UC.UnitConfig -> T.Text -> T.Text -> Bool
+linkUnitsCompatible unitConfig consumerUnit supplierUnit =
+    let cu = T.toLower (T.strip consumerUnit)
+        su = T.toLower (T.strip supplierUnit)
+     in cu == su
+            || T.null cu
+            || T.null su
+            || UC.unitsCompatible unitConfig consumerUnit supplierUnit
+
 {- | Fix a single exchange's activity link using name-only matching.
 Inputs and non-reference outputs (coproducts / avoided-production credits)
-are eligible for relinking. Returns (fixed exchange, UnlinkedSummary).
+are eligible for relinking. A candidate is accepted only if its
+reference-product unit is dimensionally compatible with the consumer exchange
+('linkUnitsCompatible'); an incompatible candidate is skipped (falling through
+to the prefix fallback, then to unlinked) rather than forming a link the matrix
+builder cannot convert — which would otherwise abort the whole load. Returns
+(fixed exchange, UnlinkedSummary).
 -}
-fixExchangeLinkByName :: NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
+fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
     | role == Input || role == ReferenceInput || role == Coproduct =
         case M.lookup fid techFlowDb of
             Just flow ->
                 let key = normalizeText (tfName flow)
+                    consumerUnit = getUnitNameForExchange unitDB ex
                     relink actUUID prodUUID = ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
-                 in case M.lookup key idx of
+                    -- Accept a candidate only when its reference unit can convert.
+                    accept (actUUID, prodUUID, supplierUnit)
+                        | linkUnitsCompatible unitConfig consumerUnit supplierUnit = Just (actUUID, prodUUID)
+                        | otherwise = Nothing
+                 in case M.lookup key idx >>= accept of
                         Just (actUUID, prodUUID) ->
                             (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
                         Nothing ->
                             let prefixes = extractProductPrefixes (tfName flow)
                                 tryPrefix [] = Nothing
-                                tryPrefix (p : ps) = case M.lookup (normalizeText p) idx of
+                                tryPrefix (p : ps) = case M.lookup (normalizeText p) idx >>= accept of
                                     Just result -> Just result
                                     Nothing -> tryPrefix ps
                              in case tryPrefix prefixes of
@@ -634,9 +664,9 @@ fixExchangeLinkByName idx techFlowDb consumerName ex@TechnosphereExchange{techFl
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)
     | otherwise = (ex, mempty) -- Reference products: nothing to relink
-fixExchangeLinkByName _ _ _ ex@BiosphereExchange{} = (ex, mempty)
+fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
-fixExchangeLinkByName _ _ _ ex@WasteExchange{} = (ex, mempty)
+fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)

@@ -43,6 +43,7 @@ library
                      , SharedSolver
                      , Database
                      , Database.Manager
+                     , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking
                      , Database.MatrixBuild
@@ -263,6 +264,7 @@ test-suite lca-tests
                      , NumericEdgesSpec
                      , AggregateSpec
                      , ConfigWriterSpec
+                     , DeleteSelectionSpec
                      , PropertiesSpec
   build-depends:       base >=4.14 && <5
                      , volca

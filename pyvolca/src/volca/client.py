@@ -142,6 +142,39 @@ def _format_query_value(value: Any) -> Any:
     return str(value)
 
 
+def _coerce_class_filter(c: dict | tuple) -> dict:
+    """Normalize one classification filter to the wire ``DeleteClassFilter``.
+
+    Accepts a ``{"system", "value", "exact"?}`` dict or a
+    ``(system, value, exact?)`` tuple. ``exact`` defaults to False. Raises
+    VoLCAError on a malformed entry rather than silently dropping fields.
+    """
+    if isinstance(c, dict):
+        missing = {"system", "value"} - set(c)
+        if missing:
+            raise VoLCAError(
+                f"Classification filter missing keys: {sorted(missing)}. "
+                "Expected {'system', 'value', 'exact'?}."
+            )
+        return {
+            "system": c["system"],
+            "value": c["value"],
+            "exact": bool(c.get("exact", False)),
+        }
+    if isinstance(c, (tuple, list)):
+        if len(c) not in (2, 3):
+            raise VoLCAError(
+                f"Classification filter tuple must be (system, value[, exact]); "
+                f"got {len(c)} items."
+            )
+        system, value = c[0], c[1]
+        exact = bool(c[2]) if len(c) == 3 else False
+        return {"system": system, "value": value, "exact": exact}
+    raise VoLCAError(
+        f"Classification filter must be a dict or tuple, got {type(c).__name__}."
+    )
+
+
 def _resolve_page_args(
     page: int | None,
     page_size: int | None,
@@ -567,6 +600,92 @@ class Client:
     def unload_database(self, db_name: str) -> dict:
         """Unload a database from memory to free RAM. The disk copy is kept."""
         return self._json(self._session.post(f"{self.base_url}/api/v1/db/{db_name}/unload"))
+
+    # -- Database write operations --
+    #
+    # These mutate a loaded database (copy / delete / relink / export /
+    # dependency wiring). The engine does NOT register them as Resources, so
+    # they carry no operationId and are unreachable through the OpenAPI
+    # dispatcher. Each method therefore builds its URL directly, exactly like
+    # load_database / unload_database above.
+    #
+    # The engine reports failures in-band as ``{"success": false, ...}`` (HTTP
+    # 200) for some of these handlers, so _require_success surfaces those as
+    # VoLCAError rather than letting a failed call look like a success.
+
+    def _db(self, db_name: str | None) -> str:
+        """Resolve the target database, falling back to ``self.db``.
+
+        Raises VoLCAError when neither an explicit ``db_name`` nor a
+        client-level default is available — never silently targets ``""``.
+        """
+        name = db_name or self.db
+        if not name:
+            raise VoLCAError(
+                "No database specified and Client(db=...) is empty. "
+                "Pass db_name= or construct the client with db=...."
+            )
+        return name
+
+    @staticmethod
+    def _require_success(payload: dict, action: str) -> dict:
+        """Raise VoLCAError if the engine reported an in-band failure.
+
+        Handlers that return ``{"success": false, "message": ...}`` with HTTP
+        200 would otherwise look like a success. Surface the engine's own
+        message instead of silently returning the failure envelope.
+        """
+        if payload.get("success") is False:
+            raise VoLCAError(
+                f"{action} failed: {payload.get('message', 'no message')}"
+            )
+        return payload
+
+    def delete_activities(
+        self,
+        *,
+        name: str = "",
+        location: str = "",
+        product: str = "",
+        classifications: list[dict | tuple] | None = None,
+        exact: bool = False,
+        keep: list[str] | None = None,
+        extra: list[str] | None = None,
+        db_name: str | None = None,
+    ) -> dict:
+        """Delete activities selected by filter, sparing/adding explicit ids.
+
+        Builds a ``DeleteSelectionRequest``: the filter fields select the whole
+        matching set, ``keep`` spares matched process ids, and ``extra`` adds
+        ones the filter missed. ``classifications`` is a list of
+        ``{"system", "value", "exact"}`` dicts or ``(system, value, exact)``
+        tuples.
+
+        Returns the ``DeleteSelectionResponse`` dict
+        (``{"success", "message", "deleted"}``); raises VoLCAError on
+        ``success=false``.
+        """
+        # Omit blank filters entirely: sending "name":"" makes the engine treat
+        # an empty string as a real (unsatisfiable) name filter, so a
+        # product-only delete would match nothing and still report success.
+        body: dict = {
+            "classifications": [
+                _coerce_class_filter(c) for c in (classifications or [])
+            ],
+            "exact": exact,
+            "keep": keep or [],
+            "extra": extra or [],
+        }
+        for key, value in (("name", name), ("location", location), ("product", product)):
+            if value:
+                body[key] = value
+        target = self._db(db_name)
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/delete", json=body
+            )
+        )
+        return self._require_success(payload, "delete_activities")
 
     def list_presets(self) -> list[Preset]:
         """List classification presets configured in this instance.

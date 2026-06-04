@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -16,6 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import Database.Edit (deleteActivitiesInDB)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
@@ -98,6 +99,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbUpload registry outputFormat manager args
         Database (DbDelete name) ->
             executeDbDelete registry outputFormat manager name
+        Database (DbDeleteActivities args) ->
+            executeDbDeleteActivities registry outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -477,6 +480,33 @@ executeDbDelete registry fmt manager name = do
         Right () -> do
             reportProgress Info $ "Deleted database: " ++ T.unpack name
             outputResult registry fmt $ object ["deleted" .= name]
+
+{- | Execute delete-by-selection: deletes the whole filtered set (pagination
+ignored) plus the explicit @--add@ ProcessIds, sparing @--keep@.
+-}
+executeDbDeleteActivities :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbDeleteArgs -> IO ()
+executeDbDeleteActivities registry fmt manager args = do
+    let classFilters = case (ddaClassSystem args, ddaClassValue args) of
+            (Just sys, Just val) -> [(sys, val, ddaExact args)]
+            _ -> []
+    result <-
+        deleteActivitiesInDB
+            manager
+            (ddaDb args)
+            (ddaName args)
+            (ddaLocation args)
+            (ddaProduct args)
+            classFilters
+            (ddaExact args)
+            (ddaKeep args)
+            (ddaExtra args)
+    case result of
+        Left err -> do
+            reportError $ "Delete failed: " ++ T.unpack err
+            exitFailure
+        Right deleted -> do
+            reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
+            outputResult registry fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
 
 -- | Execute method delete command
 executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()

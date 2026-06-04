@@ -381,6 +381,20 @@ Returns the raw JSON (no dataclass wrapping). Use this for
 operations that don't have an ergonomic wrapper yet, or for new
 endpoints added after the installed pyvolca was released.
 
+##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, db_name: str | None = None) -> dict`
+
+Delete activities selected by filter, sparing/adding explicit ids.
+
+Builds a ``DeleteSelectionRequest``: the filter fields select the whole
+matching set, ``keep`` spares matched process ids, and ``extra`` adds
+ones the filter missed. ``classifications`` is a list of
+``{"system", "value", "exact"}`` dicts or ``(system, value, exact)``
+tuples.
+
+Returns the ``DeleteSelectionResponse`` dict
+(``{"success", "message", "deleted"}``); raises VoLCAError on
+``success=false``.
+
 ##### `Client.get_activity(process_id: str) -> ActivityDetail`
 
 Fetch an activity's full detail.
