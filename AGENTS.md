@@ -65,6 +65,7 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 
 ### Code safety
 - **Make impossible states impossible** — use the type system.
+- **Name domain values with their own type, not a bare primitive.** When a `Text`/`String`/`Int`/`Double` carries domain meaning that crosses more than one signature — database names, flow and activity UUIDs, units, amounts — wrap it in a `newtype` (with a smart constructor where validation applies). This is why `RootDb`/`ThisDb` are newtypes over `Text` and not raw `Text`, so two database names can't be silently swapped. Two guard-rails: don't wrap values that never leave a single expression (boilerplate ≠ safety), and when a comment is *enumerating* the valid strings, reach for a **sum type**, not a newtype.
 - **No wildcard patterns on sum types** — exhaustive matches only. They hide incomplete matches from the compiler.
 - **No runtime crashes**: never use `error`, `throw`, `undefined`, or partial functions (`head`, `fromJust`). Functions that can fail must return `Either Text a` or `Maybe a`, never crash.
 - **No silent errors or silent misbehaviour**: never return zero, empty, or a fallback value when a lookup fails, a unit conversion can't be done, or data is missing. Surface it: `Either Text a` propagated to a 4xx/5xx, a `reportProgress Warning` log line, or a `toolError` in MCP. A score that silently undercounts is worse than a clear failure — the consumer can't tell something is wrong.
