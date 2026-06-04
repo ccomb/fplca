@@ -914,6 +914,7 @@ runImpactsRequest dbManager args req = do
         db = ldDatabase ld
         method = lrMethod req
         dbName = lrDbName req
+        collection = lrCollection req
         ra = lrResolved req
     except $ ensureLinked dbName "computing impacts" db
     subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
@@ -933,8 +934,8 @@ runImpactsRequest dbManager args req = do
                             (ldSharedSolver ld)
                             (raPid ra)
                             subs
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
-    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
         baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
         (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -946,7 +947,7 @@ runImpactsRequest dbManager args req = do
     outcome <-
         if fromMaybe False (boolArg "include_diagnostics" args)
             then do
-                idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName method
+                idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName collection method
                 let opts = defaultUncharacterizedOpts
                     diagnostics =
                         Mapping.findUncharacterized
@@ -1060,6 +1061,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
             db = ldDatabase ld
             method = lrMethod req
             dbName = lrDbName req
+            collection = lrCollection req
             ra = lrResolved req
         except $ ensureLinked dbName "computing sensitivity" db
         perts <-
@@ -1073,7 +1075,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
                     )
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
         hier <- liftIO $ DM.getLocationHierarchy dbManager
         eRes <-
             liftIO $
@@ -1262,9 +1264,9 @@ callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do
     (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
     ld <- requireDatabase dbManager dbName
-    (_, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    (collection, method) <- ExceptT (resolveMethod dbManager methodIdText)
     let db = ldDatabase ld
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
         total = msTotal stats
         matched = total - msUnmatched stats
@@ -1290,7 +1292,7 @@ callGetFlowMapping dbManager rid args = runTool rid $ do
                                 ]
                             | (cf, Nothing) <- mappings
                             ]
-                unmatchedFlows <- liftIO $ buildUnmatchedDbFlows dbManager dbName db method args maxUnm
+                unmatchedFlows <- liftIO $ buildUnmatchedDbFlows dbManager dbName collection db method args maxUnm
                 pure
                     [ "unmatched_cfs" .= unmatchedCFs
                     , "unmatched_db_flows" .= unmatchedFlows
@@ -1319,12 +1321,13 @@ process-scoped view turns out to be insufficient in practice.
 buildUnmatchedDbFlows ::
     DatabaseManager ->
     Text ->
+    Text ->
     Database ->
     Method ->
     KeyMap Value ->
     Int ->
     IO [Value]
-buildUnmatchedDbFlows dbManager dbName db method args maxN =
+buildUnmatchedDbFlows dbManager dbName collection db method args maxN =
     case textArg "process_id" args of
         Nothing -> pure [] -- caller didn't pin a process; nothing actionable to rank by
         Just pidText -> do
@@ -1348,8 +1351,8 @@ buildUnmatchedDbFlows dbManager dbName db method args maxN =
                             Left _ -> pure []
                             Right sol -> do
                                 let inventory = SharedSolver.csInventory sol
-                                tables <- DM.mapMethodToTablesCached dbManager dbName db method
-                                idx <- DM.mapMethodToIndexCached dbManager dbName method
+                                tables <- DM.mapMethodToTablesCached dbManager dbName collection db method
+                                idx <- DM.mapMethodToIndexCached dbManager dbName collection method
                                 let opts =
                                         defaultUncharacterizedOpts
                                             { Mapping.uoMaxFlows = maxN
@@ -1371,12 +1374,12 @@ callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetCharacterization dbManager rid args = runTool rid $ do
     (dbName, methodIdText) <- except $ (,) <$> requireText "database" args <*> requireText "method_id" args
     ld <- requireDatabase dbManager dbName
-    (_, method) <- ExceptT (resolveMethod dbManager methodIdText)
+    (collection, method) <- ExceptT (resolveMethod dbManager methodIdText)
     let db = ldDatabase ld
         lim = fromMaybe 20 (intArg "limit" args)
         flowQ = textArg "flow" args
         queryLower = fmap T.toLower flowQ
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     let matched =
             [ (cf, f, strat)
             | (cf, Just (f, strat)) <- mappings
@@ -1554,6 +1557,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
             db = ldDatabase ld
             method = lrMethod req
             dbName = lrDbName req
+            collection = lrCollection req
             ra = lrResolved req
             lim = fromMaybe 20 (intArg "limit" args)
             webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
@@ -1570,7 +1574,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
                     (ldSharedSolver ld)
                     (raPid ra)
         let inventory = SharedSolver.csInventory sol
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
         let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
             score = loScore outcome
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1580,7 +1584,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
         diagnosticsFields <-
             if fromMaybe False (boolArg "include_diagnostics" args)
                 then do
-                    idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName method
+                    idx <- liftIO $ DM.mapMethodToIndexCached dbManager dbName collection method
                     let opts = defaultUncharacterizedOpts
                         uncharacterized =
                             Mapping.findUncharacterized
@@ -1641,12 +1645,13 @@ callGetContributingActivities dbManager mBaseUrl rid args =
             db = ldDatabase ld
             method = lrMethod req
             dbName = lrDbName req
+            collection = lrCollection req
             ra = lrResolved req
             lim = fromMaybe 10 (intArg "limit" args)
         except $ ensureLinked dbName "computing contributions" db
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
         -- Skip separate inventory compute: contributions sum equals the score.
         contributions <-
             ExceptT $

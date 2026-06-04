@@ -481,23 +481,27 @@ data DatabaseManager = DatabaseManager
     , dmNoCache :: !Bool -- Caching disabled flag
     , dmPlugins :: !PluginRegistry -- Plugin registry (built-in + external)
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
-    , dmMethodMappingCache :: !(TVar (Map (Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
-    {- ^ Cached flow mappings: (dbName, methodId) → mappings.
-    Invalidated on database/method/synonym reload.
+    , dmMethodMappingCache :: !(TVar (Map (Text, Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
+    {- ^ Cached flow mappings: (dbName, collection, methodId) → mappings.
+    The collection is part of the key because a method UUID is a UUIDv5 of the
+    method name alone, so the same name in two collections collides on UUID
+    while carrying different CF lists. Invalidated on database/method/synonym
+    reload.
     -}
-    , dmMethodTablesCache :: !(TVar (Map (Text, UUID) MethodTables))
+    , dmMethodTablesCache :: !(TVar (Map (Text, Text, UUID) MethodTables))
     {- ^ Cached LCIA-score lookup tables built from mappings.
-    These depend only on (db, method), so building them once per pair
-    saves O(n log n) Map constructions on every LCIA call.
+    These depend only on (db, collection, method), so building them once per
+    triple saves O(n log n) Map constructions on every LCIA call.
     -}
-    , dmMethodSetTablesCache :: !(TVar (Map (Text, [UUID]) MethodSetTables))
+    , dmMethodSetTablesCache :: !(TVar (Map (Text, Text, [UUID]) MethodSetTables))
     {- ^ Cached stacked CF tables for multi-method scoring.
-    Key is (dbName, sortedMethodIds) so subset-arbitrary requests share
-    cache entries with named-collection ones whenever the method ids match.
-    Purged together with 'dmMethodTablesCache' on any reload that
-    invalidates the per-method cache (collection / synonym / DB load).
+    Key is (dbName, collection, sortedMethodIds) so subset-arbitrary requests
+    share cache entries with named-collection ones whenever the method ids
+    match within the same collection. Purged together with
+    'dmMethodTablesCache' on any reload that invalidates the per-method cache
+    (collection / synonym / DB load).
     -}
-    , dmMethodIndexCache :: !(TVar (Map (Text, UUID) MethodIndex))
+    , dmMethodIndexCache :: !(TVar (Map (Text, Text, UUID) MethodIndex))
     {- ^ Cached inverted indices over a method (CF tokens, by-medium, by-CAS).
     Used by the post-scoring suggester to surface candidate matches for
     uncharacterized flows. Keyed identically to the tables cache and
@@ -522,9 +526,9 @@ data DatabaseManager = DatabaseManager
 {- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
 The mapping depends only on (database, method), not on the process being evaluated.
 -}
-mapMethodToFlowsCached :: DatabaseManager -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodToFlowsCached manager dbName db method = do
-    let key = (dbName, methodId method)
+mapMethodToFlowsCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+mapMethodToFlowsCached manager dbName collection db method = do
+    let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodMappingCache manager)
     case M.lookup key cache of
         Just cached -> return cached
@@ -534,10 +538,10 @@ mapMethodToFlowsCached manager dbName db method = do
             return result
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
-mapMethodToTablesCached :: DatabaseManager -> Text -> Database -> Method -> IO MethodTables
-mapMethodToTablesCached manager dbName db method = do
+mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
+mapMethodToTablesCached manager dbName collection db method = do
     hier <- getLocationHierarchy manager
-    mapMethodToTablesCachedWithHier manager dbName db hier method
+    mapMethodToTablesCachedWithHier manager dbName collection db hier method
 
 {- | Variant of 'mapMethodToTablesCached' that takes the location hierarchy as
 an argument. Lets 'mapMethodSetToTablesCached' fetch it once per request
@@ -546,17 +550,18 @@ instead of once per method in the concurrent fan-out.
 mapMethodToTablesCachedWithHier ::
     DatabaseManager ->
     Text ->
+    Text ->
     Database ->
     M.Map Text [Text] ->
     Method ->
     IO MethodTables
-mapMethodToTablesCachedWithHier manager dbName db hier method = do
-    let key = (dbName, methodId method)
+mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
+    let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodTablesCache manager)
     case M.lookup key cache of
         Just tables -> pure tables
         Nothing -> do
-            mappings <- mapMethodToFlowsCached manager dbName db method
+            mappings <- mapMethodToFlowsCached manager dbName collection db method
             cmap <- getMergedCompartmentMap manager
             unitConfig <- getMergedUnitConfig manager
             (mFlows, mUnits) <- getMergedFlowMetadata manager
@@ -608,12 +613,12 @@ mapMethodToTablesCachedWithHier manager dbName db hier method = do
 'mapMethodToTablesCached' and re-used; the only set-level work is stacking
 broadcasts into a dense matrix when none of the methods are regionalized.
 -}
-mapMethodSetToTablesCached :: DatabaseManager -> Text -> Database -> [Method] -> IO MethodSetTables
-mapMethodSetToTablesCached manager dbName db methods = do
-    -- Canonical key = (dbName, sorted methodIds). Stable regardless of input
-    -- ordering so subset-arbitrary requests don't fragment the cache.
+mapMethodSetToTablesCached :: DatabaseManager -> Text -> Text -> Database -> [Method] -> IO MethodSetTables
+mapMethodSetToTablesCached manager dbName collection db methods = do
+    -- Canonical key = (dbName, collection, sorted methodIds). Stable regardless
+    -- of input ordering so subset-arbitrary requests don't fragment the cache.
     let sortedMethods = sortOn methodId methods
-        key = (dbName, map methodId sortedMethods)
+        key = (dbName, collection, map methodId sortedMethods)
     cache <- readTVarIO (dmMethodSetTablesCache manager)
     case M.lookup key cache of
         Just mst -> pure mst
@@ -631,7 +636,7 @@ mapMethodSetToTablesCached manager dbName db methods = do
             -- for a ~25-30s parallel one. Concurrent cache writes on the
             -- per-method cache are idempotent under STM (last write wins,
             -- same value).
-            tables <- mapConcurrently (mapMethodToTablesCachedWithHier manager dbName db hier) sortedMethods
+            tables <- mapConcurrently (mapMethodToTablesCachedWithHier manager dbName collection db hier) sortedMethods
             let !mst = buildMethodSetTables (zip sortedMethods tables)
             atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
             pure mst
@@ -641,9 +646,9 @@ mapMethodSetToTablesCached manager dbName db methods = do
 'Database' itself — only on the method's CF list — but keyed by (dbName,
 methodId) to share lifetime semantics with the tables cache.
 -}
-mapMethodToIndexCached :: DatabaseManager -> Text -> Method -> IO MethodIndex
-mapMethodToIndexCached manager dbName method = do
-    let key = (dbName, methodId method)
+mapMethodToIndexCached :: DatabaseManager -> Text -> Text -> Method -> IO MethodIndex
+mapMethodToIndexCached manager dbName collection method = do
+    let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodIndexCache manager)
     case M.lookup key cache of
         Just idx -> pure idx
@@ -670,10 +675,10 @@ still invalidates them fully.
 -}
 clearMethodMappingCacheForDb :: DatabaseManager -> Text -> IO ()
 clearMethodMappingCacheForDb manager dbName = atomically $ do
-    modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey (\(dn, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
 

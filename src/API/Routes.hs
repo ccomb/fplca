@@ -537,13 +537,14 @@ solution. Cache-keyed by (dbName, methods).
 -}
 buildPerDbSetTables ::
     DatabaseManager ->
+    Text ->
     NE.NonEmpty (Text, Database, Vector) ->
     [Method] ->
     IO (NE.NonEmpty (Database, Vector, Method.Mapping.MethodSetTables))
-buildPerDbSetTables dbManager scalings methods =
+buildPerDbSetTables dbManager collection scalings methods =
     traverse
         ( \(n, d, sv) -> do
-            mst <- DM.mapMethodSetToTablesCached dbManager n d methods
+            mst <- DM.mapMethodSetToTablesCached dbManager n collection d methods
             pure (d, sv, mst)
         )
         scalings
@@ -554,12 +555,13 @@ single dense matvec (non-regional) plus per-method passes (regional).
 batchedScoresFor ::
     DatabaseManager ->
     Text ->
+    Text ->
     Database ->
     SharedSolver.CrossDBSolution ->
     [Method] ->
     IO (M.Map UUID (Either Text Double))
-batchedScoresFor dbManager _dbName _db sol methods = do
-    perDb <- buildPerDbSetTables dbManager (SharedSolver.csScalings sol) methods
+batchedScoresFor dbManager _dbName collection _db sol methods = do
+    perDb <- buildPerDbSetTables dbManager collection (SharedSolver.csScalings sol) methods
     unitCfg <- getMergedUnitConfig dbManager
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
     hier <- DM.getLocationHierarchy dbManager
@@ -576,10 +578,10 @@ batchedScoresFor dbManager _dbName _db sol methods = do
 {- | Pre-warm per-(db, method) cached tables so subsequent 'batchedScoresFor'
 and 'inventoryContributions' calls hit a warm cache.
 -}
-prepMethodCtx :: DatabaseManager -> Text -> Database -> Method -> IO MethodCtx
-prepMethodCtx dbManager dbName db method = do
-    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-    _ <- DM.mapMethodToTablesCached dbManager dbName db method
+prepMethodCtx :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodCtx
+prepMethodCtx dbManager dbName collection db method = do
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName collection db method
+    _ <- DM.mapMethodToTablesCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
     pure MethodCtx{mctxMethod = method, mctxMappedFlows = msTotal stats - msUnmatched stats}
 
@@ -590,6 +592,7 @@ when a batched matvec result is already available.
 computeCategoryResult ::
     DatabaseManager ->
     Text ->
+    Text ->
     Database ->
     SharedSolver.CrossDBSolution ->
     Activity ->
@@ -597,11 +600,11 @@ computeCategoryResult ::
     Maybe (Either Text Double) ->
     Method ->
     IO LCIAResult
-computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore method = do
+computeCategoryResult dbManager dbName collection db sol activity topFlows precomputedScore method = do
     unitCfg <- getMergedUnitConfig dbManager
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-    mappings <- DM.mapMethodToFlowsCached dbManager dbName db method
-    tables <- DM.mapMethodToTablesCached dbManager dbName db method
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName collection db method
+    tables <- DM.mapMethodToTablesCached dbManager dbName collection db method
     let inventory = SharedSolver.csInventory sol
     let stats = computeMappingStats mappings
     score <- case precomputedScore of
@@ -617,7 +620,7 @@ computeCategoryResult dbManager dbName db sol activity topFlows precomputedScore
                     hier <- DM.getLocationHierarchy dbManager
                     perDb <-
                         forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
-                            tbls <- DM.mapMethodToTablesCached dbManager n d method
+                            tbls <- DM.mapMethodToTablesCached dbManager n collection d method
                             pure (d, sv, tbls)
                     case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of
                         Right s -> evaluate s
@@ -674,6 +677,7 @@ walk is skipped; when >0, runs 'inventoryContributions' per method.
 buildLCIABatchResultCached ::
     DatabaseManager ->
     Text ->
+    Text ->
     Database ->
     ProcessId ->
     Activity ->
@@ -682,7 +686,7 @@ buildLCIABatchResultCached ::
     [MethodCtx] ->
     Int ->
     IO LCIABatchResult
-buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ctxs topFlows = do
+buildLCIABatchResultCached dbManager dbName collectionName db actPid activity collection sol ctxs topFlows = do
     let damageCats = mcDamageCategories collection
         nwSets = mcNormWeightSets collection
         dcLookup =
@@ -694,7 +698,7 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
         mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
         methods = map mctxMethod ctxs
         inventory = SharedSolver.csInventory sol
-    scoreMap <- batchedScoresFor dbManager dbName db sol methods
+    scoreMap <- batchedScoresFor dbManager dbName collectionName db sol methods
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
     let unknownUuids =
             [ fid
@@ -733,7 +737,7 @@ buildLCIABatchResultCached dbManager dbName db actPid activity collection sol ct
             topContributors <- case mUnitCfg of
                 Nothing -> pure []
                 Just unitCfg -> do
-                    tables <- DM.mapMethodToTablesCached dbManager dbName db method
+                    tables <- DM.mapMethodToTablesCached dbManager dbName collectionName db method
                     let (rawContribs, _unknownUuids) =
                             inventoryContributions unitCfg mUnits mFlows inventory tables
                         sorted = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
@@ -807,11 +811,11 @@ activityLCIABatchH dbName processIdText collectionName mSub = do
             when (invSize > 0 && invSize <= 5) $
                 reportProgress Info $
                     "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
-    scoreMap <- liftIO $ batchedScoresFor dbManager dbName db sol methods
+    scoreMap <- liftIO $ batchedScoresFor dbManager dbName collectionName db sol methods
     rawResults <-
         liftIO $
             mapConcurrently
-                (\m -> computeCategoryResult dbManager dbName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
+                (\m -> computeCategoryResult dbManager dbName collectionName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
                 methods
     let results = map (enrichWithNW dcLookup mNW) rawResults
         rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
@@ -862,10 +866,10 @@ batchImpactsH dbName collectionName topFlowsParam req = do
     t0 <- liftIO getCurrentTime
     sols <- solutionsWithDeps dbName db sharedSolver validPidNums
     t1 <- liftIO getCurrentTime
-    ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName db) (mcMethods collection)
+    ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName collectionName db) (mcMethods collection)
     let topFlows = max 0 (fromMaybe 0 topFlowsParam)
     let mkEntry ((pidText, pidNum, activity), sol) = do
-            impacts <- buildLCIABatchResultCached dbManager dbName db pidNum activity collection sol ctxs topFlows
+            impacts <- buildLCIABatchResultCached dbManager dbName collectionName db pidNum activity collection sol ctxs topFlows
             pure
                 BatchImpactsEntry
                     { bieProcessId = pidText
@@ -1012,29 +1016,48 @@ cfToAPI cf =
 -- AppM helpers
 -- ---------------------------------------------------------------------------
 
--- | Lookup a method by UUID across all loaded collections.
-loadMethodByUUID :: Text -> AppM Method
+{- | Lookup a method by UUID across all loaded collections, returning the
+collection name it was found in alongside the method. The collection name is
+needed to key the per-method CF caches (a UUID alone collides across
+collections that share a method name). First-match on ambiguity, mirroring
+'API.MCP.resolveMethod'.
+-}
+loadMethodByUUID :: Text -> AppM (Text, Method)
 loadMethodByUUID uuidText = do
     dbManager <- asks aeDbManager
     loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
-    let allMethods = map snd loadedMethods
     case UUID.fromText uuidText of
         Nothing -> throwError err400{errBody = "Invalid method UUID format"}
         Just uuid ->
-            case filter (\m -> methodId m == uuid) allMethods of
-                (m : _) -> return m
+            case filter (\(_, m) -> methodId m == uuid) loadedMethods of
+                ((col, m) : _) -> return (col, m)
                 [] -> throwError err404{errBody = "Method not found"}
 
--- | Resolve (db, solver, ProcessId, Activity, Method) and dispatch.
+{- | Resolve a method by UUID *within a named collection*. Unlike
+'loadMethodByUUID' (first-match across all collections), this guarantees the
+method's CFs belong to @collectionName@ — required wherever the result keys a
+collection-scoped cache, so a method's factors and its cache slot never disagree.
+-}
+loadMethodInCollection :: Text -> Text -> AppM Method
+loadMethodInCollection collectionName uuidText = do
+    (methods, _, _, _) <- loadCollection collectionName
+    case UUID.fromText uuidText of
+        Nothing -> throwError err400{errBody = "Invalid method UUID format"}
+        Just uuid -> case filter ((== uuid) . methodId) methods of
+            (m : _) -> pure m
+            [] -> throwError err404{errBody = "Method not found in collection"}
+
+-- | Resolve (db, solver, ProcessId, Activity, Method) within @collectionName@ and dispatch.
 withActivityAndMethod ::
+    Text ->
     Text ->
     Text ->
     Text ->
     (Database -> SharedSolver -> ProcessId -> Activity -> Method -> AppM a) ->
     AppM a
-withActivityAndMethod dbName processIdText methodIdText k = do
+withActivityAndMethod dbName collectionName processIdText methodIdText k = do
     (db, sharedSolver) <- requireDatabaseByName dbName
-    method <- loadMethodByUUID methodIdText
+    method <- loadMethodInCollection collectionName methodIdText
     case Service.resolveActivityAndProcessId db processIdText of
         Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
         Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
@@ -1386,34 +1409,34 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
 {- | LCIA single-method core. GET passes a top-flows param and logs;
 POST carries substitutions instead and skips logging.
 -}
-activityLCIACore :: Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
-activityLCIACore dbName processIdText methodIdText topFlowsParam mSub = do
+activityLCIACore :: Text -> Text -> Text -> Text -> Maybe Int -> Maybe SubstitutionRequest -> AppM LCIAResult
+activityLCIACore dbName processIdText collectionName methodIdText topFlowsParam mSub = do
     dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
-    method <- loadMethodByUUID methodIdText
+    method <- loadMethodInCollection collectionName methodIdText
     (processId, activity) <- resolveOrThrow db processIdText
     sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
-    result <- liftIO $ computeCategoryResult dbManager dbName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+    result <- liftIO $ computeCategoryResult dbManager dbName collectionName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
     when (isNothing mSub) $ liftIO $ logLCIAResult result method
     pure result
 
 getActivityLCIA :: Text -> Text -> Text -> Text -> Maybe Int -> AppM LCIAResult
-getActivityLCIA dbName processIdText _collectionName methodIdText topFlowsParam =
-    activityLCIACore dbName processIdText methodIdText topFlowsParam Nothing
+getActivityLCIA dbName processIdText collectionName methodIdText topFlowsParam =
+    activityLCIACore dbName processIdText collectionName methodIdText topFlowsParam Nothing
 
 postActivityLCIA :: Text -> Text -> Text -> Text -> SubstitutionRequest -> AppM LCIAResult
-postActivityLCIA dbName processIdText _collectionName methodIdText subReq =
-    activityLCIACore dbName processIdText methodIdText Nothing (Just subReq)
+postActivityLCIA dbName processIdText collectionName methodIdText subReq =
+    activityLCIACore dbName processIdText collectionName methodIdText Nothing (Just subReq)
 
 {- | Sensitivity sweep: rank-1 perturbations on the root scaling, scored
 through the cross-DB graph (regional CFs on dep DBs still apply).
 -}
 postActivitySensitivity :: Text -> Text -> Text -> Text -> SensitivityRequest -> AppM SensitivityResponse
-postActivitySensitivity dbName processIdText _collectionName methodIdText senReq = do
+postActivitySensitivity dbName processIdText collectionName methodIdText senReq = do
     dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     requireFullyLinked dbName db
-    method <- loadMethodByUUID methodIdText
+    method <- loadMethodInCollection collectionName methodIdText
     (processId, activity) <- resolveOrThrow db processIdText
     eRes <- liftIO $ Service.computeSensitivities db sharedSolver processId (srPerturbations senReq)
     (baselineX, perResults) <- either throwServiceError pure eRes
@@ -1440,7 +1463,7 @@ postActivitySensitivity dbName processIdText _collectionName methodIdText senReq
                 case eSol of
                     Left err -> pure (PerturbedEntry p (Left err))
                     Right sol -> do
-                        lcia <- computeCategoryResult dbManager dbName db sol activity 5 Nothing method
+                        lcia <- computeCategoryResult dbManager dbName collectionName db sol activity 5 Nothing method
                         pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
     eBaselineSol <- liftIO $ scaleToSolution baselineX
     baselineSol <-
@@ -1450,7 +1473,7 @@ postActivitySensitivity dbName processIdText _collectionName methodIdText senReq
             eBaselineSol
     baselineLcia <-
         liftIO $
-            computeCategoryResult dbManager dbName db baselineSol activity 5 Nothing method
+            computeCategoryResult dbManager dbName collectionName db baselineSol activity 5 Nothing method
     perturbed <-
         liftIO $
             mapConcurrently (buildEntry baselineLcia) perResults
@@ -1574,14 +1597,14 @@ getActivityAnalyze dbName processIdText analyzerName = do
                     liftIO $ ahAnalyze analyzer ctx
 
 getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
-getContributingFlows dbName processIdText _collectionName methodIdText limitParam =
-    withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+getContributingFlows dbName processIdText collectionName methodIdText limitParam =
+    withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 20 limitParam
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
         let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
             contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
@@ -1615,14 +1638,14 @@ getContributingFlows dbName processIdText _collectionName methodIdText limitPara
                 }
 
 getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
-getContributingActivities dbName processIdText _collectionName methodIdText limitParam =
-    withActivityAndMethod dbName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
+getContributingActivities dbName processIdText collectionName methodIdText limitParam =
+    withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 10 limitParam
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
         eContribs <-
             liftIO $
                 SharedSolver.crossDBProcessContributions
@@ -1683,7 +1706,7 @@ getMethods = do
 
 getMethodDetail :: Text -> AppM MethodDetail
 getMethodDetail methodIdText = do
-    method <- loadMethodByUUID methodIdText
+    (_, method) <- loadMethodByUUID methodIdText
     return $
         MethodDetail
             { mdId = methodId method
@@ -1697,15 +1720,15 @@ getMethodDetail methodIdText = do
 
 getMethodFactors :: Text -> AppM [MethodFactorAPI]
 getMethodFactors methodIdText = do
-    method <- loadMethodByUUID methodIdText
+    (_, method) <- loadMethodByUUID methodIdText
     return $ map cfToAPI (methodFactors method)
 
 getMethodMapping :: Text -> Text -> AppM MappingStatus
 getMethodMapping dbName methodIdText = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
-    method <- loadMethodByUUID methodIdText
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    (collectionName, method) <- loadMethodByUUID methodIdText
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
     let stats = computeMappingStats mappings
         totalFactors = length mappings
         coverage =
@@ -1745,8 +1768,8 @@ getFlowCFMapping :: Text -> Text -> AppM FlowCFMapping
 getFlowCFMapping dbName methodIdText = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
-    method <- loadMethodByUUID methodIdText
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    (collectionName, method) <- loadMethodByUUID methodIdText
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
     let reverseIndex =
             M.fromList
                 [(bfId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
@@ -1765,10 +1788,10 @@ getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM Character
 getCharacterization dbName methodIdText flowFilter limitParam = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
-    method <- loadMethodByUUID methodIdText
+    (collectionName, method) <- loadMethodByUUID methodIdText
     let lim = fromMaybe 50 limitParam
         queryLower = fmap T.toLower flowFilter
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName db method
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
     let matched =
             [ (cf, f, strat)
             | (cf, Just (f, strat)) <- mappings
