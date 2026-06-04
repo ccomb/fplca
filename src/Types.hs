@@ -1230,7 +1230,19 @@ instance Semigroup CrossDBLinkingStats where
         mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
 
 instance Monoid CrossDBLinkingStats where
-    mempty = CrossDBLinkingStats [] M.empty S.empty [] [] [] 0 0 0 0
+    mempty =
+        CrossDBLinkingStats
+            { cdlLinks = []
+            , cdlUnresolvedProducts = M.empty
+            , cdlUnknownUnits = S.empty
+            , cdlLocationFallbacks = []
+            , cdlLocationUnresolved = []
+            , cdlAttributeFallbacks = []
+            , cdlTotalInputs = 0
+            , cdlWasteExactLinks = 0
+            , cdlWasteAmbiguous = 0
+            , cdlCutoffWasteCount = 0
+            }
 
 -- | Deduplicate location fallbacks by (product, requestedLoc)
 deduplicateFallbacks :: [LocationFallback] -> [LocationFallback]

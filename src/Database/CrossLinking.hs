@@ -361,8 +361,9 @@ buildIndexedDatabase dbName synDB db =
             }
 
 {- | Index supplier entries by their @(activityUUID, productUUID)@ identity.
-Location variants of one activity share that key, so last-wins is harmless —
-they carry the same activity, product, unit and name.
+Each location variant is a distinct activity with its own activity UUID, so
+variants do not collide here; a collision can only be a genuine duplicate of the
+same activity+product, making last-wins harmless.
 -}
 indexByActivityProduct :: [(Text, SupplierEntry)] -> M.Map (UUID, UUID) SupplierEntry
 indexByActivityProduct entries =

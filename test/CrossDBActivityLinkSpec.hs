@@ -25,7 +25,7 @@ import Database.CrossLinking (
     findSupplierByActivityProduct,
     locationHierarchy,
  )
-import Database.Loader (findAllCrossDBLinks)
+import Database.Loader (collectStagedDanglingProductNames, findAllCrossDBLinks)
 import SynonymDB (emptySynonymDB)
 import Test.Hspec
 import Types
@@ -185,3 +185,29 @@ spec = do
                 stats = runLinks fg [bg]
             length (cdlLinks stats) `shouldBe` 1
             cdlAttributeFallbacks stats `shouldBe` []
+
+    describe "collectStagedDanglingProductNames (duplicate product flow)" $ do
+        it "still names a residual gap when only one of two same-product inputs is covered" $ do
+            -- One activity consumes "widget" twice, from two suppliers (same
+            -- flowId, different activityLinkId); neither supplier is in the
+            -- database. A single cross-DB link covers one of them — the other
+            -- must still be reported, not masked by the shared (act, prod, flow)
+            -- triple. The engine resolves demands by (activityLinkId, flowId),
+            -- so coverage is counted per occurrence, not tested for membership.
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd supAct, inputEx supProd oldAct]
+                fg = mkDB [((cAct, cProd), consumer)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
+                coveringLink =
+                    CrossDBLink
+                        { cdlConsumerActUUID = cAct
+                        , cdlConsumerProdUUID = cProd
+                        , cdlConsumerFlowId = supProd
+                        , cdlSupplierActUUID = supAct
+                        , cdlSupplierProdUUID = supProd
+                        , cdlCoefficient = 2.0
+                        , cdlExchangeUnit = "kg"
+                        , cdlFlowName = "widget"
+                        , cdlLocation = "GLO"
+                        , cdlSourceDatabase = "bg"
+                        , cdlTiedAlternatives = []
+                        }
+            collectStagedDanglingProductNames fg [coveringLink] `shouldBe` M.singleton "widget" 1
