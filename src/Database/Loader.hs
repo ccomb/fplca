@@ -53,6 +53,7 @@ module Database.Loader (
     -- * Database Analysis
     countTotalTechInputs,
     countUnlinkedExchanges,
+    collectDanglingProductNames,
 
     -- * Internal Linking
     fixSimaProActivityLinks,
@@ -85,7 +86,7 @@ import Data.Either (partitionEithers)
 import Data.List (sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Store (decodeEx, encode)
@@ -95,6 +96,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Typeable (typeOf, typeRepFingerprint)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
 import Database.CrossLinking (
@@ -111,6 +113,7 @@ import Database.CrossLinking (
     locationHierarchy,
     normalizeUnicode,
  )
+import Database.MatrixBuild (findProducer)
 import EcoSpold.Common (distributeFiles)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDatasetsFromFile1)
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
@@ -1235,56 +1238,105 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
             -- The links will be stored in the Database.dbCrossDBLinks field later
             return (db, stats')
 
--- | Collect unlinked product names from a database (for databases without cross-DB linking)
+{- | Inputs that demand a supplier — the exact set the matrix builder tries to
+resolve in 'Database.MatrixBuild.techTriple'.
+
+Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
+@(I-A)@ and are skipped by the matrix builder, so a treatment process's
+'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
+completeness below 100% for a perfectly solvable database. Waste *outputs* (the
+typical SimaPro 'Final waste flows' case) are end-of-life markers, also not
+demands; only waste/technosphere *inputs* remain.
+-}
+isSupplierDemand :: Exchange -> Bool
+isSupplierDemand ex =
+    not (isBiosphereExchange ex)
+        && exchangeIsInput ex
+        && not (exchangeIsReference ex)
+
+{- | True when a staged input resolves to a producer activity present in the
+same database — the @(activityLinkId, flowId)@ branch of
+'Database.MatrixBuild.findProducer'.
+
+The process-link branch is deliberately omitted: a 'ProcessId' is an interned
+index assigned only when matrices are built, so it never exists on a
+'SimpleDatabase' (it is always 'Nothing' here). The loaded-database counterpart
+'collectDanglingProductNames' has the real lookup and calls 'findProducer'
+directly, honouring both branches.
+
+A nil @activityLinkId@ (SimaPro inputs awaiting cross-DB linking, or a genuine
+orphan) is never an internal producer. A *non-nil* link to an activity absent
+from this database — e.g. a partial EcoSpold2 import that references ecoinvent
+background activities it doesn't ship — is unresolved too: the matrix builder
+silently drops such an exchange, so it must count as unlinked rather than
+masquerade as a resolved internal link.
+-}
+hasInternalProducer :: SimpleDatabase -> Exchange -> Bool
+hasInternalProducer db ex =
+    case exchangeActivityLinkId ex of
+        Nothing -> False
+        Just actUUID -> M.member (actUUID, exchangeFlowId ex) (sdbActivities db)
+
+{- | Product names of technosphere demands with no resolved internal producer —
+the supplier gaps surfaced on the setup page. Covers both nil-link inputs and
+non-nil links whose target activity is absent (partial EcoSpold2 imports).
+-}
 collectUnlinkedProductNames :: SimpleDatabase -> M.Map T.Text Int
 collectUnlinkedProductNames db =
     M.fromListWith
         (+)
         [ (tfName flow, 1)
         | act <- M.elems (sdbActivities db)
-        , ex@TechnosphereExchange{techFlowId = fid, techActivityLinkId = linkId} <- exchanges act
-        , exchangeIsInput ex
-        , linkId == UUID.nil
-        , Just flow <- [M.lookup fid (sdbTechFlows db)]
+        , ex@TechnosphereExchange{} <- exchanges act
+        , isSupplierDemand ex
+        , not (hasInternalProducer db ex)
+        , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
         ]
 
--- | Count unlinked technosphere exchanges in a database
+-- | Count supplier demands with no resolved internal producer.
 countUnlinkedExchanges :: SimpleDatabase -> Int
 countUnlinkedExchanges db =
-    sum
-        [ 1
+    length
+        [ ()
         | act <- M.elems (sdbActivities db)
         , ex <- exchanges act
-        , isUnlinkedTechInput ex
+        , isSupplierDemand ex
+        , not (hasInternalProducer db ex)
         ]
-  where
-    isUnlinkedTechInput :: Exchange -> Bool
-    isUnlinkedTechInput ex@TechnosphereExchange{techActivityLinkId = linkId} =
-        exchangeIsInput ex && linkId == UUID.nil
-    isUnlinkedTechInput BiosphereExchange{} = False
-    -- A waste exchange counts as an unlinked "tech input" only when it is
-    -- consumed (treatment side) and has no supplier yet. Waste *outputs*
-    -- (the typical SimaPro 'Final waste flows' case) are end-of-life
-    -- markers, not demands — they shouldn't inflate the missing-supplier
-    -- tally.
-    isUnlinkedTechInput ex@WasteExchange{waActivityLinkId = linkId} =
-        exchangeIsInput ex && linkId == UUID.nil
 
--- | Count total technosphere input exchanges in a database
+-- | Count total supplier demands — the completeness denominator.
 countTotalTechInputs :: SimpleDatabase -> Int
 countTotalTechInputs db =
-    sum
-        [ 1
+    length
+        [ ()
         | act <- M.elems (sdbActivities db)
         , ex <- exchanges act
-        , isTechInput ex
+        , isSupplierDemand ex
         ]
-  where
-    isTechInput :: Exchange -> Bool
-    isTechInput ex@TechnosphereExchange{} = exchangeIsInput ex
-    isTechInput BiosphereExchange{} = False
-    -- Mirror isUnlinkedTechInput: only waste *inputs* (treatment side) count.
-    isTechInput ex@WasteExchange{} = exchangeIsInput ex
+
+{- | Product names of a *loaded* database's dangling internal links: non-nil
+@activityLinkId@ inputs that 'findProducer' cannot resolve against the
+database's own process lookup (the matrix builder silently drops them). The
+loaded-path counterpart that names the supplier gaps a partial EcoSpold2 import
+leaves behind — distinct from nil-link inputs, the cross-DB candidates already
+tracked in the linking stats.
+
+Sharing 'findProducer' keeps this honest with the matrix even once
+@techProcessLinkId@ is populated: an input whose process link resolves is not
+dangling, however its activity link looks.
+-}
+collectDanglingProductNames :: Database -> M.Map T.Text Int
+collectDanglingProductNames db =
+    M.fromListWith
+        (+)
+        [ (tfName flow, 1)
+        | act <- V.toList (dbActivities db)
+        , ex@TechnosphereExchange{} <- exchanges act
+        , isSupplierDemand ex
+        , isNothing (findProducer (dbProcessIdLookup db) ex)
+        , Just _ <- [exchangeActivityLinkId ex]
+        , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
+        ]
 
 {- | Find all cross-database links without modifying activities
 Returns statistics including the CrossDBLinks for chained solving

@@ -14,6 +14,7 @@ module Database.MatrixBuild (
     collectBioFlowOrder,
     buildTechTriples,
     buildBioTriples,
+    findProducer,
 ) where
 
 import Control.Applicative ((<|>))

@@ -78,6 +78,30 @@ inputExchange fid loc =
         , techPedigree = Nothing
         }
 
+actUUID2, missingActUUID :: UUID.UUID
+actUUID2 = read "cccccccc-0000-0000-0000-000000000002"
+missingActUUID = read "dddddddd-0000-0000-0000-000000000099"
+
+-- | An input linked (non-nil) to producer activity @actId@ producing @prodId@.
+linkedInput :: UUID.UUID -> UUID.UUID -> Exchange
+linkedInput actId prodId = (inputExchange prodId "GLO"){techActivityLinkId = actId}
+
+{- | A treatment process's reference input (the waste it treats): an input-side
+reference exchange that the matrix builder skips, so it is no supplier demand.
+-}
+referenceInput :: UUID.UUID -> Exchange
+referenceInput fid = (inputExchange fid "GLO"){techRole = ReferenceInput}
+
+simpleDBOf :: [((UUID.UUID, UUID.UUID), Activity)] -> [(UUID.UUID, Text)] -> SimpleDatabase
+simpleDBOf acts flows =
+    SimpleDatabase
+        { sdbActivities = M.fromList acts
+        , sdbTechFlows = M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.empty
+        }
+
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
@@ -295,6 +319,45 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             let sdb = Types.toSimpleDatabase db
             M.null (collectUnlinkedProductNames sdb) `shouldBe` True
+
+    -- A partial EcoSpold2 import carries non-nil activityLinkIds that point at
+    -- background activities it doesn't ship. Those links must read as unlinked,
+    -- not silently masquerade as resolved internal links (the matrix builder
+    -- drops them, so the score would otherwise undercount with no warning).
+    describe "countUnlinkedExchanges (producer presence)" $ do
+        it "counts a non-nil link to an absent activity as unlinked" $ do
+            let consumer = minimalActivity "lyocell fibre" "GLO" [refExchange flowUUID1, linkedInput missingActUUID flowUUID2]
+                sdb = simpleDBOf [((actUUID1, flowUUID1), consumer)] [(flowUUID1, "lyocell fibre"), (flowUUID2, "chemical, inorganic")]
+            countUnlinkedExchanges sdb `shouldBe` 1
+
+        it "does not count a non-nil link to a present activity" $ do
+            let consumer = minimalActivity "lyocell fibre" "GLO" [refExchange flowUUID1, linkedInput actUUID2 flowUUID2]
+                supplier = minimalActivity "chemical, inorganic" "GLO" [refExchange flowUUID2]
+                sdb = simpleDBOf [((actUUID1, flowUUID1), consumer), ((actUUID2, flowUUID2), supplier)] [(flowUUID1, "lyocell fibre"), (flowUUID2, "chemical, inorganic")]
+            countUnlinkedExchanges sdb `shouldBe` 0
+
+    describe "collectUnlinkedProductNames (producer presence)" $ do
+        it "surfaces the product of a dangling non-nil link" $ do
+            let consumer = minimalActivity "lyocell fibre" "GLO" [refExchange flowUUID1, linkedInput missingActUUID flowUUID2]
+                sdb = simpleDBOf [((actUUID1, flowUUID1), consumer)] [(flowUUID1, "lyocell fibre"), (flowUUID2, "chemical, inorganic")]
+            collectUnlinkedProductNames sdb `shouldBe` M.fromList [("chemical, inorganic", 1)]
+
+    -- A treatment process's reference input (ReferenceInput) is a self-edge the
+    -- matrix builder skips, not a supplier demand. Counting it would drag a
+    -- solvable treatment database below 100% complete and wrongly refuse
+    -- finalize, so it must stay out of both the total and the unlinked tally.
+    describe "reference inputs are not supplier demands" $ do
+        it "excludes a treatment ReferenceInput from the input total" $ do
+            let treatment = minimalActivity "waste treatment" "GLO" [referenceInput flowUUID1, linkedInput actUUID2 flowUUID2]
+                supplier = minimalActivity "electricity" "GLO" [refExchange flowUUID2]
+                sdb = simpleDBOf [((actUUID1, flowUUID1), treatment), ((actUUID2, flowUUID2), supplier)] [(flowUUID1, "waste"), (flowUUID2, "electricity")]
+            -- only the linked electricity input is a demand; the ReferenceInput is not
+            countTotalTechInputs sdb `shouldBe` 1
+
+        it "does not count a nil-link ReferenceInput as unlinked" $ do
+            let treatment = minimalActivity "waste treatment" "GLO" [referenceInput flowUUID1]
+                sdb = simpleDBOf [((actUUID1, flowUUID1), treatment)] [(flowUUID1, "waste")]
+            countUnlinkedExchanges sdb `shouldBe` 0
 
     -- ---------------------------------------------------------------------
     -- activityNormFactor — exercises every TechRole branch so the

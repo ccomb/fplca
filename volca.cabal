@@ -228,6 +228,7 @@ test-suite lca-tests
                      , PluginConfigSpec
                      , ConfigSpec
                      , LoaderSpec
+                     , SetupInfoSpec
                      , MappingSpec
                      , MethodSetTablesSpec
                      , MethodCollectionCacheSpec
