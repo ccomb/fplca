@@ -21,7 +21,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel da
 
 - **Multiple database formats**: EcoSpold2 (.spold), EcoSpold1 (.xml), SimaPro CSV, ILCD process datasets, Brightway Excel (.xlsx)
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
-- **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering
+- **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering. EcoSpold2 inputs link to a loaded background by exact `activityLinkId` identity (so a partial import resolves against its matching release), falling back to attribute matching — flagged as approximate — when the background is a different release
 - **Cross-DB what-if substitutions**: Swap an upstream activity at any depth — including suppliers in dependency databases — and recompute inventory and impacts through one endpoint
 - **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config
 - **Normalization and weighting**: Batch LCIA computes normalized and weighted scores per category and a single aggregated score (Pt) when NW data is present in the method collection

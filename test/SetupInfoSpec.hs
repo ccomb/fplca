@@ -167,3 +167,36 @@ spec = do
             dsiIsReady info `shouldBe` True
             dsiCompleteness info `shouldBe` 100.0
             dsiMissingSuppliers info `shouldBe` []
+
+    -- The dangling-import shape, but its matching background is loaded as a
+    -- dependency: the input resolves cross-DB by activityLinkId, recorded in
+    -- 'dbCrossDBLinks'. Readiness must follow the matrix — ready at 100% with no
+    -- gaps — not keep reporting the now-supplied product as missing.
+    describe "buildLoadedSetupInfo (partial import + loaded background)" $ do
+        it "reports a cross-DB-supplied background link as ready / 100% / no gaps" $ do
+            let consumer =
+                    minimalActivity
+                        "lyocell fibre"
+                        [refExchange consumerProd, linkedInput missingAct supplierProd]
+                link =
+                    CrossDBLink
+                        { cdlConsumerActUUID = consumerAct
+                        , cdlConsumerProdUUID = consumerProd
+                        , cdlConsumerFlowId = supplierProd
+                        , cdlSupplierActUUID = supplierAct
+                        , cdlSupplierProdUUID = supplierProd
+                        , cdlCoefficient = 0.5
+                        , cdlExchangeUnit = "kg"
+                        , cdlFlowName = "chemical, inorganic"
+                        , cdlLocation = "GLO"
+                        , cdlSourceDatabase = "background"
+                        , cdlTiedAlternatives = []
+                        }
+            db <-
+                buildDb
+                    [((consumerAct, consumerProd), consumer)]
+                    [(consumerProd, "lyocell fibre"), (supplierProd, "chemical, inorganic")]
+            let info = setupInfoFor db{dbCrossDBLinks = [link]}
+            dsiIsReady info `shouldBe` True
+            dsiCompleteness info `shouldBe` 100.0
+            dsiMissingSuppliers info `shouldBe` []
