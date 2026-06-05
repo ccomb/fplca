@@ -67,6 +67,8 @@ data DatabaseAction
       pagination ignored), keeping/adding explicit ProcessIds.
       -}
       DbDeleteActivities DbDeleteArgs
+    | -- | Copy a loaded database (source name → new name)
+      DbCopy Text Text
     deriving (Eq, Show, Generic)
 
 {- | Arguments for delete-by-selection. The filter fields mirror the activity

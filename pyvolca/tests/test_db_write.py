@@ -97,3 +97,30 @@ class TestDelete:
         _ok(session, {"success": False, "message": "nothing matched"})
         with pytest.raises(VoLCAError, match="nothing matched"):
             client.delete_activities(name="x")
+
+
+# ---------------------------------------------------------------------------
+# copy
+# ---------------------------------------------------------------------------
+
+
+class TestCopy:
+    def test_url_and_default_db(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": True, "message": "copied", "database": None})
+        client.copy_database("clone")
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/testdb/copy/clone"
+
+    def test_explicit_db_override(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": True, "message": "ok"})
+        client.copy_database("clone", db_name="other")
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/other/copy/clone"
+
+    def test_in_band_failure_raises(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"success": False, "message": "already exists"})
+        with pytest.raises(VoLCAError, match="already exists"):
+            client.copy_database("clone")

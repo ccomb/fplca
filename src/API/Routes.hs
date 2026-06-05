@@ -121,6 +121,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "load" :> Post '[JSON] LoadDatabaseResponse
                 :<|> "db" :> Capture "dbName" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "db" :> Capture "dbName" Text :> "relink" :> Post '[JSON] RelinkResponse
+                :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Delete the whole filtered set of activities (selection in JSON body)
                 :<|> "db" :> Capture "dbName" Text :> "delete" :> ReqBody '[JSON] DeleteSelectionRequest :> Post '[JSON] DeleteSelectionResponse
@@ -1954,6 +1955,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> DBHandlers.loadDatabaseHandler
             :<|> DBHandlers.unloadDatabaseHandler
             :<|> DBHandlers.relinkDatabaseHandler
+            :<|> DBHandlers.copyDatabaseHandler
             :<|> DBHandlers.deleteDatabaseHandler
             :<|> DBHandlers.deleteActivitiesHandler
             :<|> DBHandlers.uploadDatabaseHandler

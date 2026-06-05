@@ -381,6 +381,15 @@ Returns the raw JSON (no dataclass wrapping). Use this for
 operations that don't have an ergonomic wrapper yet, or for new
 endpoints added after the installed pyvolca was released.
 
+##### `Client.copy_database(new_name: str, db_name: str | None = None) -> dict`
+
+Copy a loaded database in memory under a new name.
+
+``new_name`` is a path segment; the source defaults to ``self.db``.
+Returns the engine's ``ActivateResponse`` dict
+(``{"success", "message", "database"?}``). Raises VoLCAError if the
+engine reports ``success=false``.
+
 ##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, db_name: str | None = None) -> dict`
 
 Delete activities selected by filter, sparing/adding explicit ids.

@@ -641,6 +641,20 @@ class Client:
             )
         return payload
 
+    def copy_database(self, new_name: str, db_name: str | None = None) -> dict:
+        """Copy a loaded database in memory under a new name.
+
+        ``new_name`` is a path segment; the source defaults to ``self.db``.
+        Returns the engine's ``ActivateResponse`` dict
+        (``{"success", "message", "database"?}``). Raises VoLCAError if the
+        engine reports ``success=false``.
+        """
+        src = self._db(db_name)
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/db/{src}/copy/{new_name}")
+        )
+        return self._require_success(payload, "copy_database")
+
     def delete_activities(
         self,
         *,

@@ -4,10 +4,18 @@
 
 {- |
 Module      : Database.Edit
-Description : In-memory database editing primitives (delete-by-selection)
+Description : In-memory database editing primitives (copy, delete-by-selection)
 
 Shared home for operations that produce a *new* loaded database from an
 existing one without touching disk.
+
+COPY is construction, not mutation. 'Database' is a pure, immutable value
+(see "Types"), so duplicating it is just sharing the same persistent
+structure under a second registry key: nothing observable can alias because
+nothing is mutable. The only fresh allocation is the solver (it holds an
+'MVar' factorization cache keyed by name); reusing the source solver would
+let the two registry entries share a factorization cache, so the copy gets
+its own.
 
 DELETE is reconstruction, not mutation either. 'deleteActivities' drops a set
 of activities and rebuilds every dependent structure (interning tables,
@@ -19,8 +27,14 @@ database is byte-for-byte indistinguishable from one that never carried the
 removed rows. Exchanges in surviving activities that referenced a deleted
 activity are UNLINKED (their activity link reset to nil), leaving the value
 ready for relinking — never silently dropped.
+
+Memory cost (copy): the copy keeps the source 'Database' alive for as long as
+it is loaded. Structural sharing means we don't re-allocate the activity/flow
+vectors, but a large database that would otherwise be unloaded stays resident
+while any copy of it is loaded.
 -}
 module Database.Edit (
+    copyDatabase,
     deleteActivities,
     deleteActivitiesWith,
     resolveDeleteSelection,
@@ -28,7 +42,8 @@ module Database.Edit (
     deleteActivitiesInDB,
 ) where
 
-import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
+import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
+import Control.Exception (finally)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -38,6 +53,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 
+import Config (DatabaseConfig (..))
 import Database (
     applyStructuredFilters,
     buildIndexesWithProcessIds,
@@ -61,6 +77,7 @@ import Database.MatrixBuild (
     buildTechTriples,
     collectBioFlowOrder,
  )
+import Database.Upload (slugify)
 import Matrix (clearCachedSolver)
 import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
@@ -78,6 +95,92 @@ import Types (
     parseUUIDPair,
  )
 import UnitConversion (UnitConfig, defaultUnitConfig)
+
+{- | Copy a loaded database into the runtime registry under the slugified
+@newName@.
+
+Looks up the loaded source, builds an independent 'LoadedDatabase' (renamed
+config + fresh solver — 'Database' is immutable, so the value itself is shared
+safely) and inserts it into the loaded / available / indexed maps.
+
+@newName@ is slugified to the same charset as uploaded databases: the copy is
+registered as uploaded (see 'renameConfig'), and uploaded databases are later
+deleted by name via 'removeDirectoryRecursive', so an unsanitised name (e.g.
+@"../x"@ or @""@) would let the eventual delete escape the uploads directory.
+
+Fails (Left) when the source is not loaded, when @newName@ slugifies to empty,
+or when the name already designates a loaded, configured, or in-flight
+database — a copy must never silently overwrite an existing entry. The name is
+reserved atomically (in 'dmStagingDbs') across the slow solver build, so two
+concurrent copies of the same name cannot both pass the existence check.
+-}
+copyDatabase :: DatabaseManager -> Text -> Text -> IO (Either Text ())
+copyDatabase manager srcName newName = do
+    let slug = slugify newName
+    if T.null slug
+        then pure $ Left $ "Invalid copy name (no usable characters): " <> newName
+        else
+            getDatabase manager srcName >>= \case
+                Nothing -> pure $ Left $ "Database not loaded: " <> srcName
+                Just src -> do
+                    reserved <- atomically $ do
+                        loadedDbs <- readTVar (dmLoadedDbs manager)
+                        availableDbs <- readTVar (dmAvailableDbs manager)
+                        stagingDbs <- readTVar (dmStagingDbs manager)
+                        if M.member slug loadedDbs || M.member slug availableDbs || S.member slug stagingDbs
+                            then pure (Left ("Database already exists: " <> slug))
+                            else Right () <$ modifyTVar' (dmStagingDbs manager) (S.insert slug)
+                    case reserved of
+                        Left err -> pure (Left err)
+                        Right () ->
+                            finally
+                                (registerCopy manager slug src)
+                                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete slug))
+
+{- | Build the copy's solver/index and insert it under @slug@. Caller holds the
+'dmStagingDbs' reservation for @slug@.
+-}
+registerCopy :: DatabaseManager -> Text -> LoadedDatabase -> IO (Either Text ())
+registerCopy manager slug src = do
+    let copiedDb = ldDatabase src
+        newConfig = renameConfig slug (ldConfig src)
+        -- Fresh solver: a distinct name keys a distinct factorization cache.
+        techTriplesInt =
+            [ (fromIntegral i, fromIntegral j, v)
+            | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
+            ]
+    solver <-
+        createSharedSolver
+            slug
+            techTriplesInt
+            (fromIntegral (dbActivityCount copiedDb))
+    synonymDB <- getMergedSynonymDB manager
+    let copied =
+            LoadedDatabase
+                { ldDatabase = copiedDb
+                , ldSharedSolver = solver
+                , ldConfig = newConfig
+                }
+        indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
+    atomically $ do
+        modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
+        modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
+        modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
+    clearMethodMappingCacheForDb manager slug
+    pure $ Right ()
+
+{- | Rename a config for the copy: new internal name, derived display name, and
+forced deletable/uploaded so the copy can be removed again via the normal
+delete path (the source may be a TOML-pinned, non-deletable database).
+-}
+renameConfig :: Text -> DatabaseConfig -> DatabaseConfig
+renameConfig newName cfg =
+    cfg
+        { dcName = newName
+        , dcDisplayName = newName
+        , dcIsUploaded = True
+        , dcDeletable = True
+        }
 
 -- ---------------------------------------------------------------------------
 -- Delete by selection
