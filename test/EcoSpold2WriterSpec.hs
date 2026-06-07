@@ -204,6 +204,41 @@ fixtureWithExchange ex =
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
 
+{- | A single-activity database whose biosphere flow carries synonyms, so the
+writer's @\<synonym\>@ emission and the parser's read-back are exercised end to
+end (the other fixtures all pass empty synonym maps).
+-}
+fixtureWithBioSynonyms :: SimpleDatabase
+fixtureWithBioSynonyms =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actA, prodA) activity
+        , sdbTechFlows = M.singleton prodA (TechnosphereFlow prodA "product A" unitKg M.empty Nothing Nothing)
+        , sdbBioFlows =
+            M.singleton
+                co2
+                (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg syns (Just "124-38-9") Nothing (Just (Compartment "air" (Just "unspecified"))))
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitKg (Unit unitKg "kg" "kg" "")
+        }
+  where
+    syns = M.singleton "en" (S.fromList ["CO2", "carbonic anhydride"])
+    activity =
+        Activity
+            "synonym activity"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            Nothing
+
 {- | A single activity exercising the subtlest inversion paths: a coproduct
 (outputGroup 2) and waste exchanges in both directions (waIsInput controls
 inputGroup 5 vs outputGroup 1). These round-trip paths were previously
@@ -333,6 +368,20 @@ spec = describe "EcoSpold2 writer round-trip" $ do
                 (fixtureWithExchange (TechnosphereExchange co2 2.0 unitKg ReferenceInput UUID.nil Nothing "" Nothing Nothing))
                 `shouldSatisfy` isLeft
 
+        it "rejects an exchange whose unit is absent from the registry" $
+            -- unitMJ is not in the single-unit registry, so the writer would emit
+            -- no <unitName> and the parser would read back UNKNOWN_UNIT.
+            checkEcoSpold2Exportable
+                (fixtureWithExchange (BiosphereExchange co2 1.0 unitMJ Emission "" Nothing Nothing))
+                `shouldSatisfy` isLeft
+
+        it "rejects a subnormal amount that re-parses to zero rather than undercounting" $
+            -- 5e-324's fixed-point form carries too few significant digits for
+            -- Data.Text.Read.double to recover; it would silently export as 0.
+            checkEcoSpold2Exportable
+                (fixtureWithExchange (BiosphereExchange co2 5e-324 unitKg Emission "" Nothing Nothing))
+                `shouldSatisfy` isLeft
+
     -- (b) Semantic round-trip: parse(write(D)) ≅ D, order-insensitive.
     describe "semantic round-trip (structural equality)" $ do
         it "preserves the activity set keyed by (actUUID, prodUUID)" $ do
@@ -366,6 +415,14 @@ spec = describe "EcoSpold2 writer round-trip" $ do
             map (\f -> (tfId f, tfName f)) (M.elems (sdbTechFlows sdb'))
                 `shouldMatchList` map (\f -> (tfId f, tfName f)) (M.elems (sdbTechFlows sdb))
 
+        it "preserves biosphere flow synonyms across the round-trip" $ do
+            -- The writer emits <synonym> lines and the parser reads them back
+            -- (collapsed under "en"); without a fixture carrying synonyms this
+            -- path was unexercised end to end.
+            sdb' <- roundTrip fixtureWithBioSynonyms
+            S.unions (concatMap (M.elems . bfSynonyms) (M.elems (sdbBioFlows sdb')))
+                `shouldBe` S.fromList ["CO2", "carbonic anhydride"]
+
     -- (c) Score-equivalence: same inventory for every activity within tolerance.
     it "yields the same LCIA inventory as the original (within tolerance)" $ do
         sdb <- loadFixtureSimple
@@ -389,14 +446,18 @@ spec = describe "EcoSpold2 writer round-trip" $ do
 -- Comparison helpers (order-insensitive, tolerance-aware)
 -- ----------------------------------------------------------------------------
 
--- | Structural fingerprint of an exchange, stable under reordering.
-exchangeFingerprint :: Exchange -> (Int, Text, Bool, Bool, Integer)
+{- | Structural fingerprint of an exchange, stable under reordering. Carries the
+per-exchange comment so the semantic round-trip actually pins it (the fixture
+gives one input a comment).
+-}
+exchangeFingerprint :: Exchange -> (Int, Text, Bool, Bool, Integer, Maybe Text)
 exchangeFingerprint ex =
     ( kindRank ex
     , UUID.toText (exchangeFlowId ex)
     , exchangeIsInput ex
     , exchangeIsReference ex
     , roundAmount (exchangeAmount ex)
+    , exchangeComment ex
     )
   where
     kindRank TechnosphereExchange{} = 0

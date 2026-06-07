@@ -24,6 +24,12 @@ The only thing the writer cannot recover losslessly is information the parser
 discards (per-exchange @id@/@unitId@ attribute *strings*, production volumes,
 properties). Those are either omitted or synthesised from the stable UUIDs, so
 a parse→write→parse cycle is a fixed point.
+
+The contract is fixed-point over the parser's /image/, not @parse(write(x)) == x@
+for an arbitrary 'SimpleDatabase'. The parser normalises as it reads — e.g. it
+trims surrounding whitespace from text nodes — so a value that never came from a
+parse (a name padded with leading spaces) is outside the round-trip's domain;
+@parse(write(parse(s))) == parse(s)@ is what holds.
 -}
 module EcoSpold.Writer2 (
     VolatileMeta (..),
@@ -40,6 +46,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import EcoSpold.Common (showFFloatTrim)
 import Types
@@ -116,30 +123,43 @@ re-encode.
     @\<unitName\>@, which the parser re-reads as the @UNKNOWN_UNIT@ placeholder —
     a silent unit downgrade. Reject rather than lose the unit.
 
+  * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
+    re-parse to the same 'Double' through 'Data.Text.Read.double' — e.g. a
+    subnormal near the floating-point floor — would silently export as a
+    different value. Reject rather than undercount.
+
 Reports the first offender and fails loudly rather than emit silently wrong
-data. Databases free of it pass unchanged. Subsequent checks extend this guard.
+data. Databases free of it pass unchanged.
 -}
 checkEcoSpold2Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold2Exportable db =
-    case (amountOffenders, refInputOffenders, unknownUnitOffenders) of
-        ((consumer, amt) : _, _, _) ->
+    case (amountOffenders, refInputOffenders, unknownUnitOffenders, roundTripOffenders) of
+        ((consumer, amt) : _, _, _, _) ->
             Left $
                 "EcoSpold2 export cannot represent activity \""
                     <> consumer
                     <> "\": exchange amount "
                     <> T.pack (show amt)
                     <> " is not finite."
-        ([], consumer : _, _) ->
+        ([], consumer : _, _, _) ->
             Left $
                 "EcoSpold2 export cannot represent activity \""
                     <> consumer
                     <> "\": a reference input (treatment process) has no EcoSpold2 encoding."
-        ([], [], consumer : _) ->
+        ([], [], consumer : _, _) ->
             Left $
                 "EcoSpold2 export cannot represent activity \""
                     <> consumer
                     <> "\": an exchange references a unit absent from the registry."
-        ([], [], []) -> Right ()
+        ([], [], [], (consumer, amt) : _) ->
+            Left $
+                "EcoSpold2 export cannot represent activity \""
+                    <> consumer
+                    <> "\": exchange amount "
+                    <> T.pack (show amt)
+                    <> " has no decimal form that re-parses to the same value"
+                    <> " (e.g. a subnormal near the floating-point floor)."
+        ([], [], [], []) -> Right ()
   where
     amountOffenders =
         [ (activityName act, amt)
@@ -148,6 +168,19 @@ checkEcoSpold2Exportable db =
         , let amt = exchangeAmount ex
         , isNaN amt || isInfinite amt
         ]
+    roundTripOffenders =
+        [ (activityName act, amt)
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , let amt = exchangeAmount ex
+        , not (isNaN amt || isInfinite amt) -- non-finite already reported above
+        , not (amountRoundTrips amt)
+        ]
+    -- The written decimal must re-parse to the same Double through the parser's
+    -- reader ('Data.Text.Read.double'), or the value silently changes on import.
+    amountRoundTrips amt = case TR.double (doubleAttr amt) of
+        Right (v, rest) -> v == amt && T.null rest
+        Left _ -> False
     refInputOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -518,14 +551,17 @@ intText :: Int -> Text
 intText = T.pack . show
 
 {- | Canonical 'Double' rendering for amounts via the shared 'showFFloatTrim'
-(fixed-point, never scientific), so the value round-trips byte- and
-value-identically through the parser's 'Data.Text.Read.double'. Non-finite
-values are clamped to a parseable @0.0@ (they cannot occur in a parsed database,
-but we never emit @Infinity@/@NaN@ which would break re-parsing).
+(fixed-point, never scientific), so the value round-trips through the parser's
+'Data.Text.Read.double' for the magnitudes real LCA amounts occupy. The
+near-underflow subnormal tail is the exception; 'checkEcoSpold2Exportable'
+rejects any amount that does not re-parse, so the guarded path never emits one.
+A non-finite value renders as its (non-parseable) @"NaN"@/@"Infinity"@ form so a
+bad re-import fails loudly rather than silently reading @0@; the guard rejects
+non-finite amounts before they reach here.
 -}
 doubleAttr :: Double -> Text
 doubleAttr d
-    | isNaN d || isInfinite d = "0.0"
+    | isNaN d || isInfinite d = T.pack (show d)
     | otherwise = T.pack (showFFloatTrim d)
 
 -- | Escape the three XML predefined entities for element text content.
