@@ -39,7 +39,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
 import Database.Loader (loadDatabase)
-import EcoSpold.Writer2 (VolatileMeta, checkEcoSpold2Exportable, noVolatileMeta, writeEcoSpold2)
+import EcoSpold.Writer2 (VolatileMeta (..), checkEcoSpold2Exportable, noVolatileMeta, writeEcoSpold2)
 import Matrix (computeInventoryMatrix)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -305,19 +305,44 @@ writeOrFail :: VolatileMeta -> SimpleDatabase -> [(FilePath, Text)]
 writeOrFail meta sdb =
     either (\e -> error ("writeEcoSpold2: " <> T.unpack e)) id (writeEcoSpold2 meta sdb)
 
-{- | Write a 'SimpleDatabase' to a fresh temp directory and re-load it through
-the production loader, returning the round-tripped 'SimpleDatabase'.
+{- | Write a 'SimpleDatabase' with the given volatile metadata to a fresh temp
+directory and re-load it through the production loader, returning the
+round-tripped 'SimpleDatabase'.
 -}
-roundTrip :: SimpleDatabase -> IO SimpleDatabase
-roundTrip sdb = withSystemTempDirectory "es2-writer" $ \dir -> do
+roundTripWith :: VolatileMeta -> SimpleDatabase -> IO SimpleDatabase
+roundTripWith meta sdb = withSystemTempDirectory "es2-writer" $ \dir -> do
     -- Write UTF-8 bytes explicitly so the unicode round-trip does not depend on
     -- the test runner's locale encoding (the loader always decodes UTF-8).
-    forM_ (writeOrFail noVolatileMeta sdb) $ \(fname, doc) ->
+    forM_ (writeOrFail meta sdb) $ \(fname, doc) ->
         BS.writeFile (dir </> fname) (TE.encodeUtf8 doc)
     res <- loadDatabase defaultUnitConfig dir
     case res of
         Left err -> error $ "reparse failed: " ++ T.unpack err
         Right sdb' -> pure sdb'
+
+-- | Round-trip with the byte-stable default (no volatile metadata).
+roundTrip :: SimpleDatabase -> IO SimpleDatabase
+roundTrip = roundTripWith noVolatileMeta
+
+{- | Assert the round-tripped database yields the same per-process LCI as the
+original, within tolerance. Factored out so several fixtures can be checked.
+-}
+assertInventoryRoundTrips :: SimpleDatabase -> IO ()
+assertInventoryRoundTrips sdb = do
+    sdb' <- roundTrip sdb
+    db <- buildDb sdb
+    db' <- buildDb sdb'
+    let pids = [0 .. fromIntegral (V.length (dbProcessIdTable db)) - 1] :: [ProcessId]
+    forM_ pids $ \pid -> do
+        inv <- computeInventoryMatrix db pid
+        -- The round-tripped DB may order activities differently; locate the
+        -- matching process by its (actUUID, prodUUID) key.
+        let key = dbProcessIdTable db V.! fromIntegral pid
+        case V.elemIndex key (dbProcessIdTable db') of
+            Nothing -> expectationFailure $ "process key missing after round-trip: " ++ show key
+            Just pid' -> do
+                inv' <- computeInventoryMatrix db' (fromIntegral pid')
+                inventoriesClose inv inv' `shouldBe` True
 
 spec :: Spec
 spec = describe "EcoSpold2 writer round-trip" $ do
@@ -329,6 +354,27 @@ spec = describe "EcoSpold2 writer round-trip" $ do
         let f1 = writeOrFail noVolatileMeta sdb'
         -- Compare the sorted (filename, document) sequences byte-for-byte.
         sortOn fst f1 `shouldBe` sortOn fst f0
+
+    -- The volatile-metadata paths (creationTimestamp element + generator
+    -- comment) are otherwise unexercised, since every other case uses
+    -- 'noVolatileMeta'. Pin both and assert they (1) reach the output and
+    -- (2) are non-semantic: the parser ignores them, so the round-tripped
+    -- activities match the byte-stable default exactly.
+    it "emits pinned volatile metadata that the parser then ignores" $ do
+        sdb <- loadFixtureSimple
+        let meta = VolatileMeta (Just "2020-01-02T03:04:05") (Just "writer-spec <gen> & co")
+        let docs = writeOrFail meta sdb
+        any (T.isInfixOf "2020-01-02T03:04:05" . snd) docs `shouldBe` True
+        any (T.isInfixOf "writer-spec" . snd) docs `shouldBe` True
+        pinned <- roundTripWith meta sdb
+        plain <- roundTrip sdb
+        M.keys (sdbActivities pinned) `shouldMatchList` M.keys (sdbActivities plain)
+        forM_ (M.toList (sdbActivities plain)) $ \(key, act) ->
+            case M.lookup key (sdbActivities pinned) of
+                Nothing -> expectationFailure $ "activity missing under pinned metadata: " ++ show key
+                Just act' ->
+                    sort (map exchangeFingerprint (exchanges act'))
+                        `shouldBe` sort (map exchangeFingerprint (exchanges act))
 
     -- Regression: two exchanges sharing a sort key (same kind + flow) must both
     -- survive write→parse. A Map-based sort would silently drop one,
@@ -433,23 +479,13 @@ spec = describe "EcoSpold2 writer round-trip" $ do
                 `shouldBe` S.fromList ["CO2", "carbonic anhydride"]
 
     -- (c) Score-equivalence: same inventory for every activity within tolerance.
-    it "yields the same LCIA inventory as the original (within tolerance)" $ do
-        sdb <- loadFixtureSimple
-        sdb' <- roundTrip sdb
-        db <- buildDb sdb
-        db' <- buildDb sdb'
-        -- Compare inventories for every process id present in the original.
-        let pids = [0 .. fromIntegral (V.length (dbProcessIdTable db)) - 1] :: [ProcessId]
-        forM_ pids $ \pid -> do
-            inv <- computeInventoryMatrix db pid
-            -- The round-tripped DB may order activities differently; locate the
-            -- matching process by its (actUUID, prodUUID) key.
-            let key = dbProcessIdTable db V.! fromIntegral pid
-            case V.elemIndex key (dbProcessIdTable db') of
-                Nothing -> expectationFailure $ "process key missing after round-trip: " ++ show key
-                Just pid' -> do
-                    inv' <- computeInventoryMatrix db' (fromIntegral pid')
-                    inventoriesClose inv inv' `shouldBe` True
+    it "yields the same LCIA inventory as the original (within tolerance)" $
+        loadFixtureSimple >>= assertInventoryRoundTrips
+
+    -- Duplicate-flow no-dedup, now at the inventory level: the two CO2 emissions
+    -- must sum (0.8) on both sides, not collapse to one line.
+    it "preserves duplicate-flow inventory mass across the round-trip" $
+        assertInventoryRoundTrips fixtureDupBio
 
 -- ----------------------------------------------------------------------------
 -- Comparison helpers (order-insensitive, tolerance-aware)
