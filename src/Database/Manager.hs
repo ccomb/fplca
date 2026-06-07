@@ -1553,8 +1553,9 @@ relinkStaged manager dbName maybeDepDb aliases = do
         Just staged -> do
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
             case maybeDepDb of
-                Just dep | not (M.member dep indexedDbs) ->
-                    return $ Left $ "Dependency database not loaded: " <> dep <> " (load it first)"
+                Just dep
+                    | not (M.member dep indexedDbs) ->
+                        return $ Left $ "Dependency database not loaded: " <> dep <> " (load it first)"
                 _ -> do
                     synonymDB <- getMergedSynonymDB manager
                     unitConfig <- getMergedUnitConfig manager
@@ -1579,7 +1580,8 @@ relinkStaged manager dbName maybeDepDb aliases = do
                                 , sdCrossDBLinks = newLinks
                                 , sdLinkingStats = newStats
                                 , sdMissingProducts =
-                                    sortOn (\(_, cnt, _) -> Down cnt)
+                                    sortOn
+                                        (\(_, cnt, _) -> Down cnt)
                                         [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
                                 }
                     atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
