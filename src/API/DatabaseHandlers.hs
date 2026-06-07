@@ -151,7 +151,6 @@ import Database.Upload (
     findMethodDirectory,
     handleUpload,
  )
-import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Types (Database (..), GeographyPolicy (..), unresolvedCount)
 

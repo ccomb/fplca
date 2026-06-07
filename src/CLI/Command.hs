@@ -21,7 +21,7 @@ import Database.Export (exportDatabase, parseExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.RelinkMapping (relinkWithMappingFile)
-import Database.Upload (DatabaseFormat (..), UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
+import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
 import qualified Database.Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
