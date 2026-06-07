@@ -32,6 +32,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import Data.Word (Word32)
 import Database (buildDatabaseWithMatrices)
 import Matrix (computeInventoryMatrix)
 import SimaPro.Parser (parseSimaProCSV)
@@ -426,12 +427,43 @@ spec = describe "SimaPro.Writer round-trip" $ do
             -- "Emissions to air" and re-parse as air; reject it loudly instead.
             checkSimaProExportable (emissionDb (Compartment "raw" Nothing))
                 `shouldSatisfy` either (const True) (const False)
+
+    describe "checkSimaProExportable (round-trip guards)" $ do
+        it "accepts a pedigree-less exchange with an ordinary comment" $
+            checkSimaProExportable (commentDb Nothing (Just "ordinary free text"))
+                `shouldBe` Right ()
+
+        it "rejects a pedigree-less comment that begins with a pedigree quintuple" $
+            -- Written verbatim, "(3,3,2,1,2),free text" would re-parse as a
+            -- fabricated Pedigree with a truncated comment; reject it loudly.
+            checkSimaProExportable (commentDb Nothing (Just "(3,3,2,1,2),free text"))
+                `shouldSatisfy` either (const True) (const False)
+
+        it "still accepts a genuine pedigree (it is emitted as its own prefix)" $
+            checkSimaProExportable (commentDb (Just (Pedigree 3 3 2 1 2)) (Just "free text"))
+                `shouldBe` Right ()
+
+        it "rejects an activity name that collides with a SimaPro metadata key" $
+            -- An activity named "Comment" would be read back as a new metadata
+            -- field, silently dropping the name; reject it at the boundary.
+            checkSimaProExportable (namedDb "Comment")
+                `shouldSatisfy` either (const True) (const False)
+
+        it "accepts an ordinary activity name" $
+            checkSimaProExportable (namedDb "Butter production")
+                `shouldBe` Right ()
   where
     activitiesOf (acts, _, _, _, _) = acts
 
 -- ---------------------------------------------------------------------------
 -- Emission-medium guard fixture
 -- ---------------------------------------------------------------------------
+
+{- | A distinct, valid UUID for a fixture, built totally from a tag — no partial
+'read' that would crash the suite on a typo.
+-}
+testUUID :: Word32 -> UUID
+testUUID n = UUID.fromWords n 0x4000 0x8000 1
 
 {- | One activity emitting a single biosphere flow whose compartment is @comp@.
 Used to exercise 'checkSimaProExportable': air/water/soil pass, anything else is
@@ -448,10 +480,10 @@ emissionDb comp =
         }
   where
     actU, prodU, bioU, unitU :: UUID
-    actU = read "aaaaaaaa-0000-4000-8000-000000000010"
-    prodU = read "aaaaaaaa-0000-4000-8000-0000000000a0"
-    bioU = read "cccccccc-0000-4000-8000-0000000000c0"
-    unitU = read "11111111-0000-4000-8000-000000000001"
+    actU = testUUID 0x10
+    prodU = testUUID 0xa0
+    bioU = testUUID 0xc0
+    unitU = testUUID 0x01
     act =
         Activity
             "thing maker"
@@ -493,10 +525,10 @@ allocationDb =
         }
   where
     actU, prodU, matU, unitU :: UUID
-    actU = read "aaaaaaaa-0000-4000-8000-000000000020"
-    prodU = read "aaaaaaaa-0000-4000-8000-0000000000b0"
-    matU = read "aaaaaaaa-0000-4000-8000-0000000000b1"
-    unitU = read "11111111-0000-4000-8000-000000000002"
+    actU = testUUID 0x20
+    prodU = testUUID 0xb0
+    matU = testUUID 0xb1
+    unitU = testUUID 0x02
     act =
         Activity
             "alloc maker"
@@ -511,5 +543,80 @@ allocationDb =
             M.empty
             M.empty
             (Just 50)
+            Nothing
+            Nothing
+
+-- ---------------------------------------------------------------------------
+-- Round-trip guard fixtures (comment-as-pedigree, metadata-key collision)
+-- ---------------------------------------------------------------------------
+
+{- | One activity with a reference product and a single technosphere input
+carrying the given pedigree/comment. Exercises the comment-as-pedigree guard.
+-}
+commentDb :: Maybe Pedigree -> Maybe Text -> SimpleDatabase
+commentDb ped cmt =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows =
+            M.fromList
+                [ (prodU, TechnosphereFlow prodU "main product" unitU M.empty Nothing Nothing)
+                , (matU, TechnosphereFlow matU "some material" unitU M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, matU, unitU :: UUID
+    actU = testUUID 0x30
+    prodU = testUUID 0xd0
+    matU = testUUID 0xd1
+    unitU = testUUID 0x03
+    act =
+        Activity
+            "comment maker"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped
+            ]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            Nothing
+
+{- | One activity with the given name and a single reference product. Exercises
+the metadata-key collision guard: a name equal to a SimaPro key is rejected.
+-}
+namedDb :: Text -> SimpleDatabase
+namedDb name =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "main product" unitU M.empty Nothing Nothing)
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, unitU :: UUID
+    actU = testUUID 0x40
+    prodU = testUUID 0xe0
+    unitU = testUUID 0x04
+    act =
+        Activity
+            name
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
+            M.empty
+            M.empty
+            Nothing
             Nothing
             Nothing

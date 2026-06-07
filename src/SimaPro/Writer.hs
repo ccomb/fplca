@@ -46,10 +46,11 @@ module SimaPro.Writer (
 import qualified Data.ByteString as BS
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import SimaPro.Parser (isMetadataKey, parsePedigreePrefix)
 import Types
 
 -- ============================================================================
@@ -92,9 +93,23 @@ RFC-4180-quotes them, but the parser splits the file on physical lines
 ('BS8.lines') /before/ CSV parsing, so an embedded @\\n@ or @\\r@ tears the row
 apart and corrupts or drops it. Reject such fields rather than emit a row the
 parser cannot read back.
+
+Two more round-trip hazards are specific to SimaPro's textual layout, and bite
+only for databases imported from other formats (a SimaPro parse can't produce
+them):
+
+  * a pedigree-less exchange whose comment /begins/ with a @(r,c,t,g,f)@
+    quintuple — 'parsePedigreePrefix' would read it back as a 'Pedigree' and
+    strip it, fabricating a data-quality score; and
+  * a metadata value (activity name, location, …) equal to a SimaPro metadata
+    key — the parser checks 'isMetadataKey' before reading a value line, so it
+    would mistake the value for a new field and silently drop it.
+
+Both are rejected here rather than emitted as a row the parser misreads.
 -}
 checkSimaProExportable :: SimpleDatabase -> Either Text ()
-checkSimaProExportable db = checkMedia *> checkAmounts *> checkAllocation *> checkUnits *> checkNewlines
+checkSimaProExportable db =
+    checkMedia *> checkAmounts *> checkAllocation *> checkUnits *> checkNewlines *> checkComments *> checkMetaKeys
   where
     checkMedia =
         case mediumOffenders of
@@ -148,6 +163,28 @@ checkSimaProExportable db = checkMedia *> checkAmounts *> checkAllocation *> che
                         <> T.pack (show uid)
                         <> ", which is absent from the unit registry (it would be"
                         <> " written as a blank unit and re-parsed as UNKNOWN)."
+    checkComments =
+        case commentOffenders of
+            [] -> Right ()
+            ((name, cmt) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": the comment \""
+                        <> cmt
+                        <> "\" begins with a pedigree-shaped (r,c,t,g,f) quintuple, so the"
+                        <> " parser would re-read it as a data-quality pedigree on import."
+    checkMetaKeys =
+        case metaKeyOffenders of
+            [] -> Right ()
+            ((name, val) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": the metadata value \""
+                        <> val
+                        <> "\" collides with a SimaPro metadata key, so the parser would"
+                        <> " mistake it for a new field and drop it on import."
     mediumOffenders =
         [ (bfName flow, bfCompartmentName flow)
         | act <- M.elems (sdbActivities db)
@@ -175,6 +212,30 @@ checkSimaProExportable db = checkMedia *> checkAmounts *> checkAllocation *> che
         | act <- M.elems (sdbActivities db)
         , ex <- exchanges act
         , M.notMember (exchangeUnitId ex) (sdbUnits db)
+        ]
+    commentOffenders =
+        [ (activityName act, cmt)
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , Nothing <- [exchangePedigree ex]
+        , Just cmt <- [exchangeComment ex]
+        , isJust (fst (parsePedigreePrefix cmt))
+        ]
+    metaKeyOffenders =
+        [ (activityName act, val)
+        | act <- M.elems (sdbActivities db)
+        , val <- emittedMetaValues act
+        , not (T.null val)
+        , isMetadataKey (TE.encodeUtf8 (T.strip val))
+        ]
+    -- The metadata values the writer emits as bare value lines (see
+    -- 'serializeActivity'). Each must not collide with a SimaPro metadata key.
+    emittedMetaValues act =
+        [ M.findWithDefault "" "Category type" (activityClassification act)
+        , activityName act
+        , typeLabelOf (activityNativeType act)
+        , activityLocation act
+        , T.intercalate " " (activityDescription act)
         ]
     hasNewline = T.any (\c -> c == '\n' || c == '\r')
     newlineOffenders =
@@ -219,10 +280,16 @@ Integral values are written without a trailing @.0@ (e.g. @100@, not
 @100.0@) so allocation percentages match the parser's @"100"@ raw form;
 all other values use Haskell's 'show', which is dot-decimal and exact
 enough to round-trip a 'Double'.
+
+A non-finite value has no parseable literal: it renders as its (non-parseable)
+@"NaN"@/@"Infinity"@ form so a re-import fails loudly rather than silently
+reading @0@. 'checkSimaProExportable' rejects non-finite amounts at the export
+boundary, so this never fires for a validated database — but the formatter
+stays honest for any direct caller.
 -}
 formatAmount :: Double -> Text
 formatAmount x
-    | isNaN x || isInfinite x = "0"
+    | isNaN x || isInfinite x = T.pack (show x)
     | x == fromIntegral (round x :: Integer) =
         T.pack (show (round x :: Integer))
     | otherwise = T.pack (show x)
@@ -276,6 +343,18 @@ data Line = Line
 -- | Deterministic ordering key for a section's lines.
 lineKey :: Line -> (Text, Text, Text, Double)
 lineKey l = (lName l, lCompartment l, lUnit l, lAmount l)
+
+{- | The @Type@ metadata value the writer emits for an activity's native type,
+or @""@ when there is none (so the line is omitted). Shared between
+'serializeActivity' and 'checkSimaProExportable' so the export guard inspects
+exactly the value that gets written.
+-}
+typeLabelOf :: Maybe NativeActivityType -> Text
+typeLabelOf mnt = case mnt of
+    Just (SimaProProcessType lbl) -> lbl
+    Just (EcoSpoldActivityType{eatLabel = lbl}) -> lbl
+    Just (ILCDProcessType lbl) -> lbl
+    Nothing -> ""
 
 -- | Render the comment column, re-attaching a pedigree prefix when present.
 renderComment :: Maybe Pedigree -> Maybe Text -> Text
@@ -361,17 +440,18 @@ bioSection :: BioFlowDB -> Exchange -> Maybe BioSec
 bioSection bioDB ex@BiosphereExchange{bioDirection = dir} =
     case dir of
         Resource -> Just SecRes
-        Emission -> case M.lookup (exchangeFlowId ex) bioDB of
-            Nothing -> Just SecAir -- unknown medium → air (parser default-ish); flow itself dropped anyway
-            Just flow -> case T.toLower (bfCompartmentName flow) of
-                "water" -> Just SecWater
-                "soil" -> Just SecSoil
-                "air" -> Just SecAir
-                "" -> Just SecAir
-                -- Any other medium has no faithful SimaPro section.
-                -- 'checkSimaProExportable' rejects it at the export boundary, so
-                -- this air fallback only ever fires for a direct (un-guarded) caller.
-                _ -> Just SecAir
+        -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
+        -- section only when it also keeps a row (the two are paired in
+        -- 'serializeActivity'); no dead "unknown → air" arm.
+        Emission -> sectionForMedium . bfCompartmentName <$> M.lookup (exchangeFlowId ex) bioDB
+  where
+    sectionForMedium name = case T.toLower name of
+        "water" -> SecWater
+        "soil" -> SecSoil
+        -- air, unspecified, or any other medium → air. 'checkSimaProExportable'
+        -- rejects non air/water/soil media at the export boundary, so a real
+        -- export only ever lands air or empty here.
+        _ -> SecAir
 bioSection _ TechnosphereExchange{} = Nothing
 bioSection _ WasteExchange{} = Nothing
 
@@ -469,11 +549,7 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
         category = M.findWithDefault "" "Category" activityClassification
         -- No native type → omit the Type line entirely (meta drops empty values),
         -- so a re-parse yields Nothing again rather than drifting to "Unit process".
-        typeLabel = case activityNativeType of
-            Just (SimaProProcessType lbl) -> lbl
-            Just (EcoSpoldActivityType{eatLabel = lbl}) -> lbl
-            Just (ILCDProcessType lbl) -> lbl
-            Nothing -> ""
+        typeLabel = typeLabelOf activityNativeType
         -- SimaPro's "Comment" is a single value line emitted unescaped, so it
         -- cannot carry newlines (a paragraph break would corrupt re-parsing).
         -- Multi-paragraph descriptions are flattened to one space-joined line;
