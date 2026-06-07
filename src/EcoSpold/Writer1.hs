@@ -11,11 +11,22 @@ __canonical and deterministic__:
   * dataset numbers are assigned sequentially (1-based) in that order, and
     exchange numbers likewise (see below). Because the parser derives flow
     UUIDs from @datasetNumber@, exchange number, name and category, these
-    reassigned numbers make the writer's output __self-stable__: parsing it
-    and writing again reproduces the same flow UUIDs. This is fixed-point
-    stability of the writer's own canonical form, __not__ reproduction of
-    the UUIDs of an arbitrary parsed source file — that source carried its
-    own dataset/exchange numbering, which the writer does not preserve;
+    reassigned numbers make the writer's output __self-stable for every
+    exchange except a linked technosphere input__: reference products,
+    co-products, biosphere and waste exchanges, and /unlinked/ inputs all
+    reproduce the same flow UUIDs on a write→parse→write cycle. This is
+    fixed-point stability of the writer's own canonical form, __not__
+    reproduction of the UUIDs of an arbitrary parsed source file — that source
+    carried its own dataset/exchange numbering, which the writer does not
+    preserve;
+  * a /linked/ technosphere input is the one exception. Its @number@ attribute
+    carries the /supplier's/ dataset number (so the loader can re-link it by
+    'techActivityLinkId'); but 'SimpleDatabase' has no field for that link, so a
+    bare re-parse drops it and the next write falls back to the positional
+    index. Byte-stability of a linked input therefore relies on the full
+    loader re-resolving the link (by supplier name/location) rather than on a
+    direct 'SimpleDatabase' round-trip. The semantic round-trip — flow name,
+    amount, role, unit — is preserved either way;
   * exchange numbers are sequential (1-based) in exchange order;
   * attributes appear in a fixed order, classification maps are sorted by
     key, numbers use a fixed textual form, and there is no insignificant
@@ -52,7 +63,6 @@ module EcoSpold.Writer1 (
     -- * Writers
     writeDatabase,
     writeSimpleDatabase,
-    writeActivities,
 
     -- * Export boundary check
     checkEcoSpold1Exportable,
@@ -66,6 +76,7 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import Database.Loader (generateActivityUUIDFromActivity)
 import EcoSpold.Common (showFFloatTrim)
@@ -124,7 +135,10 @@ writeSimpleDatabase opts sdb = do
             (M.elems (sdbActivities sdb))
 
 {- | Serialize a list of activities against the flow / unit tables that
-resolve their exchange UUIDs.
+resolve their exchange UUIDs. Internal: it does no export-boundary checking,
+so it is reached only through 'writeSimpleDatabase', which runs
+'checkEcoSpold1Exportable' first. Not exported, so no caller can bypass the
+guard.
 -}
 writeActivities ::
     WriterOptions ->
@@ -166,7 +180,8 @@ supplierNumberIndex ordered =
     M.fromList [(generateActivityUUIDFromActivity a, n) | (n, a) <- zip [1 ..] ordered]
 
 {- | Guard an EcoSpold1 export against data the writer cannot faithfully
-re-encode. Two failure modes are checked:
+re-encode. Each check reports its first offender and fails loudly rather than
+emit silently wrong data:
 
   * __Dangling supplier links.__ The format names a supplier from a
     technosphere input's @number@ attribute, which the parser reads as the
@@ -176,16 +191,27 @@ re-encode. Two failure modes are checked:
     the database would otherwise force a positional index the parser would
     misread as a different supplier.
 
-  * __Non-finite amounts.__ 'formatAmount' clamps @NaN@/@Infinity@ to a
-    parseable @0.0@; a database carrying such an amount would silently export
-    as zero. Parsed databases never contain these, so they only arise from
-    in-memory construction.
+  * __Reference inputs.__ EcoSpold1 has no marker for a reference /input/, so
+    the writer would emit @outputGroup 0@ and the parser would read it back as
+    a reference product — a direction flip.
 
-Either case reports the first offender and fails loudly rather than emit
-silently wrong data. Databases free of both pass unchanged.
+  * __Missing flows / units.__ An exchange whose flow or unit is absent from
+    the tables would be written with a blank name and re-parse as a different
+    (or @UNKNOWN@) entity.
+
+  * __Non-finite amounts.__ @NaN@/@Infinity@ have no parseable literal.
+
+  * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
+    re-parse to the same 'Double' through 'Data.Text.Read.double' (the parser's
+    reader) — e.g. a subnormal near the floating-point floor — would silently
+    export as a different value. Real LCA amounts never reach this range, but
+    the guard rejects it rather than undercount.
+
+Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
-checkEcoSpold1Exportable db = checkLinks *> checkRefInputs *> checkFlows *> checkUnits *> checkAmounts
+checkEcoSpold1Exportable db =
+    checkLinks *> checkRefInputs *> checkFlows *> checkUnits *> checkAmounts *> checkAmountRoundTrip
   where
     checkLinks =
         case danglingLinks of
@@ -236,6 +262,17 @@ checkEcoSpold1Exportable db = checkLinks *> checkRefInputs *> checkFlows *> chec
                         <> "\": exchange amount "
                         <> T.pack (show amt)
                         <> " is not finite."
+    checkAmountRoundTrip =
+        case roundTripOffenders of
+            [] -> Right ()
+            ((consumer, amt) : _) ->
+                Left $
+                    "EcoSpold1 export cannot represent activity \""
+                        <> consumer
+                        <> "\": exchange amount "
+                        <> T.pack (show amt)
+                        <> " has no decimal form that re-parses to the same value"
+                        <> " (e.g. a subnormal near the floating-point floor)."
     index = supplierNumberIndex (orderedActivities (M.elems (sdbActivities db)))
     danglingLinks =
         [ (activityName act, link)
@@ -251,6 +288,19 @@ checkEcoSpold1Exportable db = checkLinks *> checkRefInputs *> checkFlows *> chec
         , let amt = exchangeAmount ex
         , isNaN amt || isInfinite amt
         ]
+    roundTripOffenders =
+        [ (activityName act, amt)
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , let amt = exchangeAmount ex
+        , not (isNaN amt || isInfinite amt) -- non-finite already reported by checkAmounts
+        , not (amountRoundTrips amt)
+        ]
+    -- The written decimal must re-parse to the same Double through the parser's
+    -- reader ('Data.Text.Read.double'), or the value silently changes on import.
+    amountRoundTrips amt = case TR.double (formatAmount amt) of
+        Right (v, rest) -> v == amt && T.null rest
+        Left _ -> False
     refInputOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -485,13 +535,18 @@ escapeXmlAttr =
 
 {- | Deterministic textual form for a @meanValue@. Uses the shared
 'showFFloatTrim' (fixed-point, never scientific) so the value round-trips
-byte- and value-identically through the parser's 'Data.Text.Read.double' —
-unlike @show@, which emits scientific notation for small/large magnitudes that
-re-reads lossily. Non-finite values (which cannot occur in a parsed database)
-are clamped to a parseable @0.0@ rather than the unreadable @"NaN"@/@"Infinity"@.
+through the parser's 'Data.Text.Read.double' for the magnitudes real LCA
+amounts occupy — unlike @show@, which emits scientific notation that re-reads
+lossily. The near-underflow subnormal tail is the exception;
+'checkEcoSpold1Exportable' rejects any amount that does not re-parse, so the
+guarded path never emits a value that changes on import.
+
+A non-finite value renders as its (non-parseable) @"NaN"@/@"Infinity"@ form so
+a bad re-import fails loudly rather than silently reading @0@; the export guard
+rejects non-finite amounts before they reach here.
 -}
 formatAmount :: Double -> Text
 formatAmount x
-    | isNaN x || isInfinite x = "0.0"
+    | isNaN x || isInfinite x = T.pack (show x)
     | x == 0 = "0.0" -- normalise negative zero (showFFloat would emit "-0.0")
     | otherwise = T.pack (showFFloatTrim x)
