@@ -64,6 +64,7 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -143,13 +144,21 @@ ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   — @""@ (key vanishes), or @"a//b"@ \/ @"a/"@ (collapses to @"a/b"@ \/ @"a"@) —
   therefore does not round-trip.
 
-Rather than silently corrupting either, report the first offending flow or
-activity so the caller can fail loudly. Databases whose activity UUIDs are all
-unique, whose biosphere media are all canonical and whose classification levels
-are all non-empty pass unchanged.
+* /Amounts that do not re-parse./ 'formatDouble' is fixed-point, so a non-finite
+  amount (@NaN@\/@Infinity@, which the parser can propagate from an out-of-range
+  literal like @"1e400"@) or a subnormal near @5e-324@ would re-import as a
+  different number (or fail to parse), silently shifting LCIA scores. We reject
+  any amount that does not re-parse to itself.
+
+Rather than silently corrupting any of these, report the first offending flow,
+activity or exchange so the caller can fail loudly. Databases whose activity
+UUIDs are all unique, whose biosphere media are all canonical, whose
+classification levels are all non-empty and whose amounts all re-parse pass
+unchanged.
 -}
 checkILCDExportable :: SimpleDatabase -> Either Text ()
-checkILCDExportable db = checkMedia >> checkMultiOutput >> checkClassifications
+checkILCDExportable db =
+    checkMedia >> checkMultiOutput >> checkClassifications >> checkAmounts
   where
     -- Media the parser's @extractMedium@ inverts back to the same string.
     canonicalMedia = ["air", "water", "soil", "natural resource"]
@@ -210,6 +219,30 @@ checkILCDExportable db = checkMedia >> checkMultiOutput >> checkClassifications
                         <> uuidText actUUID
                         <> "): an empty classification level does not round-trip "
                         <> "because the ILCD parser drops empty levels."
+
+    -- An amount round-trips only when its fixed-point rendering re-parses to the
+    -- same value through the parser's 'Data.Text.Read.double' (consuming all of
+    -- it). Rejects non-finite amounts and the subnormal tail near 5e-324.
+    checkAmounts =
+        case [ (actUUID, exchangeAmount ex)
+             | ((actUUID, _), act) <- M.toList (sdbActivities db)
+             , ex <- exchanges act
+             , not (amountRoundTrips (exchangeAmount ex))
+             ] of
+            [] -> Right ()
+            ((actUUID, amt) : _) ->
+                Left $
+                    "ILCD export cannot represent amount "
+                        <> T.pack (show amt)
+                        <> " on activity \""
+                        <> nameOf actUUID
+                        <> "\" (UUID "
+                        <> uuidText actUUID
+                        <> "): it does not re-parse to the same value through the "
+                        <> "ILCD parser (non-finite or near-underflow subnormal)."
+    amountRoundTrips amt = case TR.double (formatDouble amt) of
+        Right (v, rest) -> v == amt && T.null rest
+        Left _ -> False
 
 {- | Write the ILCD package as a directory tree rooted at @dir@, or return the
 export guard's 'Left' without touching disk.
@@ -573,16 +606,20 @@ escapeXmlAttr =
         . escapeXml
 
 {- | Canonical 'Double' formatting via the shared 'showFFloatTrim' (fixed-point,
-never scientific), so the value round-trips byte- and value-identically through
-the parser's 'Data.Text.Read.double' — unlike @show@, which emits scientific
-notation for small/large magnitudes that re-reads lossily (e.g. @show 3.3e-20@ →
-@3.2999999999999994e-20@, and @5.0e-324@ → @0@). Non-finite values (which cannot
-occur in a parsed database) are clamped to a parseable @0.0@; negative zero is
+never scientific), so the value round-trips through the parser's
+'Data.Text.Read.double' for the magnitudes real LCA amounts occupy — unlike
+@show@, which emits scientific notation that re-reads lossily (e.g. @show 3.3e-20@
+→ @3.2999999999999994e-20@). The near-underflow subnormal tail (≈@5e-324@) is the
+exception (fixed-point can't carry enough digits, so it re-parses to @0@);
+'checkILCDExportable' rejects any amount that does not re-parse, so the guarded
+path never emits one. A non-finite value renders as its (non-parseable)
+@"NaN"@/@"Infinity"@ form so a bad re-import fails loudly rather than silently
+reading @0@; the guard rejects non-finite amounts first. Negative zero is
 normalised to @0.0@.
 -}
 formatDouble :: Double -> Text
 formatDouble x
-    | isNaN x || isInfinite x = "0.0"
+    | isNaN x || isInfinite x = T.pack (show x)
     | x == 0 = "0.0"
     | otherwise = T.pack (showFFloatTrim x)
 
