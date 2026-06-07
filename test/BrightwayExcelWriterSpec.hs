@@ -183,6 +183,18 @@ spec = describe "BrightwayExcel.Writer" $ do
                                 Left err -> expectationFailure (T.unpack err)
                                 Right parsed2 -> refUnitAmount parsed2 `shouldBe` refUnitAmount parsed1
 
+        it "(j) round-trips a single-paragraph activity description" $
+            -- The writer newline-joins 'activityDescription' into the one comment
+            -- the format allows; the parser reads it back as a one-element list.
+            -- A single paragraph is therefore a fixed point — the realistic case,
+            -- since the parser's own image has ≤1 element (see 'activityRows').
+            withWritten describedDb $ \path ->
+                parseBrightwayExcel defaultUnitConfig path >>= \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (acts, _, _, _, _) -> case acts of
+                        [a] -> activityDescription a `shouldBe` ["a milling note"]
+                        other -> expectationFailure ("expected one activity, got " <> show (length other))
+
     describe "export guard" $ do
         it "rejects a waste exchange (Brightway has no waste type)" $
             -- Per the export boundary: emitting a WasteExchange would re-parse as a
@@ -459,6 +471,13 @@ commentDb =
         TechnosphereExchange{} -> ex
         BiosphereExchange{} -> ex{bioComment = Just "emission note"}
         WasteExchange{} -> ex
+
+-- | The base fixture carrying a single-paragraph activity-level description.
+describedDb :: SimpleDatabase
+describedDb =
+    fixtureDb{sdbActivities = M.singleton (generateActivityUUID a, getReferenceProductUUID a) a}
+  where
+    a = elec{activityDescription = ["a milling note"]}
 
 -- ---------------------------------------------------------------------------
 -- Coproduct / empty / boundary-amount fixtures

@@ -278,6 +278,14 @@ exchangeHeader =
 @production amount@ / @unit@ / @reference product@ are taken from the activity's
 reference exchange so a parse → write round-trip reproduces them, and the
 @production amount@ fallback stays consistent with the reference row's amount.
+
+'activityDescription' is newline-joined into the single @comment@ cell the
+format allows. The parser reads it back as a one-element description
+('Data.Maybe.maybeToList'), so an activity carrying a /multi-paragraph/
+description is not a fixed point of @parse . write@ (the text survives; the
+paragraph split does not). Once parsed it has ≤1 element and round-trips exactly
+— the same "fixed-point over the parser's image" caveat the parser documents for
+reference-unit canonicalization.
 -}
 activityRows :: WriterConfig -> SimpleDatabase -> Activity -> [[Cell]]
 activityRows cfg db act =
