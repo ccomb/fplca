@@ -11,7 +11,7 @@ module CLI.Client (
 import CLI.Types
 import Config (Config (..), ServerConfig (..))
 import Control.Exception (IOException, try)
-import Data.Aeson (Value (..), decode, encode, object, (.:), (.:?), (.=))
+import Data.Aeson (Value (..), decode, encode, object, (.:), (.=))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
@@ -284,20 +284,19 @@ executeRemoteExport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> 
 executeRemoteExport mgr rc fmt jp args = do
     resp <- apiPost mgr rc ("/api/v1/db/" ++ T.unpack (deaDb args) ++ "/export") (object ["format" .= deaFormat args])
     case resp of
+        -- A failed export (bad format, db not loaded, unexportable data) arrives
+        -- as a non-2xx HTTP status, surfaced here as 'Left'.
         Left err -> reportError err >> exitFailure
-        Right val -> case parseMaybe parseExportResponse val of
+        Right val -> case parseMaybe parseExportData val of
             Nothing -> reportError "export: malformed server response" >> exitFailure
-            Just (False, msg, _) -> reportError ("export failed: " ++ T.unpack msg) >> exitFailure
-            Just (True, _, Nothing) -> reportError "export: server reported success but returned no data" >> exitFailure
-            Just (True, _, Just b64) -> case B64.decode (T.encodeUtf8 b64) of
+            Just b64 -> case B64.decode (T.encodeUtf8 b64) of
                 Left derr -> reportError ("export: invalid base64 from server: " ++ derr) >> exitFailure
                 Right bytes -> do
                     C8.writeFile (deaOut args) bytes
                     output fmt jp (Right (object ["database" .= deaDb args, "format" .= deaFormat args, "out" .= deaOut args]))
   where
-    parseExportResponse :: Value -> Parser (Bool, Text, Maybe Text)
-    parseExportResponse = withObject "ExportResponse" $ \o ->
-        (,,) <$> o .: "success" <*> o .: "message" <*> o .:? "data"
+    parseExportData :: Value -> Parser Text
+    parseExportData = withObject "ExportResponse" $ \o -> o .: "data"
 
 -- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String

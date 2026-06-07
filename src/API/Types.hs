@@ -805,14 +805,14 @@ newtype ExportRequest = ExportRequest
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportRequest)
 
-{- | Response for database export. The serialized database is base64-encoded
-(single-file formats carry their bytes directly; EcoSpold 2 / ILCD are zipped),
-mirroring the upload endpoint's base64 convention.
+{- | Response for a successful database export: the serialized database,
+base64-encoded (single-file formats carry their bytes directly; EcoSpold 2 /
+ILCD are zipped), mirroring the upload endpoint's base64 convention. Failures are
+HTTP errors (400 bad format / unexportable data, 404 not loaded), never a
+success flag in a 200 body — so the type cannot represent "success with no data".
 -}
-data ExportResponse = ExportResponse
-    { exrespSuccess :: Bool
-    , exrespMessage :: Text
-    , exrespData :: Maybe Text -- Base64-encoded serialized database (if successful)
+newtype ExportResponse = ExportResponse
+    { exrespData :: Text -- Base64-encoded serialized database
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportResponse)
