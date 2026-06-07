@@ -89,8 +89,10 @@ library
                      , SimaPro.Parser
                      , SimaPro.Writer
                      , BrightwayExcel.Parser
+                     , BrightwayExcel.Writer
                      , Expr
                      , ILCD.Parser
+                     , ILCD.Writer
                      , Plugin.Types
                      , Plugin.Builtin
                      , Plugin.Bridge
@@ -210,6 +212,7 @@ test-suite lca-tests
                      , MethodSpec
                      , SimaProParserSpec
                      , BrightwayExcelSpec
+                     , BrightwayExcelWriterSpec
                      , UnitConversionSpec
                      , PluginSpec
                      , ServerSpec
@@ -250,6 +253,7 @@ test-suite lca-tests
                      , EcoSpold2Spec
                      , EcoSpold2WriterSpec
                      , SimaProWriterSpec
+                     , ILCDWriterSpec
                      , MCPSchemaSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec

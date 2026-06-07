@@ -30,11 +30,16 @@ We also decode the two numeric character references (line feed and
 carriage return) that frequently appear inside attribute values in
 EcoSpold exports (e.g. `generalComment="text&#10;"`).
 -}
+
+-- @&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
+-- inverse of the writers escaping @&@ FIRST. Resolving it first would turn an
+-- escaped literal @"&lt;"@ (written as @"&amp;lt;"@) back into @"<"@ instead of
+-- @"&lt;"@ — a silent round-trip corruption for entity-like text.
 decodeXmlEntities :: Text -> Text
 decodeXmlEntities =
-    T.replace "&lt;" "<"
+    T.replace "&amp;" "&"
+        . T.replace "&lt;" "<"
         . T.replace "&gt;" ">"
-        . T.replace "&amp;" "&"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
         . T.replace "&#10;" "\n"

@@ -47,6 +47,7 @@ module BrightwayExcel.Parser (
     sheetToActivities,
     skippedSheetWarning,
     splitCategories,
+    isResourceCompartment,
 ) where
 
 import Codec.Archive.Zip (Archive, findEntryByPath, fromEntry, toArchiveOrFail)
@@ -337,9 +338,16 @@ rawToActivity cfg ra =
             }
 
 {- | Build the reference-product (or coproduct) exchange from a @production@ row,
-falling back to the activity metadata for any field the row omits. The
-reference product is normalized to its canonical base unit at ingest, exactly
-like the SimaPro importer.
+falling back to the activity metadata for any field the row omits.
+
+The /reference/ product is normalized to its canonical base unit at ingest (e.g.
+@g@ → @kg@, scaling the amount), exactly like the SimaPro importer. This makes
+the importer non-injective on the reference unit: a database whose reference unit
+is non-canonical does not satisfy @parse (write d) == d@. The writer's contract
+is instead fixed-point over the parser's /image/ — once a database has been
+parsed (so its reference unit is canonical), @parse (write d) == d@ holds. A
+coproduct row is left in its stated unit (no canonicalization), so it round-trips
+verbatim.
 -}
 productRowOut :: UC.UnitConfig -> M.Map Text CellValue -> Bool -> M.Map Text CellValue -> RowOut
 productRowOut cfg meta isRef f =
@@ -364,7 +372,7 @@ productRowOut cfg meta isRef f =
             , techActivityLinkId = UUID.nil
             , techProcessLinkId = Nothing
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
-            , techComment = Nothing
+            , techComment = fieldText f "comment"
             , techPedigree = Nothing
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
@@ -434,7 +442,7 @@ biosphereRowOut actName f
             , bioAmount = amount
             , bioUnitId = unitUUID
             , bioDirection = if isResourceCompartment comp then Resource else Emission
-            , bioLocation = ""
+            , bioLocation = fromMaybe "" (fieldText f "location")
             , bioComment = fieldText f "comment"
             , bioPedigree = Nothing
             }
