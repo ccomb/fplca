@@ -113,6 +113,7 @@ data ExchangeShape = ExchangeShape
     , esAmount :: Double
     , esInput :: Bool
     , esRef :: Bool
+    , esLocation :: Text
     , esComment :: Maybe Text
     }
     deriving (Eq, Ord, Show)
@@ -130,6 +131,7 @@ exchangeShape db ex =
                     (roundAmt amt)
                     (exchangeIsInput ex)
                     (exchangeIsReference ex)
+                    (exchangeLocation ex)
                     c
             BiosphereExchange{bioFlowId = fid, bioAmount = amt, bioUnitId = uid, bioComment = c} ->
                 ExchangeShape
@@ -139,6 +141,7 @@ exchangeShape db ex =
                     (roundAmt amt)
                     (exchangeIsInput ex)
                     (exchangeIsReference ex)
+                    (exchangeLocation ex)
                     c
             WasteExchange{waFlowId = fid, waAmount = amt, waUnitId = uid, waComment = c} ->
                 ExchangeShape
@@ -148,6 +151,7 @@ exchangeShape db ex =
                     (roundAmt amt)
                     (exchangeIsInput ex)
                     (exchangeIsReference ex)
+                    (exchangeLocation ex)
                     c
 
 activityShape :: SimpleDatabase -> Activity -> ActivityShape
@@ -346,6 +350,16 @@ spec = describe "ILCD.Writer round-trip" $ do
                     ]
             comments `shouldContain` [specialText]
 
+        it "round-trips a non-empty per-exchange location verbatim" $ do
+            db' <- roundTrip richDb
+            let locs =
+                    [ exchangeLocation ex
+                    | act <- M.elems (sdbActivities db')
+                    , ex <- exchanges act
+                    , not (T.null (exchangeLocation ex))
+                    ]
+            locs `shouldBe` ["RER"]
+
         it "places the reference at a non-zero index after round-trip" $ do
             db' <- roundTrip richDb
             let refIdxs =
@@ -513,14 +527,15 @@ refProductEx :: Exchange
 refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
 
 {- | The reference product sits at index 2, after an air emission with a
-subcompartment and a natural-resource input. One exchange comment carries
-'specialText', so names and comments are exercised together.
+subcompartment and a natural-resource input. One exchange carries a non-empty
+location and a comment of 'specialText', so location, names and comments are all
+exercised together.
 -}
 richDb :: SimpleDatabase
 richDb =
     oneActivityDb
         (M.fromList [(fEmitU, fEmission), (fResU, fResource)])
-        [ BiosphereExchange fEmitU 2.0 fUnitU Emission "" (Just specialText) Nothing
+        [ BiosphereExchange fEmitU 2.0 fUnitU Emission "RER" (Just specialText) Nothing
         , BiosphereExchange fResU 3.0 fUnitU Resource "" Nothing Nothing
         , refProductEx
         ]

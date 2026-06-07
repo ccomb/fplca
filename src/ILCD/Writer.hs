@@ -24,7 +24,7 @@ Determinism is the contract:
   @write (parse (write d)) == write d@ holds byte-for-byte.
 
 What round-trips: process UUID, name, location, classifications, processType,
-every exchange (flow ref, direction, amount, per-exchange comment), and the
+every exchange (flow ref, direction, amount, location, per-exchange comment), and the
 full flow + unit catalog (names, CAS, biosphere compartment, flow type, the
 flow→unit reference). These are exactly the fields "ILCD.Parser" reads back;
 fields the parser drops (activity description, synonyms, params, allocation,
@@ -343,10 +343,20 @@ exchangeXML i ex =
     , elem' "exchangeDirection" direction
     , elem' "resultingAmount" (formatDouble (exchangeAmount ex))
     ]
+        ++ locationBlock (exchangeLocation ex)
         ++ commentBlock (exchangeComment ex)
         ++ ["    </exchange>"]
   where
     direction = if exchangeIsInput ex then "Input" else "Output"
+
+{- | Per-exchange @<location>@, which the parser reads back into the exchange's
+location field. Omitted when empty — the common case, since ILCD geography lives
+at the process level — so it never perturbs the byte-stable round-trip.
+-}
+locationBlock :: Text -> [Text]
+locationBlock loc
+    | T.null loc = []
+    | otherwise = [elem' "location" loc]
 
 -- | Per-exchange comment, English-tagged to match the parser's preference.
 commentBlock :: Maybe Text -> [Text]
