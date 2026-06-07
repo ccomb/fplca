@@ -89,10 +89,14 @@ distributeFiles n xs =
 
 {- | Render a 'Double' in fixed-point notation (never scientific) with trailing
 zeros trimmed but at least one fractional digit kept. This is the canonical
-amount format for the EcoSpold/ILCD writers: it round-trips byte- and
-value-identically through 'Data.Text.Read.double', unlike 'show' which emits
-scientific notation for small/large magnitudes that re-reads lossily
-(e.g. @show 3.3e-20@ → @3.2999999999999994e-20@).
+amount format for the EcoSpold/ILCD writers: it re-parses to the same value
+through 'Data.Text.Read.double' for the magnitudes real LCA amounts occupy —
+unlike 'show', which emits scientific notation for small/large magnitudes that
+re-reads lossily (e.g. @show 3.3e-20@ → @3.2999999999999994e-20@). The
+near-underflow subnormal tail (≈@5e-324@) is the exception: fixed-point can't
+carry enough significant digits there, so it re-parses to @0@. The writers'
+export guards reject any amount that does not re-parse, so a guarded export
+never emits one of these.
 -}
 showFFloatTrim :: Double -> String
 showFFloatTrim d =

@@ -428,6 +428,16 @@ spec = do
             -- dataset number is unknown; fail loudly instead of mislabelling it.
             checkEcoSpold1Exportable (linkedDb danglingLink) `shouldSatisfy` isLeft
 
+        it "preserves a linked input semantically across a write→parse round-trip" $
+            -- SimpleDatabase carries no supplier link, so a bare re-parse can't
+            -- reproduce the raw dataset-number byte-for-byte (the module doc's
+            -- linked-input caveat). What must survive — and does — is the
+            -- semantic content the loader re-links on: flow name, amount, role,
+            -- unit. The idempotence test (a) uses an unlinked fixture, so this is
+            -- the only check that exercises a linked input end to end.
+            (dbViews <$> roundTrip (linkedDb supplierLink))
+                `shouldBe` Right (dbViews (linkedDb supplierLink))
+
     describe "empty database" $ do
         it "writes a well-formed, dataset-free document the parser accepts" $ do
             xml <- writeOk canonicalWriterOptions emptyDb
@@ -497,3 +507,15 @@ spec = do
                 Right sdb' ->
                     concatMap (exchangeViews sdb') (M.elems (sdbActivities sdb'))
                         `shouldSatisfy` any ((== 3.3e-20) . evAmount)
+
+    describe "non-round-tripping amounts" $
+        it "rejects a subnormal amount that re-parses to zero rather than undercounting" $ do
+            -- 5e-324 is finite but its fixed-point form carries too few
+            -- significant digits for Data.Text.Read.double to recover, so it
+            -- would silently export as 0; the guard rejects it instead.
+            let prodU = read "aaaa0000-0000-4000-8000-000000000001" :: UUID
+                bioU = read "aaaa0000-0000-4000-8000-0000000000c0" :: UUID
+                bioEx = BiosphereExchange bioU 5e-324 kgUnit Emission "" Nothing Nothing
+                bios = M.singleton bioU (BiosphereFlow bioU "trace" kgUnit M.empty Nothing Nothing Nothing)
+                sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
