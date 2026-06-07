@@ -97,11 +97,10 @@ assembleSimpleDb datasets =
         , sdbUnits = M.fromList [(unitId u, u) | (_, _, _, _, us, _, _) <- datasets, u <- us]
         }
 
-{- | The (activityUUID, productUUID) key the matrix builder expects. We use the
-reference exchange's flow id as the product, and derive a stable activity id
-from name+location via the same namespace the Loader uses is unnecessary
-here: the writer round-trip only depends on flow ids, so any injective key
-works. We reuse the reference product flow id for both slots.
+{- | An injective @(activityUUID, productUUID)@ key for the matrix builder. The
+writer round-trip depends only on flow ids, not on this key, so any injective
+choice works: we reuse the reference product's flow id (falling back to the
+first exchange's) for both slots.
 -}
 processKey :: Activity -> (UUID, UUID)
 processKey act =
@@ -410,7 +409,9 @@ spec = do
                     inv0 <- inventoryByName db0
                     inv1 <- inventoryByName db1
                     M.keys inv1 `shouldBe` M.keys inv0
-                    let near a b = abs (a - b) < 1e-9
+                    -- Relative tolerance with an absolute floor, so the check
+                    -- holds across magnitudes rather than only near unity.
+                    let near a b = abs (a - b) <= 1e-9 * max 1 (max (abs a) (abs b))
                     and (M.elems (M.intersectionWith near inv0 inv1)) `shouldBe` True
                     M.null inv0 `shouldBe` False
 
@@ -449,8 +450,11 @@ spec = do
             checkEcoSpold1Exportable emptyDb `shouldBe` Right ()
 
     describe "escaping / unicode" $
-        it "round-trips XML metacharacters and non-ASCII in names" $ do
-            let nm = "Cu <ore> & «café» 95% — 1\"" :: Text
+        it "round-trips XML metacharacters, newlines, and non-ASCII in names" $ do
+            -- The \r and \n exercise the &#13; / &#10; numeric entities end to
+            -- end (escapeXmlAttr → parser's decodeXmlEntities), not just at the
+            -- byte level the escapeXmlAttr unit test covers.
+            let nm = "Cu <ore> & «café»\r\n95% — 1\"" :: Text
                 prodU = read "44444444-0000-4000-8000-000000000001" :: UUID
                 sdb = soloDb nm prodU [] M.empty M.empty M.empty
             case roundTrip sdb of
@@ -519,3 +523,38 @@ spec = do
                 bios = M.singleton bioU (BiosphereFlow bioU "trace" kgUnit M.empty Nothing Nothing Nothing)
                 sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+
+    describe "general comment (activity description)" $
+        it "re-imports a multi-paragraph description as one joined paragraph" $ do
+            -- generalComment is a single ES1 attribute, so paragraph cardinality
+            -- does not round-trip: the joined text survives, but the parser reads
+            -- it back as one element. This pins that documented behaviour.
+            let prodU = read "cccc0000-0000-4000-8000-000000000001" :: UUID
+                ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+                act =
+                    Activity
+                        "documented process"
+                        ["first paragraph", "second paragraph"]
+                        M.empty
+                        M.empty
+                        "GLO"
+                        "kg"
+                        [ref]
+                        M.empty
+                        M.empty
+                        Nothing
+                        Nothing
+                        Nothing
+                sdb =
+                    SimpleDatabase
+                        { sdbActivities = M.singleton (prodU, prodU) act
+                        , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "documented process" kgUnit M.empty Nothing Nothing)
+                        , sdbBioFlows = M.empty
+                        , sdbWasteFlows = M.empty
+                        , sdbUnits = units1
+                        }
+            case roundTrip sdb of
+                Left err -> expectationFailure ("round-trip failed: " ++ err)
+                Right sdb' ->
+                    map activityDescription (M.elems (sdbActivities sdb'))
+                        `shouldBe` [["first paragraph\nsecond paragraph"]]
