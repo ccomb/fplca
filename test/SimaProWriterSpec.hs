@@ -25,6 +25,7 @@ Three properties are pinned:
 module SimaProWriterSpec (spec) where
 
 import qualified Data.ByteString as BS
+import Data.Either (isLeft)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -452,6 +453,19 @@ spec = describe "SimaPro.Writer round-trip" $ do
         it "accepts an ordinary activity name" $
             checkSimaProExportable (namedDb "Butter production")
                 `shouldBe` Right ()
+
+    describe "checkSimaProExportable (field-shape guards)" $ do
+        it "accepts a baseline single-reference activity" $
+            checkSimaProExportable (guardDb Nothing Nothing [refProd])
+                `shouldBe` Right ()
+
+        it "rejects a newline in the native-type (Type) label" $
+            -- The Type label is emitted as a bare metadata value line, so a
+            -- newline would split the Process block across physical rows on
+            -- re-import. Regression: the newline guard now covers the Type label
+            -- (it is derived from the same 'activityMetaLines' as the emitter).
+            checkSimaProExportable (guardDb Nothing (Just (SimaProProcessType "Unit\nprocess")) [refProd])
+                `shouldSatisfy` isLeft
   where
     activitiesOf (acts, _, _, _, _) = acts
 
@@ -620,3 +634,41 @@ namedDb name =
             Nothing
             Nothing
             Nothing
+
+-- ---------------------------------------------------------------------------
+-- Field-shape guard fixtures (shared by the field-shape guard specs)
+-- ---------------------------------------------------------------------------
+
+-- | Catalog UUIDs shared by every 'guardDb' fixture.
+gProd, gMat, gBio, gUnit :: UUID
+gProd = testUUID 0x50
+gMat = testUUID 0x51
+gBio = testUUID 0x52
+gUnit = testUUID 0x53
+
+-- | A valid reference product output for the catalog above.
+refProd :: Exchange
+refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+
+{- | A one-activity database whose exchanges are supplied verbatim, against a
+fixed catalog (a reference product flow, a material flow, an emission flow, and
+a kg unit). Lets the field-shape guard specs vary allocation, native type, and
+the exchange list while keeping every flow/unit resolvable.
+-}
+guardDb :: Maybe Double -> Maybe NativeActivityType -> [Exchange] -> SimpleDatabase
+guardDb alloc ntype exs =
+    SimpleDatabase
+        { sdbActivities = M.singleton (testUUID 0x5f, gProd) act
+        , sdbTechFlows =
+            M.fromList
+                [ (gProd, TechnosphereFlow gProd "main product" gUnit M.empty Nothing Nothing)
+                , (gMat, TechnosphereFlow gMat "some material" gUnit M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows =
+            M.singleton gBio (BiosphereFlow gBio "an emission" gUnit M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton gUnit (Unit gUnit "kg" "kg" "")
+        }
+  where
+    act =
+        Activity "guard maker" [] M.empty M.empty "GLO" "kg" exs M.empty M.empty alloc Nothing ntype

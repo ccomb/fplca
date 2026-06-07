@@ -224,38 +224,26 @@ checkSimaProExportable db =
     metaKeyOffenders =
         [ (activityName act, val)
         | act <- M.elems (sdbActivities db)
-        , val <- emittedMetaValues act
+        , val <- map snd (activityMetaLines act)
         , not (T.null val)
         , isMetadataKey (TE.encodeUtf8 (T.strip val))
         ]
-    -- The metadata values the writer emits as bare value lines (see
-    -- 'serializeActivity'). Each must not collide with a SimaPro metadata key.
-    emittedMetaValues act =
-        [ M.findWithDefault "" "Category type" (activityClassification act)
-        , activityName act
-        , typeLabelOf (activityNativeType act)
-        , activityLocation act
-        , T.intercalate " " (activityDescription act)
-        ]
     hasNewline = T.any (\c -> c == '\n' || c == '\r')
+    -- Every text field that lands in the output verbatim: the bare metadata
+    -- value lines (so a newline in any of them — the Type label included — is
+    -- caught), the "Category" product-column value, exchange comments, and all
+    -- flow names. The line-based parser splits on physical newlines /before/
+    -- CSV parsing, so even a quoted newline tears a row apart; reject upstream.
+    activityTexts act =
+        map snd (activityMetaLines act)
+            ++ M.elems (activityClassification act)
+            ++ [cmt | ex <- exchanges act, Just cmt <- [exchangeComment ex]]
     newlineOffenders =
         filter hasNewline $
-            concat
-                [ activityName act : activityLocation act : activityDescription act
-                | act <- M.elems (sdbActivities db)
-                ]
-                ++ [ v
-                   | act <- M.elems (sdbActivities db)
-                   , v <- M.elems (activityClassification act)
-                   ]
+            concatMap activityTexts (M.elems (sdbActivities db))
                 ++ map tfName (M.elems (sdbTechFlows db))
                 ++ map bfName (M.elems (sdbBioFlows db))
                 ++ map wfName (M.elems (sdbWasteFlows db))
-                ++ [ cmt
-                   | act <- M.elems (sdbActivities db)
-                   , ex <- exchanges act
-                   , Just cmt <- [exchangeComment ex]
-                   ]
 
 -- ============================================================================
 -- Constants
@@ -367,6 +355,32 @@ typeLabelOf mnt = case mnt of
     Just (EcoSpoldActivityType{eatLabel = lbl}) -> lbl
     Just (ILCDProcessType lbl) -> lbl
     Nothing -> ""
+
+{- | The metadata @key/value@ pairs the writer emits as bare @key⏎value⏎@ lines
+in a @Process@ block. Single source of truth shared by 'serializeActivity'
+(which writes them) and 'checkSimaProExportable' (which guards every value
+against the two hazards a bare value line is prone to): an embedded newline,
+which the line-based parser would split across rows, and a value equal to a
+SimaPro metadata key, which the parser would mistake for a new field. Empty
+values are dropped on emission by 'serializeActivity'’s @meta@, but kept here so
+the guards still inspect exactly what /would/ be written.
+
+The "Category" classification value is intentionally absent: it rides the
+@Products@ row's category column, not a bare metadata line. Multi-paragraph
+descriptions are flattened to one space-joined "Comment" line; the re-parse
+reads them back as a single description entry, losing the paragraph boundaries —
+an accepted limitation of SimaPro's single-line "Comment" field. A missing
+native type yields an empty "Type" value, so @meta@ omits the line and a
+re-parse yields 'Nothing' again rather than drifting to "Unit process".
+-}
+activityMetaLines :: Activity -> [(Text, Text)]
+activityMetaLines Activity{..} =
+    [ ("Category type", M.findWithDefault "" "Category type" activityClassification)
+    , ("Process name", activityName)
+    , ("Type", typeLabelOf activityNativeType)
+    , ("Geography", activityLocation)
+    , ("Comment", T.intercalate " " activityDescription)
+    ]
 
 -- | Render the comment column, re-attaching a pedigree prefix when present.
 renderComment :: Maybe Pedigree -> Maybe Text -> Text
@@ -550,18 +564,8 @@ respective DBs; exchanges whose flow is missing are dropped (the matrix
 builder is the authority on unknown flows, not the serializer).
 -}
 serializeActivity :: Catalogs -> Activity -> [Text]
-serializeActivity cats Activity{..} =
-    let catType = M.findWithDefault "" "Category type" activityClassification
-        category = M.findWithDefault "" "Category" activityClassification
-        -- No native type → omit the Type line entirely (meta drops empty values),
-        -- so a re-parse yields Nothing again rather than drifting to "Unit process".
-        typeLabel = typeLabelOf activityNativeType
-        -- SimaPro's "Comment" is a single value line emitted unescaped, so it
-        -- cannot carry newlines (a paragraph break would corrupt re-parsing).
-        -- Multi-paragraph descriptions are flattened to one space-joined line;
-        -- the re-parse reads them back as a single description entry, losing the
-        -- paragraph boundaries. Accepted limitation of the SimaPro format.
-        comment = T.intercalate " " activityDescription
+serializeActivity cats act@Activity{..} =
+    let category = M.findWithDefault "" "Category" activityClassification
 
         -- The parser scales every shared exchange (everything but the reference
         -- product) by allocFraction = allocPercent/100 on import. To be its exact
@@ -586,15 +590,9 @@ serializeActivity cats Activity{..} =
             , Just l <- [bioLine cats ex]
             ]
         wasteLines = mapMaybe (wasteLine cats) unscaledExchanges
-
-        meta key val = if T.null val then [] else [key, val, ""]
      in concat
             [ ["Process", ""]
-            , meta "Category type" catType
-            , meta "Process name" activityName
-            , meta "Type" typeLabel
-            , meta "Geography" activityLocation
-            , meta "Comment" comment
+            , concatMap (uncurry meta) (activityMetaLines act)
             , -- Products section is always present (an activity has a reference).
               -- Coproducts go to "Avoided products" so the parser reads them back
               -- as coproducts, not as extra reference-product activities.
@@ -611,6 +609,10 @@ serializeActivity cats Activity{..} =
             , ["End", ""]
             ]
   where
+    -- A metadata line is emitted only when its value is non-empty; an empty
+    -- value drops the whole key/value/blank triple so a re-parse yields the
+    -- absent field again rather than an empty string.
+    meta key val = if T.null val then [] else [key, val, ""]
     -- Append a blank separator line after a non-empty section.
     withBlank [] = []
     withBlank ls = ls ++ [""]
