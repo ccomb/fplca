@@ -395,8 +395,11 @@ exchangeRow cfg db = \case
     ex@WasteExchange{waAmount = amt, waLocation = loc} -> do
         name <- flowNameOf db ex
         unit <- unitNameOf (exchangeUnitId ex) db
-        -- Brightway has no native waste type; emit as a technosphere input so the
-        -- amount and supplier link survive the round-trip.
+        -- Unreachable on any guarded path: 'checkBrightwayExportable' (run by
+        -- 'renderWorkbook' before serialization) rejects every database carrying a
+        -- waste exchange, precisely because re-parsing it as technosphere would
+        -- invert an output waste into a positive input. This branch only keeps
+        -- 'exchangeRow' total without a silent drop; it never reaches the workbook.
         Just
             [ CText name
             , CNum amt
