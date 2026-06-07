@@ -399,8 +399,12 @@ renderTechnosphere env ex =
 
 {- | Waste exchange → @intermediateExchange@ tagged with the
 @By-product classification = Waste@ classification (parser "Pattern B"). The
-@waIsInput@ flag picks input vs output group so direction round-trips. This
-re-parses to a 'WasteExchange', preserving the kind.
+@waIsInput@ flag picks the group so direction round-trips: an input takes
+@inputGroup 5@ (from technosphere), an output the @outputGroup 2@ (by-product) —
+the only output groups EcoSpold2 defines for an intermediate exchange besides the
+reference @0@. A waste output shares group @2@ with an ordinary coproduct; it is
+the @Waste@ classification, not the group number, that re-routes it to a
+'WasteExchange' on parse, so the kind is preserved.
 -}
 renderWaste :: ResolveEnv -> Exchange -> [Text]
 renderWaste env ex =
@@ -417,7 +421,7 @@ renderWaste env ex =
         (waComment ex)
   where
     flowId = waFlowId ex
-    groupLine = if waIsInput ex then inputGroupLine "5" else outputGroupLine "4"
+    groupLine = if waIsInput ex then inputGroupLine "5" else outputGroupLine "2"
 
 {- | Biosphere exchange → @elementaryExchange@. Direction maps to in/out group:
 'Resource' → @inputGroup@ 4, 'Emission' → @outputGroup@ 4. The compartment is

@@ -241,7 +241,7 @@ fixtureWithBioSynonyms =
 
 {- | A single activity exercising the subtlest inversion paths: a coproduct
 (outputGroup 2) and waste exchanges in both directions (waIsInput controls
-inputGroup 5 vs outputGroup 1). These round-trip paths were previously
+inputGroup 5 vs outputGroup 2). These round-trip paths were previously
 untested.
 -}
 fixtureWasteCoproduct :: SimpleDatabase
@@ -342,8 +342,9 @@ spec = describe "EcoSpold2 writer round-trip" $ do
                     `shouldBe` [0.3, 0.5]
 
     -- Regression: the subtlest inversion paths. renderWaste maps waIsInput to
-    -- inputGroup 5 / outputGroup 1, and a coproduct goes to outputGroup 2 —
-    -- both must survive write→parse rather than flip direction or role.
+    -- inputGroup 5 / outputGroup 2, and a coproduct goes to outputGroup 2 too
+    -- (the Waste classification, not the group, distinguishes them) — both must
+    -- survive write→parse rather than flip direction or role.
     it "round-trips waste direction (in/out) and a coproduct" $ do
         sdb' <- roundTrip fixtureWasteCoproduct
         case M.lookup (actA, prodA) (sdbActivities sdb') of
