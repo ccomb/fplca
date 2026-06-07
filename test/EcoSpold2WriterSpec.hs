@@ -375,6 +375,14 @@ spec = describe "EcoSpold2 writer round-trip" $ do
                 (fixtureWithExchange (BiosphereExchange co2 1.0 unitMJ Emission "" Nothing Nothing))
                 `shouldSatisfy` isLeft
 
+        it "rejects an exchange whose flow is absent from the registry" $
+            -- `land` is not in the single-flow biosphere registry, so the writer
+            -- would emit a nameless, compartment-less exchange (name degrading to
+            -- the bare UUID) — symmetric to the missing-unit downgrade above.
+            checkEcoSpold2Exportable
+                (fixtureWithExchange (BiosphereExchange land 1.0 unitKg Emission "" Nothing Nothing))
+                `shouldSatisfy` isLeft
+
         it "rejects a subnormal amount that re-parses to zero rather than undercounting" $
             -- 5e-324's fixed-point form carries too few significant digits for
             -- Data.Text.Read.double to recover; it would silently export as 0.

@@ -43,6 +43,7 @@ module EcoSpold.Writer2 (
 
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -123,6 +124,12 @@ re-encode.
     @\<unitName\>@, which the parser re-reads as the @UNKNOWN_UNIT@ placeholder —
     a silent unit downgrade. Reject rather than lose the unit.
 
+  * __Unresolvable flows.__ A flow's name, compartment, CAS and synonyms are all
+    resolved from the flow registries; an exchange whose flow id is absent emits
+    a bare exchange that re-parses with the flow's UUID string as its name and
+    /no compartment/ — a silent identity and compartment downgrade. Symmetric to
+    the unit case: reject rather than corrupt.
+
   * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
     re-parse to the same 'Double' through 'Data.Text.Read.double' — e.g. a
     subnormal near the floating-point floor — would silently export as a
@@ -133,34 +140,17 @@ data. Databases free of it pass unchanged.
 -}
 checkEcoSpold2Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold2Exportable db =
-    case (amountOffenders, refInputOffenders, unknownUnitOffenders, roundTripOffenders) of
-        ((consumer, amt) : _, _, _, _) ->
-            Left $
-                "EcoSpold2 export cannot represent activity \""
-                    <> consumer
-                    <> "\": exchange amount "
-                    <> T.pack (show amt)
-                    <> " is not finite."
-        ([], consumer : _, _, _) ->
-            Left $
-                "EcoSpold2 export cannot represent activity \""
-                    <> consumer
-                    <> "\": a reference input (treatment process) has no EcoSpold2 encoding."
-        ([], [], consumer : _, _) ->
-            Left $
-                "EcoSpold2 export cannot represent activity \""
-                    <> consumer
-                    <> "\": an exchange references a unit absent from the registry."
-        ([], [], [], (consumer, amt) : _) ->
-            Left $
-                "EcoSpold2 export cannot represent activity \""
-                    <> consumer
-                    <> "\": exchange amount "
-                    <> T.pack (show amt)
-                    <> " has no decimal form that re-parses to the same value"
-                    <> " (e.g. a subnormal near the floating-point floor)."
-        ([], [], [], []) -> Right ()
+    maybe (Right ()) Left (listToMaybe (concat orderedViolations))
   where
+    -- Categories in priority order; the first offending activity across all of
+    -- them is reported. Each inner list carries one message per offender.
+    orderedViolations =
+        [ [nonFiniteMsg c a | (c, a) <- amountOffenders]
+        , [refInputMsg c | c <- refInputOffenders]
+        , [unknownUnitMsg c | c <- unknownUnitOffenders]
+        , [missingFlowMsg c | c <- missingFlowOffenders]
+        , [nonRoundTripMsg c a | (c, a) <- roundTripOffenders]
+        ]
     amountOffenders =
         [ (activityName act, amt)
         | act <- M.elems (sdbActivities db)
@@ -193,11 +183,34 @@ checkEcoSpold2Exportable db =
         , ex <- exchanges act
         , M.notMember (exchangeUnitId ex) (sdbUnits db)
         ]
+    -- Each exchange's flow must resolve in the registry matching its kind, or the
+    -- writer emits a nameless, compartment-less exchange (see Haddock above).
+    missingFlowOffenders =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , flowMissing ex
+        ]
+    flowMissing ex = case ex of
+        TechnosphereExchange{techFlowId = fid} -> M.notMember fid (sdbTechFlows db)
+        WasteExchange{waFlowId = fid} -> M.notMember fid (sdbWasteFlows db)
+        BiosphereExchange{bioFlowId = fid} -> M.notMember fid (sdbBioFlows db)
     isReferenceInput ex = case ex of
         TechnosphereExchange{techRole = ReferenceInput} -> True
         TechnosphereExchange{} -> False
         WasteExchange{} -> False
         BiosphereExchange{} -> False
+    cannotRepresent c = "EcoSpold2 export cannot represent activity \"" <> c <> "\": "
+    nonFiniteMsg c a = cannotRepresent c <> "exchange amount " <> T.pack (show a) <> " is not finite."
+    refInputMsg c = cannotRepresent c <> "a reference input (treatment process) has no EcoSpold2 encoding."
+    unknownUnitMsg c = cannotRepresent c <> "an exchange references a unit absent from the registry."
+    missingFlowMsg c = cannotRepresent c <> "an exchange references a flow absent from the registry."
+    nonRoundTripMsg c a =
+        cannotRepresent c
+            <> "exchange amount "
+            <> T.pack (show a)
+            <> " has no decimal form that re-parses to the same value"
+            <> " (e.g. a subnormal near the floating-point floor)."
 
 -- | Canonical filename for an activity: @{actUUID}_{prodUUID}.spold@.
 activityFileName :: UUID.UUID -> UUID.UUID -> FilePath
