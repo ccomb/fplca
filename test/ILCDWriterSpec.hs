@@ -334,7 +334,7 @@ spec = describe "ILCD.Writer round-trip" $ do
             map bfCompartment (M.elems (sdbBioFlows db'))
                 `shouldMatchList` map bfCompartment (M.elems (sdbBioFlows richDb))
 
-        it "round-trips a name and comment with & < > \" and unicode verbatim" $ do
+        it "round-trips a name and comment with & < > \", entity literals and unicode verbatim" $ do
             db' <- roundTrip richDb
             let names = map activityName (M.elems (sdbActivities db'))
             names `shouldBe` [specialText]
@@ -373,17 +373,18 @@ spec = describe "ILCD.Writer round-trip" $ do
                     ]
             refs `shouldBe` []
 
-        it "clamps a NaN or Infinity amount to zero on export" $ do
-            formatDouble (0 / 0) `shouldBe` "0.0"
-            formatDouble (1 / 0) `shouldBe` "0.0"
-            db' <- roundTrip (nonFiniteDb (1 / 0))
-            let amounts =
-                    [ exchangeAmount ex
-                    | act <- M.elems (sdbActivities db')
-                    , ex <- exchanges act
-                    , isBiosphereExchange ex
-                    ]
-            amounts `shouldBe` [0]
+        it "rejects a non-finite amount rather than silently clamping it to zero" $ do
+            -- formatDouble renders the non-parseable form so a bad re-import
+            -- fails loudly; the export guard rejects it before that can happen.
+            formatDouble (0 / 0) `shouldBe` "NaN"
+            formatDouble (1 / 0) `shouldBe` "Infinity"
+            checkILCDExportable (nonFiniteDb (1 / 0)) `shouldSatisfy` isLeft
+            checkILCDExportable (nonFiniteDb (0 / 0)) `shouldSatisfy` isLeft
+
+        it "rejects a subnormal amount that fixed-point cannot round-trip" $
+            -- 5e-324 (smallest positive subnormal) re-parses to 0 through
+            -- fixed-point, an undetectable LCIA shift; reject it at the boundary.
+            checkILCDExportable (nonFiniteDb 5.0e-324) `shouldSatisfy` isLeft
 
 isPrefixOfFp :: String -> FilePath -> Bool
 isPrefixOfFp = isPrefixOf
@@ -442,9 +443,14 @@ multiOutputDb =
 -- Feature fixtures (single-output, exercising the recent ILCD writer fixes)
 -- ---------------------------------------------------------------------------
 
--- | A name/comment carrying every XML-significant char plus non-ASCII text.
+{- | A name/comment carrying every XML-significant char plus non-ASCII text.
+The literal entity references @&lt;@ and @&amp;@ are deliberate: the writer
+escapes their @&@ to @&amp;@ (so @&lt;@ → @&amp;lt;@), and a decoder that resolves
+@&amp;@ before @&lt;@ would corrupt them back to @<@/@&@. They guard that
+asymmetry.
+-}
 specialText :: Text
-specialText = "Name & <tag> \"q\" café ☕"
+specialText = "Name & <tag> \"q\" &lt; &amp; café ☕"
 
 {- | UUIDs shared by the feature fixtures. Distinct constructors keep each flow
 addressable; the reference product is deliberately the /third/ exchange so a
@@ -536,8 +542,9 @@ noRefDb =
         (M.singleton fEmitU fEmission)
         [BiosphereExchange fEmitU 1.0 fUnitU Emission "" Nothing Nothing]
 
-{- | One activity whose single biosphere amount is the given (non-finite) value.
-'formatDouble' clamps NaN/Infinity to 0, so the amount re-imports as 0.
+{- | One activity whose single biosphere amount is the given value. Used with a
+non-finite or subnormal amount that 'checkILCDExportable' must reject because it
+does not re-parse to itself through 'formatDouble'.
 -}
 nonFiniteDb :: Double -> SimpleDatabase
 nonFiniteDb amt =
