@@ -67,7 +67,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath (joinPath, splitDirectories, (</>))
 
 import EcoSpold.Common (showFFloatTrim)
 import Types
@@ -98,27 +98,33 @@ defaultWriteOptions = WriteOptions{woTimestamp = Nothing, woGenerator = Nothing}
 
 {- | Produce the full set of @(relativePath, contents)@ pairs for the ILCD
 package. Pure and deterministic. The result is sorted by path.
+
+Paths use a forward slash on every OS: the ILCD package layout and the zip
+archive both mandate @/@ regardless of host (a backslash from
+'System.FilePath.</>' on Windows would yield a non-portable archive and break
+the @processes/@ prefix the parser keys on). 'writeILCDDatabase' maps them to
+the native separator before touching disk.
 -}
 ilcdFiles :: WriteOptions -> SimpleDatabase -> [(FilePath, BS.ByteString)]
 ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   where
     processes =
-        [ ("processes" </> uuidStr actUUID <> ".xml", render (processXML opts actUUID act))
+        [ ("processes/" <> uuidStr actUUID <> ".xml", render (processXML opts actUUID act))
         | ((actUUID, _prodUUID), act) <- M.toAscList (sdbActivities db)
         ]
 
     flows =
-        [ ("flows" </> uuidStr (flowKindId fk) <> ".xml", render (flowXML fk unitRef))
+        [ ("flows/" <> uuidStr (flowKindId fk) <> ".xml", render (flowXML fk unitRef))
         | (fk, unitRef) <- allFlows db
         ]
 
     flowProps =
-        [ ("flowproperties" </> uuidStr uid <> ".xml", render (flowPropertyXML u))
+        [ ("flowproperties/" <> uuidStr uid <> ".xml", render (flowPropertyXML u))
         | (uid, u) <- M.toAscList (sdbUnits db)
         ]
 
     unitGroups =
-        [ ("unitgroups" </> uuidStr uid <> ".xml", render (unitGroupXML u))
+        [ ("unitgroups/" <> uuidStr uid <> ".xml", render (unitGroupXML u))
         | (uid, u) <- M.toAscList (sdbUnits db)
         ]
 
@@ -256,8 +262,12 @@ writeILCDDatabase opts dir db =
             createDirectoryIfMissing True (dir </> "flows")
             createDirectoryIfMissing True (dir </> "flowproperties")
             createDirectoryIfMissing True (dir </> "unitgroups")
-            mapM_ (\(rel, bytes) -> BS.writeFile (dir </> rel) bytes) (ilcdFiles opts db)
+            mapM_ (\(rel, bytes) -> BS.writeFile (dir </> nativePath rel) bytes) (ilcdFiles opts db)
             pure (Right ())
+  where
+    -- ilcdFiles yields forward-slash package paths; rejoin with the native
+    -- separator so the on-disk write is correct on Windows too.
+    nativePath = joinPath . splitDirectories
 
 {- | Build a deterministic zip 'Archive' of the ILCD package and return its
 serialized bytes. Entry modification times are pinned to epoch 0 so the
