@@ -76,7 +76,14 @@ defaultWriterConfig = WriterConfig{wcVersion = "SimaPro 9.6.0.1"}
 -- Export guard
 -- ============================================================================
 
-{- | SimaPro CSV files emissions into air / water / soil sections only. An
+{- | Every activity must have exactly one reference product. The writer emits
+one @Process@ block per activity, with one @Products@ row per reference output;
+zero references would leave an empty @Products@ section that the parser discards
+(it keeps a block only if it has a product), and more than one would re-parse
+into a separate activity per row. Reject either rather than silently drop or
+split the activity on re-import.
+
+SimaPro CSV files emissions into air / water / soil sections only. An
 emission whose compartment medium is some other non-empty value has no faithful
 section, so report it rather than silently filing it under @Emissions to air@.
 An unspecified (empty) medium is allowed — it carries no medium to lose and
@@ -109,8 +116,28 @@ Both are rejected here rather than emitted as a row the parser misreads.
 -}
 checkSimaProExportable :: SimpleDatabase -> Either Text ()
 checkSimaProExportable db =
-    checkMedia *> checkAmounts *> checkAllocation *> checkUnits *> checkNewlines *> checkComments *> checkMetaKeys
+    checkReferences
+        *> checkMedia
+        *> checkAmounts
+        *> checkAllocation
+        *> checkUnits
+        *> checkNewlines
+        *> checkComments
+        *> checkMetaKeys
   where
+    checkReferences =
+        case referenceOffenders of
+            [] -> Right ()
+            ((name, n) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": it has "
+                        <> T.pack (show n)
+                        <> " reference products, but a faithful round-trip needs exactly"
+                        <> " one — zero would drop the whole Process block on re-import"
+                        <> " (the parser keeps a block only if it has a product), and more"
+                        <> " than one would split it into separate activities."
     checkMedia =
         case mediumOffenders of
             [] -> Right ()
@@ -185,6 +212,16 @@ checkSimaProExportable db =
                         <> val
                         <> "\" collides with a SimaPro metadata key, so the parser would"
                         <> " mistake it for a new field and drop it on import."
+    -- Each activity must have exactly one reference product. The writer emits
+    -- one Process block per activity with one Products row per reference; zero
+    -- references → an empty Products section → the parser drops the block, and
+    -- >1 → several Products rows → the parser splits it into one activity each.
+    referenceOffenders =
+        [ (activityName act, n)
+        | act <- M.elems (sdbActivities db)
+        , let n = length (filter exchangeIsReference (exchanges act))
+        , n /= 1
+        ]
     mediumOffenders =
         [ (bfName flow, bfCompartmentName flow)
         | act <- M.elems (sdbActivities db)

@@ -466,6 +466,16 @@ spec = describe "SimaPro.Writer round-trip" $ do
             -- (it is derived from the same 'activityMetaLines' as the emitter).
             checkSimaProExportable (guardDb Nothing (Just (SimaProProcessType "Unit\nprocess")) [refProd])
                 `shouldSatisfy` isLeft
+
+        it "rejects an activity with no reference product" $
+            -- An empty Products section makes the parser discard the whole block.
+            checkSimaProExportable (guardDb Nothing Nothing [matInput])
+                `shouldSatisfy` isLeft
+
+        it "rejects an activity with more than one reference product" $
+            -- Two Products rows re-parse into two separate activities.
+            checkSimaProExportable (guardDb Nothing Nothing [refProd, refProd2])
+                `shouldSatisfy` isLeft
   where
     activitiesOf (acts, _, _, _, _) = acts
 
@@ -649,6 +659,14 @@ gUnit = testUUID 0x53
 -- | A valid reference product output for the catalog above.
 refProd :: Exchange
 refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+
+-- | A second reference product (on the material flow) — an invalid second head.
+refProd2 :: Exchange
+refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+
+-- | A plain material input (no reference product in the activity).
+matInput :: Exchange
+matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing
 
 {- | A one-activity database whose exchanges are supplied verbatim, against a
 fixed catalog (a reference product flow, a material flow, an emission flow, and
