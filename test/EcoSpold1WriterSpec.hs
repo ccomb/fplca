@@ -524,6 +524,19 @@ spec = do
                 sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
 
+    describe "waste-marker collision" $
+        it "rejects a biosphere flow whose compartment is the waste-routing category" $ do
+            -- "Final waste flows" is the parser's waste-routing marker, tested
+            -- before the biosphere group, so a biosphere flow carrying it as its
+            -- compartment name would silently re-import as a waste exchange.
+            let prodU = read "bbbb0000-0000-4000-8000-000000000001" :: UUID
+                bioU = read "bbbb0000-0000-4000-8000-0000000000c0" :: UUID
+                comp = Compartment "Final waste flows" Nothing
+                bioEx = BiosphereExchange bioU 0.05 kgUnit Emission "" Nothing Nothing
+                bios = M.singleton bioU (BiosphereFlow bioU "oddly classified" kgUnit M.empty Nothing Nothing (Just comp))
+                sdb = soloDb "confused process" prodU [bioEx] M.empty bios M.empty
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+
     describe "general comment (activity description)" $
         it "re-imports a multi-paragraph description as one joined paragraph" $ do
             -- generalComment is a single ES1 attribute, so paragraph cardinality

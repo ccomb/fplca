@@ -195,6 +195,11 @@ emit silently wrong data:
     the writer would emit @outputGroup 0@ and the parser would read it back as
     a reference product — a direction flip.
 
+  * __Waste-marker collision.__ A biosphere flow whose compartment name is the
+    waste-routing category @"Final waste flows"@ would re-import as a waste
+    exchange, because the parser tests that category before the biosphere group
+    — a silent biosphere → waste kind flip. Rejected.
+
   * __Missing flows / units.__ An exchange whose flow or unit is absent from
     the tables would be written with a blank name and re-parse as a different
     (or @UNKNOWN@) entity.
@@ -211,7 +216,7 @@ Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold1Exportable db =
-    checkLinks *> checkRefInputs *> checkFlows *> checkUnits *> checkAmounts *> checkAmountRoundTrip
+    checkLinks *> checkRefInputs *> checkWasteSentinel *> checkFlows *> checkUnits *> checkAmounts *> checkAmountRoundTrip
   where
     checkLinks =
         case danglingLinks of
@@ -233,6 +238,18 @@ checkEcoSpold1Exportable db =
                         <> "\": the format has no marker for it, so the writer would emit"
                         <> " outputGroup 0 and the parser would read it back as a reference"
                         <> " product — a direction flip from input to output."
+    checkWasteSentinel =
+        case wasteSentinelOffenders of
+            [] -> Right ()
+            (consumer : _) ->
+                Left $
+                    "EcoSpold1 export cannot represent activity \""
+                        <> consumer
+                        <> "\": a biosphere flow's compartment is \""
+                        <> finalWasteFlowsCategory
+                        <> "\", which 'EcoSpold.Parser1' reads as the waste-routing marker —"
+                        <> " the flow would re-import as a waste exchange, not a biosphere one"
+                        <> " (a silent biosphere → waste kind flip)."
     checkFlows =
         case flowOffenders of
             [] -> Right ()
@@ -305,6 +322,17 @@ checkEcoSpold1Exportable db =
         [ activityName act
         | act <- M.elems (sdbActivities db)
         , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
+        ]
+    -- A biosphere flow is serialised with @category = bfCompartmentName@. If that
+    -- equals the waste-routing marker, the parser (which tests the category first)
+    -- re-imports it as a waste exchange — a silent kind flip. A missing flow is
+    -- caught by 'checkFlows', so only resolvable biosphere flows are inspected here.
+    wasteSentinelOffenders =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , BiosphereExchange{bioFlowId = fid} <- exchanges act
+        , Just bf <- [M.lookup fid (sdbBioFlows db)]
+        , bfCompartmentName bf == finalWasteFlowsCategory
         ]
     flowOffenders =
         [ activityName act
@@ -463,6 +491,17 @@ groupElement ex = case ex of
 -- Flow-field resolution (name / category / subCategory / CAS by UUID)
 -- ----------------------------------------------------------------------------
 
+{- | The category label EcoSpold1 exports use for SimaPro's third flow class.
+'EcoSpold.Parser1.buildExchange' routes any exchange carrying this category to a
+'WasteExchange' — and it checks that /before/ the biosphere and technosphere
+groups. So the writer emits it for every waste flow, and
+'checkEcoSpold1Exportable' rejects any /non-waste/ flow whose category would
+collide with it (the only such flow is a biosphere one whose compartment name
+happens to be this string), which would otherwise re-import as a waste exchange.
+-}
+finalWasteFlowsCategory :: Text
+finalWasteFlowsCategory = "Final waste flows"
+
 {- | The four flow-derived attribute values the parser stored on a flow:
 name, category, subCategory, CAS. Positional — always consumed as a whole.
 -}
@@ -491,8 +530,8 @@ flowFields res ex = case ex of
             Nothing -> FlowFields "" "" "" Nothing
     WasteExchange{waFlowId = fid} ->
         case M.lookup fid (rWaste res) of
-            Just wf -> FlowFields (wfName wf) "Final waste flows" "" (wfCAS wf)
-            Nothing -> FlowFields "" "Final waste flows" "" Nothing
+            Just wf -> FlowFields (wfName wf) finalWasteFlowsCategory "" (wfCAS wf)
+            Nothing -> FlowFields "" finalWasteFlowsCategory "" Nothing
 
 {- | Resolve a unit UUID to its name. The parser stored both unit name and
 symbol as the source unit string, so the name field is the faithful echo.
