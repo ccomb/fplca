@@ -89,6 +89,7 @@ library
                      , SimaPro.Parser
                      , SimaPro.Writer
                      , BrightwayExcel.Parser
+                     , BrightwayExcel.Writer
                      , Expr
                      , ILCD.Parser
                      , ILCD.Writer
@@ -211,6 +212,7 @@ test-suite lca-tests
                      , MethodSpec
                      , SimaProParserSpec
                      , BrightwayExcelSpec
+                     , BrightwayExcelWriterSpec
                      , UnitConversionSpec
                      , PluginSpec
                      , ServerSpec
