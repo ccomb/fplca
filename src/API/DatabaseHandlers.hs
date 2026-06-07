@@ -19,6 +19,7 @@ module API.DatabaseHandlers (
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
+    exportDatabaseHandler,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -61,7 +62,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Data.Word (Word64)
-import Servant (Header, Headers, addHeader, err400, err404, err500, errBody, throwError)
+import Servant (Header, Headers, ServerError, addHeader, err400, err404, err500, errBody, throwError)
 import qualified System.Directory
 import System.FilePath ((</>))
 
@@ -79,6 +80,8 @@ import API.Types (
     DeleteClassFilter (..),
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
+    ExportRequest (..),
+    ExportResponse (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
@@ -98,6 +101,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Export (parseExportFormat, serializeDatabase)
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -114,6 +118,7 @@ import Database.Manager (
     addMethodCollection,
     addUnitDefs,
     finalizeDatabase,
+    getDatabase,
     getDatabaseSetupInfo,
     getFlowSynonymGroups,
     listCompartmentMappings,
@@ -269,6 +274,24 @@ deleteActivitiesHandler dbName req = do
                     True
                     ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
                     deleted
+
+{- | Export a loaded database, returning the serialized bytes base64-encoded.
+EcoSpold 2 / ILCD multi-file trees are zipped; single-file formats carry their
+bytes directly. Mirrors the upload endpoint's base64 convention. Failures surface
+as HTTP errors — 400 for an unknown format or data the target format cannot
+represent, 404 for a database that is not loaded — never a 200 with a failure flag.
+-}
+exportDatabaseHandler :: Text -> ExportRequest -> AppM ExportResponse
+exportDatabaseHandler dbName req = do
+    dbManager <- asks aeDbManager
+    fmt <- either (httpErr err400) pure (parseExportFormat (exrFormat req))
+    mLoaded <- liftIO (getDatabase dbManager dbName)
+    ld <- maybe (httpErr err404 ("Database not loaded: " <> dbName)) pure mLoaded
+    bytes <- either (httpErr err400) pure (serializeDatabase fmt (ldDatabase ld))
+    pure (ExportResponse (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))))
+  where
+    httpErr :: ServerError -> Text -> AppM a
+    httpErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
 
 {- | Enforce the hosting upload-size policy on a decoded payload.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0

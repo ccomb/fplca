@@ -93,6 +93,7 @@ library
                      , Expr
                      , ILCD.Parser
                      , ILCD.Writer
+                     , Database.Export
                      , Plugin.Types
                      , Plugin.Builtin
                      , Plugin.Bridge
@@ -280,6 +281,8 @@ test-suite lca-tests
                      , ConfigWriterSpec
                      , CopySpec
                      , DeleteSelectionSpec
+                     , ExportSpec
+                     , ExportHandlerSpec
                      , PropertiesSpec
   build-depends:       base >=4.14 && <5
                      , volca

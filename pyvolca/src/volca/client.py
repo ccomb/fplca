@@ -39,6 +39,7 @@ variants in the Servant API.
 
 from __future__ import annotations
 
+import base64
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,16 @@ def _candidate_wire_names(py_name: str) -> list[str]:
         if cand not in seen:
             seen.append(cand)
     return seen
+
+
+_EXPORT_FORMATS = frozenset(
+    {"simapro", "ecospold1", "ecospold2", "ilcd", "brightway"}
+)
+"""Target keywords accepted by ``POST /api/v1/db/{dbName}/export``.
+
+Mirrors the engine's ``parseExportFormat`` (case-folded). Validated
+client-side so a typo fails before the round-trip with the same message
+shape the engine would have returned."""
 
 
 _FORMATTED_SCALARS = (str, int, float)
@@ -726,6 +737,47 @@ class Client:
         """Read a mapping CSV file and call :meth:`relink` with its text."""
         csv_text = Path(mapping_path).read_text(encoding="utf-8")
         return self.relink(dep_db, csv_text, db_name=db_name)
+
+    def export_database(self, fmt: str, db_name: str | None = None) -> bytes:
+        """Export a loaded database, returning the serialized bytes.
+
+        ``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway`` —
+        validated client-side; an unknown value raises VoLCAError before any
+        request. Single-file formats carry their bytes directly; EcoSpold 2 /
+        ILCD multi-file trees come back zipped.
+
+        The engine returns the payload base64-encoded in the ``data`` field;
+        this method base64-decodes it and returns the raw bytes. Raises
+        VoLCAError on ``success=false`` or a missing ``data`` field.
+        """
+        fmt_norm = fmt.strip().lower()
+        if fmt_norm not in _EXPORT_FORMATS:
+            raise VoLCAError(
+                f"unknown export format: {fmt!r} "
+                f"(expected {'|'.join(sorted(_EXPORT_FORMATS))})"
+            )
+        target = self._db(db_name)
+        payload = self._require_success(
+            self._json(
+                self._session.post(
+                    f"{self.base_url}/api/v1/db/{target}/export",
+                    json={"format": fmt_norm},
+                )
+            ),
+            "export_database",
+        )
+        data = payload.get("data")
+        if data is None:
+            raise VoLCAError(
+                "export_database succeeded but the response carried no data field."
+            )
+        return base64.b64decode(data)
+
+    def export_to_file(
+        self, fmt: str, out_path: str, db_name: str | None = None
+    ) -> None:
+        """Export a database (see :meth:`export_database`) and write it to a file."""
+        Path(out_path).write_bytes(self.export_database(fmt, db_name=db_name))
 
     def add_dependency(self, dep_name: str, db_name: str | None = None) -> dict:
         """Declare ``dep_name`` as a dependency of the target database.

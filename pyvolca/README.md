@@ -411,6 +411,23 @@ Returns the ``DeleteSelectionResponse`` dict
 (``{"success", "message", "deleted"}``); raises VoLCAError on
 ``success=false``.
 
+##### `Client.export_database(fmt: str, db_name: str | None = None) -> bytes`
+
+Export a loaded database, returning the serialized bytes.
+
+``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway`` —
+validated client-side; an unknown value raises VoLCAError before any
+request. Single-file formats carry their bytes directly; EcoSpold 2 /
+ILCD multi-file trees come back zipped.
+
+The engine returns the payload base64-encoded in the ``data`` field;
+this method base64-decodes it and returns the raw bytes. Raises
+VoLCAError on ``success=false`` or a missing ``data`` field.
+
+##### `Client.export_to_file(fmt: str, out_path: str, db_name: str | None = None) -> None`
+
+Export a database (see :meth:`export_database`) and write it to a file.
+
 ##### `Client.get_activity(process_id: str) -> ActivityDetail`
 
 Fetch an activity's full detail.

@@ -119,6 +119,7 @@ databaseParser =
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
                     <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
                     <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a name->name supplier alias CSV"))
+                    <> OA.command "export" (info (DbExport <$> exportArgsParser <**> helper) (progDesc "Export a loaded database to a file"))
                 )
             )
 
@@ -138,6 +139,16 @@ relinkArgsParser =
         <$> textArg "DB" "Name of the loaded database to relink"
         <*> textOpt "to" Nothing "DEP_DB" "Dependency database to link against"
         <*> strOpt "mapping" Nothing "CSV" "Path to the name->name supplier alias CSV"
+
+{- | Export parser: positional DB, @--format@ keyword, @--out@ file path.
+Mirrors @db export <db> --format <fmt> --out <file>@.
+-}
+exportArgsParser :: Parser DbExportArgs
+exportArgsParser =
+    DbExportArgs
+        <$> textArg "DB" "Name of the loaded database to export"
+        <*> textOpt "format" Nothing "FMT" "Target format: simapro|ecospold1|ecospold2|ilcd|brightway"
+        <*> strOpt "out" Nothing "FILE" "Output file path"
 
 {- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
 @--add@ may be repeated; they spare or add individual ProcessIds.

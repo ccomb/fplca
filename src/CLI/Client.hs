@@ -107,6 +107,8 @@ executeRemoteCommand mgr rc globalOpts cmd = do
                         ("/api/v1/db/" ++ T.unpack (draDb args) ++ "/relink")
                         (relinkMappingBody (draToDep args) csv)
                         >>= output fmt jp
+        Database (DbExport args) ->
+            executeRemoteExport mgr rc fmt jp args
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -272,6 +274,29 @@ relinkMappingBody depDb csv =
         [ "depDb" .= depDb
         , "mappingCsv" .= csv
         ]
+
+{- | Remote export: POST the target format, base64-decode the bytes the server
+returns (serialization happens server-side), and write them to @--out@. Mirrors
+the local export's output summary. Failures (bad format, db not loaded, invalid
+base64) surface loudly rather than writing a partial/empty file.
+-}
+executeRemoteExport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> DbExportArgs -> IO ()
+executeRemoteExport mgr rc fmt jp args = do
+    resp <- apiPost mgr rc ("/api/v1/db/" ++ T.unpack (deaDb args) ++ "/export") (object ["format" .= deaFormat args])
+    case resp of
+        -- A failed export (bad format, db not loaded, unexportable data) arrives
+        -- as a non-2xx HTTP status, surfaced here as 'Left'.
+        Left err -> reportError err >> exitFailure
+        Right val -> case parseMaybe parseExportData val of
+            Nothing -> reportError "export: malformed server response" >> exitFailure
+            Just b64 -> case B64.decode (T.encodeUtf8 b64) of
+                Left derr -> reportError ("export: invalid base64 from server: " ++ derr) >> exitFailure
+                Right bytes -> do
+                    C8.writeFile (deaOut args) bytes
+                    output fmt jp (Right (object ["database" .= deaDb args, "format" .= deaFormat args, "out" .= deaOut args]))
+  where
+    parseExportData :: Value -> Parser Text
+    parseExportData = withObject "ExportResponse" $ \o -> o .: "data"
 
 -- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String
