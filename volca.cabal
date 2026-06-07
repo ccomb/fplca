@@ -238,6 +238,7 @@ test-suite lca-tests
                      , MethodCollectionCacheSpec
                      , MethodResolveSpec
                      , ChemSynonymsSpec
+                     , SynonymDBSpec
                      , UploadedDatabaseSpec
                      , UploadSizeSpec
                      , ProgressSpec

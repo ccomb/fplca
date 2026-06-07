@@ -95,12 +95,16 @@ loadFromCSVFileWithCache csvPath = do
     case cached of
         Just db -> return (Right db)
         Nothing -> do
-            csvData <- BL.readFile csvPath
-            case buildFromCSV csvData of
-                Left err -> return (Left err)
-                Right db -> do
-                    saveCache cachePath db
-                    return (Right db)
+            exists <- doesFileExist csvPath
+            if not exists
+                then return (Left ("File not found: " ++ csvPath))
+                else do
+                    csvData <- BL.readFile csvPath
+                    case buildFromCSV csvData of
+                        Left err -> return (Left err)
+                        Right db -> do
+                            saveCache cachePath db
+                            return (Right db)
   where
     loadCache cachePath srcPath = do
         exists <- doesFileExist cachePath
