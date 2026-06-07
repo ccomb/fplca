@@ -1514,7 +1514,7 @@ relinkDatabaseWithMapping ::
 relinkDatabaseWithMapping manager dbName depDb aliases = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
-        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Nothing -> relinkStaged manager dbName (Just depDb) (Just aliases)
         Just loaded
             | not (M.member depDb loadedDbs) ->
                 return $ Left $ "Dependency database not loaded: " <> depDb <> " (load it first)"
@@ -1539,6 +1539,61 @@ relinkDatabaseWithMapping manager dbName depDb aliases = do
                 then ld
                 else ld{ldDatabase = db{dbDependsOn = dep : dbDependsOn db}}
 
+{- | Relink a *staged* (parsed-but-not-finalized) database, mirroring
+'relinkDatabaseWith' on the staged 'SimpleDatabase' via the shared
+'Loader.relinkSimpleDatabase'. This lets the relink endpoint work from the setup
+page before a database is finalized. @maybeDepDb@ pins a chosen dependency (a
+mapping relink); @aliases@ feeds the supplier-alias map.
+-}
+relinkStaged :: DatabaseManager -> Text -> Maybe Text -> Maybe (M.Map Text Text) -> IO (Either Text RelinkResult)
+relinkStaged manager dbName maybeDepDb aliases = do
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    case M.lookup dbName stagedDbs of
+        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Just staged -> do
+            indexedDbs <- readTVarIO (dmIndexedDbs manager)
+            case maybeDepDb of
+                Just dep | not (M.member dep indexedDbs) ->
+                    return $ Left $ "Dependency database not loaded: " <> dep <> " (load it first)"
+                _ -> do
+                    synonymDB <- getMergedSynonymDB manager
+                    unitConfig <- getMergedUnitConfig manager
+                    let pinnedDeps = case maybeDepDb of
+                            Just dep | dep `notElem` sdSelectedDeps staged -> dep : sdSelectedDeps staged
+                            _ -> sdSelectedDeps staged
+                        selectedIndexes = [idx | (n, idx) <- M.toList indexedDbs, n `elem` pinnedDeps]
+                        beforeLinks = sdCrossDBLinks staged
+                        newStats =
+                            Loader.relinkSimpleDatabase
+                                selectedIndexes
+                                synonymDB
+                                unitConfig
+                                (M.map snd (dmGeographies manager))
+                                (dcGeographyPolicy (sdConfig staged))
+                                aliases
+                                (sdSimpleDB staged)
+                        newLinks = Loader.cdlLinks newStats
+                        updatedStaged =
+                            staged
+                                { sdSelectedDeps = pinnedDeps
+                                , sdCrossDBLinks = newLinks
+                                , sdLinkingStats = newStats
+                                , sdMissingProducts =
+                                    sortOn (\(_, cnt, _) -> Down cnt)
+                                        [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                                }
+                    atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+                    return $
+                        Right
+                            RelinkResult
+                                { rresDbName = dbName
+                                , rresUnresolvedBefore = unresolvedCount (sdLinkingStats staged)
+                                , rresUnresolvedAfter = unresolvedCount newStats
+                                , rresCrossDBLinks = length newLinks
+                                , rresDepsLoaded = pinnedDeps
+                                , rresLinksChanged = not (sameSet newLinks beforeLinks)
+                                }
+
 {- | Shared relink core. Candidates are the database's full declared pin
 ('dbDependsOn'); relink recomputes the links within it but never grows or
 shrinks the set. @aliases@ feeds 'lcSupplierAliases' — a mapping relink passes
@@ -1561,7 +1616,7 @@ relinkDatabaseWith ::
 relinkDatabaseWith manager dbName aliases persistedDeps = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
-        Nothing -> return $ Left $ "Database not loaded: " <> dbName
+        Nothing -> relinkStaged manager dbName Nothing aliases
         Just loaded -> do
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
             -- Strict pin: candidates are restricted to the database's declared
