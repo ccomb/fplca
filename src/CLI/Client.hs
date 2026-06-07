@@ -10,7 +10,7 @@ module CLI.Client (
 
 import CLI.Types
 import Config (Config (..), ServerConfig (..))
-import Control.Exception (try)
+import Control.Exception (IOException, try)
 import Data.Aeson (Value (..), decode, encode, object, (.:), (.=))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
@@ -25,6 +25,7 @@ import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
 import Network.HTTP.Client (
     HttpException (..),
@@ -93,6 +94,19 @@ executeRemoteCommand mgr rc globalOpts cmd = do
                 ("/api/v1/db/" ++ T.unpack srcName ++ "/copy/" ++ T.unpack newName)
                 (object [])
                 >>= outputStatus fmt jp "copy"
+        Database (DbRelinkMapping args) -> do
+            readResult <- try (TIO.readFile (draMappingCsv args)) :: IO (Either IOException Text)
+            case readResult of
+                Left _ -> do
+                    reportError $ "cannot read mapping file " ++ draMappingCsv args
+                    exitFailure
+                Right csv ->
+                    apiPost
+                        mgr
+                        rc
+                        ("/api/v1/db/" ++ T.unpack (draDb args) ++ "/relink")
+                        (relinkMappingBody (draToDep args) csv)
+                        >>= output fmt jp
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -246,6 +260,18 @@ deleteSelectionBody args =
         (Just sys, Just val) ->
             [object ["system" .= sys, "value" .= val, "exact" .= ddaExact args]]
         _ -> [] :: [Value]
+
+{- | Body for POST /api/v1/db/{db}/relink with an inline alias mapping.
+Keys mirror 'API.Types.RelinkRequest' after the @Stripped@ prefix transform
+(@rmrDepDb@ → @depDb@, @rmrMappingCsv@ → @mappingCsv@); both are populated here,
+which the handler reads as mapping mode (an empty @{}@ body is a plain relink).
+-}
+relinkMappingBody :: Text -> Text -> Value
+relinkMappingBody depDb csv =
+    object
+        [ "depDb" .= depDb
+        , "mappingCsv" .= csv
+        ]
 
 -- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String

@@ -43,6 +43,7 @@ module Database.Loader (
 
     -- * Cross-Database Linking
     fixActivityLinksWithCrossDB,
+    relinkSimpleDatabase,
     findAllCrossDBLinks,
     CrossDBLinkingStats (..),
     crossDBLinksCount,
@@ -1250,6 +1251,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = if M.null locationHier then locationHierarchy else locationHier
                         , lcGeographyPolicy = policy
+                        , lcSupplierAliases = Nothing
                         }
 
             -- Process all activities to find cross-DB links
@@ -1308,6 +1310,35 @@ hasInternalProducer db ex =
     case exchangeActivityLinkId ex of
         Nothing -> False
         Just actUUID -> M.member (actUUID, exchangeFlowId ex) (sdbActivities db)
+
+{- | Re-resolve the cross-DB links of a 'SimpleDatabase' against the given
+dependencies, optionally aliasing supplier names. Unlike
+'fixActivityLinksWithCrossDB' this always recomputes — a relink must re-resolve
+already-linked exchanges, e.g. to apply a new alias map — and threads @aliases@
+into 'lcSupplierAliases', so a staged relink behaves exactly like the loaded one.
+-}
+relinkSimpleDatabase ::
+    [IndexedDatabase] ->
+    SynonymDB ->
+    UC.UnitConfig ->
+    M.Map T.Text [T.Text] ->
+    GeographyPolicy ->
+    Maybe (M.Map T.Text T.Text) ->
+    SimpleDatabase ->
+    CrossDBLinkingStats
+relinkSimpleDatabase indexedDbs synonymDB unitConfig locationHier policy aliases db =
+    let ctx =
+            LinkingContext
+                { lcIndexedDatabases = indexedDbs
+                , lcSynonymDB = synonymDB
+                , lcUnitConfig = unitConfig
+                , lcThreshold = defaultLinkingThreshold
+                , lcLocationHierarchy = if M.null locationHier then locationHierarchy else locationHier
+                , lcGeographyPolicy = policy
+                , lcSupplierAliases = aliases
+                }
+        stats = findAllCrossDBLinks ctx (sdbTechFlows db) (sdbWasteFlows db) (sdbUnits db) (sdbActivities db)
+     in stats{cdlTotalInputs = countTotalTechInputs db}
 
 {- | Product names of technosphere demands with no resolved internal producer —
 the supplier gaps surfaced on the setup page. Covers both nil-link inputs and

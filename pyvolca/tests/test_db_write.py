@@ -124,3 +124,60 @@ class TestCopy:
         _ok(session, {"success": False, "message": "already exists"})
         with pytest.raises(VoLCAError, match="already exists"):
             client.copy_database("clone")
+
+
+# ---------------------------------------------------------------------------
+# relink
+# ---------------------------------------------------------------------------
+
+
+class TestRelink:
+    def test_body_and_url(self, mocked_client):
+        client, session = mocked_client
+        _ok(
+            session,
+            {
+                "dbName": "testdb",
+                "unresolvedBefore": 10,
+                "unresolvedAfter": 2,
+                "crossDBLinks": 8,
+                "dependsOn": ["ecoinvent-3.9"],
+            },
+        )
+        result = client.relink("ecoinvent-3.9", "src,dst\nfoo,bar\n")
+        assert result["unresolvedAfter"] == 2
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/testdb/relink"
+        body = session.post.call_args[1]["json"]
+        assert body == {"depDb": "ecoinvent-3.9", "mappingCsv": "src,dst\nfoo,bar\n"}
+
+    def test_from_file_reads_text(self, mocked_client, tmp_path):
+        client, session = mocked_client
+        _ok(session, {"dbName": "testdb", "unresolvedBefore": 0,
+                      "unresolvedAfter": 0, "crossDBLinks": 0, "dependsOn": []})
+        csv = tmp_path / "map.csv"
+        csv.write_text("src,dst\nfoo,bar\n", encoding="utf-8")
+        client.relink_from_file("dep", str(csv))
+        body = session.post.call_args[1]["json"]
+        assert body == {"depDb": "dep", "mappingCsv": "src,dst\nfoo,bar\n"}
+
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+
+
+class TestDependencies:
+    def test_add_dependency_url(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"dependsOn": ["dep"]})
+        client.add_dependency("dep")
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/testdb/add-dependency/dep"
+
+    def test_remove_dependency_url(self, mocked_client):
+        client, session = mocked_client
+        _ok(session, {"dependsOn": []})
+        client.remove_dependency("dep", db_name="other")
+        url = session.post.call_args[0][0]
+        assert url == "http://test.local/api/v1/db/other/remove-dependency/dep"

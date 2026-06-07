@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -17,8 +17,9 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (copyDatabase, deleteActivitiesInDB)
-import Database.Manager (DatabaseManager (..), LoadedDatabase (..), addDatabase, addMethodCollection)
+import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
+import Database.RelinkMapping (relinkWithMappingFile)
 import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
 import qualified Database.Upload
 import qualified Database.UploadedDatabase as UploadedDB
@@ -103,6 +104,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbDeleteActivities registry outputFormat manager args
         Database (DbCopy srcName newName) ->
             executeDbCopy registry outputFormat manager srcName newName
+        Database (DbRelinkMapping args) ->
+            executeDbRelinkMapping registry outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -521,6 +524,34 @@ executeDbCopy registry fmt manager srcName newName = do
         Right () -> do
             reportProgress Info $ "Copied database: " ++ T.unpack srcName ++ " -> " ++ T.unpack newName
             outputResult registry fmt $ object ["source" .= srcName, "copy" .= newName]
+
+-- | Execute relink-with-mapping: relink a DB to a dependency via an alias CSV.
+executeDbRelinkMapping :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbRelinkArgs -> IO ()
+executeDbRelinkMapping registry fmt manager args = do
+    result <- relinkWithMappingFile manager (draDb args) (draToDep args) (draMappingCsv args)
+    case result of
+        Left err -> do
+            reportError $ "Relink failed: " ++ T.unpack err
+            exitFailure
+        Right r -> do
+            reportProgress Info $
+                "Re-linked "
+                    ++ T.unpack (rresDbName r)
+                    ++ ": "
+                    ++ show (rresUnresolvedBefore r)
+                    ++ " -> "
+                    ++ show (rresUnresolvedAfter r)
+                    ++ " unresolved ("
+                    ++ show (rresCrossDBLinks r)
+                    ++ " cross-DB links)"
+            outputResult registry fmt $
+                object
+                    [ "database" .= rresDbName r
+                    , "unresolved_before" .= rresUnresolvedBefore r
+                    , "unresolved_after" .= rresUnresolvedAfter r
+                    , "cross_db_links" .= rresCrossDBLinks r
+                    , "depends_on" .= rresDepsLoaded r
+                    ]
 
 -- | Execute method delete command
 executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()

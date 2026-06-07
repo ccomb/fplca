@@ -51,6 +51,7 @@ spec = describe "findWasteTreatmentAcrossDatabases" $ do
                 , lcThreshold = defaultLinkingThreshold
                 , lcLocationHierarchy = M.empty
                 , lcGeographyPolicy = GeoExact
+                , lcSupplierAliases = Nothing
                 }
 
         wasteUUID = UUID.fromWords 0xa 0xb 0xc 0xd

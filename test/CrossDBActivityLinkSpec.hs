@@ -125,6 +125,7 @@ ctxFor idbs =
         , lcThreshold = defaultLinkingThreshold
         , lcLocationHierarchy = locationHierarchy
         , lcGeographyPolicy = GeoGlobal
+        , lcSupplierAliases = Nothing
         }
 
 runLinks :: SimpleDatabase -> [IndexedDatabase] -> CrossDBLinkingStats

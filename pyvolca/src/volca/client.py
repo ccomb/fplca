@@ -40,6 +40,7 @@ variants in the Servant API.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -700,6 +701,56 @@ class Client:
             )
         )
         return self._require_success(payload, "delete_activities")
+
+    def relink(
+        self, dep_db: str, mapping_csv: str, db_name: str | None = None
+    ) -> dict:
+        """Re-link a database against a dependency using a name→name alias CSV.
+
+        ``mapping_csv`` is the CSV *text* (header row + source/target columns),
+        sent inline so the engine needs no filesystem access. Returns the
+        ``RelinkResponse`` dict (``{"dbName", "unresolvedBefore",
+        "unresolvedAfter", "crossDBLinks", "dependsOn"}``).
+        """
+        target = self._db(db_name)
+        body = {"depDb": dep_db, "mappingCsv": mapping_csv}
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/relink", json=body
+            )
+        )
+
+    def relink_from_file(
+        self, dep_db: str, mapping_path: str, db_name: str | None = None
+    ) -> dict:
+        """Read a mapping CSV file and call :meth:`relink` with its text."""
+        csv_text = Path(mapping_path).read_text(encoding="utf-8")
+        return self.relink(dep_db, csv_text, db_name=db_name)
+
+    def add_dependency(self, dep_name: str, db_name: str | None = None) -> dict:
+        """Declare ``dep_name`` as a dependency of the target database.
+
+        Returns the engine's ``DatabaseSetupInfo`` dict describing the updated
+        dependency topology.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/add-dependency/{dep_name}"
+            )
+        )
+
+    def remove_dependency(self, dep_name: str, db_name: str | None = None) -> dict:
+        """Remove ``dep_name`` from the target database's dependencies.
+
+        Returns the updated ``DatabaseSetupInfo`` dict.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/remove-dependency/{dep_name}"
+            )
+        )
 
     def list_presets(self) -> list[Preset]:
         """List classification presets configured in this instance.
