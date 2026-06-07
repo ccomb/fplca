@@ -323,6 +323,18 @@ builder, not silently defaulted to a wrong unit here).
 unitNameOf :: UnitDB -> UUID -> Text
 unitNameOf units uid = maybe "" unitName (M.lookup uid units)
 
+{- | The four flow/unit catalogs an activity is serialized against, gathered
+into one record so the per-section helpers take a single argument instead of
+threading four maps positionally (which invites silent arg-swaps between maps
+of the same shape).
+-}
+data Catalogs = Catalogs
+    { catTech :: !TechFlowDB
+    , catBio :: !BioFlowDB
+    , catWaste :: !WasteFlowDB
+    , catUnits :: !UnitDB
+    }
+
 -- ============================================================================
 -- Process block serialization
 -- ============================================================================
@@ -379,71 +391,71 @@ renderPedigree Pedigree{..} =
 the reference/coproduct outputs (those go to the Products section) and for
 exchanges whose flow is unknown to the tech-flow DB.
 -}
-techInputLine :: TechFlowDB -> UnitDB -> Exchange -> Maybe Line
-techInputLine techDB units ex@TechnosphereExchange{..} =
+techInputLine :: Catalogs -> Exchange -> Maybe Line
+techInputLine cats ex@TechnosphereExchange{..} =
     if exchangeIsReference ex
         then Nothing
-        else case M.lookup techFlowId techDB of
+        else case M.lookup techFlowId (catTech cats) of
             Nothing -> Nothing
             Just flow ->
                 Just
                     Line
                         { lName = tfName flow
                         , lCompartment = ""
-                        , lUnit = unitNameOf units techUnitId
+                        , lUnit = unitNameOf (catUnits cats) techUnitId
                         , lAmount = techAmount
                         , lComment = renderComment techPedigree techComment
                         }
-techInputLine _ _ BiosphereExchange{} = Nothing
-techInputLine _ _ WasteExchange{} = Nothing
+techInputLine _ BiosphereExchange{} = Nothing
+techInputLine _ WasteExchange{} = Nothing
 
 -- | Build a 'Line' for a biosphere exchange (resource or emission).
-bioLine :: BioFlowDB -> UnitDB -> Exchange -> Maybe Line
-bioLine bioDB units BiosphereExchange{..} =
-    case M.lookup bioFlowId bioDB of
+bioLine :: Catalogs -> Exchange -> Maybe Line
+bioLine cats BiosphereExchange{..} =
+    case M.lookup bioFlowId (catBio cats) of
         Nothing -> Nothing
         Just flow ->
             Just
                 Line
                     { lName = bfName flow
                     , lCompartment = fromMaybe "" (bfCompartmentSub flow)
-                    , lUnit = unitNameOf units bioUnitId
+                    , lUnit = unitNameOf (catUnits cats) bioUnitId
                     , lAmount = bioAmount
                     , lComment = renderComment bioPedigree bioComment
                     }
-bioLine _ _ TechnosphereExchange{} = Nothing
-bioLine _ _ WasteExchange{} = Nothing
+bioLine _ TechnosphereExchange{} = Nothing
+bioLine _ WasteExchange{} = Nothing
 
 -- | Build a 'Line' for a waste exchange (Final waste flows section).
-wasteLine :: WasteFlowDB -> UnitDB -> Exchange -> Maybe Line
-wasteLine wasteDB units WasteExchange{..} =
-    case M.lookup waFlowId wasteDB of
+wasteLine :: Catalogs -> Exchange -> Maybe Line
+wasteLine cats WasteExchange{..} =
+    case M.lookup waFlowId (catWaste cats) of
         Nothing -> Nothing
         Just flow ->
             Just
                 Line
                     { lName = wfName flow
                     , lCompartment = ""
-                    , lUnit = unitNameOf units waUnitId
+                    , lUnit = unitNameOf (catUnits cats) waUnitId
                     , lAmount = waAmount
                     , lComment = renderComment waPedigree waComment
                     }
-wasteLine _ _ TechnosphereExchange{} = Nothing
-wasteLine _ _ BiosphereExchange{} = Nothing
+wasteLine _ TechnosphereExchange{} = Nothing
+wasteLine _ BiosphereExchange{} = Nothing
 
 {- | The medium a biosphere exchange belongs to, derived from the flow's
 compartment name. SimaPro splits biosphere rows into four sections keyed on
 the medium: Resources, Emissions to air/water/soil. Resources are the
 'Resource' direction; emissions are bucketed by compartment name.
 -}
-bioSection :: BioFlowDB -> Exchange -> Maybe BioSec
-bioSection bioDB ex@BiosphereExchange{bioDirection = dir} =
+bioSection :: Catalogs -> Exchange -> Maybe BioSec
+bioSection cats ex@BiosphereExchange{bioDirection = dir} =
     case dir of
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
         -- section only when it also keeps a row (the two are paired in
         -- 'serializeActivity'); no dead "unknown → air" arm.
-        Emission -> sectionForMedium . bfCompartmentName <$> M.lookup (exchangeFlowId ex) bioDB
+        Emission -> sectionForMedium . bfCompartmentName <$> M.lookup (exchangeFlowId ex) (catBio cats)
   where
     sectionForMedium name = case T.toLower name of
         "water" -> SecWater
@@ -464,17 +476,17 @@ the technosphere outputs matching @keep@. Used for both the @Products@ section
 rendered identically but the parser routes them to different exchange roles, so
 they must be emitted under their own headers, never merged.
 -}
-productLines :: (Exchange -> Bool) -> TechFlowDB -> UnitDB -> Maybe Double -> Text -> [Exchange] -> [Text]
-productLines keep techDB units allocPct category exchs =
+productLines :: (Exchange -> Bool) -> Catalogs -> Maybe Double -> Text -> [Exchange] -> [Text]
+productLines keep cats allocPct category exchs =
     let alloc = formatAmount (fromMaybe 100 allocPct)
         -- Extract the row fields in the comprehension, where the exchange is
         -- known to be a TechnosphereExchange — so mkRow is total (no unreachable
         -- blank-row arm). Sort by (name, unit, amount) for determinism.
         entries =
-            [ (tfName flow, unitNameOf units (exchangeUnitId ex), exchangeAmount ex)
+            [ (tfName flow, unitNameOf (catUnits cats) (exchangeUnitId ex), exchangeAmount ex)
             | ex@TechnosphereExchange{} <- exchs
             , keep ex
-            , Just flow <- [M.lookup (exchangeFlowId ex) techDB]
+            , Just flow <- [M.lookup (exchangeFlowId ex) (catTech cats)]
             ]
         mkRow (nm, unit, amt) = row [nm, unit, formatAmount amt, alloc, "not defined", category, ""]
      in map mkRow (sortOn id entries)
@@ -537,14 +549,8 @@ without trailing terminator). Flow/unit names are resolved through the
 respective DBs; exchanges whose flow is missing are dropped (the matrix
 builder is the authority on unknown flows, not the serializer).
 -}
-serializeActivity ::
-    TechFlowDB ->
-    BioFlowDB ->
-    WasteFlowDB ->
-    UnitDB ->
-    Activity ->
-    [Text]
-serializeActivity techDB bioDB wasteDB units Activity{..} =
+serializeActivity :: Catalogs -> Activity -> [Text]
+serializeActivity cats Activity{..} =
     let catType = M.findWithDefault "" "Category type" activityClassification
         category = M.findWithDefault "" "Category" activityClassification
         -- No native type → omit the Type line entirely (meta drops empty values),
@@ -571,15 +577,15 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
             | otherwise = scaleExchangeAmount (1 / allocFraction) ex
         unscaledExchanges = map unscale exchanges
 
-        techLines = mapMaybe (techInputLine techDB units) unscaledExchanges
+        techLines = mapMaybe (techInputLine cats) unscaledExchanges
         bioByName name = [l | (sec, l) <- bioPaired, sec == name]
         bioPaired =
             [ (sec, l)
             | ex@BiosphereExchange{} <- unscaledExchanges
-            , Just sec <- [bioSection bioDB ex]
-            , Just l <- [bioLine bioDB units ex]
+            , Just sec <- [bioSection cats ex]
+            , Just l <- [bioLine cats ex]
             ]
-        wasteLines = mapMaybe (wasteLine wasteDB units) unscaledExchanges
+        wasteLines = mapMaybe (wasteLine cats) unscaledExchanges
 
         meta key val = if T.null val then [] else [key, val, ""]
      in concat
@@ -592,9 +598,9 @@ serializeActivity techDB bioDB wasteDB units Activity{..} =
             , -- Products section is always present (an activity has a reference).
               -- Coproducts go to "Avoided products" so the parser reads them back
               -- as coproducts, not as extra reference-product activities.
-              "Products" : productLines exchangeIsReference techDB units activityAllocationPercent category unscaledExchanges
+              "Products" : productLines exchangeIsReference cats activityAllocationPercent category unscaledExchanges
             , [""]
-            , withBlank (avoidedHeader (productLines isCoproduct techDB units activityAllocationPercent category unscaledExchanges))
+            , withBlank (avoidedHeader (productLines isCoproduct cats activityAllocationPercent category unscaledExchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))
@@ -637,8 +643,9 @@ byte stream is independent of the underlying 'Map' iteration order.
 serializeSimaProCSV :: WriterConfig -> SimpleDatabase -> Either Text BS.ByteString
 serializeSimaProCSV cfg db@SimpleDatabase{..} = do
     checkSimaProExportable db
-    let acts = sortOn (\a -> (activityName a, activityLocation a)) (M.elems sdbActivities)
-        blocks = concatMap (serializeActivity sdbTechFlows sdbBioFlows sdbWasteFlows sdbUnits) acts
+    let cats = Catalogs sdbTechFlows sdbBioFlows sdbWasteFlows sdbUnits
+        acts = sortOn (\a -> (activityName a, activityLocation a)) (M.elems sdbActivities)
+        blocks = concatMap (serializeActivity cats) acts
         allLines = headerLines cfg ++ blocks
     pure (TE.encodeUtf8 (T.intercalate crlf allLines <> crlf))
 
