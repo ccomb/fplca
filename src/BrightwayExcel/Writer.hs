@@ -292,7 +292,7 @@ activityRows cfg db act =
         ++ exchangeDataRows
   where
     comment = T.intercalate "\n" (activityDescription act)
-    ordered = orderedExchanges (exchanges act)
+    ordered = orderedExchanges db (exchanges act)
     exchangeDataRows = mapMaybe (exchangeRow cfg db) ordered
     refExchange = lookup' exchangeIsReference ordered
     refProduct = refExchange >>= flowNameOf db
@@ -301,11 +301,12 @@ activityRows cfg db act =
 
 {- | Canonical exchange order: reference product first, then coproducts, then
 ordinary technosphere inputs, then biosphere flows — each group sorted by flow
-name. This is what makes two databases with the same content serialize byte-for
--byte identically.
+name, with the flow id as a stable tiebreaker for same-named flows. Sorting by
+name keeps the exported columns legible; the id tiebreaker keeps the order total
+and deterministic, so two databases with the same content serialize identically.
 -}
-orderedExchanges :: [Exchange] -> [Exchange]
-orderedExchanges exs = concatMap (sortOn sortKey) groups
+orderedExchanges :: SimpleDatabase -> [Exchange] -> [Exchange]
+orderedExchanges db exs = concatMap (sortOn sortKey) groups
   where
     groups = [refs, coproducts, techInputs, bios, wastes]
     refs = filter exchangeIsReference exs
@@ -313,7 +314,7 @@ orderedExchanges exs = concatMap (sortOn sortKey) groups
     techInputs = filter isTechInput exs
     bios = filter isBio exs
     wastes = filter isWaste exs
-    sortKey = exchangeFlowId
+    sortKey ex = (flowNameOf db ex, exchangeFlowId ex)
 
 isCoproduct :: Exchange -> Bool
 isCoproduct = \case
