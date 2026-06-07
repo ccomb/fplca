@@ -28,6 +28,7 @@ module SimaPro.Parser (
     parseTechRow,
     parseBioRow,
     parsePedigreePrefix,
+    isMetadataKey,
     decodeBS,
 ) where
 
