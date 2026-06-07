@@ -178,6 +178,36 @@ noTypeCSV =
         , "End"
         ]
 
+-- | A process with a @Final waste flows@ section, exercising the waste path.
+wasteCSV :: BS.ByteString
+wasteCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: Semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Landfill process"
+        , ""
+        , "Geography"
+        , "FR"
+        , ""
+        , "Products"
+        , "Treated waste;kg;1;100;not defined;material;"
+        , ""
+        , "Final waste flows"
+        , -- name;compartment;unit;amount;Undefined;;;;;;<comment>
+          "Municipal solid waste;;kg;0.5;Undefined;;;;;;to landfill"
+        , ""
+        , "End"
+        ]
+
 -- | Parse a SimaPro CSV blob through a temp file.
 parseBytes :: BS.ByteString -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
 parseBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
@@ -418,6 +448,16 @@ spec = describe "SimaPro.Writer round-trip" $ do
                 activityAllocationPercent a `shouldBe` Just 50
             other -> expectationFailure ("expected one activity, got " <> show (length other))
 
+    it "(regression) round-trips a Final waste flows section" $ do
+        original <- parseBytes wasteCSV
+        f0 <- serBytes (toSimple original)
+        reparsed <- parseBytes f0
+        shapeSet reparsed `shouldBe` shapeSet original
+        -- Guard against a vacuous pass: the original must actually carry a waste
+        -- exchange, so the structural equality above is pinning something.
+        let kinds = [esKind ex | ash <- S.toList (shapeSet original), ex <- asExchanges ash]
+        kinds `shouldSatisfy` elem "waste"
+
     describe "checkSimaProExportable (emission-medium guard)" $ do
         it "accepts air / water / soil emissions" $
             checkSimaProExportable (emissionDb (Compartment "air" Nothing))
@@ -475,6 +515,23 @@ spec = describe "SimaPro.Writer round-trip" $ do
         it "rejects an activity with more than one reference product" $
             -- Two Products rows re-parse into two separate activities.
             checkSimaProExportable (guardDb Nothing Nothing [refProd, refProd2])
+                `shouldSatisfy` isLeft
+
+        it "rejects a non-finite exchange amount" $
+            -- NaN/±Infinity has no parseable literal; 'formatAmount' would flatten
+            -- it to a number and silently mis-state the inventory.
+            checkSimaProExportable (guardDb Nothing Nothing [refProd, bioInf])
+                `shouldSatisfy` isLeft
+
+        it "rejects a zero allocation percentage" $
+            -- The writer divides shared amounts by allocFraction; a 0 would make
+            -- that division non-finite and lose the amounts on re-import.
+            checkSimaProExportable (guardDb (Just 0) Nothing [refProd])
+                `shouldSatisfy` isLeft
+
+        it "rejects an exchange whose unit is absent from the registry" $
+            -- A missing unit would be written blank and re-parsed as UNKNOWN.
+            checkSimaProExportable (guardDb Nothing Nothing [refProd, matMissingUnit])
                 `shouldSatisfy` isLeft
   where
     activitiesOf (acts, _, _, _, _) = acts
@@ -667,6 +724,14 @@ refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing
 -- | A plain material input (no reference product in the activity).
 matInput :: Exchange
 matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing
+
+-- | An emission carrying a non-finite (+Infinity) amount.
+bioInf :: Exchange
+bioInf = BiosphereExchange gBio (1 / 0) gUnit Emission "" Nothing Nothing
+
+-- | A material input referencing a unit UUID absent from the unit registry.
+matMissingUnit :: Exchange
+matMissingUnit = TechnosphereExchange gMat 2.0 (testUUID 0xbad) Input UUID.nil Nothing "" Nothing Nothing
 
 {- | A one-activity database whose exchanges are supplied verbatim, against a
 fixed catalog (a reference product flow, a material flow, an emission flow, and
