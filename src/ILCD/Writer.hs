@@ -103,8 +103,8 @@ ilcdFiles :: WriteOptions -> SimpleDatabase -> [(FilePath, BS.ByteString)]
 ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   where
     processes =
-        [ ("processes" </> uuidStr actUUID <> ".xml", render (processXML opts db key act))
-        | (key@(actUUID, _prodUUID), act) <- M.toAscList (sdbActivities db)
+        [ ("processes" </> uuidStr actUUID <> ".xml", render (processXML opts actUUID act))
+        | ((actUUID, _prodUUID), act) <- M.toAscList (sdbActivities db)
         ]
 
     flows =
@@ -282,10 +282,9 @@ writeILCDArchive opts db = do
 -- | All flows in the database as 'FlowKind' + unit id, sorted by flow UUID.
 allFlows :: SimpleDatabase -> [(FlowKind, UUID)]
 allFlows db =
-    sortOn (flowKindId . fst) $
-        [(TechKind f, tfUnitId f) | f <- M.elems (sdbTechFlows db)]
-            ++ [(BioKind f, bfUnitId f) | f <- M.elems (sdbBioFlows db)]
-            ++ [(WasteKind f, wfUnitId f) | f <- M.elems (sdbWasteFlows db)]
+    [(TechKind f, tfUnitId f) | f <- M.elems (sdbTechFlows db)]
+        ++ [(BioKind f, bfUnitId f) | f <- M.elems (sdbBioFlows db)]
+        ++ [(WasteKind f, wfUnitId f) | f <- M.elems (sdbWasteFlows db)]
 
 --------------------------------------------------------------------------------
 -- Process XML
@@ -296,8 +295,8 @@ gets @dataSetInternalID@ matching @referenceToReferenceFlow@; remaining
 exchanges follow in their list order, so the parser reads them back in the
 same order it would re-serialize.
 -}
-processXML :: WriteOptions -> SimpleDatabase -> (UUID, UUID) -> Activity -> [Text]
-processXML opts _db (actUUID, _prodUUID) act =
+processXML :: WriteOptions -> UUID -> Activity -> [Text]
+processXML opts actUUID act =
     [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
     , "<processDataSet xmlns=\"http://lca.jrc.it/ILCD/Process\" xmlns:common=\"http://lca.jrc.it/ILCD/Common\">"
     , "  <processInformation>"
