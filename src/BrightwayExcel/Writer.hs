@@ -72,8 +72,10 @@ import Data.Maybe (mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Read as TR
 
 import BrightwayExcel.Parser (isResourceCompartment)
+import EcoSpold.Common (showFFloatTrim)
 import Types
 
 -- ---------------------------------------------------------------------------
@@ -153,16 +155,17 @@ compartment matches 'isResourceCompartment'. A 'Resource' flow whose compartment
 is outside that whitelist would round-trip as an 'Emission' — a sign flip, since
 the two directions act as input vs output. Such a flow is rejected here too.
 
-A non-finite amount (@NaN@/@Infinity@) cannot be written to a numeric cell:
-'formatAmount' would clamp it to @0@, silently substituting a misleading value.
-Any such exchange is rejected here rather than exported as a bogus zero.
+An amount that does not re-parse to itself is rejected: a non-finite
+@NaN@/@Infinity@ (which the parser can propagate from an out-of-range literal),
+or a subnormal near @5e-324@ that 'formatAmount' collapses to @0@. Either would
+silently substitute a different value on re-import.
 
 Databases whose exchanges all resolve, carry no waste, keep every resource
-direction recoverable, and have finite amounts pass unchanged.
+direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
 checkBrightwayExportable :: SimpleDatabase -> Either Text ()
 checkBrightwayExportable db =
-    case (flowOffenders, unitOffenders, wasteOffenders, refInputOffenders, directionOffenders, finiteOffenders) of
+    case (flowOffenders, unitOffenders, wasteOffenders, refInputOffenders, directionOffenders, roundTripOffenders) of
         (consumer : _, _, _, _, _, _) ->
             Left $
                 "Brightway Excel export cannot represent activity \""
@@ -195,7 +198,7 @@ checkBrightwayExportable db =
                     <> consumer
                     <> "\": exchange amount "
                     <> tshow amt
-                    <> " is not finite."
+                    <> " does not re-parse to the same value (non-finite or near-underflow subnormal)."
         ([], [], [], [], [], []) -> Right ()
   where
     refInputOffenders =
@@ -226,13 +229,16 @@ checkBrightwayExportable db =
         , ex <- exchanges act
         , resourceDirectionLost db ex
         ]
-    finiteOffenders =
+    roundTripOffenders =
         [ (activityName act, amt)
         | act <- M.elems (sdbActivities db)
         , ex <- exchanges act
         , let amt = exchangeAmount ex
-        , isNaN amt || isInfinite amt
+        , not (amountRoundTrips amt)
         ]
+    amountRoundTrips amt = case TR.double (formatAmount amt) of
+        Right (v, rest) -> v == amt && T.null rest
+        Left _ -> False
 
 {- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
 resource: the writer never records the direction, so the parser reconstructs
@@ -457,17 +463,21 @@ lookup' p = foldr (\x acc -> if p x then Just x else acc) Nothing
 -- ---------------------------------------------------------------------------
 
 {- | Canonical numeric rendering for amount cells. Integers print without a
-decimal point (@1@, not @1.0@); everything else uses the shortest round-tripping
-'show' for a 'Double'. Both forms re-parse via @Data.Text.Read.double@, so the
-written cell reconstructs the same 'Double'. Non-finite values (which cannot
-occur in a parsed database) are clamped to a parseable @0@ rather than the
-unreadable @"NaN"@/@"Infinity"@ in a numeric cell — matching the other writers.
+decimal point (@1@, not @1.0@); every other value uses the shared fixed-point
+'showFFloatTrim' (never scientific), so it re-parses through the parser's
+'Data.Text.Read.double' — unlike @show@, whose scientific notation re-reads
+lossily for small magnitudes (e.g. @show 3.3e-20@ → @3.2999999999999994e-20@).
+The near-underflow subnormal tail (≈@5e-324@) cannot survive fixed-point, and a
+non-finite value has no numeric-cell form; 'checkBrightwayExportable' rejects
+both, so the guarded path never emits one. A non-finite value still renders as
+its (non-parseable) @"NaN"@/@"Infinity"@ form so a stray re-import fails loudly
+rather than reading a misleading number.
 -}
 formatAmount :: Double -> Text
 formatAmount d
-    | isNaN d || isInfinite d = "0"
+    | isNaN d || isInfinite d = tshow d
     | d == fromIntegral i && abs d < 1.0e15 = T.pack (show i)
-    | otherwise = T.pack (show d)
+    | otherwise = T.pack (showFFloatTrim d)
   where
     i = round d :: Integer
 

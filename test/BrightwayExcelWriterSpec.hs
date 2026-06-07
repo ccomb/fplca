@@ -38,6 +38,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
@@ -50,7 +51,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 
 spec :: Spec
 spec = describe "BrightwayExcel.Writer" $ do
@@ -59,8 +60,11 @@ spec = describe "BrightwayExcel.Writer" $ do
             formatAmount 1 `shouldBe` "1"
         it "prints fractions with full precision" $
             formatAmount 8.5 `shouldBe` "8.5"
-        it "round-trips a small scientific value" $
-            TR.double (formatAmount 1.0e-3) `shouldBe` Right (1.0e-3, "")
+        it "renders a small magnitude as fixed-point that re-parses exactly" $ do
+            -- show 3.3e-20 emits scientific notation the parser's TR.double
+            -- re-reads lossily; fixed-point keeps it value-identical end to end.
+            T.isInfixOf "e" (formatAmount 3.3e-20) `shouldBe` False
+            TR.double (formatAmount 3.3e-20) `shouldBe` Right (3.3e-20, "")
 
     describe "renderCategories" $ do
         it "joins compartment and subcompartment with ::" $
@@ -120,7 +124,11 @@ spec = describe "BrightwayExcel.Writer" $ do
                 parseBrightwayExcel defaultUnitConfig path >>= \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
-                        [a] -> roleAmounts a `shouldBe` [(ReferenceProduct, 1), (Coproduct, 0.25)]
+                        [a] -> do
+                            roleAmounts a `shouldBe` [(ReferenceProduct, 1), (Coproduct, 0.25)]
+                            -- The coproduct's comment also flows through productRowOut.
+                            [techComment ex | ex@TechnosphereExchange{} <- exchanges a]
+                                `shouldBe` [Just "ref note", Just "heat note"]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
         it "(f) round-trips an empty database to no activities" $
@@ -132,7 +140,7 @@ spec = describe "BrightwayExcel.Writer" $ do
                     Right (acts, _, _, _, _) -> length acts `shouldBe` 0
 
         it "(g) round-trips a boundary-magnitude (~1e15) amount" $
-            -- At 1e15 'formatAmount' crosses from integer to scientific rendering;
+            -- At 1e15 'formatAmount' crosses from integer to fixed-point rendering;
             -- the parser reads it back through TR.double. The amount must survive
             -- the format switch exactly.
             withWritten bigAmountDb $ \path ->
@@ -142,17 +150,38 @@ spec = describe "BrightwayExcel.Writer" $ do
                         [a] -> map techAmount [ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a] `shouldBe` [1.0e15]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
-        it "(h) round-trips exchange-level comments via the comment column" $
+        it "(h) round-trips exchange-level comments, including the reference product" $
+            -- The reference product is a production row; its comment column flows
+            -- through 'productRowOut' (the same path coproducts take), which once
+            -- dropped it. Assert the product, input, and biosphere comments all
+            -- survive.
             withWritten commentDb $ \path ->
                 parseBrightwayExcel defaultUnitConfig path >>= \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
                         [a] -> do
+                            [techComment ex | ex@TechnosphereExchange{techRole = ReferenceProduct} <- exchanges a]
+                                `shouldBe` [Just "product note"]
                             [techComment ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a]
                                 `shouldBe` [Just "input note"]
                             [bioComment ex | ex@BiosphereExchange{} <- exchanges a]
                                 `shouldBe` [Just "emission note"]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
+
+        it "(i) canonicalizes a non-canonical reference unit, then is a fixed point" $
+            -- The parser normalizes a reference product's unit to canonical at
+            -- ingest (g→kg here, scaling 1000→1). So parse(write D) ≠ D for a
+            -- non-canonical reference unit — the contract is fixed-point over the
+            -- parser's image: a second round-trip reproduces the first exactly.
+            withWritten gramRefDb $ \path ->
+                parseBrightwayExcel gramConfig path >>= \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right parsed1 -> do
+                        refUnitAmount parsed1 `shouldBe` Just ("kg", 1.0)
+                        withWritten (rebuild parsed1) $ \path2 ->
+                            parseBrightwayExcel gramConfig path2 >>= \case
+                                Left err -> expectationFailure (T.unpack err)
+                                Right parsed2 -> refUnitAmount parsed2 `shouldBe` refUnitAmount parsed1
 
     describe "export guard" $ do
         it "rejects a waste exchange (Brightway has no waste type)" $
@@ -160,9 +189,13 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- positive technosphere input, inverting an output waste. Reject loudly.
             checkBrightwayExportable wasteDb `shouldSatisfy` isLeft
         it "rejects a non-finite amount" $
-            -- 'formatAmount' would clamp NaN/Infinity to a misleading 0; the guard
-            -- rejects the database instead of exporting a bogus zero.
+            -- A non-finite amount has no numeric-cell form that re-parses; the
+            -- guard rejects the database instead of emitting a misleading value.
             checkBrightwayExportable nonFiniteDb `shouldSatisfy` isLeft
+        it "rejects a subnormal amount that fixed-point cannot round-trip" $
+            -- 5e-324 (smallest positive subnormal) collapses to 0 through
+            -- fixed-point, an undetectable shift; reject it at the boundary.
+            checkBrightwayExportable subnormalDb `shouldSatisfy` isLeft
 
     describe "ReferenceInput regression" $
         it "rejects a reference input rather than round-tripping it to a duplicated row" $ do
@@ -411,8 +444,9 @@ refInputDb =
         , sdbUnits = M.singleton (unitId kg) kg
         }
 
-{- | The base fixture with a comment attached to its technosphere input and its
-biosphere emission, to prove exchange-level comments survive the round-trip.
+{- | The base fixture with a comment attached to its reference product, its
+technosphere input, and its biosphere emission, to prove exchange-level comments
+survive the round-trip — including on production rows ('productRowOut').
 -}
 commentDb :: SimpleDatabase
 commentDb =
@@ -420,6 +454,7 @@ commentDb =
   where
     a = elec{exchanges = map withComment (exchanges elec)}
     withComment ex = case ex of
+        TechnosphereExchange{techRole = ReferenceProduct} -> ex{techComment = Just "product note"}
         TechnosphereExchange{techRole = Input} -> ex{techComment = Just "input note"}
         TechnosphereExchange{} -> ex
         BiosphereExchange{} -> ex{bioComment = Just "emission note"}
@@ -456,8 +491,8 @@ coproductAct =
         { activityName = "Combined heat and power"
         , activityUnit = "kilogram"
         , exchanges =
-            [ kgProduction chpRefFlow ReferenceProduct 1
-            , kgProduction chpHeatFlow Coproduct 0.25
+            [ (kgProduction chpRefFlow ReferenceProduct 1){techComment = Just "ref note"}
+            , (kgProduction chpHeatFlow Coproduct 0.25){techComment = Just "heat note"}
             ]
         }
 
@@ -507,6 +542,69 @@ bigAmountDb =
     act = elec{exchanges = [prodExch, gasExch{techAmount = 1.0e15}, co2Exch]}
 
 -- ---------------------------------------------------------------------------
+-- Reference-unit normalization fixture (non-canonical unit → canonical)
+-- ---------------------------------------------------------------------------
+
+{- | A unit config that knows grams as a non-canonical mass unit (factor 1e-3),
+so the parser canonicalizes a @g@ reference product to @kg@ at ingest.
+-}
+gramConfig :: UnitConfig
+gramConfig =
+    either (error . T.unpack) id $
+        buildFromCSV "name,dimension,factor\nkg,mass,1.0\ng,mass,1.0e-3\n"
+
+gramUnit :: Unit
+gramUnit = mkUnit "g"
+
+gramProdFlow :: TechnosphereFlow
+gramProdFlow = flowInUnit "milled flour" "g"
+
+-- | A flow whose generated UUIDs key off the given unit string.
+flowInUnit :: Text -> Text -> TechnosphereFlow
+flowInUnit n u =
+    TechnosphereFlow (generateFlowUUID n "" u) n (generateUnitUUID u) M.empty Nothing Nothing
+
+{- | One activity whose reference product is stated in grams (1000 g). On import
+under 'gramConfig' the parser rewrites it to 1 kg, so it is not a fixed point of
+@parse . write@ until it has been through the parser once.
+-}
+gramRefDb :: SimpleDatabase
+gramRefDb =
+    SimpleDatabase
+        { sdbActivities = M.singleton (generateActivityUUID act, getReferenceProductUUID act) act
+        , sdbTechFlows = M.singleton (tfId gramProdFlow) gramProdFlow
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton (unitId gramUnit) gramUnit
+        }
+  where
+    act =
+        elec
+            { activityName = "Flour milling"
+            , activityUnit = "g"
+            , exchanges =
+                [ TechnosphereExchange
+                    { techFlowId = tfId gramProdFlow
+                    , techAmount = 1000
+                    , techUnitId = generateUnitUUID "g"
+                    , techRole = ReferenceProduct
+                    , techActivityLinkId = UUID.nil
+                    , techProcessLinkId = Nothing
+                    , techLocation = "GLO"
+                    , techComment = Nothing
+                    , techPedigree = Nothing
+                    }
+                ]
+            }
+
+-- | The (unit name, amount) of a parsed activity's reference exchange.
+refUnitAmount :: Parsed -> Maybe (Text, Double)
+refUnitAmount (acts, _tech, _bio, _waste, unitDB) = do
+    a <- listToMaybe acts
+    ex <- listToMaybe [e | e <- exchanges a, exchangeIsReference e]
+    pure (maybe "" unitName (M.lookup (exchangeUnitId ex) unitDB), exchangeAmount ex)
+
+-- ---------------------------------------------------------------------------
 -- Export-guard fixtures (rejected at the boundary)
 -- ---------------------------------------------------------------------------
 
@@ -547,8 +645,8 @@ scrapExch =
         , waPedigree = Nothing
         }
 
-{- | A database whose input exchange carries a non-finite amount (B6): rejected,
-since 'formatAmount' would clamp it to a misleading 0.
+{- | A database whose input exchange carries a non-finite amount: rejected, since
+it has no numeric-cell form that re-parses to the same value.
 -}
 nonFiniteDb :: SimpleDatabase
 nonFiniteDb =
@@ -557,6 +655,17 @@ nonFiniteDb =
         }
   where
     act = elec{exchanges = [prodExch, gasExch{techAmount = 1 / 0}, co2Exch]}
+
+{- | A database whose input exchange carries the smallest positive subnormal
+(@5e-324@): rejected, since fixed-point rendering collapses it to @0@.
+-}
+subnormalDb :: SimpleDatabase
+subnormalDb =
+    fixtureDb
+        { sdbActivities = M.singleton (generateActivityUUID act, getReferenceProductUUID act) act
+        }
+  where
+    act = elec{exchanges = [prodExch, gasExch{techAmount = 5.0e-324}, co2Exch]}
 
 co2 :: BiosphereFlow
 co2 =
