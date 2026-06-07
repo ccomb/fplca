@@ -201,34 +201,16 @@ checkBrightwayExportable db =
                     <> " does not re-parse to the same value (non-finite or near-underflow subnormal)."
         ([], [], [], [], [], []) -> Right ()
   where
-    refInputOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
-        ]
-    flowOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , ex <- exchanges act
-        , not (flowResolvable db ex)
-        ]
-    unitOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , ex <- exchanges act
-        , M.notMember (exchangeUnitId ex) (sdbUnits db)
-        ]
-    wasteOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , any isWasteExchange (exchanges act)
-        ]
-    directionOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , ex <- exchanges act
-        , resourceDirectionLost db ex
-        ]
+    -- Names of activities with at least one exchange satisfying @p@. Only the
+    -- first offender is ever reported, so one entry per activity (not per
+    -- exchange) is equivalent — and lets every guard share one comprehension.
+    activitiesWith p =
+        [activityName act | act <- M.elems (sdbActivities db), any p (exchanges act)]
+    flowOffenders = activitiesWith (not . flowResolvable db)
+    unitOffenders = activitiesWith (\ex -> M.notMember (exchangeUnitId ex) (sdbUnits db))
+    wasteOffenders = activitiesWith isWasteExchange
+    refInputOffenders = activitiesWith isReferenceInput
+    directionOffenders = activitiesWith (resourceDirectionLost db)
     roundTripOffenders =
         [ (activityName act, amt)
         | act <- M.elems (sdbActivities db)
@@ -364,6 +346,14 @@ isWaste = \case
     WasteExchange{} -> True
     TechnosphereExchange{} -> False
     BiosphereExchange{} -> False
+
+-- | A treatment process's reference input — rejected by 'checkBrightwayExportable'.
+isReferenceInput :: Exchange -> Bool
+isReferenceInput = \case
+    TechnosphereExchange{techRole = ReferenceInput} -> True
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+    WasteExchange{} -> False
 
 {- | Render one exchange to a data row aligned to 'exchangeHeader'. Returns
 'Nothing' for an exchange whose flow or unit is missing from the database (it
