@@ -30,6 +30,37 @@ Encoding/layout mirrors the parser's expectations:
 Field shapes are kept aligned with the parser's row parsers
 ('parseProductRow', 'parseTechRow', 'parseBioRow') so a faithful round-trip is
 possible. CSV escaping reuses the same rule as 'Matrix.Export.escapeCsvField'.
+
+== Known lossy round-trips
+
+The writer is a faithful inverse for /SimaPro-origin/ databases: a
+@parse → write → parse@ cycle preserves activities, flows, units, and the LCIA
+inventory exactly (pinned by "SimaProWriterSpec"). It writes /resolved numeric/
+amounts and only the metadata SimaPro itself carries, so a few things present in
+databases imported from /other/ formats are dropped — always score-preserving
+(the numbers that drive the matrix are kept), never silently wrong:
+
+  * parameter provenance — @Input@ / @Calculated parameters@ sections and any
+    per-exchange raw formula expression are flattened to their resolved
+    'Double'; 'activityAllocationFormula' likewise re-parses as 'Nothing' (the
+    numeric allocation percentage is preserved);
+  * classification keys other than @Category type@ / @Category@ (e.g. ISIC/CPC
+    from an EcoSpold import) are not emitted;
+  * reference- and co-product comments are dropped (SimaPro product rows carry a
+    comment column, but a SimaPro parse never populates it);
+  * an emission with an empty (unspecified) medium is written to
+    @Emissions to air@ and re-parses as @air@ — SimaPro has no
+    unspecified-emission section. This shifts the flow's medium (and hence its
+    generated UUID), so it is the one lossy case that can affect characterisation
+    for a cross-format export; air/water/soil media and all SimaPro-origin
+    emissions are unaffected;
+  * multi-paragraph descriptions are joined into the single-line @Comment@ field.
+
+Anything the format /cannot/ represent without silently corrupting the data on
+re-import (non-finite amounts, a zero allocation, a missing unit, newlines in a
+field, a pedigree-shaped comment, a metadata-key collision, an activity without
+exactly one reference product) is rejected outright by 'checkSimaProExportable'
+rather than written lossily.
 -}
 module SimaPro.Writer (
     WriterConfig (..),
@@ -326,6 +357,12 @@ formatAmount x
 {- | Escape a field for semicolon-delimited CSV. Same rule as
 'Matrix.Export.escapeCsvField': quote only when the field contains the
 delimiter, a quote, or a newline, doubling embedded quotes.
+
+The newline case is kept only for parity with 'Matrix.Export.escapeCsvField':
+it never fires in practice because 'checkSimaProExportable' rejects newlines
+upstream, and quoting would not help anyway — the parser splits the file on
+physical lines /before/ CSV parsing, so an embedded newline tears the row apart
+regardless of quoting.
 -}
 escapeField :: Text -> Text
 escapeField text
