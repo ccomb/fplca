@@ -165,7 +165,8 @@ checkILCDExportable :: SimpleDatabase -> Either Text ()
 checkILCDExportable db =
     checkMedia >> checkMultiOutput >> checkClassifications >> checkAmounts
   where
-    -- Media the parser's @extractMedium@ inverts back to the same string.
+    -- Media the parser's @extractMedium@ inverts back, after canonicalising
+    -- aliases like "resource" → "natural resource".
     canonicalMedia = ["air", "water", "soil", "natural resource"]
     checkMedia =
         case [f | f <- M.elems (sdbBioFlows db), notInvertible f] of
@@ -182,7 +183,7 @@ checkILCDExportable db =
                         <> "only air, water, soil and natural resource round-trip."
     notInvertible f = case bfCompartment f of
         Nothing -> False
-        Just c -> compartmentName c `notElem` canonicalMedia
+        Just c -> canonicalMedium (compartmentName c) `notElem` canonicalMedia
 
     checkMultiOutput =
         case M.toList collisions of
@@ -497,6 +498,15 @@ casBlock (Just cas)
 'parseCompartment': level 0 is "Emissions"/"Resources", level 1 names the
 medium, level 2 (when a sub-compartment exists) is "<medium-phrase>, <sub>".
 -}
+
+{- | Canonicalise a biosphere compartment medium to the spelling ILCD's
+classification — and the parser's 'extractMedium' — round-trips. SimaPro-sourced
+databases label natural-resource flows "resource"; ILCD uses "natural resource".
+-}
+canonicalMedium :: Text -> Text
+canonicalMedium "resource" = "natural resource"
+canonicalMedium m = m
+
 compartmentBlock :: Maybe Compartment -> [Text]
 compartmentBlock Nothing = []
 compartmentBlock (Just (Compartment medium sub)) =
@@ -510,17 +520,18 @@ compartmentBlock (Just (Compartment medium sub)) =
            , "      </classificationInformation>"
            ]
   where
-    isResource = medium == "natural resource"
+    m = canonicalMedium medium
+    isResource = m == "natural resource"
     level0 = if isResource then "Resources" else "Emissions"
     level1
         | isResource = "Resources"
-        | otherwise = "Emissions to " <> medium
+        | otherwise = "Emissions to " <> m
     level2 = case sub of
         Nothing -> []
         Just s
             | T.null s -> []
             | isResource -> [attrElem "common:category" [("level", "2")] ("Resources " <> s)]
-            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> medium <> ", " <> s)]
+            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> m <> ", " <> s)]
 
 --------------------------------------------------------------------------------
 -- FlowProperty XML  (one per unit; shares the unit's UUID)

@@ -376,6 +376,15 @@ spec = describe "ILCD.Writer round-trip" $ do
         it "accepts a canonical biosphere medium" $
             checkILCDExportable (bioMediumDb "air") `shouldBe` Right ()
 
+        it "accepts and canonicalises the SimaPro \"resource\" medium to \"natural resource\"" $ do
+            -- SimaPro labels natural-resource flows "resource"; the writer maps it
+            -- to ILCD's "natural resource", which the parser reads back — so the
+            -- flow is representable rather than rejected.
+            checkILCDExportable (bioMediumDb "resource") `shouldBe` Right ()
+            db' <- roundTrip (bioMediumDb "resource")
+            map (fmap compartmentName . bfCompartment) (M.elems (sdbBioFlows db'))
+                `shouldBe` [Just "natural resource"]
+
         it "preserves the no-reference state on a reference-less activity" $ do
             checkILCDExportable noRefDb `shouldBe` Right ()
             db' <- roundTrip noRefDb
@@ -542,8 +551,9 @@ richDb =
         ]
 
 {- | One activity with a single biosphere emission under the given medium.
-A non-canonical medium ("fresh water", "resource", …) is what
-'checkILCDExportable' must reject; a canonical one passes.
+A non-canonical medium ("fresh water", …) is what 'checkILCDExportable' must
+reject; a canonical one — or an alias the writer canonicalises, like
+"resource" → "natural resource" — passes.
 -}
 bioMediumDb :: Text -> SimpleDatabase
 bioMediumDb medium =
