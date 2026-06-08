@@ -198,13 +198,20 @@ spec = describe "BrightwayExcel.Writer" $ do
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
     describe "export guard" $ do
-        it "best-efforts a waste exchange as technosphere instead of rejecting it" $ do
-            -- Brightway has no waste type; the writer rewrites a waste exchange as a
-            -- technosphere flow (inventory-preserving — the matrix treats them the
-            -- same) and records it in the manifest, rather than refusing the export.
+        it "best-efforts an orphan waste exchange as technosphere instead of rejecting it" $ do
+            -- Brightway has no waste type. An orphan waste exchange (no producer link)
+            -- never enters the matrix, so the writer rewrites it as a technosphere flow
+            -- (inventory-neutral) and records it in the manifest, rather than refusing.
             checkBrightwayExportable wasteDb `shouldBe` Right ()
             wasteManifest wasteDb `shouldSatisfy` (not . null)
             renderWorkbook defaultWriterConfig wasteDb `shouldSatisfy` isRight
+        it "rejects a linked waste exchange, which would invert its sign on re-import" $ do
+            -- A waste exchange that resolves to a producer contributes a negative
+            -- coefficient to the matrix; written as technosphere it re-imports as a
+            -- positive Input, inverting the inventory. The guard must reject it, and
+            -- it is not best-efforted (so it never appears in the manifest).
+            checkBrightwayExportable linkedWasteDb `shouldSatisfy` isLeft
+            wasteManifest linkedWasteDb `shouldBe` []
         it "rejects a non-finite amount" $
             -- A non-finite amount has no numeric-cell form that re-parses; the
             -- guard rejects the database instead of emitting a misleading value.
@@ -633,9 +640,10 @@ refUnitAmount (acts, _tech, _bio, _waste, unitDB) = do
 -- Export-guard fixtures (rejected at the boundary)
 -- ---------------------------------------------------------------------------
 
-{- | A database whose activity carries a waste exchange (B4): Brightway has no
-native waste type, so the writer best-efforts it as a technosphere flow and
-records it in 'wasteManifest'.
+{- | A database whose activity carries an /orphan/ waste exchange (B4): no
+producer link, so it never enters the matrix. Brightway has no native waste type,
+so the writer best-efforts it as a technosphere flow and records it in
+'wasteManifest'.
 -}
 wasteDb :: SimpleDatabase
 wasteDb =
@@ -670,6 +678,19 @@ scrapExch =
         , waComment = Nothing
         , waPedigree = Nothing
         }
+
+{- | 'wasteDb' but the waste exchange links to a producer (a non-nil activity
+link), so it would contribute a signed coefficient to the matrix. Brightway
+cannot encode that without inverting the sign on re-import, so the guard rejects
+it rather than best-efforting it.
+-}
+linkedWasteDb :: SimpleDatabase
+linkedWasteDb =
+    wasteDb
+        { sdbActivities = M.singleton (generateActivityUUID act, getReferenceProductUUID act) act
+        }
+  where
+    act = elec{exchanges = [prodExch, scrapExch{waActivityLinkId = generateActivityUUID elec}]}
 
 {- | A database whose input exchange carries a non-finite amount: rejected, since
 it has no numeric-cell form that re-parses to the same value.
