@@ -78,7 +78,6 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Database.Loader (generateActivityUUIDFromActivity)
 import EcoSpold.Common (showFFloatTrim)
 import Types
 
@@ -132,9 +131,9 @@ writeSimpleDatabase opts sdb = do
             (sdbBioFlows sdb)
             (sdbWasteFlows sdb)
             (sdbUnits sdb)
-            (M.elems (sdbActivities sdb))
+            (sdbActivities sdb)
 
-{- | Serialize a list of activities against the flow / unit tables that
+{- | Serialize the database's activities against the flow / unit tables that
 resolve their exchange UUIDs. Internal: it does no export-boundary checking,
 so it is reached only through 'writeSimpleDatabase', which runs
 'checkEcoSpold1Exportable' first. Not exported, so no caller can bypass the
@@ -146,14 +145,14 @@ writeActivities ::
     BioFlowDB ->
     WasteFlowDB ->
     UnitDB ->
-    [Activity] ->
+    ActivityMap ->
     Text
 writeActivities opts techs bios wastes units activities =
     T.unlines $
         [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
         ]
-            ++ concat (zipWith (datasetLines opts res) [1 ..] ordered)
+            ++ concat (zipWith (datasetLines opts res) [1 ..] (map snd ordered))
             ++ ["</ecoSpold>"]
   where
     res = Resolvers techs bios wastes units (supplierNumberIndex ordered)
@@ -161,23 +160,30 @@ writeActivities opts techs bios wastes units activities =
     -- are reproducible regardless of the source Map's ordering.
     ordered = orderedActivities activities
 
-{- | Canonical export order: sorted by @(activityName, location)@, so dataset
+{- | Canonical export order: sorted by @(activityName, location)@ so dataset
 numbers (and thus flow UUIDs) are reproducible regardless of the source Map's
-ordering. Shared by the writer and 'checkEcoSpold1Exportable'.
+ordering. Each activity is paired with the stored activity UUID — the first
+component of its 'sdbActivities' key — that a technosphere input's
+'techActivityLinkId' points at. Shared by the writer and
+'checkEcoSpold1Exportable'.
 -}
-orderedActivities :: [Activity] -> [Activity]
-orderedActivities = sortOn (\a -> (activityName a, activityLocation a))
+orderedActivities :: ActivityMap -> [(UUID, Activity)]
+orderedActivities =
+    sortOn (\(_, a) -> (activityName a, activityLocation a))
+        . map (\((actU, _), a) -> (actU, a))
+        . M.toList
 
-{- | Map each supplier activity's UUID to the dataset number it is assigned in
-canonical order. A technosphere input links to its supplier by
-'techActivityLinkId' (the supplier's @generateActivityUUIDFromActivity@), so the
-parser reads the input's @number@ attribute back as that supplier dataset number
-('EcoSpold.Parser1.closeExchange'). Re-encoding that link therefore means
-resolving the supplier UUID to its position in this index.
+{- | Map each supplier activity's stored UUID to the dataset number it is assigned
+in canonical order. A technosphere input links to its supplier by
+'techActivityLinkId' — the supplier's stored activity UUID, the first component of
+its 'sdbActivities' key — and the parser reads the input's @number@ attribute back
+as that supplier dataset number ('EcoSpold.Parser1.closeExchange'). Keying by the
+stored UUID rather than re-deriving one lets a link resolve whatever namespace the
+source format minted the UUID in.
 -}
-supplierNumberIndex :: [Activity] -> M.Map UUID Int
+supplierNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
 supplierNumberIndex ordered =
-    M.fromList [(generateActivityUUIDFromActivity a, n) | (n, a) <- zip [1 ..] ordered]
+    M.fromList [(actU, n) | (n, (actU, _)) <- zip [1 ..] ordered]
 
 {- | Guard an EcoSpold1 export against data the writer cannot faithfully
 re-encode. Each check reports its first offender and fails loudly rather than
@@ -288,7 +294,7 @@ checkEcoSpold1Exportable db =
                         <> "\": exchange amount "
                         <> T.pack (show amt)
                         <> " has no decimal form that re-parses to the same value."
-    index = supplierNumberIndex (orderedActivities (M.elems (sdbActivities db)))
+    index = supplierNumberIndex (orderedActivities (sdbActivities db))
     danglingLinks =
         [ (activityName act, link)
         | act <- M.elems (sdbActivities db)
