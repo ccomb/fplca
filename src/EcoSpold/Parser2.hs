@@ -521,14 +521,20 @@ parseWithXeno xmlContent processId = do
                                 , waPedigree = Nothing
                                 }
                         wasteFlow = WasteFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
-                        -- Reference product unit only when the flow stays in the technosphere
-                        -- (waste outputs are never the reference product of a producing process).
+                        -- A waste-classified flow normally routes to the waste axis. The one
+                        -- exception is the reference flow of a waste-treatment / market-for-waste
+                        -- activity: it is itself waste (negative amount, outputGroup="0") yet it
+                        -- IS the reference product. Diverting it to the waste axis leaves the
+                        -- activity with no reference product, so 'applyCutoffStrategy' rejects it
+                        -- and the whole dataset is dropped — silently severing every input that
+                        -- links into the treatment subsystem.
+                        refOnWasteAxis = isWasteFlow && not isReferenceProduct
                         newRefUnit =
-                            if isReferenceProduct && not isWasteFlow && not (T.null (idUnitName idata))
+                            if isReferenceProduct && not (T.null (idUnitName idata))
                                 then Just (idUnitName idata)
                                 else psRefUnit state
                         base = (finishExchange unit warns state){psRefUnit = newRefUnit}
-                     in if isWasteFlow
+                     in if refOnWasteAxis
                             then addExchange wasteExchange (addWasteFlow wasteFlow base)
                             else addExchange techExchange (addTechFlow techFlow base)
         | isElement tagName "elementaryExchange" =
