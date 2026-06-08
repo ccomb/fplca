@@ -80,6 +80,35 @@ spec = describe "per-exchange comments" $ do
                 length wasteInputs `shouldBe` 1
                 length wasteOutputs `shouldBe` 1
 
+    -- Regression: e17dc21 established "all 25,412 ecoinvent .spold parse"; the
+    -- WasteFlow axis (#83) silently re-broke it. A treatment / market-for-waste
+    -- activity's reference flow is itself waste (negative amount, outputGroup="0",
+    -- By-product classification=Waste). Routing it to the waste axis leaves the
+    -- activity reference-less, so applyCutoffStrategy drops it (≈4,619 ecoinvent
+    -- datasets) and every input into the treatment subsystem silently goes
+    -- unresolved. The reference must stay the technosphere reference product.
+    describe "waste-classified reference flow (treatment / market-for-waste)" $ do
+        it "does not drop the activity" $ do
+            result <- parseWasteReference
+            case result of
+                Left err -> expectationFailure $ "activity was dropped: " ++ err
+                Right _ -> pure ()
+
+        it "keeps the reference on the technosphere axis, not the waste axis" $
+            withWasteReferenceFixture $ \(act, techs, _, wastes, _) -> do
+                [techRole e | e@TechnosphereExchange{} <- exchanges act] `shouldBe` [ReferenceProduct]
+                length [() | WasteExchange{} <- exchanges act] `shouldBe` 0
+                length techs `shouldBe` 1 -- reference registered as a TechnosphereFlow
+                length wastes `shouldBe` 0 -- and not as a WasteFlow
+        it "carries the reference unit through (not UNKNOWN_UNIT)" $
+            withWasteReferenceFixture $ \(act, _, _, _, _) ->
+                activityUnit act `shouldBe` "kg"
+
+        it "preserves the negative reference amount for the matrix diagonal" $
+            withWasteReferenceFixture $ \(act, _, _, _, _) ->
+                [exchangeAmount e | e@TechnosphereExchange{techRole = ReferenceProduct} <- exchanges act]
+                    `shouldBe` [-1.0]
+
     -- -----------------------------------------------------------------------
     -- Robustness: malformed input should never crash; we expect a clean Left.
     -- The byte-level fuzzing inputs are the ones the parser actually sees in
@@ -257,3 +286,46 @@ wastePatternsXml =
     \    </flowData>\n\
     \  </activityDataset>\n\
     \</ecoSpold>\n"
+
+{- | A waste-treatment / market-for-waste activity whose reference flow is itself
+waste: negative amount, outputGroup="0", tagged By-product classification=Waste.
+This is the ecoinvent EcoSpold2 shape (e.g. "market for refinery sludge") that
+the WasteFlow axis silently dropped. The reference must remain the technosphere
+reference product so the activity loads and its consumers' links resolve.
+-}
+wasteReferenceXml :: BS.ByteString
+wasteReferenceXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+    \  <activityDataset>\n\
+    \    <activityDescription>\n\
+    \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"market-for-waste\">\n\
+    \        <activityName xml:lang=\"en\">market for refinery sludge</activityName>\n\
+    \      </activity>\n\
+    \      <geography geographyId=\"GLO\"><shortname xml:lang=\"en\">GLO</shortname></geography>\n\
+    \    </activityDescription>\n\
+    \    <flowData>\n\
+    \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"-1.0\"\n\
+    \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\"\n\
+    \                           productionVolumeAmount=\"1000.0\">\n\
+    \        <name xml:lang=\"en\">refinery sludge</name>\n\
+    \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \        <classification classificationId=\"bp-waste\">\n\
+    \          <classificationSystem xml:lang=\"en\">By-product classification</classificationSystem>\n\
+    \          <classificationValue xml:lang=\"en\">Waste</classificationValue>\n\
+    \        </classification>\n\
+    \        <outputGroup>0</outputGroup>\n\
+    \      </intermediateExchange>\n\
+    \    </flowData>\n\
+    \  </activityDataset>\n\
+    \</ecoSpold>\n"
+
+parseWasteReference :: IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
+parseWasteReference = withSystemTempDirectory "es2-waste-ref" $ \dir -> do
+    let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+    BS.writeFile path wasteReferenceXml
+    streamParseActivityAndFlowsFromFile path
+
+withWasteReferenceFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withWasteReferenceFixture k =
+    parseWasteReference >>= either (expectationFailure . ("Parse failed: " ++)) k
