@@ -13,6 +13,7 @@ has no writer and 'UnknownFormat' is not a real target, so both fail loudly
 -}
 module Database.Export (
     serializeDatabase,
+    exportWarnings,
     exportDatabase,
     parseExportFormat,
 ) where
@@ -51,6 +52,16 @@ serializeDatabase fmt db = case fmt of
         Left "cannot export to an unknown format"
   where
     sdb = toSimpleDatabase db
+
+{- | Best-effort approximations made when serializing @db@ to @fmt@. Empty for a
+faithful export; non-empty when a writer had to approximate. Currently only the
+Brightway writer approximates: it has no waste type, so it rewrites waste
+exchanges as technosphere flows (inventory-preserving, but the waste tag is lost
+on re-import) and reports the affected activities here.
+-}
+exportWarnings :: DatabaseFormat -> Database -> [Text]
+exportWarnings BrightwayExcel db = BE.wasteManifest (toSimpleDatabase db)
+exportWarnings _ _ = []
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted

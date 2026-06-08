@@ -55,6 +55,7 @@ module BrightwayExcel.Writer (
     writeBrightwayExcel,
     renderWorkbook,
     checkBrightwayExportable,
+    wasteManifest,
 
     -- * Exposed for testing
     Cell (..),
@@ -163,12 +164,35 @@ that would otherwise substitute a different value on re-import.
 Databases whose exchanges all resolve, carry no waste, keep every resource
 direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
+
+{- | Best-effort export note for a database with waste exchanges. Brightway has
+no waste type, so 'exchangeRow' writes each waste exchange as a technosphere flow
+('checkBrightwayExportable' no longer rejects it). The matrix treats a waste
+exchange exactly like a technosphere flow ('Database.MatrixBuild.techTriple'), so
+the inventory result is preserved — only the waste classification is lost on
+re-import. Report which activities that affects so the loss is never silent.
+-}
+wasteManifest :: SimpleDatabase -> [Text]
+wasteManifest db = case wasteActs of
+    [] -> []
+    _ -> [summary]
+  where
+    wasteActs = [activityName a | a <- M.elems (sdbActivities db), any isWasteExchange (exchanges a)]
+    summary =
+        tshow (length wasteActs)
+            <> " activit"
+            <> (if length wasteActs == 1 then "y" else "ies")
+            <> " with waste exchanges were written as technosphere flows (Brightway has"
+            <> " no waste type); the inventory result is preserved, but the waste"
+            <> " classification is lost on re-import: "
+            <> T.intercalate ", " (take 10 wasteActs)
+            <> (if length wasteActs > 10 then ", … and " <> tshow (length wasteActs - 10) <> " more" else "")
+
 checkBrightwayExportable :: SimpleDatabase -> Either Text ()
 checkBrightwayExportable db =
     case catMaybes
         [ flowMsg <$> listToMaybe flowOffenders
         , unitMsg <$> listToMaybe unitOffenders
-        , wasteMsg <$> listToMaybe wasteOffenders
         , refInputMsg <$> listToMaybe refInputOffenders
         , directionMsg <$> listToMaybe directionOffenders
         , roundTripMsg <$> listToMaybe roundTripOffenders
@@ -179,7 +203,6 @@ checkBrightwayExportable db =
     cannot consumer = "Brightway Excel export cannot represent activity \"" <> consumer <> "\": "
     flowMsg consumer = cannot consumer <> "an exchange references a flow absent from the database."
     unitMsg consumer = cannot consumer <> "an exchange references a unit absent from the registry."
-    wasteMsg consumer = cannot consumer <> "it has a waste exchange, which Brightway has no type for."
     refInputMsg consumer =
         cannot consumer
             <> "a reference input (treatment process) has no Brightway encoding;"
@@ -197,7 +220,6 @@ checkBrightwayExportable db =
         [activityName act | act <- M.elems (sdbActivities db), any p (exchanges act)]
     flowOffenders = activitiesWith (not . flowResolvable db)
     unitOffenders = activitiesWith (\ex -> M.notMember (exchangeUnitId ex) (sdbUnits db))
-    wasteOffenders = activitiesWith isWasteExchange
     refInputOffenders = activitiesWith isReferenceInput
     directionOffenders = activitiesWith (resourceDirectionLost db)
     roundTripOffenders =
@@ -390,11 +412,11 @@ exchangeRow cfg db = \case
     ex@WasteExchange{waAmount = amt, waLocation = loc} -> do
         name <- flowNameOf db ex
         unit <- unitNameOf (exchangeUnitId ex) db
-        -- Unreachable on any guarded path: 'checkBrightwayExportable' (run by
-        -- 'renderWorkbook' before serialization) rejects every database carrying a
-        -- waste exchange, precisely because re-parsing it as technosphere would
-        -- invert an output waste into a positive input. This branch only keeps
-        -- 'exchangeRow' total without a silent drop; it never reaches the workbook.
+        -- Best-effort: Brightway has no waste type, so a waste exchange is written
+        -- as a technosphere flow with the same amount. The matrix treats the two
+        -- identically ('Database.MatrixBuild.techTriple'), so the inventory result
+        -- is preserved; only the waste classification is lost on re-import.
+        -- 'wasteManifest' reports the affected activities.
         Just
             [ CText name
             , CNum amt

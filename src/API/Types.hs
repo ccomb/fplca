@@ -811,8 +811,9 @@ ILCD are zipped), mirroring the upload endpoint's base64 convention. Failures ar
 HTTP errors (400 bad format / unexportable data, 404 not loaded), never a
 success flag in a 200 body — so the type cannot represent "success with no data".
 -}
-newtype ExportResponse = ExportResponse
+data ExportResponse = ExportResponse
     { exrespData :: Text -- Base64-encoded serialized database
+    , exrespWarnings :: [Text] -- Best-effort approximations; empty on a faithful export
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExportResponse)

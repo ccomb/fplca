@@ -30,9 +30,11 @@ import BrightwayExcel.Writer (
     WriterConfig (..),
     activityRows,
     checkBrightwayExportable,
+    defaultWriterConfig,
     formatAmount,
     renderCategories,
     renderWorkbook,
+    wasteManifest,
  )
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft, isRight)
@@ -196,10 +198,13 @@ spec = describe "BrightwayExcel.Writer" $ do
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
     describe "export guard" $ do
-        it "rejects a waste exchange (Brightway has no waste type)" $
-            -- Per the export boundary: emitting a WasteExchange would re-parse as a
-            -- positive technosphere input, inverting an output waste. Reject loudly.
-            checkBrightwayExportable wasteDb `shouldSatisfy` isLeft
+        it "best-efforts a waste exchange as technosphere instead of rejecting it" $ do
+            -- Brightway has no waste type; the writer rewrites a waste exchange as a
+            -- technosphere flow (inventory-preserving — the matrix treats them the
+            -- same) and records it in the manifest, rather than refusing the export.
+            checkBrightwayExportable wasteDb `shouldBe` Right ()
+            wasteManifest wasteDb `shouldSatisfy` (not . null)
+            renderWorkbook defaultWriterConfig wasteDb `shouldSatisfy` isRight
         it "rejects a non-finite amount" $
             -- A non-finite amount has no numeric-cell form that re-parses; the
             -- guard rejects the database instead of emitting a misleading value.
@@ -628,8 +633,9 @@ refUnitAmount (acts, _tech, _bio, _waste, unitDB) = do
 -- Export-guard fixtures (rejected at the boundary)
 -- ---------------------------------------------------------------------------
 
-{- | A database whose activity carries a waste exchange (B4): rejected, since
-Brightway has no native waste type and would invert it on re-parse.
+{- | A database whose activity carries a waste exchange (B4): Brightway has no
+native waste type, so the writer best-efforts it as a technosphere flow and
+records it in 'wasteManifest'.
 -}
 wasteDb :: SimpleDatabase
 wasteDb =
