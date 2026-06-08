@@ -370,8 +370,13 @@ activityNormFactor act (actUUID, prodUUID) =
                 , not (exchangeIsReference ex)
                 , isSelfLoop ex
                 ]
-        netOutput = if refOutputs > 1e-15 then refOutputs - internalConsumption else 0.0
-     in if netOutput > 1e-15
+        -- Magnitude, not sign, decides whether a reference output is real: a
+        -- waste-treatment / market-for-waste activity has a NEGATIVE reference
+        -- output (e.g. -1 kg of the waste it treats). Its signed net output must
+        -- flow through as the normalization factor; forcing a positive fallback
+        -- here flips the sign of the activity's entire inventory contribution.
+        netOutput = if abs refOutputs > 1e-15 then refOutputs - internalConsumption else 0.0
+     in if abs netOutput > 1e-15
             then netOutput
             else
                 if refInputs > 1e-15

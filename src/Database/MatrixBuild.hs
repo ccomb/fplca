@@ -82,10 +82,13 @@ collectBioFlowOrder activities =
         ]
 
 {- | Divide-by-zero guard for normalization factors. Activities with no
-reference output normalize by 1.0 instead of a near-zero denominator.
+reference output normalize by 1.0 instead of a near-zero denominator. Guards on
+magnitude, not sign: a waste-treatment reference is a NEGATIVE production (e.g.
+-1 kg of the treated waste), and that sign must be preserved through the
+normalization — collapsing it to 1.0 silently flips the activity's inventory.
 -}
 safeDenom :: Double -> Double
-safeDenom f = if f > 1e-15 then f else 1.0
+safeDenom f = if abs f > 1e-15 then f else 1.0
 
 {- | Producer cascade for technosphere exchanges: prefer the resolved process
 link, else look up the (activityUUID, flowUUID) pair. This is the

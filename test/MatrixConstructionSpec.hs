@@ -2,12 +2,14 @@
 
 module MatrixConstructionSpec (spec) where
 
+import Data.List (elemIndex)
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Database (buildDatabaseWithMatrices)
+import Matrix (computeInventoryMatrix)
 import Test.Hspec
 import TestHelpers
 import Types
@@ -254,3 +256,113 @@ spec = do
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db ->
                     VU.length (dbBiosphereTriples db) `shouldBe` 0
+
+    describe "Waste-treatment scoring sign (negative reference)" $ do
+        -- A waste-treatment / market-for-waste activity's reference flow is a
+        -- NEGATIVE production (here -1 kg of the waste it treats). A producer that
+        -- sends 3 kg of that waste to treatment must pick up +3× the treatment's
+        -- burden, not -3×. Before the activityNormFactor / safeDenom sign fix the
+        -- normalization collapsed the -1 reference to +1, flipping every linked
+        -- treatment burden negative — so treating waste spuriously *reduced* impact.
+        it "adds the treatment burden with a positive sign to the waste producer" $ do
+            let tA = mkUUID "11111111-1111-1111-1111-111111111111"
+                wW = mkUUID "22222222-2222-2222-2222-222222222222"
+                pA = mkUUID "33333333-3333-3333-3333-333333333333"
+                yY = mkUUID "44444444-4444-4444-4444-444444444444"
+                co2 = mkUUID "55555555-5555-5555-5555-555555555555"
+                kgU = mkUUID "66666666-6666-6666-6666-666666666666"
+                tRef =
+                    TechnosphereExchange
+                        { techFlowId = wW
+                        , techAmount = -1.0 -- treats 1 kg of waste W (negative production)
+                        , techUnitId = kgU
+                        , techRole = ReferenceProduct
+                        , techActivityLinkId = UUID.nil
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
+                tCO2 =
+                    BiosphereExchange
+                        { bioFlowId = co2
+                        , bioAmount = 2.0 -- 2 kg CO2 per kg treated
+                        , bioUnitId = kgU
+                        , bioDirection = Emission
+                        , bioLocation = ""
+                        , bioComment = Nothing
+                        , bioPedigree = Nothing
+                        }
+                treatment =
+                    Activity
+                        { activityName = "treatment of waste W"
+                        , activityDescription = []
+                        , activitySynonyms = M.empty
+                        , activityClassification = M.empty
+                        , activityLocation = "GLO"
+                        , activityUnit = "kg"
+                        , exchanges = [tRef, tCO2]
+                        , activityParams = M.empty
+                        , activityParamExprs = M.empty
+                        , activityAllocationPercent = Nothing
+                        , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
+                        }
+                pRef =
+                    TechnosphereExchange
+                        { techFlowId = yY
+                        , techAmount = 1.0
+                        , techUnitId = kgU
+                        , techRole = ReferenceProduct
+                        , techActivityLinkId = UUID.nil
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
+                pWaste =
+                    WasteExchange
+                        { waFlowId = wW
+                        , waAmount = 3.0 -- produces 3 kg of waste W, sent to treatment
+                        , waUnitId = kgU
+                        , waIsInput = False
+                        , waActivityLinkId = tA
+                        , waProcessLinkId = Nothing
+                        , waLocation = ""
+                        , waComment = Nothing
+                        , waPedigree = Nothing
+                        }
+                producer =
+                    Activity
+                        { activityName = "producer of Y"
+                        , activityDescription = []
+                        , activitySynonyms = M.empty
+                        , activityClassification = M.empty
+                        , activityLocation = "GLO"
+                        , activityUnit = "kg"
+                        , exchanges = [pRef, pWaste]
+                        , activityParams = M.empty
+                        , activityParamExprs = M.empty
+                        , activityAllocationPercent = Nothing
+                        , activityAllocationFormula = Nothing
+                        , activityNativeType = Nothing
+                        }
+                activityMap = M.fromList [((tA, wW), treatment), ((pA, yY), producer)]
+                techFlowDB =
+                    M.fromList
+                        [ (wW, TechnosphereFlow wW "waste W" kgU M.empty Nothing Nothing)
+                        , (yY, TechnosphereFlow yY "product Y" kgU M.empty Nothing Nothing)
+                        ]
+                bioFlowDB = M.singleton co2 (BiosphereFlow co2 "carbon dioxide" kgU M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+                wasteFlowDB = M.singleton wW (WasteFlow wW "waste W" kgU M.empty Nothing Nothing)
+                unitDB = M.singleton kgU (Unit kgU "kg" "kg" "")
+
+            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB wasteFlowDB unitDB
+            case result of
+                Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
+                Right db -> case elemIndex (pA, yY) (V.toList (dbProcessIdTable db)) of
+                    Nothing -> expectationFailure "producer activity was not interned"
+                    Just ix -> do
+                        inv <- computeInventoryMatrix db (fromIntegral ix)
+                        -- 3 kg waste × 2 kg CO2/kg treated = +6 kg CO2 (positive!)
+                        withinTolerance 1.0e-9 6.0 (M.findWithDefault 0.0 co2 inv) `shouldBe` True
