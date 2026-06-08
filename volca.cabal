@@ -131,6 +131,7 @@ library
                      , aeson
                      , aeson-pretty
                      , scientific
+                     , attoparsec
                      , wai
                      , wai-cors
                      , wai-app-static
