@@ -16,7 +16,7 @@
 module EcoSpold1WriterSpec (spec) where
 
 import qualified Data.ByteString.Char8 as BC
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe)
@@ -27,7 +27,6 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import qualified Database as DB
-import Database.Loader (generateActivityUUIDFromActivity)
 import EcoSpold.Parser1 (parseAllWithXeno)
 import EcoSpold.Writer1
 import qualified Matrix
@@ -146,10 +145,10 @@ emptyDb :: SimpleDatabase
 emptyDb = SimpleDatabase M.empty M.empty M.empty M.empty M.empty
 
 {- | Two activities where the consumer's technosphere input is a resolved link
-to the supplier. The link UUID is the loader's content hash of the supplier's
-@(name, location)@, which is exactly the key 'checkEcoSpold1Exportable' /
-'supplierNumberIndex' resolve to a dataset number. Passing a UUID absent from
-the database instead models a dangling supplier link.
+to the supplier. The link UUID is the supplier's stored activity UUID
+('supplierLink' — the first component of its 'sdbActivities' key), which
+'checkEcoSpold1Exportable' / 'supplierNumberIndex' resolve to a dataset number.
+Passing a UUID absent from the database instead models a dangling supplier link.
 -}
 linkedDb :: UUID -> SimpleDatabase
 linkedDb link =
@@ -165,7 +164,7 @@ linkedDb link =
         , sdbUnits = units1
         }
   where
-    supU = read "22222222-0000-4000-8000-000000000001"
+    supU = supplierLink
     conU = read "33333333-0000-4000-8000-000000000001"
     mkAct nm prodU exs = Activity nm [] M.empty M.empty "GLO" "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing
     refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
@@ -173,11 +172,14 @@ linkedDb link =
     -- The consumer's input consumes the supplier's product and links to it.
     consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing]
 
--- | The supplier's resolved activity UUID, the value a consumer's input links to.
+{- | The supplier's stored activity UUID — the first component of its
+'sdbActivities' key, and the value a solver-resolved input carries in
+'techActivityLinkId'. Deliberately a literal in a different namespace from
+'generateActivityUUIDFromActivity' (mirroring a non-EcoSpold1-origin database),
+so the export must resolve the link by this stored UUID, not by re-deriving one.
+-}
 supplierLink :: UUID
-supplierLink =
-    generateActivityUUIDFromActivity
-        (Activity "aaa supplier" [] M.empty M.empty "GLO" "kg" [] M.empty M.empty Nothing Nothing Nothing)
+supplierLink = read "22222222-0000-4000-8000-000000000001"
 
 {- | A non-nil UUID that no exported activity hashes to, so a consumer input
 carrying it has no resolvable dataset number — a dangling link. Distinct from
@@ -418,7 +420,9 @@ spec = do
     describe "supplier links (multi-dataset)" $ do
         it "re-emits a resolved supplier link as the supplier's dataset number" $
             -- "aaa supplier" sorts first → dataset 1; the consumer's input links
-            -- to it, so the parser reads its number attribute back as 1.
+            -- to its stored UUID (which differs from generateActivityUUIDFromActivity),
+            -- so the index must key on the stored UUID for the parser to read its
+            -- number attribute back as 1.
             roundTripSupplierLinks (linkedDb supplierLink) `shouldBe` Right [1]
 
         it "passes the export-boundary check when the link targets an exported dataset" $
@@ -512,17 +516,17 @@ spec = do
                     concatMap (exchangeViews sdb') (M.elems (sdbActivities sdb'))
                         `shouldSatisfy` any ((== 3.3e-20) . evAmount)
 
-    describe "non-round-tripping amounts" $
-        it "rejects a subnormal amount that re-parses to zero rather than undercounting" $ do
-            -- 5e-324 is finite but its fixed-point form carries too few
-            -- significant digits for Data.Text.Read.double to recover, so it
-            -- would silently export as 0; the guard rejects it instead.
+    describe "subnormal amounts" $
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $ do
+            -- 5e-324 is finite and re-parses exactly through Amount.readAmount
+            -- (Data.Text.Read.double used to lose it to 0), so it is faithfully
+            -- representable and the guard must not reject it.
             let prodU = read "aaaa0000-0000-4000-8000-000000000001" :: UUID
                 bioU = read "aaaa0000-0000-4000-8000-0000000000c0" :: UUID
                 bioEx = BiosphereExchange bioU 5e-324 kgUnit Emission "" Nothing Nothing
                 bios = M.singleton bioU (BiosphereFlow bioU "trace" kgUnit M.empty Nothing Nothing Nothing)
                 sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
-            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isRight
 
     describe "waste-marker collision" $
         it "rejects a biosphere flow whose compartment is the waste-routing category" $ do

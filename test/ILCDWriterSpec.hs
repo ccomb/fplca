@@ -25,7 +25,7 @@ module ILCDWriterSpec (spec) where
 
 import Codec.Archive.Zip (ZipOption (OptDestination), extractFilesFromArchive, toArchive)
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (isPrefixOf, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -376,6 +376,28 @@ spec = describe "ILCD.Writer round-trip" $ do
         it "accepts a canonical biosphere medium" $
             checkILCDExportable (bioMediumDb "air") `shouldBe` Right ()
 
+        it "accepts and canonicalises the SimaPro \"resource\" medium to \"natural resource\"" $ do
+            -- SimaPro labels natural-resource flows "resource"; the writer maps it
+            -- to ILCD's "natural resource", which the parser reads back — so the
+            -- flow is representable rather than rejected.
+            checkILCDExportable (bioMediumDb "resource") `shouldBe` Right ()
+            db' <- roundTrip (bioMediumDb "resource")
+            map (fmap compartmentName . bfCompartment) (M.elems (sdbBioFlows db'))
+                `shouldBe` [Just "natural resource"]
+
+        it "reports every violation category in one message, not just the first" $ do
+            -- A flow with both a non-canonical medium and a non-finite amount trips
+            -- two independent checks; the collected report must carry both.
+            let db =
+                    oneActivityDb
+                        (M.singleton fEmitU (fEmission{bfCompartment = Just (Compartment "fresh water" Nothing)}))
+                        [BiosphereExchange fEmitU (1 / 0) fUnitU Emission "" Nothing Nothing, refProductEx]
+            case checkILCDExportable db of
+                Left msg -> do
+                    msg `shouldSatisfy` T.isInfixOf "fresh water"
+                    msg `shouldSatisfy` T.isInfixOf "non-finite"
+                Right () -> expectationFailure "expected violations"
+
         it "preserves the no-reference state on a reference-less activity" $ do
             checkILCDExportable noRefDb `shouldBe` Right ()
             db' <- roundTrip noRefDb
@@ -395,10 +417,11 @@ spec = describe "ILCD.Writer round-trip" $ do
             checkILCDExportable (nonFiniteDb (1 / 0)) `shouldSatisfy` isLeft
             checkILCDExportable (nonFiniteDb (0 / 0)) `shouldSatisfy` isLeft
 
-        it "rejects a subnormal amount that fixed-point cannot round-trip" $
-            -- 5e-324 (smallest positive subnormal) re-parses to 0 through
-            -- fixed-point, an undetectable LCIA shift; reject it at the boundary.
-            checkILCDExportable (nonFiniteDb 5.0e-324) `shouldSatisfy` isLeft
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $
+            -- 5e-324 (smallest positive subnormal) re-parses exactly through
+            -- Amount.readAmount (Data.Text.Read.double used to lose it to 0), so it
+            -- is faithfully representable; the guard must not reject it.
+            checkILCDExportable (nonFiniteDb 5.0e-324) `shouldSatisfy` isRight
 
 isPrefixOfFp :: String -> FilePath -> Bool
 isPrefixOfFp = isPrefixOf
@@ -541,8 +564,9 @@ richDb =
         ]
 
 {- | One activity with a single biosphere emission under the given medium.
-A non-canonical medium ("fresh water", "resource", …) is what
-'checkILCDExportable' must reject; a canonical one passes.
+A non-canonical medium ("fresh water", …) is what 'checkILCDExportable' must
+reject; a canonical one — or an alias the writer canonicalises, like
+"resource" → "natural resource" — passes.
 -}
 bioMediumDb :: Text -> SimpleDatabase
 bioMediumDb medium =

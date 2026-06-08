@@ -59,16 +59,17 @@ module ILCD.Writer (
 import Codec.Archive.Zip (addEntryToArchive, emptyArchive, fromArchive, toEntry)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (joinPath, splitDirectories, (</>))
 
+import Amount (readAmount)
 import EcoSpold.Common (showFFloatTrim)
 import Types
 
@@ -150,11 +151,10 @@ ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   — @""@ (key vanishes), or @"a//b"@ \/ @"a/"@ (collapses to @"a/b"@ \/ @"a"@) —
   therefore does not round-trip.
 
-* /Amounts that do not re-parse./ 'formatDouble' is fixed-point, so a non-finite
-  amount (@NaN@\/@Infinity@, which the parser can propagate from an out-of-range
-  literal like @"1e400"@) or a subnormal near @5e-324@ would re-import as a
-  different number (or fail to parse), silently shifting LCIA scores. We reject
-  any amount that does not re-parse to itself.
+* /Amounts that do not re-parse./ The written decimal must re-parse to the same
+  'Double' through 'Amount.readAmount' (the importer's correctly-rounded
+  reader). Every finite amount does, so this rejects only the non-finite
+  (@NaN@\/@Infinity@) that would otherwise shift LCIA scores on re-import.
 
 Rather than silently corrupting any of these, report the first offending flow,
 activity or exchange so the caller can fail loudly. Databases whose activity
@@ -164,9 +164,12 @@ unchanged.
 -}
 checkILCDExportable :: SimpleDatabase -> Either Text ()
 checkILCDExportable db =
-    checkMedia >> checkMultiOutput >> checkClassifications >> checkAmounts
+    case lefts [checkMedia, checkMultiOutput, checkClassifications, checkAmounts] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
-    -- Media the parser's @extractMedium@ inverts back to the same string.
+    -- Media the parser's @extractMedium@ inverts back, after canonicalising
+    -- aliases like "resource" → "natural resource".
     canonicalMedia = ["air", "water", "soil", "natural resource"]
     checkMedia =
         case [f | f <- M.elems (sdbBioFlows db), notInvertible f] of
@@ -183,7 +186,7 @@ checkILCDExportable db =
                         <> "only air, water, soil and natural resource round-trip."
     notInvertible f = case bfCompartment f of
         Nothing -> False
-        Just c -> compartmentName c `notElem` canonicalMedia
+        Just c -> canonicalMedium (compartmentName c) `notElem` canonicalMedia
 
     checkMultiOutput =
         case M.toList collisions of
@@ -226,9 +229,9 @@ checkILCDExportable db =
                         <> "): an empty classification level does not round-trip "
                         <> "because the ILCD parser drops empty levels."
 
-    -- An amount round-trips only when its fixed-point rendering re-parses to the
-    -- same value through the parser's 'Data.Text.Read.double' (consuming all of
-    -- it). Rejects non-finite amounts and the subnormal tail near 5e-324.
+    -- An amount round-trips when its fixed-point rendering re-parses to the same
+    -- value through 'Amount.readAmount' (the importer's correctly-rounded
+    -- reader). Every finite amount does, so this rejects only the non-finite.
     checkAmounts =
         case [ (actUUID, exchangeAmount ex)
              | ((actUUID, _), act) <- M.toList (sdbActivities db)
@@ -245,10 +248,8 @@ checkILCDExportable db =
                         <> "\" (UUID "
                         <> uuidText actUUID
                         <> "): it does not re-parse to the same value through the "
-                        <> "ILCD parser (non-finite or near-underflow subnormal)."
-    amountRoundTrips amt = case TR.double (formatDouble amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+                        <> "ILCD parser (a non-finite amount)."
+    amountRoundTrips amt = readAmount (formatDouble amt) == Just amt
 
 {- | Write the ILCD package as a directory tree rooted at @dir@, or return the
 export guard's 'Left' without touching disk.
@@ -500,6 +501,15 @@ casBlock (Just cas)
 'parseCompartment': level 0 is "Emissions"/"Resources", level 1 names the
 medium, level 2 (when a sub-compartment exists) is "<medium-phrase>, <sub>".
 -}
+
+{- | Canonicalise a biosphere compartment medium to the spelling ILCD's
+classification — and the parser's 'extractMedium' — round-trips. SimaPro-sourced
+databases label natural-resource flows "resource"; ILCD uses "natural resource".
+-}
+canonicalMedium :: Text -> Text
+canonicalMedium "resource" = "natural resource"
+canonicalMedium m = m
+
 compartmentBlock :: Maybe Compartment -> [Text]
 compartmentBlock Nothing = []
 compartmentBlock (Just (Compartment medium sub)) =
@@ -513,17 +523,18 @@ compartmentBlock (Just (Compartment medium sub)) =
            , "      </classificationInformation>"
            ]
   where
-    isResource = medium == "natural resource"
+    m = canonicalMedium medium
+    isResource = m == "natural resource"
     level0 = if isResource then "Resources" else "Emissions"
     level1
         | isResource = "Resources"
-        | otherwise = "Emissions to " <> medium
+        | otherwise = "Emissions to " <> m
     level2 = case sub of
         Nothing -> []
         Just s
             | T.null s -> []
             | isResource -> [attrElem "common:category" [("level", "2")] ("Resources " <> s)]
-            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> medium <> ", " <> s)]
+            | otherwise -> [attrElem "common:category" [("level", "2")] ("Emissions to " <> m <> ", " <> s)]
 
 --------------------------------------------------------------------------------
 -- FlowProperty XML  (one per unit; shares the unit's UUID)
@@ -625,13 +636,10 @@ escapeXmlAttr =
         . escapeXml
 
 {- | Canonical 'Double' formatting via the shared 'showFFloatTrim' (fixed-point,
-never scientific), so the value round-trips through the parser's
-'Data.Text.Read.double' for the magnitudes real LCA amounts occupy — unlike
-@show@, which emits scientific notation that re-reads lossily (e.g. @show 3.3e-20@
-→ @3.2999999999999994e-20@). The near-underflow subnormal tail (≈@5e-324@) is the
-exception (fixed-point can't carry enough digits, so it re-parses to @0@);
-'checkILCDExportable' rejects any amount that does not re-parse, so the guarded
-path never emits one. A non-finite value renders as its (non-parseable)
+never scientific), the exact inverse of 'Amount.readAmount': every finite amount
+round-trips through that correctly-rounded reader. 'checkILCDExportable' rejects
+any amount that does not re-parse, which now leaves only the non-finite. A
+non-finite value renders as its (non-parseable)
 @"NaN"@/@"Infinity"@ form so a bad re-import fails loudly rather than silently
 reading @0@; the guard rejects non-finite amounts first. Negative zero is
 normalised to @0.0@.

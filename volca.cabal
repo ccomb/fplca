@@ -33,6 +33,7 @@ library
                      , Data.Validation
                      , Progress
                      , UnitConversion
+                     , Amount
                      , Config
                      , ConfigWriter
                      , Service
@@ -130,6 +131,7 @@ library
                      , aeson
                      , aeson-pretty
                      , scientific
+                     , attoparsec
                      , wai
                      , wai-cors
                      , wai-app-static
@@ -205,6 +207,7 @@ test-suite lca-tests
   main-is:             Spec.hs
   other-modules:       TestHelpers
                      , GoldenData
+                     , AmountSpec
                      , AutoRelinkSpec
                      , RelinkMappingSpec
                      , MatrixConstructionSpec

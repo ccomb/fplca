@@ -13,7 +13,9 @@ module EcoSpold.Common (
     showFFloatTrim,
 ) where
 
+import Amount (readAmount)
 import qualified Data.ByteString as BS
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -47,9 +49,7 @@ decodeXmlEntities =
 
 -- | ByteString to Double conversion (strict - errors on parse failure)
 bsToDouble :: BS.ByteString -> Double
-bsToDouble bs = case TR.double (bsToText bs) of
-    Right (val, _) -> val
-    Left _ -> error $ "Failed to parse double from: " ++ show bs
+bsToDouble bs = fromMaybe (error $ "Failed to parse double from: " ++ show bs) (readAmount (bsToText bs))
 
 -- | ByteString to Int conversion (strict - errors on parse failure)
 bsToInt :: BS.ByteString -> Int
@@ -94,14 +94,12 @@ distributeFiles n xs =
 
 {- | Render a 'Double' in fixed-point notation (never scientific) with trailing
 zeros trimmed but at least one fractional digit kept. This is the canonical
-amount format for the EcoSpold/ILCD writers: it re-parses to the same value
-through 'Data.Text.Read.double' for the magnitudes real LCA amounts occupy —
-unlike 'show', which emits scientific notation for small/large magnitudes that
-re-reads lossily (e.g. @show 3.3e-20@ → @3.2999999999999994e-20@). The
-near-underflow subnormal tail (≈@5e-324@) is the exception: fixed-point can't
-carry enough significant digits there, so it re-parses to @0@. The writers'
-export guards reject any amount that does not re-parse, so a guarded export
-never emits one of these.
+amount format for the EcoSpold/ILCD/Brightway writers and the exact inverse of
+'Amount.readAmount': through that correctly-rounded reader every finite 'Double'
+— subnormals included — re-parses to the same value. Fixed-point is also the
+form these exchange formats and their external readers expect. The writers'
+export guards reject any amount that does not re-parse, which now leaves only the
+non-finite @Infinity@/@NaN@.
 -}
 showFFloatTrim :: Double -> String
 showFFloatTrim d =

@@ -50,6 +50,7 @@ module BrightwayExcel.Parser (
     isResourceCompartment,
 ) where
 
+import Amount (readAmount)
 import Codec.Archive.Zip (Archive, findEntryByPath, fromEntry, toArchiveOrFail)
 import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
@@ -101,9 +102,7 @@ cellText = \case
 cellNum :: CellValue -> Maybe Double
 cellNum = \case
     CellNumber d -> Just d
-    CellText t -> case TR.double (T.strip t) of
-        Right (d, rest) | T.null (T.strip rest) -> Just d
-        _ -> Nothing
+    CellText t -> readAmount t
 
 textAt :: Int -> Row -> Maybe Text
 textAt i row = cellText =<< M.lookup i row
@@ -567,9 +566,9 @@ cellValue sharedStrings c = case TE.decodeUtf8 <$> attr "t" c of
     _ -> do
         v <- firstChildNamed "v" c
         let txt = nodeText v
-        case TR.double txt of
-            Right (d, rest) | T.null (T.strip rest) -> Just (CellNumber d)
-            _ -> nonEmptyText txt
+        case readAmount txt of
+            Just d -> Just (CellNumber d)
+            Nothing -> nonEmptyText txt
 
 nonEmptyText :: Text -> Maybe CellValue
 nonEmptyText t = let s = T.strip t in if T.null s then Nothing else Just (CellText s)

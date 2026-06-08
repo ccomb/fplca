@@ -30,7 +30,7 @@ spec = describe "Database.Export dispatcher" $ do
         forM_ [SimaProCSV, EcoSpold1, EcoSpold2, ILCDProcess, BrightwayExcel] $ \fmt ->
             case serializeDatabase fmt db of
                 Left err -> expectationFailure (show fmt <> ": " <> T.unpack err)
-                Right bytes -> BL.null bytes `shouldBe` False
+                Right (bytes, _warnings) -> BL.null bytes `shouldBe` False
 
     it "fails loudly for formats with no writer (never a silent empty file)" $ do
         db <- buildFixture (Compartment "air" (Just "unspecified"))

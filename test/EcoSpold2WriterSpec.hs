@@ -27,7 +27,7 @@ module EcoSpold2WriterSpec (spec) where
 
 import Control.Monad (forM_)
 import qualified Data.ByteString as BS
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -430,12 +430,13 @@ spec = describe "EcoSpold2 writer round-trip" $ do
                 (fixtureWithExchange (BiosphereExchange land 1.0 unitKg Emission "" Nothing Nothing))
                 `shouldSatisfy` isLeft
 
-        it "rejects a subnormal amount that re-parses to zero rather than undercounting" $
-            -- 5e-324's fixed-point form carries too few significant digits for
-            -- Data.Text.Read.double to recover; it would silently export as 0.
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $
+            -- 5e-324's fixed-point form re-parses exactly through Amount.readAmount
+            -- (Data.Text.Read.double used to lose it to 0), so it is faithfully
+            -- representable and the guard must not reject it.
             checkEcoSpold2Exportable
                 (fixtureWithExchange (BiosphereExchange co2 5e-324 unitKg Emission "" Nothing Nothing))
-                `shouldSatisfy` isLeft
+                `shouldSatisfy` isRight
 
     -- (b) Semantic round-trip: parse(write(D)) ≅ D, order-insensitive.
     describe "semantic round-trip (structural equality)" $ do

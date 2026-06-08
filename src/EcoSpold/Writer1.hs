@@ -72,13 +72,13 @@ module EcoSpold.Writer1 (
     formatAmount,
 ) where
 
+import Amount (readAmount)
+import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
-import Database.Loader (generateActivityUUIDFromActivity)
 import EcoSpold.Common (showFFloatTrim)
 import Types
 
@@ -132,9 +132,9 @@ writeSimpleDatabase opts sdb = do
             (sdbBioFlows sdb)
             (sdbWasteFlows sdb)
             (sdbUnits sdb)
-            (M.elems (sdbActivities sdb))
+            (sdbActivities sdb)
 
-{- | Serialize a list of activities against the flow / unit tables that
+{- | Serialize the database's activities against the flow / unit tables that
 resolve their exchange UUIDs. Internal: it does no export-boundary checking,
 so it is reached only through 'writeSimpleDatabase', which runs
 'checkEcoSpold1Exportable' first. Not exported, so no caller can bypass the
@@ -146,14 +146,14 @@ writeActivities ::
     BioFlowDB ->
     WasteFlowDB ->
     UnitDB ->
-    [Activity] ->
+    ActivityMap ->
     Text
 writeActivities opts techs bios wastes units activities =
     T.unlines $
         [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
         ]
-            ++ concat (zipWith (datasetLines opts res) [1 ..] ordered)
+            ++ concat (zipWith (datasetLines opts res) [1 ..] (map snd ordered))
             ++ ["</ecoSpold>"]
   where
     res = Resolvers techs bios wastes units (supplierNumberIndex ordered)
@@ -161,23 +161,30 @@ writeActivities opts techs bios wastes units activities =
     -- are reproducible regardless of the source Map's ordering.
     ordered = orderedActivities activities
 
-{- | Canonical export order: sorted by @(activityName, location)@, so dataset
+{- | Canonical export order: sorted by @(activityName, location)@ so dataset
 numbers (and thus flow UUIDs) are reproducible regardless of the source Map's
-ordering. Shared by the writer and 'checkEcoSpold1Exportable'.
+ordering. Each activity is paired with the stored activity UUID — the first
+component of its 'sdbActivities' key — that a technosphere input's
+'techActivityLinkId' points at. Shared by the writer and
+'checkEcoSpold1Exportable'.
 -}
-orderedActivities :: [Activity] -> [Activity]
-orderedActivities = sortOn (\a -> (activityName a, activityLocation a))
+orderedActivities :: ActivityMap -> [(UUID, Activity)]
+orderedActivities =
+    sortOn (\(_, a) -> (activityName a, activityLocation a))
+        . map (\((actU, _), a) -> (actU, a))
+        . M.toList
 
-{- | Map each supplier activity's UUID to the dataset number it is assigned in
-canonical order. A technosphere input links to its supplier by
-'techActivityLinkId' (the supplier's @generateActivityUUIDFromActivity@), so the
-parser reads the input's @number@ attribute back as that supplier dataset number
-('EcoSpold.Parser1.closeExchange'). Re-encoding that link therefore means
-resolving the supplier UUID to its position in this index.
+{- | Map each supplier activity's stored UUID to the dataset number it is assigned
+in canonical order. A technosphere input links to its supplier by
+'techActivityLinkId' — the supplier's stored activity UUID, the first component of
+its 'sdbActivities' key — and the parser reads the input's @number@ attribute back
+as that supplier dataset number ('EcoSpold.Parser1.closeExchange'). Keying by the
+stored UUID rather than re-deriving one lets a link resolve whatever namespace the
+source format minted the UUID in.
 -}
-supplierNumberIndex :: [Activity] -> M.Map UUID Int
+supplierNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
 supplierNumberIndex ordered =
-    M.fromList [(generateActivityUUIDFromActivity a, n) | (n, a) <- zip [1 ..] ordered]
+    M.fromList [(actU, n) | (n, (actU, _)) <- zip [1 ..] ordered]
 
 {- | Guard an EcoSpold1 export against data the writer cannot faithfully
 re-encode. Each check reports its first offender and fails loudly rather than
@@ -206,17 +213,18 @@ emit silently wrong data:
 
   * __Non-finite amounts.__ @NaN@/@Infinity@ have no parseable literal.
 
-  * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
-    re-parse to the same 'Double' through 'Data.Text.Read.double' (the parser's
-    reader) — e.g. a subnormal near the floating-point floor — would silently
-    export as a different value. Real LCA amounts never reach this range, but
-    the guard rejects it rather than undercount.
+  * __Non-round-tripping amounts.__ A defensive check that the written decimal
+    re-parses to the same 'Double' through 'Amount.readAmount' (the importer's
+    correctly-rounded reader). Every finite amount round-trips, so this guards
+    the formatter↔reader contract against future drift.
 
 Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold1Exportable db =
-    checkLinks *> checkRefInputs *> checkWasteSentinel *> checkFlows *> checkUnits *> checkAmounts *> checkAmountRoundTrip
+    case lefts [checkLinks, checkRefInputs, checkWasteSentinel, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
     checkLinks =
         case danglingLinks of
@@ -288,9 +296,8 @@ checkEcoSpold1Exportable db =
                         <> consumer
                         <> "\": exchange amount "
                         <> T.pack (show amt)
-                        <> " has no decimal form that re-parses to the same value"
-                        <> " (e.g. a subnormal near the floating-point floor)."
-    index = supplierNumberIndex (orderedActivities (M.elems (sdbActivities db)))
+                        <> " has no decimal form that re-parses to the same value."
+    index = supplierNumberIndex (orderedActivities (sdbActivities db))
     danglingLinks =
         [ (activityName act, link)
         | act <- M.elems (sdbActivities db)
@@ -313,11 +320,10 @@ checkEcoSpold1Exportable db =
         , not (isNaN amt || isInfinite amt) -- non-finite already reported by checkAmounts
         , not (amountRoundTrips amt)
         ]
-    -- The written decimal must re-parse to the same Double through the parser's
-    -- reader ('Data.Text.Read.double'), or the value silently changes on import.
-    amountRoundTrips amt = case TR.double (formatAmount amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+    -- The written decimal must re-parse to the same Double through the importer's
+    -- correctly-rounded reader ('Amount.readAmount'), or the value would change
+    -- on re-import.
+    amountRoundTrips amt = readAmount (formatAmount amt) == Just amt
     refInputOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -573,12 +579,10 @@ escapeXmlAttr =
         . T.replace "&" "&amp;"
 
 {- | Deterministic textual form for a @meanValue@. Uses the shared
-'showFFloatTrim' (fixed-point, never scientific) so the value round-trips
-through the parser's 'Data.Text.Read.double' for the magnitudes real LCA
-amounts occupy — unlike @show@, which emits scientific notation that re-reads
-lossily. The near-underflow subnormal tail is the exception;
-'checkEcoSpold1Exportable' rejects any amount that does not re-parse, so the
-guarded path never emits a value that changes on import.
+'showFFloatTrim' (fixed-point, never scientific), the exact inverse of
+'Amount.readAmount': every finite amount round-trips through that
+correctly-rounded reader. 'checkEcoSpold1Exportable' rejects any amount that does
+not re-parse, which now leaves only the non-finite.
 
 A non-finite value renders as its (non-parseable) @"NaN"@/@"Infinity"@ form so
 a bad re-import fails loudly rather than silently reading @0@; the export guard

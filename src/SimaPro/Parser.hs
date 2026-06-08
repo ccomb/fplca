@@ -32,6 +32,7 @@ module SimaPro.Parser (
     decodeBS,
 ) where
 
+import Amount (readAmount)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
@@ -43,13 +44,12 @@ import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
 import Data.List (dropWhileEnd)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, isNothing, maybeToList)
+import Data.Maybe (catMaybes, isJust, isNothing, maybeToList)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
-import qualified Data.Text.Read as TR
 import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
@@ -791,9 +791,9 @@ extractLocation name =
 resolveAmount :: M.Map Text Double -> Text -> Double -> Double
 resolveAmount env raw fallback
     | T.null raw = fallback
-    | otherwise = case TR.double raw of
-        Right (v, rest) | T.null (T.strip rest) -> v
-        _ -> case Expr.evaluate env raw of
+    | otherwise = case readAmount raw of
+        Just v -> v
+        Nothing -> case Expr.evaluate env raw of
             Right v -> v
             Left _ -> fallback
 
@@ -915,9 +915,7 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
 
 -- | True when the raw allocation cell is a plain decimal literal (no formula).
 isNumericFormula :: Text -> Bool
-isNumericFormula t = case TR.double t of
-    Right (_, rest) -> T.null (T.strip rest)
-    Left _ -> False
+isNumericFormula = isJust . readAmount
 
 -- | Scale an exchange amount by a factor (for allocation)
 scaleExchange :: Double -> Exchange -> Exchange

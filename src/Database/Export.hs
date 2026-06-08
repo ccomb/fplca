@@ -32,25 +32,33 @@ import qualified ILCD.Writer as ILCD
 import qualified SimaPro.Writer as SP
 import Types (Database, toSimpleDatabase)
 
-{- | Serialize a database to a single byte stream in the requested format. Pure:
-the multi-file formats are zipped in-memory. Fails loudly for formats without a
-writer.
+{- | Serialize a database to a single byte stream in the requested format, paired
+with any best-effort approximation warnings. Pure: the multi-file formats are
+zipped in-memory. Fails loudly for formats without a writer.
+
+The warning list is empty for a faithful export and non-empty when a writer had
+to approximate. Currently only the Brightway writer approximates: it has no waste
+type, so it rewrites /orphan/ waste exchanges as technosphere flows
+(inventory-neutral, but the waste tag is lost on re-import) and reports the
+affected activities. Returning bytes and warnings together shares the one
+'toSimpleDatabase' conversion and keeps them from drifting apart.
 -}
-serializeDatabase :: DatabaseFormat -> Database -> Either Text BL.ByteString
+serializeDatabase :: DatabaseFormat -> Database -> Either Text (BL.ByteString, [Text])
 serializeDatabase fmt db = case fmt of
     -- Each writer runs its own check*Exportable and returns 'Left' on a database
     -- the format cannot represent faithfully, so the guard is unskippable.
-    SimaProCSV -> BL.fromStrict <$> SP.serializeSimaProCSV SP.defaultWriterConfig sdb
-    EcoSpold1 -> BL.fromStrict . TE.encodeUtf8 <$> ES1.writeDatabase ES1.canonicalWriterOptions db
-    EcoSpold2 -> zipText <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb
-    ILCDProcess -> ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb
-    BrightwayExcel -> BE.renderWorkbook BE.defaultWriterConfig sdb
+    SimaProCSV -> noWarn (BL.fromStrict <$> SP.serializeSimaProCSV SP.defaultWriterConfig sdb)
+    EcoSpold1 -> noWarn (BL.fromStrict . TE.encodeUtf8 <$> ES1.writeDatabase ES1.canonicalWriterOptions db)
+    EcoSpold2 -> noWarn (zipText <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb)
+    ILCDProcess -> noWarn (ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb)
+    BrightwayExcel -> (\bytes -> (bytes, BE.wasteManifest sdb)) <$> BE.renderWorkbook BE.defaultWriterConfig sdb
     OpenLcaJsonLd ->
         Left "openLCA JSON-LD export is not supported"
     UnknownFormat ->
         Left "cannot export to an unknown format"
   where
     sdb = toSimpleDatabase db
+    noWarn = fmap (\bytes -> (bytes, []))
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted
@@ -69,7 +77,7 @@ parseExportFormat raw = case T.toLower (T.strip raw) of
 exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text ())
 exportDatabase fmt db path = case serializeDatabase fmt db of
     Left err -> pure (Left err)
-    Right bytes -> either (Left . renderErr) Right <$> try (BL.writeFile path bytes)
+    Right (bytes, _warnings) -> either (Left . renderErr) Right <$> try (BL.writeFile path bytes)
   where
     renderErr :: SomeException -> Text
     renderErr e = "export failed: " <> T.pack (show e)

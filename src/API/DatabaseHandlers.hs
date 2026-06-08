@@ -287,8 +287,8 @@ exportDatabaseHandler dbName req = do
     fmt <- either (httpErr err400) pure (parseExportFormat (exrFormat req))
     mLoaded <- liftIO (getDatabase dbManager dbName)
     ld <- maybe (httpErr err404 ("Database not loaded: " <> dbName)) pure mLoaded
-    bytes <- either (httpErr err400) pure (serializeDatabase fmt (ldDatabase ld))
-    pure (ExportResponse (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))))
+    (bytes, warnings) <- either (httpErr err400) pure (serializeDatabase fmt (ldDatabase ld))
+    pure (ExportResponse (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))) warnings)
   where
     httpErr :: ServerError -> Text -> AppM a
     httpErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}

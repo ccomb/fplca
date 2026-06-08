@@ -55,6 +55,7 @@ module BrightwayExcel.Writer (
     writeBrightwayExcel,
     renderWorkbook,
     checkBrightwayExportable,
+    wasteManifest,
 
     -- * Exposed for testing
     Cell (..),
@@ -68,12 +69,12 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Read as TR
 
+import Amount (readAmount)
 import BrightwayExcel.Parser (isResourceCompartment)
 import EcoSpold.Common (showFFloatTrim)
 import Types
@@ -143,11 +144,13 @@ silently losing an amount-bearing exchange. This check rejects such a database a
 the export boundary instead, reporting the first offending activity and whether a
 flow or a unit is missing.
 
-Brightway also has no native waste exchange type. Emitting a 'WasteExchange' as
-@technosphere@ would discard its waste identity and, on re-parse, reconstruct the
-direction from the technosphere convention — turning an output waste into a
-positive technosphere input. Since that link cannot survive faithfully, a
-database carrying any waste exchange is rejected here too.
+Brightway also has no native waste exchange type. A 'WasteExchange' that links to
+a producer is emitted as @technosphere@ only at the cost of its sign: the matrix
+gives a waste /output/ a negative coefficient ('Database.MatrixBuild.techTriple'),
+but the re-parsed technosphere row is read back as a positive 'Input', inverting
+it. A /linked/ waste exchange is therefore rejected here. An /orphan/ waste
+exchange (no producer link) never enters the matrix, so 'exchangeRow' instead
+best-efforts it as technosphere and 'wasteManifest' reports it.
 
 A biosphere exchange's 'BioDirection' is likewise never written: the parser
 re-derives it from the @categories@ compartment, reading 'Resource' only when the
@@ -155,52 +158,90 @@ compartment matches 'isResourceCompartment'. A 'Resource' flow whose compartment
 is outside that whitelist would round-trip as an 'Emission' — a sign flip, since
 the two directions act as input vs output. Such a flow is rejected here too.
 
-An amount that does not re-parse to itself is rejected: a non-finite
-@NaN@/@Infinity@ (which the parser can propagate from an out-of-range literal),
-or a subnormal near @5e-324@ that 'formatAmount' collapses to @0@. Either would
-silently substitute a different value on re-import.
+An amount that does not re-parse to itself is rejected. The written decimal must
+re-parse through 'Amount.readAmount' (the importer's correctly-rounded reader);
+every finite amount does, so this rejects only the non-finite @NaN@/@Infinity@
+that would otherwise substitute a different value on re-import.
 
-Databases whose exchanges all resolve, carry no waste, keep every resource
+Databases whose exchanges all resolve, carry no linked waste, keep every resource
 direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
+
+{- | A waste exchange that resolves to a producer in the technosphere matrix.
+'Database.MatrixBuild.findProducer' locates a producer via the process link or a
+non-nil activity link, and 'techTriple' then emits a signed triple — with the
+negative sign of a waste /output/ ('exchangeIsInput' is 'False'). Re-imported, the
+technosphere row 'exchangeRow' writes is read back as a positive 'Input',
+inverting that sign. So a linked waste exchange cannot be best-efforted as
+technosphere; 'checkBrightwayExportable' rejects it.
+-}
+linkedWaste :: Exchange -> Bool
+linkedWaste ex =
+    isWasteExchange ex
+        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
+
+{- | A waste exchange with no producer link: matrix-invisible, so 'exchangeRow'
+rewrites it as a technosphere flow (best-effort) rather than rejecting it.
+-}
+orphanWaste :: Exchange -> Bool
+orphanWaste ex = isWasteExchange ex && not (linkedWaste ex)
+
+{- | Best-effort export note for a database with /orphan/ waste exchanges —
+end-of-life waste outputs that carry no producer link. Brightway has no waste
+type, so 'exchangeRow' writes each as a technosphere flow. Such an exchange never
+participates in the technosphere matrix ('Database.MatrixBuild.findProducer'
+returns 'Nothing'), so the rewrite is inventory-neutral; only the waste
+classification is lost on re-import. (A /linked/ waste exchange would invert its
+sign and is rejected by 'checkBrightwayExportable', so it never reaches here.)
+Report which activities are affected so the loss is never silent.
+-}
+wasteManifest :: SimpleDatabase -> [Text]
+wasteManifest db = case wasteActs of
+    [] -> []
+    _ -> [summary]
+  where
+    wasteActs = [activityName a | a <- M.elems (sdbActivities db), any orphanWaste (exchanges a)]
+    summary =
+        tshow (length wasteActs)
+            <> " activit"
+            <> (if length wasteActs == 1 then "y" else "ies")
+            <> " with end-of-life waste exchanges: Brightway has no waste type, so each"
+            <> " was written as a technosphere flow. These outputs carry no producer link,"
+            <> " so the inventory result is unchanged — only the waste classification is"
+            <> " lost on re-import: "
+            <> T.intercalate ", " (take 10 wasteActs)
+            <> (if length wasteActs > 10 then ", … and " <> tshow (length wasteActs - 10) <> " more" else "")
+
 checkBrightwayExportable :: SimpleDatabase -> Either Text ()
 checkBrightwayExportable db =
-    case (flowOffenders, unitOffenders, wasteOffenders, refInputOffenders, directionOffenders, roundTripOffenders) of
-        (consumer : _, _, _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": an exchange references a flow absent from the database."
-        ([], consumer : _, _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": an exchange references a unit absent from the registry."
-        ([], [], consumer : _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": it has a waste exchange, which Brightway has no type for."
-        ([], [], [], consumer : _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": a reference input (treatment process) has no Brightway encoding;"
-                    <> " it would round-trip to a duplicated, role-flipped exchange."
-        ([], [], [], [], consumer : _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": a resource biosphere flow's compartment would re-parse as an emission."
-        ([], [], [], [], [], (consumer, amt) : _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": exchange amount "
-                    <> tshow amt
-                    <> " does not re-parse to the same value (non-finite or near-underflow subnormal)."
-        ([], [], [], [], [], []) -> Right ()
+    case catMaybes
+        [ flowMsg <$> listToMaybe flowOffenders
+        , unitMsg <$> listToMaybe unitOffenders
+        , wasteMsg <$> listToMaybe wasteOffenders
+        , refInputMsg <$> listToMaybe refInputOffenders
+        , directionMsg <$> listToMaybe directionOffenders
+        , roundTripMsg <$> listToMaybe roundTripOffenders
+        ] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
+    cannot consumer = "Brightway Excel export cannot represent activity \"" <> consumer <> "\": "
+    flowMsg consumer = cannot consumer <> "an exchange references a flow absent from the database."
+    unitMsg consumer = cannot consumer <> "an exchange references a unit absent from the registry."
+    wasteMsg consumer =
+        cannot consumer
+            <> "a waste exchange links to a producer; Brightway has no waste type,"
+            <> " and rewriting it as a technosphere flow would invert its sign on re-import."
+    refInputMsg consumer =
+        cannot consumer
+            <> "a reference input (treatment process) has no Brightway encoding;"
+            <> " it would round-trip to a duplicated, role-flipped exchange."
+    directionMsg consumer = cannot consumer <> "a resource biosphere flow's compartment would re-parse as an emission."
+    roundTripMsg (consumer, amt) =
+        cannot consumer
+            <> "exchange amount "
+            <> tshow amt
+            <> " does not re-parse to the same value (a non-finite amount)."
     -- Names of activities with at least one exchange satisfying @p@. Only the
     -- first offender is ever reported, so one entry per activity (not per
     -- exchange) is equivalent — and lets every guard share one comprehension.
@@ -208,7 +249,7 @@ checkBrightwayExportable db =
         [activityName act | act <- M.elems (sdbActivities db), any p (exchanges act)]
     flowOffenders = activitiesWith (not . flowResolvable db)
     unitOffenders = activitiesWith (\ex -> M.notMember (exchangeUnitId ex) (sdbUnits db))
-    wasteOffenders = activitiesWith isWasteExchange
+    wasteOffenders = activitiesWith linkedWaste
     refInputOffenders = activitiesWith isReferenceInput
     directionOffenders = activitiesWith (resourceDirectionLost db)
     roundTripOffenders =
@@ -218,9 +259,7 @@ checkBrightwayExportable db =
         , let amt = exchangeAmount ex
         , not (amountRoundTrips amt)
         ]
-    amountRoundTrips amt = case TR.double (formatAmount amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+    amountRoundTrips amt = readAmount (formatAmount amt) == Just amt
 
 {- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
 resource: the writer never records the direction, so the parser reconstructs
@@ -403,11 +442,11 @@ exchangeRow cfg db = \case
     ex@WasteExchange{waAmount = amt, waLocation = loc} -> do
         name <- flowNameOf db ex
         unit <- unitNameOf (exchangeUnitId ex) db
-        -- Unreachable on any guarded path: 'checkBrightwayExportable' (run by
-        -- 'renderWorkbook' before serialization) rejects every database carrying a
-        -- waste exchange, precisely because re-parsing it as technosphere would
-        -- invert an output waste into a positive input. This branch only keeps
-        -- 'exchangeRow' total without a silent drop; it never reaches the workbook.
+        -- Best-effort: Brightway has no waste type. Only orphan waste reaches here
+        -- ('checkBrightwayExportable' rejects linked waste, which would sign-invert),
+        -- and an orphan waste exchange never enters the technosphere matrix, so
+        -- writing it as a technosphere flow is inventory-neutral; only the waste
+        -- classification is lost on re-import. 'wasteManifest' reports the activities.
         Just
             [ CText name
             , CNum amt
@@ -466,12 +505,10 @@ lookup' p = foldr (\x acc -> if p x then Just x else acc) Nothing
 
 {- | Canonical numeric rendering for amount cells. Integers print without a
 decimal point (@1@, not @1.0@); every other value uses the shared fixed-point
-'showFFloatTrim' (never scientific), so it re-parses through the parser's
-'Data.Text.Read.double' — unlike @show@, whose scientific notation re-reads
-lossily for small magnitudes (e.g. @show 3.3e-20@ → @3.2999999999999994e-20@).
-The near-underflow subnormal tail (≈@5e-324@) cannot survive fixed-point, and a
-non-finite value has no numeric-cell form; 'checkBrightwayExportable' rejects
-both, so the guarded path never emits one. A non-finite value still renders as
+'showFFloatTrim' (never scientific), the exact inverse of 'Amount.readAmount':
+every finite amount re-parses through that correctly-rounded reader. A
+non-finite value has no numeric-cell form; 'checkBrightwayExportable' rejects it,
+so the guarded path never emits one. A non-finite value still renders as
 its (non-parseable) @"NaN"@/@"Infinity"@ form so a stray re-import fails loudly
 rather than reading a misleading number.
 -}
