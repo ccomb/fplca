@@ -73,6 +73,7 @@ module EcoSpold.Writer1 (
 ) where
 
 import Amount (readAmount)
+import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -221,7 +222,9 @@ Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold1Exportable db =
-    checkLinks *> checkRefInputs *> checkWasteSentinel *> checkFlows *> checkUnits *> checkAmounts *> checkAmountRoundTrip
+    case lefts [checkLinks, checkRefInputs, checkWasteSentinel, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
     checkLinks =
         case danglingLinks of

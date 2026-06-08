@@ -59,6 +59,7 @@ module ILCD.Writer (
 import Codec.Archive.Zip (addEntryToArchive, emptyArchive, fromArchive, toEntry)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -163,7 +164,9 @@ unchanged.
 -}
 checkILCDExportable :: SimpleDatabase -> Either Text ()
 checkILCDExportable db =
-    checkMedia >> checkMultiOutput >> checkClassifications >> checkAmounts
+    case lefts [checkMedia, checkMultiOutput, checkClassifications, checkAmounts] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
     -- Media the parser's @extractMedium@ inverts back, after canonicalising
     -- aliases like "resource" → "natural resource".

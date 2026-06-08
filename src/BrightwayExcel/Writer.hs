@@ -68,7 +68,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -165,42 +165,31 @@ direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
 checkBrightwayExportable :: SimpleDatabase -> Either Text ()
 checkBrightwayExportable db =
-    case (flowOffenders, unitOffenders, wasteOffenders, refInputOffenders, directionOffenders, roundTripOffenders) of
-        (consumer : _, _, _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": an exchange references a flow absent from the database."
-        ([], consumer : _, _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": an exchange references a unit absent from the registry."
-        ([], [], consumer : _, _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": it has a waste exchange, which Brightway has no type for."
-        ([], [], [], consumer : _, _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": a reference input (treatment process) has no Brightway encoding;"
-                    <> " it would round-trip to a duplicated, role-flipped exchange."
-        ([], [], [], [], consumer : _, _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": a resource biosphere flow's compartment would re-parse as an emission."
-        ([], [], [], [], [], (consumer, amt) : _) ->
-            Left $
-                "Brightway Excel export cannot represent activity \""
-                    <> consumer
-                    <> "\": exchange amount "
-                    <> tshow amt
-                    <> " does not re-parse to the same value (a non-finite amount)."
-        ([], [], [], [], [], []) -> Right ()
+    case catMaybes
+        [ flowMsg <$> listToMaybe flowOffenders
+        , unitMsg <$> listToMaybe unitOffenders
+        , wasteMsg <$> listToMaybe wasteOffenders
+        , refInputMsg <$> listToMaybe refInputOffenders
+        , directionMsg <$> listToMaybe directionOffenders
+        , roundTripMsg <$> listToMaybe roundTripOffenders
+        ] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
+    cannot consumer = "Brightway Excel export cannot represent activity \"" <> consumer <> "\": "
+    flowMsg consumer = cannot consumer <> "an exchange references a flow absent from the database."
+    unitMsg consumer = cannot consumer <> "an exchange references a unit absent from the registry."
+    wasteMsg consumer = cannot consumer <> "it has a waste exchange, which Brightway has no type for."
+    refInputMsg consumer =
+        cannot consumer
+            <> "a reference input (treatment process) has no Brightway encoding;"
+            <> " it would round-trip to a duplicated, role-flipped exchange."
+    directionMsg consumer = cannot consumer <> "a resource biosphere flow's compartment would re-parse as an emission."
+    roundTripMsg (consumer, amt) =
+        cannot consumer
+            <> "exchange amount "
+            <> tshow amt
+            <> " does not re-parse to the same value (a non-finite amount)."
     -- Names of activities with at least one exchange satisfying @p@. Only the
     -- first offender is ever reported, so one entry per activity (not per
     -- exchange) is equivalent — and lets every guard share one comprehension.

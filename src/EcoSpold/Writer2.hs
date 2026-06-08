@@ -44,7 +44,7 @@ module EcoSpold.Writer2 (
 import Amount (readAmount)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -140,10 +140,12 @@ data. Databases free of it pass unchanged.
 -}
 checkEcoSpold2Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold2Exportable db =
-    maybe (Right ()) Left (listToMaybe (concat orderedViolations))
+    case mapMaybe listToMaybe orderedViolations of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
-    -- Categories in priority order; the first offending activity across all of
-    -- them is reported. Each inner list carries one message per offender.
+    -- Categories in priority order; the first offending activity of each is
+    -- reported. Each inner list carries one message per offender.
     orderedViolations =
         [ [nonFiniteMsg c a | (c, a) <- amountOffenders]
         , [refInputMsg c | c <- refInputOffenders]

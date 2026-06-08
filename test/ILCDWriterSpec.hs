@@ -385,6 +385,19 @@ spec = describe "ILCD.Writer round-trip" $ do
             map (fmap compartmentName . bfCompartment) (M.elems (sdbBioFlows db'))
                 `shouldBe` [Just "natural resource"]
 
+        it "reports every violation category in one message, not just the first" $ do
+            -- A flow with both a non-canonical medium and a non-finite amount trips
+            -- two independent checks; the collected report must carry both.
+            let db =
+                    oneActivityDb
+                        (M.singleton fEmitU (fEmission{bfCompartment = Just (Compartment "fresh water" Nothing)}))
+                        [BiosphereExchange fEmitU (1 / 0) fUnitU Emission "" Nothing Nothing, refProductEx]
+            case checkILCDExportable db of
+                Left msg -> do
+                    msg `shouldSatisfy` T.isInfixOf "fresh water"
+                    msg `shouldSatisfy` T.isInfixOf "non-finite"
+                Right () -> expectationFailure "expected violations"
+
         it "preserves the no-reference state on a reference-less activity" $ do
             checkILCDExportable noRefDb `shouldBe` Right ()
             db' <- roundTrip noRefDb

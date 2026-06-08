@@ -75,6 +75,7 @@ module SimaPro.Writer (
 ) where
 
 import qualified Data.ByteString as BS
+import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
@@ -147,14 +148,18 @@ Both are rejected here rather than emitted as a row the parser misreads.
 -}
 checkSimaProExportable :: SimpleDatabase -> Either Text ()
 checkSimaProExportable db =
-    checkReferences
-        *> checkMedia
-        *> checkAmounts
-        *> checkAllocation
-        *> checkUnits
-        *> checkNewlines
-        *> checkComments
-        *> checkMetaKeys
+    case lefts
+        [ checkReferences
+        , checkMedia
+        , checkAmounts
+        , checkAllocation
+        , checkUnits
+        , checkNewlines
+        , checkComments
+        , checkMetaKeys
+        ] of
+        [] -> Right ()
+        violations -> Left (T.intercalate "\n\n" violations)
   where
     checkReferences =
         case referenceOffenders of
