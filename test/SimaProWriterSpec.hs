@@ -25,7 +25,7 @@ Three properties are pinned:
 module SimaProWriterSpec (spec) where
 
 import qualified Data.ByteString as BS
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -448,6 +448,13 @@ spec = describe "SimaPro.Writer round-trip" $ do
                 activityAllocationPercent a `shouldBe` Just 50
             other -> expectationFailure ("expected one activity, got " <> show (length other))
 
+    it "(regression) serializes a 0%-allocated activity without a divide-by-zero" $ do
+        -- The parser scaled the 0%-allocated co-product's shared amounts to 0; the
+        -- writer emits those zeros as-is rather than dividing by zero, so nothing
+        -- non-finite leaks into the file.
+        bytes <- serBytes zeroAllocationDb
+        ("NaN" `BS.isInfixOf` bytes || "Infinity" `BS.isInfixOf` bytes) `shouldBe` False
+
     it "(regression) round-trips a Final waste flows section" $ do
         original <- parseBytes wasteCSV
         f0 <- serBytes (toSimple original)
@@ -523,10 +530,17 @@ spec = describe "SimaPro.Writer round-trip" $ do
             checkSimaProExportable (guardDb Nothing Nothing [refProd, bioInf])
                 `shouldSatisfy` isLeft
 
-        it "rejects a zero allocation percentage" $
-            -- The writer divides shared amounts by allocFraction; a 0 would make
-            -- that division non-finite and lose the amounts on re-import.
+        it "accepts a zero allocation percentage" $
+            -- A 0% co-product carries 0% of the shared burden; the parser already
+            -- scaled its shared amounts to 0, so the writer emits those zeros as-is
+            -- (no divide-by-zero) and the round-trip is faithful.
             checkSimaProExportable (guardDb (Just 0) Nothing [refProd])
+                `shouldSatisfy` isRight
+
+        it "rejects a non-finite allocation percentage" $
+            -- A non-finite percentage cannot be written as a number and would
+            -- corrupt the divide-back-out, so it is rejected.
+            checkSimaProExportable (guardDb (Just (1 / 0)) Nothing [refProd])
                 `shouldSatisfy` isLeft
 
         it "rejects an exchange whose unit is absent from the registry" $
@@ -624,6 +638,46 @@ allocationDb =
             M.empty
             M.empty
             (Just 50)
+            Nothing
+            Nothing
+
+{- | A 0%-allocated activity: its shared material input is stored at 0 (the parser
+scaled every shared amount by allocFraction = 0 on import). A correct writer emits
+that 0 as-is — no divide-by-zero — so the re-import scales 0 by 0 back to 0.
+-}
+zeroAllocationDb :: SimpleDatabase
+zeroAllocationDb =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows =
+            M.fromList
+                [ (prodU, TechnosphereFlow prodU "main product" unitU M.empty Nothing Nothing)
+                , (matU, TechnosphereFlow matU "some material" unitU M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, matU, unitU :: UUID
+    actU = testUUID 0x21
+    prodU = testUUID 0xb2
+    matU = testUUID 0xb3
+    unitU = testUUID 0x02
+    act =
+        Activity
+            "zero alloc maker"
+            []
+            M.empty
+            M.empty
+            "GLO"
+            "kg"
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            (Just 0)
             Nothing
             Nothing
 

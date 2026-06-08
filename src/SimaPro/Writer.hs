@@ -207,9 +207,9 @@ checkSimaProExportable db =
                         <> name
                         <> "\": allocation percentage "
                         <> T.pack (show pct)
-                        <> " is not a usable positive number — the writer divides the"
-                        <> " allocation-scaled amounts back out, so 0 (or non-finite)"
-                        <> " would lose them on re-import."
+                        <> " is not finite — the writer divides the allocation-scaled"
+                        <> " amounts back out, so a non-finite percentage would lose"
+                        <> " them on re-import."
     checkUnits =
         case unitOffenders of
             [] -> Right ()
@@ -273,7 +273,7 @@ checkSimaProExportable db =
         [ (activityName act, pct)
         | act <- M.elems (sdbActivities db)
         , let pct = fromMaybe 100 (activityAllocationPercent act)
-        , isNaN pct || isInfinite pct || pct == 0
+        , isNaN pct || isInfinite pct
         ]
     unitOffenders =
         [ (activityName act, exchangeUnitId ex)
@@ -647,11 +647,14 @@ serializeActivity cats act@Activity{..} =
         -- back out so the re-import lands on the stored amounts again (emitting
         -- them as-is would let the parser scale a second time). The reference
         -- product is never scaled, so it passes through untouched.
-        -- 'checkSimaProExportable' rejects a zero/non-finite allocation, so the
-        -- division is finite for any export-validated database.
+        -- A 0% allocation is the degenerate case: the parser scaled every shared
+        -- amount to 0, so there is nothing to divide back out — emit the stored
+        -- zeros as-is and the re-import scales 0 by 0 again. 'checkSimaProExportable'
+        -- still rejects a non-finite allocation, so the division below is finite.
         allocFraction = fromMaybe 100 activityAllocationPercent / 100
         unscale ex
             | exchangeIsReference ex = ex
+            | allocFraction == 0 = ex
             | otherwise = scaleExchangeAmount (1 / allocFraction) ex
         unscaledExchanges = map unscale exchanges
 
