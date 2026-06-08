@@ -72,8 +72,8 @@ import Data.Maybe (mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Read as TR
 
+import Amount (readAmount)
 import BrightwayExcel.Parser (isResourceCompartment)
 import EcoSpold.Common (showFFloatTrim)
 import Types
@@ -155,10 +155,10 @@ compartment matches 'isResourceCompartment'. A 'Resource' flow whose compartment
 is outside that whitelist would round-trip as an 'Emission' — a sign flip, since
 the two directions act as input vs output. Such a flow is rejected here too.
 
-An amount that does not re-parse to itself is rejected: a non-finite
-@NaN@/@Infinity@ (which the parser can propagate from an out-of-range literal),
-or a subnormal near @5e-324@ that 'formatAmount' collapses to @0@. Either would
-silently substitute a different value on re-import.
+An amount that does not re-parse to itself is rejected. The written decimal must
+re-parse through 'Amount.readAmount' (the importer's correctly-rounded reader);
+every finite amount does, so this rejects only the non-finite @NaN@/@Infinity@
+that would otherwise substitute a different value on re-import.
 
 Databases whose exchanges all resolve, carry no waste, keep every resource
 direction recoverable, and whose amounts all re-parse pass unchanged.
@@ -198,7 +198,7 @@ checkBrightwayExportable db =
                     <> consumer
                     <> "\": exchange amount "
                     <> tshow amt
-                    <> " does not re-parse to the same value (non-finite or near-underflow subnormal)."
+                    <> " does not re-parse to the same value (a non-finite amount)."
         ([], [], [], [], [], []) -> Right ()
   where
     -- Names of activities with at least one exchange satisfying @p@. Only the
@@ -218,9 +218,7 @@ checkBrightwayExportable db =
         , let amt = exchangeAmount ex
         , not (amountRoundTrips amt)
         ]
-    amountRoundTrips amt = case TR.double (formatAmount amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+    amountRoundTrips amt = readAmount (formatAmount amt) == Just amt
 
 {- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
 resource: the writer never records the direction, so the parser reconstructs
@@ -466,12 +464,10 @@ lookup' p = foldr (\x acc -> if p x then Just x else acc) Nothing
 
 {- | Canonical numeric rendering for amount cells. Integers print without a
 decimal point (@1@, not @1.0@); every other value uses the shared fixed-point
-'showFFloatTrim' (never scientific), so it re-parses through the parser's
-'Data.Text.Read.double' — unlike @show@, whose scientific notation re-reads
-lossily for small magnitudes (e.g. @show 3.3e-20@ → @3.2999999999999994e-20@).
-The near-underflow subnormal tail (≈@5e-324@) cannot survive fixed-point, and a
-non-finite value has no numeric-cell form; 'checkBrightwayExportable' rejects
-both, so the guarded path never emits one. A non-finite value still renders as
+'showFFloatTrim' (never scientific), the exact inverse of 'Amount.readAmount':
+every finite amount re-parses through that correctly-rounded reader. A
+non-finite value has no numeric-cell form; 'checkBrightwayExportable' rejects it,
+so the guarded path never emits one. A non-finite value still renders as
 its (non-parseable) @"NaN"@/@"Infinity"@ form so a stray re-import fails loudly
 rather than reading a misleading number.
 -}

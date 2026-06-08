@@ -25,7 +25,7 @@ module ILCDWriterSpec (spec) where
 
 import Codec.Archive.Zip (ZipOption (OptDestination), extractFilesFromArchive, toArchive)
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (isPrefixOf, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -395,10 +395,11 @@ spec = describe "ILCD.Writer round-trip" $ do
             checkILCDExportable (nonFiniteDb (1 / 0)) `shouldSatisfy` isLeft
             checkILCDExportable (nonFiniteDb (0 / 0)) `shouldSatisfy` isLeft
 
-        it "rejects a subnormal amount that fixed-point cannot round-trip" $
-            -- 5e-324 (smallest positive subnormal) re-parses to 0 through
-            -- fixed-point, an undetectable LCIA shift; reject it at the boundary.
-            checkILCDExportable (nonFiniteDb 5.0e-324) `shouldSatisfy` isLeft
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $
+            -- 5e-324 (smallest positive subnormal) re-parses exactly through
+            -- Amount.readAmount (Data.Text.Read.double used to lose it to 0), so it
+            -- is faithfully representable; the guard must not reject it.
+            checkILCDExportable (nonFiniteDb 5.0e-324) `shouldSatisfy` isRight
 
 isPrefixOfFp :: String -> FilePath -> Bool
 isPrefixOfFp = isPrefixOf

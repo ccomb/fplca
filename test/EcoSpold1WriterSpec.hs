@@ -16,7 +16,7 @@
 module EcoSpold1WriterSpec (spec) where
 
 import qualified Data.ByteString.Char8 as BC
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe)
@@ -512,17 +512,17 @@ spec = do
                     concatMap (exchangeViews sdb') (M.elems (sdbActivities sdb'))
                         `shouldSatisfy` any ((== 3.3e-20) . evAmount)
 
-    describe "non-round-tripping amounts" $
-        it "rejects a subnormal amount that re-parses to zero rather than undercounting" $ do
-            -- 5e-324 is finite but its fixed-point form carries too few
-            -- significant digits for Data.Text.Read.double to recover, so it
-            -- would silently export as 0; the guard rejects it instead.
+    describe "subnormal amounts" $
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $ do
+            -- 5e-324 is finite and re-parses exactly through Amount.readAmount
+            -- (Data.Text.Read.double used to lose it to 0), so it is faithfully
+            -- representable and the guard must not reject it.
             let prodU = read "aaaa0000-0000-4000-8000-000000000001" :: UUID
                 bioU = read "aaaa0000-0000-4000-8000-0000000000c0" :: UUID
                 bioEx = BiosphereExchange bioU 5e-324 kgUnit Emission "" Nothing Nothing
                 bios = M.singleton bioU (BiosphereFlow bioU "trace" kgUnit M.empty Nothing Nothing Nothing)
                 sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
-            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isRight
 
     describe "waste-marker collision" $
         it "rejects a biosphere flow whose compartment is the waste-routing category" $ do

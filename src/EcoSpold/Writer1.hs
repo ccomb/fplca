@@ -72,11 +72,11 @@ module EcoSpold.Writer1 (
     formatAmount,
 ) where
 
+import Amount (readAmount)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import Database.Loader (generateActivityUUIDFromActivity)
 import EcoSpold.Common (showFFloatTrim)
@@ -206,11 +206,10 @@ emit silently wrong data:
 
   * __Non-finite amounts.__ @NaN@/@Infinity@ have no parseable literal.
 
-  * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
-    re-parse to the same 'Double' through 'Data.Text.Read.double' (the parser's
-    reader) — e.g. a subnormal near the floating-point floor — would silently
-    export as a different value. Real LCA amounts never reach this range, but
-    the guard rejects it rather than undercount.
+  * __Non-round-tripping amounts.__ A defensive check that the written decimal
+    re-parses to the same 'Double' through 'Amount.readAmount' (the importer's
+    correctly-rounded reader). Every finite amount round-trips, so this guards
+    the formatter↔reader contract against future drift.
 
 Databases free of all of these pass unchanged.
 -}
@@ -288,8 +287,7 @@ checkEcoSpold1Exportable db =
                         <> consumer
                         <> "\": exchange amount "
                         <> T.pack (show amt)
-                        <> " has no decimal form that re-parses to the same value"
-                        <> " (e.g. a subnormal near the floating-point floor)."
+                        <> " has no decimal form that re-parses to the same value."
     index = supplierNumberIndex (orderedActivities (M.elems (sdbActivities db)))
     danglingLinks =
         [ (activityName act, link)
@@ -313,11 +311,10 @@ checkEcoSpold1Exportable db =
         , not (isNaN amt || isInfinite amt) -- non-finite already reported by checkAmounts
         , not (amountRoundTrips amt)
         ]
-    -- The written decimal must re-parse to the same Double through the parser's
-    -- reader ('Data.Text.Read.double'), or the value silently changes on import.
-    amountRoundTrips amt = case TR.double (formatAmount amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+    -- The written decimal must re-parse to the same Double through the importer's
+    -- correctly-rounded reader ('Amount.readAmount'), or the value would change
+    -- on re-import.
+    amountRoundTrips amt = readAmount (formatAmount amt) == Just amt
     refInputOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -573,12 +570,10 @@ escapeXmlAttr =
         . T.replace "&" "&amp;"
 
 {- | Deterministic textual form for a @meanValue@. Uses the shared
-'showFFloatTrim' (fixed-point, never scientific) so the value round-trips
-through the parser's 'Data.Text.Read.double' for the magnitudes real LCA
-amounts occupy — unlike @show@, which emits scientific notation that re-reads
-lossily. The near-underflow subnormal tail is the exception;
-'checkEcoSpold1Exportable' rejects any amount that does not re-parse, so the
-guarded path never emits a value that changes on import.
+'showFFloatTrim' (fixed-point, never scientific), the exact inverse of
+'Amount.readAmount': every finite amount round-trips through that
+correctly-rounded reader. 'checkEcoSpold1Exportable' rejects any amount that does
+not re-parse, which now leaves only the non-finite.
 
 A non-finite value renders as its (non-parseable) @"NaN"@/@"Infinity"@ form so
 a bad re-import fails loudly rather than silently reading @0@; the export guard

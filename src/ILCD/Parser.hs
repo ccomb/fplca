@@ -15,6 +15,7 @@ module ILCD.Parser (
     fixActivityExchanges,
 ) where
 
+import Amount (readAmount)
 import Control.Applicative ((<|>))
 import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async (mapConcurrently)
@@ -494,7 +495,7 @@ parseProcessXML bytes =
     cdata = txt
     accum s = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum s)
 
-    parseDouble t = case TR.double t of Right (v, _) -> v; Left _ -> 0
+    parseDouble t = Data.Maybe.fromMaybe 0 (readAmount t)
 
     buildProcess s = do
         uuid <- UUID.fromText (psUUID s)

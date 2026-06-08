@@ -41,13 +41,13 @@ module EcoSpold.Writer2 (
     sortExchanges,
 ) where
 
+import Amount (readAmount)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import EcoSpold.Common (showFFloatTrim)
 import Types
@@ -107,11 +107,11 @@ writeEcoSpold2 meta sdb = do
 {- | Guard an EcoSpold2 export against data the writer cannot faithfully
 re-encode.
 
-  * __Non-finite amounts.__ 'doubleAttr' clamps @NaN@/@Infinity@ to a parseable
-    @0.0@; a database carrying such an amount would silently export as zero. The
-    reader parses amounts with 'Data.Text.Read.double', which yields @Infinity@
-    for an overflowing literal like @1e400@, so this is reachable from a parsed
-    source — not only from in-memory construction.
+  * __Non-finite amounts.__ 'doubleAttr' renders @NaN@/@Infinity@ as their
+    non-parseable literal forms; the guard rejects such an amount rather than
+    emit one. 'Amount.readAmount' also refuses non-finite and overflowing
+    literals (e.g. @1e400@) on import, so an in-memory non-finite can only arise
+    from programmatic construction.
 
   * __Reference inputs.__ A treatment activity's 'ReferenceInput' is written as
     @inputGroup 5@, but no ES2 inputGroup re-parses to 'ReferenceInput' (the
@@ -130,10 +130,10 @@ re-encode.
     /no compartment/ — a silent identity and compartment downgrade. Symmetric to
     the unit case: reject rather than corrupt.
 
-  * __Non-round-tripping amounts.__ A finite amount whose decimal form does not
-    re-parse to the same 'Double' through 'Data.Text.Read.double' — e.g. a
-    subnormal near the floating-point floor — would silently export as a
-    different value. Reject rather than undercount.
+  * __Non-round-tripping amounts.__ A defensive check that the written decimal
+    re-parses to the same 'Double' through 'Amount.readAmount' (the importer's
+    correctly-rounded reader). Every finite amount round-trips, so this guards
+    the formatter↔reader contract against future drift.
 
 Reports the first offender and fails loudly rather than emit silently wrong
 data. Databases free of it pass unchanged.
@@ -166,11 +166,10 @@ checkEcoSpold2Exportable db =
         , not (isNaN amt || isInfinite amt) -- non-finite already reported above
         , not (amountRoundTrips amt)
         ]
-    -- The written decimal must re-parse to the same Double through the parser's
-    -- reader ('Data.Text.Read.double'), or the value silently changes on import.
-    amountRoundTrips amt = case TR.double (doubleAttr amt) of
-        Right (v, rest) -> v == amt && T.null rest
-        Left _ -> False
+    -- The written decimal must re-parse to the same Double through the importer's
+    -- correctly-rounded reader ('Amount.readAmount'), or the value would change
+    -- on re-import.
+    amountRoundTrips amt = readAmount (doubleAttr amt) == Just amt
     refInputOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
@@ -209,8 +208,7 @@ checkEcoSpold2Exportable db =
         cannotRepresent c
             <> "exchange amount "
             <> T.pack (show a)
-            <> " has no decimal form that re-parses to the same value"
-            <> " (e.g. a subnormal near the floating-point floor)."
+            <> " has no decimal form that re-parses to the same value."
 
 -- | Canonical filename for an activity: @{actUUID}_{prodUUID}.spold@.
 activityFileName :: UUID.UUID -> UUID.UUID -> FilePath
@@ -568,11 +566,11 @@ intText :: Int -> Text
 intText = T.pack . show
 
 {- | Canonical 'Double' rendering for amounts via the shared 'showFFloatTrim'
-(fixed-point, never scientific), so the value round-trips through the parser's
-'Data.Text.Read.double' for the magnitudes real LCA amounts occupy. The
-near-underflow subnormal tail is the exception; 'checkEcoSpold2Exportable'
-rejects any amount that does not re-parse, so the guarded path never emits one.
-A non-finite value renders as its (non-parseable) @"NaN"@/@"Infinity"@ form so a
+(fixed-point, never scientific), the exact inverse of 'Amount.readAmount': every
+finite amount round-trips through that correctly-rounded reader.
+'checkEcoSpold2Exportable' rejects any amount that does not re-parse, which now
+leaves only the non-finite. A non-finite value renders as its (non-parseable)
+@"NaN"@/@"Infinity"@ form so a
 bad re-import fails loudly rather than silently reading @0@; the guard rejects
 non-finite amounts before they reach here.
 -}

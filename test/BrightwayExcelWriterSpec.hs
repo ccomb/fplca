@@ -35,7 +35,7 @@ import BrightwayExcel.Writer (
     renderWorkbook,
  )
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
@@ -204,10 +204,11 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- A non-finite amount has no numeric-cell form that re-parses; the
             -- guard rejects the database instead of emitting a misleading value.
             checkBrightwayExportable nonFiniteDb `shouldSatisfy` isLeft
-        it "rejects a subnormal amount that fixed-point cannot round-trip" $
-            -- 5e-324 (smallest positive subnormal) collapses to 0 through
-            -- fixed-point, an undetectable shift; reject it at the boundary.
-            checkBrightwayExportable subnormalDb `shouldSatisfy` isLeft
+        it "accepts a subnormal amount, which round-trips through the correctly-rounded reader" $
+            -- 5e-324 (smallest positive subnormal) re-parses exactly through
+            -- Amount.readAmount (Data.Text.Read.double used to lose it to 0), so it
+            -- is faithfully representable; the guard must not reject it.
+            checkBrightwayExportable subnormalDb `shouldSatisfy` isRight
 
     describe "ReferenceInput regression" $
         it "rejects a reference input rather than round-tripping it to a duplicated row" $ do
