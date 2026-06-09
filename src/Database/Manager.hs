@@ -21,6 +21,10 @@ module Database.Manager (
     DependencyStatus (..),
     MethodCollectionStatus (..),
     RefDataStatus (..),
+    DirectoryFormat (..),
+
+    -- * Format detection
+    detectDirectoryFormat,
 
     -- * Re-exports
     DepLoadResult (..),
@@ -209,7 +213,7 @@ import qualified UnitConversion
 import API.Types (DepLoadResult (..))
 import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
-import Database.Upload (DatabaseFormat (..), findMethodDirectory)
+import Database.Upload (DatabaseFormat (..), findMethodDirectory, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.FlowResolver (ILCDFlowInfo)
@@ -1198,12 +1202,19 @@ detectDirectoryFormat path = do
                     if hasProcesses
                         then return FormatILCD
                         else do
-                            files <- listDirectory path
-                            let extensions = map (map toLower . takeExtension) files
-                            -- Check for different formats (in order of preference)
-                            if ".spold" `elem` extensions
+                            -- EcoSpold packages keep their datasets in a
+                            -- subdirectory (e.g. ecoinvent's datasets/*.spold),
+                            -- so probe for .spold recursively. Otherwise a
+                            -- sibling FilenameToActivityLookup.csv at the package
+                            -- root masks them and the database misdetects as
+                            -- SimaPro CSV, silently loading zero activities.
+                            hasSpold <- containsExtensionDeep ".spold" path
+                            if hasSpold
                                 then return FormatSpold
-                                else
+                                else do
+                                    files <- listDirectory path
+                                    let extensions = map (map toLower . takeExtension) files
+                                    -- Check for remaining formats (in order of preference)
                                     if ".csv" `elem` extensions
                                         then return FormatCSV
                                         else
@@ -1211,6 +1222,15 @@ detectDirectoryFormat path = do
                                                 then return FormatXML
                                                 else return FormatUnknown
                 else return FormatUnknown
+
+{- | Recursively test whether the directory tree rooted at @path@ contains at
+least one file with the given (lowercased) extension. Lets dataset files in a
+subdirectory drive format detection even when an unrelated file sits at the
+package root (e.g. ecoinvent's datasets/*.spold beside a root CSV).
+-}
+containsExtensionDeep :: String -> FilePath -> IO Bool
+containsExtensionDeep ext =
+    fmap (any ((== ext) . map toLower . takeExtension)) . listDirectoryRecursive
 
 -- | Find CSV files in a directory
 findCSVFiles :: FilePath -> IO [FilePath]

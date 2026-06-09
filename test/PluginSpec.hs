@@ -4,6 +4,9 @@ module PluginSpec (spec) where
 
 import qualified Data.Map.Strict as M
 import Data.UUID (nil)
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Method.Types (FlowDirection (..), MethodCF (..))
@@ -144,6 +147,20 @@ spec = do
             results <- searchWithPlugins [s1, s2] db query
             length results `shouldBe` 1 -- Deduplicated by UUID
             srScore (head results) `shouldBe` 0.9 -- Higher score kept
+    describe "Import handle detection" $ do
+        it "ecospold2 handle reads packages whose .spold datasets sit in a subdirectory" $
+            -- Native ecoinvent layout: datasets/*.spold below the package root.
+            withSystemTempDirectory "ecospold2-canread" $ \dir -> do
+                createDirectoryIfMissing True (dir </> "datasets")
+                writeFile (dir </> "datasets" </> "a_b.spold") "<x/>"
+                ihCanRead ecospold2Importer dir `shouldReturn` True
+
+        it "ecospold1 handle stays top-level and ignores .xml under subdirectories" $
+            -- EcoSpold1 detection must not descend into MasterData/ metadata XML.
+            withSystemTempDirectory "ecospold1-canread" $ \dir -> do
+                createDirectoryIfMissing True (dir </> "MasterData")
+                writeFile (dir </> "MasterData" </> "units.xml") "<x/>"
+                ihCanRead ecospold1Importer dir `shouldReturn` False
 
 -- Re-export validation functions from Service for testing
 runPreComputeValidation :: [ValidateHandle] -> Database -> IO [ValidationIssue]

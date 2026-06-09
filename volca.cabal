@@ -208,6 +208,7 @@ test-suite lca-tests
   main-is:             Spec.hs
   other-modules:       TestHelpers
                      , GoldenData
+                     , DetectFormatSpec
                      , AmountSpec
                      , AutoRelinkSpec
                      , RelinkMappingSpec

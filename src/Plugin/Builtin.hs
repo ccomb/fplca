@@ -55,6 +55,7 @@ import Plugin.Types
 import Data.Char (toLower)
 import Data.List (sortOn)
 import Data.Maybe (fromMaybe)
+import Database.Upload (listDirectoryRecursive)
 import Matrix (Inventory)
 import qualified Matrix.Export as MatrixExport
 import Method.Mapping (MatchStrategy)
@@ -197,7 +198,7 @@ ecospold2Importer =
     ImportHandle
         { ihName = "ecospold2"
         , ihBackend = Builtin
-        , ihCanRead = hasFilesWithExt ".spold"
+        , ihCanRead = hasFilesWithExtDeep ".spold"
         , ihRead = \_ _ -> pure $ Left "Use Database.Manager for full loading with caching"
         }
 
@@ -232,19 +233,32 @@ ilcdImporter =
         , ihRead = \_ _ -> pure $ Left "Use Database.Manager for full loading with caching"
         }
 
--- | Check if path contains files with a given extension
-hasFilesWithExt :: String -> FilePath -> IO Bool
-hasFilesWithExt ext path = do
+{- | Check if @path@ is, or (for a directory) contains, a file with the given
+extension. The directory walk is parameterised so callers pick the depth:
+'hasFilesWithExt' stays top-level, 'hasFilesWithExtDeep' recurses.
+-}
+hasFilesWithExtBy :: (FilePath -> IO [FilePath]) -> String -> FilePath -> IO Bool
+hasFilesWithExtBy listFiles ext path = do
     isFile <- doesFileExist path
     if isFile
-        then pure $ map toLower (takeExtension path) == ext
+        then pure (matches path)
         else do
             isDir <- doesDirectoryExist path
             if isDir
-                then do
-                    files <- listDirectory path
-                    pure $ any (\f -> map toLower (takeExtension f) == ext) files
+                then any matches <$> listFiles path
                 else pure False
+  where
+    matches f = map toLower (takeExtension f) == ext
+
+-- | Top-level extension probe — .xml/.csv detection stays shallow, matching the loader.
+hasFilesWithExt :: String -> FilePath -> IO Bool
+hasFilesWithExt = hasFilesWithExtBy listDirectory
+
+{- | Recursive extension probe — EcoSpold2 datasets may sit in a subdirectory
+below the package root (e.g. ecoinvent's datasets/*.spold).
+-}
+hasFilesWithExtDeep :: String -> FilePath -> IO Bool
+hasFilesWithExtDeep = hasFilesWithExtBy listDirectoryRecursive
 
 -- ──────────────────────────────────────────────
 -- Search handles (wrap Database search functions)
