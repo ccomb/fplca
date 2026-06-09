@@ -13,17 +13,18 @@ import API.JsonOptions (Stripped (..))
 import Control.Lens ((&), (.~), (?~))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import qualified Data.Map as M
-import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), declareSchemaRef, enum_, format, nullable, properties, required, type_)
+import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), binarySchema, declareSchemaRef, enum_, format, nullable, properties, required, type_)
 import qualified Data.OpenApi.Lens as OA
 import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
-import Servant.API.ContentTypes (MimeRender (..), OctetStream)
+import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
 import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
@@ -748,15 +749,6 @@ data LoadDatabaseResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped LoadDatabaseResponse)
 
--- | Request for database upload (base64-encoded ZIP)
-data UploadRequest = UploadRequest
-    { urName :: Text -- Display name for the database
-    , urDescription :: Maybe Text -- Optional description
-    , urFileData :: Text -- Base64-encoded ZIP file content
-    }
-    deriving (Generic)
-    deriving (ToJSON, FromJSON, ToSchema) via (Stripped UploadRequest)
-
 {- | One classification filter in a delete request: the @system@ to match, the
 @value@ to look for, and whether the match is exact (else token-contains).
 Mirrors the search endpoint's classification query parameters so the deleted
@@ -1351,3 +1343,17 @@ newtype BinaryContent = BinaryContent BSL.ByteString
 
 instance MimeRender OctetStream BinaryContent where
     mimeRender _ (BinaryContent bs) = bs
+
+{- | One raw chunk of a streamed octet-stream upload request body.
+
+A newtype around strict 'BS.ByteString' for two reasons: openapi3 refuses a
+'ToSchema' for a bare 'ByteString' (we give it a binary schema here), and the
+'StreamBody' decoder needs a 'MimeUnrender' target for the chunk type.
+-}
+newtype UploadChunk = UploadChunk {unUploadChunk :: BS.ByteString}
+
+instance MimeUnrender OctetStream UploadChunk where
+    mimeUnrender _ = Right . UploadChunk . BSL.toStrict
+
+instance ToSchema UploadChunk where
+    declareNamedSchema _ = pure $ NamedSchema (Just "UploadChunk") binarySchema

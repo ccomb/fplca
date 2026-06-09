@@ -16,6 +16,7 @@ import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseMaybe, withArray, withObject)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
@@ -37,11 +38,13 @@ import Network.HTTP.Client (
     parseRequest,
     responseBody,
     responseStatus,
+    setQueryString,
  )
 import Network.HTTP.Types.Status (statusCode)
 import Progress (reportError)
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
+import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
 
 -- | Configuration for connecting to a remote VoLCA server
 data RemoteConfig = RemoteConfig
@@ -319,16 +322,49 @@ buildQuery params =
 
 -- | Execute an upload command (database or method collection)
 executeUpload :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -> UploadArgs -> IO ()
-executeUpload mgr rc fmt jp path args = do
-    fileData <- BL.readFile (uaFile args)
-    let encoded = T.decodeLatin1 $ B64.encode (BL.toStrict fileData)
-        body =
-            object
-                [ "urName" .= uaName args
-                , "urDescription" .= uaDescription args
-                , "urFileData" .= encoded
-                ]
-    apiPost mgr rc path body >>= output fmt jp
+executeUpload mgr rc fmt jp path args = apiUploadFile mgr rc path args >>= output fmt jp
+
+{- | Stream a file to an upload endpoint as a raw octet-stream body, carrying the
+display name and optional description as query parameters. The body is streamed
+from disk in constant memory (no base64, no whole-file buffering).
+-}
+apiUploadFile :: Manager -> RemoteConfig -> String -> UploadArgs -> IO (Either String Value)
+apiUploadFile mgr rc path args = do
+    body <- fileRequestBody (uaFile args)
+    let url = rcBaseUrl rc ++ path
+        query =
+            ("name", Just (T.encodeUtf8 (uaName args)))
+                : [("description", Just (T.encodeUtf8 d)) | Just d <- [uaDescription args]]
+    result <- try $ do
+        req0 <- parseRequest url
+        let req1 =
+                setQueryString query $
+                    req0
+                        { Network.HTTP.Client.method = "POST"
+                        , requestHeaders =
+                            authHeaders ++ [("Content-Type", "application/octet-stream")] ++ requestHeaders req0
+                        , requestBody = body
+                        }
+        httpLbs req1 mgr
+    case result of
+        Left e -> return $ Left (formatHttpError (rcBaseUrl rc) e)
+        Right resp ->
+            let status = statusCode (responseStatus resp)
+                respBody = responseBody resp
+             in if status >= 200 && status < 300
+                    then return $ Right $ fromMaybe (object []) (decode respBody)
+                    else return $ Left $ formatApiError status respBody
+  where
+    authHeaders = case rcAuth rc of
+        Just pwd -> [("Authorization", "Bearer " <> C8.pack pwd)]
+        Nothing -> []
+
+-- | Build a constant-memory streaming request body from a file on disk.
+fileRequestBody :: FilePath -> IO RequestBody
+fileRequestBody fp = do
+    size <- withBinaryFile fp ReadMode hFileSize
+    return $ RequestBodyStream (fromIntegral size) $ \needsPopper ->
+        withBinaryFile fp ReadMode $ \h -> needsPopper (BS.hGetSome h 65536)
 
 {- | Output a response whose body carries an in-band @{"success",..,"message"}@
 status (the handlers return HTTP 200 even on failure, so a bare 'output' would

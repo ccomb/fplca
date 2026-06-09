@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), ExportResponse (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadRequest (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), ExportResponse (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -128,8 +128,8 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "delete" :> ReqBody '[JSON] DeleteSelectionRequest :> Post '[JSON] DeleteSelectionResponse
                 -- Export a loaded database to a serialized (base64) file in the requested format
                 :<|> "db" :> Capture "dbName" Text :> "export" :> ReqBody '[JSON] ExportRequest :> Post '[JSON] ExportResponse
-                -- Upload endpoint (base64-encoded ZIP in JSON body)
-                :<|> "db" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                -- Upload endpoint (streamed octet-stream body; metadata in query params)
+                :<|> "db" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
                 -- Database setup endpoints (for cross-DB linking configuration)
                 :<|> "db" :> Capture "dbName" Text :> "setup" :> Get '[JSON] DatabaseSetupInfo
                 :<|> "db" :> Capture "dbName" Text :> "add-dependency" :> Capture "depName" Text :> Post '[JSON] DatabaseSetupInfo
@@ -141,25 +141,25 @@ type LCAAPI =
                 :<|> "method-collections" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
                 :<|> "method-collections" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "method-collections" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
-                :<|> "method-collections" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "method-collections" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
                 -- Reference data endpoints (flow synonyms, compartment mappings, units)
                 :<|> "flow-synonyms" :> Get '[JSON] RefDataListResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
-                :<|> "flow-synonyms" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "flow-synonyms" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> "groups" :> Get '[JSON] SynonymGroupsResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> "download" :> Get '[OctetStream] (Headers '[Header "Content-Disposition" Text] BinaryContent)
                 :<|> "compartment-mappings" :> Get '[JSON] RefDataListResponse
                 :<|> "compartment-mappings" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
                 :<|> "compartment-mappings" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "compartment-mappings" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
-                :<|> "compartment-mappings" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "compartment-mappings" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
                 :<|> "units" :> Get '[JSON] RefDataListResponse
                 :<|> "units" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
                 :<|> "units" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "units" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
-                :<|> "units" :> "upload" :> ReqBody '[JSON] UploadRequest :> Post '[JSON] UploadResponse
+                :<|> "units" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
                 -- Log endpoint
                 :<|> "logs" :> QueryParam "since" Int :> Get '[JSON] Value
                 -- Auth endpoint (login)
