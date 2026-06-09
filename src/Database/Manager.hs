@@ -21,6 +21,10 @@ module Database.Manager (
     DependencyStatus (..),
     MethodCollectionStatus (..),
     RefDataStatus (..),
+    DirectoryFormat (..),
+
+    -- * Format detection
+    detectDirectoryFormat,
 
     -- * Re-exports
     DepLoadResult (..),
@@ -1198,12 +1202,19 @@ detectDirectoryFormat path = do
                     if hasProcesses
                         then return FormatILCD
                         else do
-                            files <- listDirectory path
-                            let extensions = map (map toLower . takeExtension) files
-                            -- Check for different formats (in order of preference)
-                            if ".spold" `elem` extensions
+                            -- EcoSpold packages keep their datasets in a
+                            -- subdirectory (e.g. ecoinvent's datasets/*.spold),
+                            -- so probe for .spold recursively. Otherwise a
+                            -- sibling FilenameToActivityLookup.csv at the package
+                            -- root masks them and the database misdetects as
+                            -- SimaPro CSV, silently loading zero activities.
+                            hasSpold <- containsExtensionDeep ".spold" path
+                            if hasSpold
                                 then return FormatSpold
-                                else
+                                else do
+                                    files <- listDirectory path
+                                    let extensions = map (map toLower . takeExtension) files
+                                    -- Check for remaining formats (in order of preference)
                                     if ".csv" `elem` extensions
                                         then return FormatCSV
                                         else
@@ -1211,6 +1222,23 @@ detectDirectoryFormat path = do
                                                 then return FormatXML
                                                 else return FormatUnknown
                 else return FormatUnknown
+
+{- | Recursively test whether the directory tree rooted at @path@ contains at
+least one file with the given (lowercased) extension, stopping at the first hit.
+Lets dataset files in a subdirectory drive format detection even when an
+unrelated file sits at the package root.
+-}
+containsExtensionDeep :: String -> FilePath -> IO Bool
+containsExtensionDeep ext = go
+  where
+    go dir = listDirectory dir >>= anyM probe . map (dir </>)
+    probe p =
+        doesDirectoryExist p >>= \isDir ->
+            if isDir
+                then go p
+                else pure (map toLower (takeExtension p) == ext)
+    anyM _ [] = pure False
+    anyM f (x : xs) = f x >>= \b -> if b then pure True else anyM f xs
 
 -- | Find CSV files in a directory
 findCSVFiles :: FilePath -> IO [FilePath]

@@ -34,6 +34,7 @@ module Database.Loader (
     loadDatabase,
     loadDatabaseWithLocationAliases,
     loadDatabaseWithCrossDBLinking,
+    findFilesByExtRecursive,
 
     -- * Cache Operations
     loadCachedDatabaseWithMatrices,
@@ -671,13 +672,31 @@ fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
 fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
 
+{- | Recursively collect files under @dir@ whose lowercased extension matches
+@ext@. Lets an EcoSpold package load from its root even when the .spold datasets
+sit in a subdirectory (e.g. ecoinvent's datasets/).
+-}
+findFilesByExtRecursive :: String -> FilePath -> IO [FilePath]
+findFilesByExtRecursive ext = go
+  where
+    go d = do
+        entries <- listDirectory d
+        fmap concat $ forM entries $ \e -> do
+            let p = d </> e
+            isDir <- doesDirectoryExist p
+            if isDir
+                then go p
+                else pure [p | map toLower (takeExtension p) == ext]
+
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadEcoSpoldDirectory locationAliases dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
-    -- Support both EcoSpold2 (.spold) and EcoSpold1 (.XML/.xml) files
-    let spold2Files = [dir </> f | f <- files, takeExtension f == ".spold"]
+    -- .spold datasets may live in a subdirectory (e.g. ecoinvent's datasets/),
+    -- so find them recursively. .xml (EcoSpold1) stays top-level to avoid
+    -- sweeping up MasterData/metadata XML that sits beside the datasets.
+    spold2Files <- findFilesByExtRecursive ".spold" dir
     let spold1Files = [dir </> f | f <- files, map toLower (takeExtension f) == ".xml"]
 
     -- Determine which format to use based on what's found

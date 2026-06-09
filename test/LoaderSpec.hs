@@ -7,6 +7,9 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Database.Loader
@@ -107,6 +110,20 @@ simpleDBOf acts flows =
 
 spec :: Spec
 spec = do
+    -- -----------------------------------------------------------------------
+    -- findFilesByExtRecursive
+    -- -----------------------------------------------------------------------
+    describe "findFilesByExtRecursive" $ do
+        it "finds .spold datasets in a subdirectory beside a root CSV" $
+            -- Native ecoinvent layout: datasets/*.spold plus a top-level
+            -- FilenameToActivityLookup.csv. The package must load from its root.
+            withSystemTempDirectory "ecospold-load" $ \dir -> do
+                createDirectoryIfMissing True (dir </> "datasets")
+                writeFile (dir </> "datasets" </> "a_b.spold") "<x/>"
+                writeFile (dir </> "FilenameToActivityLookup.csv") "Filename;ActivityName\n"
+                found <- findFilesByExtRecursive ".spold" dir
+                found `shouldBe` [dir </> "datasets" </> "a_b.spold"]
+
     -- -----------------------------------------------------------------------
     -- normalizeText
     -- -----------------------------------------------------------------------
