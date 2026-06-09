@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -45,12 +46,13 @@ module API.DatabaseHandlers (
     convertDbStatus,
     simpleAction,
     formatToText,
-    checkUploadSize,
+    uploadSizeCap,
     uploadBodyCeiling,
+    streamToTempFile,
 ) where
 
 import Control.Exception (SomeException, try)
-import Control.Monad (mfilter)
+import Control.Monad (mfilter, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
@@ -62,9 +64,11 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Data.Word (Word64)
-import Servant (Header, Headers, ServerError, addHeader, err400, err404, err500, errBody, throwError)
+import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err404, err500, errBody, throwError)
+import qualified Servant.Types.SourceT as S
 import qualified System.Directory
 import System.FilePath ((</>))
+import System.IO (hClose, openBinaryTempFile)
 
 -- Flow synonyms
 
@@ -88,7 +92,7 @@ import API.Types (
     RelinkRequest (..),
     RelinkResponse (..),
     SynonymGroupsResponse (..),
-    UploadRequest (..),
+    UploadChunk (..),
     UploadResponse (..),
  )
 import App.Env (AppEnv (..), AppM)
@@ -293,37 +297,31 @@ exportDatabaseHandler dbName req = do
     httpErr :: ServerError -> Text -> AppM a
     httpErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
 
-{- | Enforce the hosting upload-size policy on a decoded payload.
+{- | Resolve the hosting upload-size policy into a streaming byte cap.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0
 disables uploads; a negative limit is unlimited; a positive limit caps the
-size in megabytes. Returns the failure message to surface, or () to proceed.
+size in megabytes. 'Left' rejects the upload outright (disabled plan); 'Right
+Nothing' means no cap; 'Right (Just n)' caps the streamed body at n bytes.
 -}
-checkUploadSize :: Maybe HostingConfig -> Int -> Either Text ()
-checkUploadSize Nothing _ = Right ()
-checkUploadSize (Just hc) sizeBytes =
+uploadSizeCap :: Maybe HostingConfig -> Either Text (Maybe Int)
+uploadSizeCap Nothing = Right Nothing
+uploadSizeCap (Just hc) =
     case hcMaxUploadMb hc of
         0 -> Left "Uploads are disabled on this plan."
         limitMb
-            | limitMb < 0 -> Right ()
-            | sizeBytes > limitMb * 1024 * 1024 ->
-                Left $
-                    "File too large ("
-                        <> T.pack (show (sizeBytes `div` (1024 * 1024)))
-                        <> " MB). The upload limit on this plan is "
-                        <> T.pack (show limitMb)
-                        <> " MB."
-            | otherwise -> Right ()
+            | limitMb < 0 -> Right Nothing
+            | otherwise -> Right (Just (limitMb * 1024 * 1024))
 
 {- | The WAI-level request-body ceiling (in bytes) for a request path, or
-'Nothing' for no limit. This is the outer, pre-buffering backstop for
-'checkUploadSize': only the database and method upload routes are bounded, and
-only when the hosting config sets a positive cap. base64 inflates the payload by
-~4/3 and the JSON envelope adds a little more, so we admit 2x the policy limit at
-the HTTP layer — files between the real limit and that ceiling still reach the
-handler, which returns the precise 'checkUploadSize' error. Unlimited (-1),
-disabled (0), and local/CLI (no config) are left unbounded here: neither
-unlimited nor disabled is a size bound, and the handler still rejects disabled
-uploads.
+'Nothing' for no limit. This is the outer, hard backstop for the in-handler
+streaming size check ('withStreamedUpload'): only the database and method upload
+routes are bounded, and only when the hosting config sets a positive cap. The
+body is now a raw octet-stream (no base64 inflation, no JSON envelope), so we
+admit the policy limit plus 1 MiB of slack — files between the real limit and
+that ceiling still reach the handler, which streams and returns the precise
+rejection. Unlimited (-1), disabled (0), and local/CLI (no config) are left
+unbounded here: neither unlimited nor disabled is a size bound, and the handler
+still rejects disabled uploads.
 -}
 uploadBodyCeiling :: Maybe HostingConfig -> [Text] -> Maybe Word64
 uploadBodyCeiling hostingConfig path
@@ -331,7 +329,7 @@ uploadBodyCeiling hostingConfig path
     | otherwise = case hostingConfig of
         Nothing -> Nothing
         Just hc
-            | hcMaxUploadMb hc > 0 -> Just (fromIntegral (hcMaxUploadMb hc) * 2 * 1024 * 1024)
+            | hcMaxUploadMb hc > 0 -> Just ((fromIntegral (hcMaxUploadMb hc) + 1) * 1024 * 1024)
             | otherwise -> Nothing
 
 {- | The upload routes governed by the size policy. These mirror the @db/upload@
@@ -345,30 +343,79 @@ isPolicyUploadPath path =
                , ["api", "v1", "method-collections", "upload"]
                ]
 
-{- | Decode the base64 upload payload and enforce the hosting size policy,
-then hand the raw bytes to the continuation. Shared by the database and
-method upload handlers so both gate on one rule.
+{- | Stream an octet-stream upload body to a temp file, enforcing the hosting
+size policy as the bytes arrive, then hand @(name, description, file bytes)@ to
+the continuation. Shared by the database and method upload handlers so both
+gate on one rule and never buffer the whole payload in memory. The name is
+required (it travels as the @?name=@ query parameter).
 -}
-withUploadBytes :: UploadRequest -> (BS.ByteString -> AppM UploadResponse) -> AppM UploadResponse
-withUploadBytes req k =
-    case B64.decode (T.encodeUtf8 (urFileData req)) of
-        Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
-        Right zipBytes -> do
+withStreamedUpload ::
+    Maybe Text ->
+    Maybe Text ->
+    SourceIO UploadChunk ->
+    (Text -> Maybe Text -> BSL.ByteString -> AppM UploadResponse) ->
+    AppM UploadResponse
+withStreamedUpload mName mDesc src k =
+    case mfilter (not . T.null) (T.strip <$> mName) of
+        Nothing -> return (rejectUpload "Missing upload name. Pass it as the ?name= query parameter.")
+        Just name -> do
             hostingConfig <- asks aeHostingConfig
-            case checkUploadSize hostingConfig (BS.length zipBytes) of
-                Left rejection -> return $ UploadResponse False rejection Nothing Nothing
-                Right () -> k zipBytes
+            case uploadSizeCap hostingConfig of
+                Left rejection -> return (rejectUpload rejection)
+                Right mCap -> do
+                    streamed <- liftIO (streamToTempFile mCap src)
+                    case streamed of
+                        Left rejection -> return (rejectUpload rejection)
+                        Right tmpPath -> do
+                            bytes <- liftIO (BSL.readFile tmpPath)
+                            resp <- k name mDesc bytes
+                            liftIO (void (try (System.Directory.removeFile tmpPath) :: IO (Either SomeException ())))
+                            return resp
+  where
+    rejectUpload msg = UploadResponse False msg Nothing Nothing
 
--- | Upload a new database
-uploadDatabaseHandler :: UploadRequest -> AppM UploadResponse
-uploadDatabaseHandler req =
-    withUploadBytes req $ \zipBytes -> do
+{- | Fold a streamed octet-stream body into a fresh temp file, aborting with a
+'Left' rejection if the running byte count exceeds the cap. Returns the temp
+file path on success (the caller deletes it). Bytes are written chunk-by-chunk
+and never held whole in memory.
+-}
+streamToTempFile :: Maybe Int -> SourceIO UploadChunk -> IO (Either Text FilePath)
+streamToTempFile mCap src = do
+    tmpDir <- System.Directory.getTemporaryDirectory
+    (tmpPath, h) <- openBinaryTempFile tmpDir "volca-upload-.bin"
+    result <- try (S.unSourceT src (go h 0)) :: IO (Either SomeException (Either Text ()))
+    hClose h
+    case result of
+        Left e -> removeQuietly tmpPath >> return (Left ("Upload stream error: " <> T.pack (show e)))
+        Right (Left msg) -> removeQuietly tmpPath >> return (Left msg)
+        Right (Right ()) -> return (Right tmpPath)
+  where
+    removeQuietly p = void (try (System.Directory.removeFile p) :: IO (Either SomeException ()))
+    tooLarge cap =
+        "File too large. The upload limit on this plan is "
+            <> T.pack (show (cap `div` (1024 * 1024)))
+            <> " MB."
+    go h !n step = case step of
+        S.Stop -> return (Right ())
+        S.Error e -> return (Left ("Upload stream error: " <> T.pack e))
+        S.Skip s -> go h n s
+        S.Effect ms -> ms >>= go h n
+        S.Yield chunk s ->
+            let !n' = n + BS.length (unUploadChunk chunk)
+             in case mCap of
+                    Just cap | n' > cap -> return (Left (tooLarge cap))
+                    _ -> BS.hPut h (unUploadChunk chunk) >> go h n' s
+
+-- | Upload a new database (streamed octet-stream body; metadata in query params)
+uploadDatabaseHandler :: Maybe Text -> Maybe Text -> SourceIO UploadChunk -> AppM UploadResponse
+uploadDatabaseHandler mName mDesc src =
+    withStreamedUpload mName mDesc src $ \name mDescription zipBytes -> do
         dbManager <- asks aeDbManager
         let uploadData =
                 UploadData
-                    { udName = urName req
-                    , udDescription = urDescription req
-                    , udZipData = BSL.fromStrict zipBytes
+                    { udName = name
+                    , udDescription = mDescription
+                    , udZipData = zipBytes
                     }
         -- Handle the upload (extract, detect format)
         uploadsDir <- liftIO UploadedDB.getDatabaseUploadsDir
@@ -384,8 +431,8 @@ uploadDatabaseHandler req =
                 let meta =
                         UploadedDB.UploadMeta
                             { UploadedDB.umVersion = 1
-                            , UploadedDB.umDisplayName = urName req
-                            , UploadedDB.umDescription = urDescription req
+                            , UploadedDB.umDisplayName = name
+                            , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                             }
@@ -395,9 +442,9 @@ uploadDatabaseHandler req =
                 let dbConfig =
                         DatabaseConfig
                             { dcName = urSlug uploadResult
-                            , dcDisplayName = urName req
+                            , dcDisplayName = name
                             , dcPath = urPath uploadResult
-                            , dcDescription = urDescription req
+                            , dcDescription = mDescription
                             , dcLoad = False -- Don't auto-load
                             , dcDefault = False
                             , dcDepends = []
@@ -550,15 +597,15 @@ finalizeDatabaseHandler dbName = do
 {- | Upload a new method collection
 Same flow as database upload but creates MethodConfig entry
 -}
-uploadMethodHandler :: UploadRequest -> AppM UploadResponse
-uploadMethodHandler req =
-    withUploadBytes req $ \zipBytes -> do
+uploadMethodHandler :: Maybe Text -> Maybe Text -> SourceIO UploadChunk -> AppM UploadResponse
+uploadMethodHandler mName mDesc src =
+    withStreamedUpload mName mDesc src $ \name mDescription zipBytes -> do
         dbManager <- asks aeDbManager
         let uploadData =
                 UploadData
-                    { udName = urName req
-                    , udDescription = urDescription req
-                    , udZipData = BSL.fromStrict zipBytes
+                    { udName = name
+                    , udDescription = mDescription
+                    , udZipData = zipBytes
                     }
         uploadsDir <- liftIO UploadedDB.getMethodUploadsDir
         result <- liftIO $ handleUpload uploadsDir uploadData (\_ -> return ())
@@ -575,8 +622,8 @@ uploadMethodHandler req =
                 let meta =
                         UploadedDB.UploadMeta
                             { UploadedDB.umVersion = 1
-                            , UploadedDB.umDisplayName = urName req
-                            , UploadedDB.umDescription = urDescription req
+                            , UploadedDB.umDisplayName = name
+                            , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = urFormat uploadResult
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
                             }
@@ -585,11 +632,11 @@ uploadMethodHandler req =
                 -- Create MethodConfig and add to manager
                 let mc =
                         MethodConfig
-                            { mcName = urName req
+                            { mcName = name
                             , mcPath = methodDir
                             , mcActive = False
                             , mcIsUploaded = True
-                            , mcDescription = urDescription req
+                            , mcDescription = mDescription
                             , mcFormat = Just $ formatToText $ urFormat uploadResult
                             , mcScoringSets = []
                             }
@@ -689,42 +736,39 @@ deleteRefData kind name = do
     let (_, _, _, _, removeFn, _) = rdOps kind
     simpleAction (removeFn dbManager name) ("Deleted: " <> name)
 
-uploadRefData :: RefDataKind -> UploadRequest -> AppM UploadResponse
-uploadRefData kind req = do
-    dbManager <- asks aeDbManager
-    let (_, _, _, addFn, _, subdir) = rdOps kind
-    let csvDataResult = B64.decode $ T.encodeUtf8 $ urFileData req
-    case csvDataResult of
-        Left err -> return $ UploadResponse False ("Invalid base64 data: " <> T.pack err) Nothing Nothing
-        Right csvBytes -> do
-            baseDir <- liftIO UploadedDB.getDataDir
-            let slug = T.toLower $ T.intercalate "-" $ T.words $ urName req
-                uploadDir = baseDir </> "uploads" </> T.unpack subdir </> T.unpack slug
-                csvPath = uploadDir </> "data.csv"
-            liftIO $ do
-                System.Directory.createDirectoryIfMissing True uploadDir
-                BSL.writeFile csvPath (BSL.fromStrict csvBytes)
-                let metaContent =
-                        T.intercalate
-                            "\n"
-                            [ "[meta]"
-                            , "version = 1"
-                            , "displayName = " <> quote (urName req)
-                            , maybe "" (\d -> "description = " <> quote d) (urDescription req)
-                            , ""
-                            ]
-                T.writeFile (uploadDir </> "meta.toml") metaContent
-            let rd =
-                    RefDataConfig
-                        { rdName = urName req
-                        , rdPath = csvPath
-                        , rdActive = False
-                        , rdIsUploaded = True
-                        , rdIsAuto = False
-                        , rdDescription = urDescription req
-                        }
-            liftIO $ addFn dbManager rd
-            return $ UploadResponse True "Uploaded successfully" (Just slug) Nothing
+uploadRefData :: RefDataKind -> Maybe Text -> Maybe Text -> SourceIO UploadChunk -> AppM UploadResponse
+uploadRefData kind mName mDesc src =
+    withStreamedUpload mName mDesc src $ \name mDescription csvBytes -> do
+        dbManager <- asks aeDbManager
+        let (_, _, _, addFn, _, subdir) = rdOps kind
+        baseDir <- liftIO UploadedDB.getDataDir
+        let slug = T.toLower $ T.intercalate "-" $ T.words name
+            uploadDir = baseDir </> "uploads" </> T.unpack subdir </> T.unpack slug
+            csvPath = uploadDir </> "data.csv"
+        liftIO $ do
+            System.Directory.createDirectoryIfMissing True uploadDir
+            BSL.writeFile csvPath csvBytes
+            let metaContent =
+                    T.intercalate
+                        "\n"
+                        [ "[meta]"
+                        , "version = 1"
+                        , "displayName = " <> quote name
+                        , maybe "" (\d -> "description = " <> quote d) mDescription
+                        , ""
+                        ]
+            T.writeFile (uploadDir </> "meta.toml") metaContent
+        let rd =
+                RefDataConfig
+                    { rdName = name
+                    , rdPath = csvPath
+                    , rdActive = False
+                    , rdIsUploaded = True
+                    , rdIsAuto = False
+                    , rdDescription = mDescription
+                    }
+        liftIO $ addFn dbManager rd
+        return $ UploadResponse True "Uploaded successfully" (Just slug) Nothing
   where
     quote t = "\"" <> T.replace "\"" "\\\"" t <> "\""
 

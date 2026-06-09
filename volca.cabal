@@ -309,6 +309,7 @@ test-suite lca-tests
                      , warp
                      , wai
                      , servant-server
+                     , servant
                      , network-uri
                      , base64-bytestring
                      , optparse-applicative
