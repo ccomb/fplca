@@ -29,6 +29,7 @@ spec = describe "findWasteTreatmentAcrossDatabases" $ do
                 , seLocation = "RoW"
                 , seUnit = "kg"
                 , seProductName = nm
+                , seRefSign = 1.0
                 }
 
         idbWith :: Text -> [(UUID.UUID, SupplierEntry)] -> [(Text, SupplierEntry)] -> IndexedDatabase
