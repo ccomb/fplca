@@ -11,6 +11,7 @@ module App.Env (
 ) where
 
 import qualified Config
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 import Control.Monad.Except (MonadError)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Reader (MonadReader, ReaderT (..))
@@ -27,7 +28,7 @@ data AppEnv = AppEnv
     }
 
 newtype AppM a = AppM {unAppM :: ReaderT AppEnv Handler a}
-    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader AppEnv, MonadError ServerError)
+    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader AppEnv, MonadError ServerError, MonadThrow, MonadCatch, MonadMask)
 
 runApp :: AppEnv -> AppM a -> Handler a
 runApp env (AppM m) = runReaderT m env

@@ -53,6 +53,7 @@ module API.DatabaseHandlers (
 
 import Control.Exception (SomeException, try)
 import Control.Monad (mfilter, void)
+import Control.Monad.Catch (finally)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64 as B64
@@ -366,11 +367,12 @@ withStreamedUpload mName mDesc src k =
                     streamed <- liftIO (streamToTempFile mCap src)
                     case streamed of
                         Left rejection -> return (rejectUpload rejection)
-                        Right tmpPath -> do
-                            bytes <- liftIO (BSL.readFile tmpPath)
-                            resp <- k name mDesc bytes
-                            liftIO (void (try (System.Directory.removeFile tmpPath) :: IO (Either SomeException ())))
-                            return resp
+                        Right tmpPath ->
+                            -- The read is lazy, so an uncapped (local/desktop) upload is never
+                            -- buffered whole; 'finally' guarantees the temp file is deleted even
+                            -- if the extract/detect continuation throws.
+                            (liftIO (BSL.readFile tmpPath) >>= k name mDesc)
+                                `finally` liftIO (removeQuietly tmpPath)
   where
     rejectUpload msg = UploadResponse False msg Nothing Nothing
 
@@ -390,7 +392,6 @@ streamToTempFile mCap src = do
         Right (Left msg) -> removeQuietly tmpPath >> return (Left msg)
         Right (Right ()) -> return (Right tmpPath)
   where
-    removeQuietly p = void (try (System.Directory.removeFile p) :: IO (Either SomeException ()))
     tooLarge cap =
         "File too large. The upload limit on this plan is "
             <> T.pack (show (cap `div` (1024 * 1024)))
@@ -405,6 +406,10 @@ streamToTempFile mCap src = do
              in case mCap of
                     Just cap | n' > cap -> return (Left (tooLarge cap))
                     _ -> BS.hPut h (unUploadChunk chunk) >> go h n' s
+
+-- | Delete a file, swallowing any error — best-effort temp-file cleanup.
+removeQuietly :: FilePath -> IO ()
+removeQuietly p = void (try (System.Directory.removeFile p) :: IO (Either SomeException ()))
 
 -- | Upload a new database (streamed octet-stream body; metadata in query params)
 uploadDatabaseHandler :: Maybe Text -> Maybe Text -> SourceIO UploadChunk -> AppM UploadResponse
