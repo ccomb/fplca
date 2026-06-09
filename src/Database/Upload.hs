@@ -23,6 +23,9 @@ module Database.Upload (
     countDataFilesIn,
     anyDataFilesIn,
 
+    -- * Filesystem helpers
+    listDirectoryRecursive,
+
     -- * Method directory detection
     findMethodDirectory,
     findAllMethodDirectories,

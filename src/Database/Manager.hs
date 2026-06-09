@@ -213,7 +213,7 @@ import qualified UnitConversion
 import API.Types (DepLoadResult (..))
 import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
-import Database.Upload (DatabaseFormat (..), findMethodDirectory)
+import Database.Upload (DatabaseFormat (..), findMethodDirectory, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.FlowResolver (ILCDFlowInfo)
@@ -1224,21 +1224,13 @@ detectDirectoryFormat path = do
                 else return FormatUnknown
 
 {- | Recursively test whether the directory tree rooted at @path@ contains at
-least one file with the given (lowercased) extension, stopping at the first hit.
-Lets dataset files in a subdirectory drive format detection even when an
-unrelated file sits at the package root.
+least one file with the given (lowercased) extension. Lets dataset files in a
+subdirectory drive format detection even when an unrelated file sits at the
+package root (e.g. ecoinvent's datasets/*.spold beside a root CSV).
 -}
 containsExtensionDeep :: String -> FilePath -> IO Bool
-containsExtensionDeep ext = go
-  where
-    go dir = listDirectory dir >>= anyM probe . map (dir </>)
-    probe p =
-        doesDirectoryExist p >>= \isDir ->
-            if isDir
-                then go p
-                else pure (map toLower (takeExtension p) == ext)
-    anyM _ [] = pure False
-    anyM f (x : xs) = f x >>= \b -> if b then pure True else anyM f xs
+containsExtensionDeep ext =
+    fmap (any ((== ext) . map toLower . takeExtension)) . listDirectoryRecursive
 
 -- | Find CSV files in a directory
 findCSVFiles :: FilePath -> IO [FilePath]

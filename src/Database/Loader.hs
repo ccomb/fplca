@@ -118,6 +118,7 @@ import Database.CrossLinking (
     normalizeUnicode,
  )
 import Database.MatrixBuild (findProducer)
+import Database.Upload (listDirectoryRecursive)
 import EcoSpold.Common (distributeFiles)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDatasetsFromFile1)
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
@@ -677,16 +678,8 @@ fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
 sit in a subdirectory (e.g. ecoinvent's datasets/).
 -}
 findFilesByExtRecursive :: String -> FilePath -> IO [FilePath]
-findFilesByExtRecursive ext = go
-  where
-    go d = do
-        entries <- listDirectory d
-        fmap concat $ forM entries $ \e -> do
-            let p = d </> e
-            isDir <- doesDirectoryExist p
-            if isDir
-                then go p
-                else pure [p | map toLower (takeExtension p) == ext]
+findFilesByExtRecursive ext =
+    fmap (filter ((== ext) . map toLower . takeExtension)) . listDirectoryRecursive
 
 -- | Load EcoSpold files from directory
 loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
