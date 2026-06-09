@@ -211,6 +211,7 @@ test-suite lca-tests
                      , AutoRelinkSpec
                      , RelinkMappingSpec
                      , MatrixConstructionSpec
+                     , WasteTreatmentSignSpec
                      , InventorySpec
                      , MatrixExportSpec
                      , MethodSpec

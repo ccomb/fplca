@@ -89,6 +89,7 @@ import Types (
     SimpleDatabase (..),
     TechnosphereFlow (..),
     WasteFlow (..),
+    activityNormFactor,
     exchangeFlowId,
     exchangeIsReference,
     exchangeLocation,
@@ -130,6 +131,14 @@ data SupplierEntry = SupplierEntry
     , seLocation :: !Text
     , seUnit :: !Text
     , seProductName :: !Text -- Product name for display/debugging
+    , seRefSign :: !Double
+    {- ^ Sign of the supplier's reference production: @+1@ for a normal product
+    output, @-1@ for a negative-output waste treatment (the EcoSpold2
+    convention; ILCD treatments keep @+1@ via their positive 'ReferenceInput').
+    A cross-DB waste link multiplies its coefficient by this so the dependency
+    solve drives the treatment in its waste-removing direction regardless of
+    which reference convention the supplier database uses.
+    -}
     }
 
 -- | Context for cross-database linking (with pre-built indexes)
@@ -384,7 +393,7 @@ lives in `sdbTechFlows`.
 -}
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow) 1.0)
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
@@ -399,7 +408,7 @@ product). One tuple per (waste flow UUID, waste flow name, entry).
 -}
 buildWasteTreatmentEntries :: SimpleDatabase -> [(UUID, Text, SupplierEntry)]
 buildWasteTreatmentEntries db =
-    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow))
+    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow) (signum (activityNormFactor act (actUUID, prodUUID))))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
@@ -447,7 +456,7 @@ buildIndexedDatabaseFromDB dbName synDB db =
 -}
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow))
+    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow) 1.0)
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
@@ -477,7 +486,7 @@ supplierLocations act ex =
 -- | Treatment-activity entries from a full Database. Mirrors 'buildWasteTreatmentEntries'.
 buildWasteTreatmentEntriesFromDB :: Database -> [(UUID, Text, SupplierEntry)]
 buildWasteTreatmentEntriesFromDB db =
-    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow))
+    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow) (signum (activityNormFactor act (actUUID, prodUUID))))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act

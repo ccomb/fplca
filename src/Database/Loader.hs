@@ -1626,21 +1626,31 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsWasteFlows = wasteFlowDb} consum
         let flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
          in case findWasteTreatmentAcrossDatabases ctx fid flowName of
                 WasteMatched entry dbN ->
-                    let !crossLink =
+                    let
+                        -- The dep-demand solve drives the matched treatment in
+                        -- its OWN reference convention: an EcoSpold2 treatment
+                        -- has a negative-output reference ('seRefSign' = -1),
+                        -- an ILCD one a positive 'ReferenceInput' (+1). The
+                        -- consumer's waste-output amount is positive, so we
+                        -- carry the treatment's sign into the coefficient —
+                        -- without it a negative-reference background treatment
+                        -- scores the treated waste's burden with a flipped sign.
+                        !crossLink =
                             CrossDBLink
                                 { cdlConsumerActUUID = consumerActUUID
                                 , cdlConsumerProdUUID = consumerProdUUID
                                 , cdlConsumerFlowId = fid
                                 , cdlSupplierActUUID = seActivityUUID entry
                                 , cdlSupplierProdUUID = seProductUUID entry
-                                , cdlCoefficient = amt
+                                , cdlCoefficient = amt * seRefSign entry
                                 , cdlExchangeUnit = seUnit entry
                                 , cdlFlowName = seProductName entry
                                 , cdlLocation = seLocation entry
                                 , cdlSourceDatabase = dbN
                                 , cdlTiedAlternatives = []
                                 }
-                     in mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
+                     in
+                        mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
                 WasteAmbiguous _ -> mempty{cdlWasteAmbiguous = 1}
                 WasteNoMatch -> mempty{cdlCutoffWasteCount = 1}
     | otherwise = mempty
