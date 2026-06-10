@@ -1649,39 +1649,15 @@ scoreBatched unitCfg unitDB flowDB bt inventory
 -- Post-scoring suggester
 -- ──────────────────────────────────────────────
 
-{- | Top-level CF lookup helper used by the suggester. Same cascade as the
-per-function @lookupCF@ helpers inlined elsewhere in this module, but
-exposed so 'findUncharacterized' can ask whether a flow has any CF at all.
+{- | Top-level CF lookup helper used by the suggester. Delegates to
+'lookupCascadeCF' (with the caller's already-resolved flow as a singleton
+DB) so the suggester sees exactly what scoring sees — including the CAS
+bridge — and 'findUncharacterized' never flags a flow the score path
+characterizes. Cold path; the singleton allocation is irrelevant here.
 -}
 lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe (Double, Text)
-lookupCFForFlow tables fid mFlow = case M.lookup fid (mtUuidCF tables) of
-    Just cfv -> Just cfv
-    Nothing -> case mFlow of
-        Nothing -> Nothing
-        Just flow ->
-            let name = normalizeName (bfName flow)
-                rawCategory = T.toLower (VT.bfCompartmentName flow)
-                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                    (m, rest)
-                        | T.null rest -> (m, T.empty)
-                        | otherwise -> (m, T.drop 1 rest)
-                rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
-                     in if T.null s then rawSubFromCat else s
-                Compartment normMedRaw normSub _ =
-                    normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-                baseMed = normalizeMediumTop normMedRaw
-                subcomp = normSub
-                exact = M.lookup (name, baseMed, subcomp) (mtExactCF tables)
-             in case exact of
-                    Just _ -> exact
-                    Nothing -> M.lookup (name, baseMed) (mtFallbackCF tables)
-
--- | Top-level variant of the @normalizeMedium@ helper used by the suggester.
-normalizeMediumTop :: Text -> Text
-normalizeMediumTop m
-    | m == "natural resource" = "resource"
-    | otherwise = m
+lookupCFForFlow tables fid mFlow =
+    lookupCascadeCF tables (maybe M.empty (M.singleton fid) mFlow) fid
 
 {- | Find the top-N method CFs that most resemble a database flow.
 
@@ -1710,7 +1686,7 @@ findSimilarCFs syns idx flow maxN
     | otherwise =
         let flowName' = bfName flow
             flowCAS' = bfCAS flow
-            flowMedium = normalizeMediumTop . T.takeWhile (/= '/') . T.toLower $ VT.bfCompartmentName flow
+            flowMedium = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ VT.bfCompartmentName flow
 
             flowRawTokens = S.fromList (T.words (normalizeName flowName'))
             flowExpTokens = expandedTokens syns flowName'
