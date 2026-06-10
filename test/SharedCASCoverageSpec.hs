@@ -236,6 +236,86 @@ buildCarbonTables = do
     pure (fillBroadcastVector defaultUnitConfig M.empty carbonFlows raw)
 
 -- ---------------------------------------------------------------------------
+-- Fixture: subcompartment discipline of the CAS bridge
+-- ---------------------------------------------------------------------------
+
+-- Same CAS + medium, distinct subcompartments; CF names match no flow name,
+-- so both flows are reachable only through the CAS bridge.
+lakeWater, oceanWater :: BiosphereFlow
+lakeWater = (mkWaterFlow 20 "Water, lake" "water"){bfCompartment = Just (VT.Compartment "water" (Just "lake"))}
+oceanWater = (mkWaterFlow 21 "Water, ocean" "water"){bfCompartment = Just (VT.Compartment "water" (Just "ocean"))}
+
+subFlows :: M.Map UUID BiosphereFlow
+subFlows = M.fromList [(bfId f, f) | f <- [lakeWater, oceanWater]]
+
+subCtx :: MapContext
+subCtx =
+    MapContext
+        { mcBioFlowsByUUID = subFlows
+        , mcBioFlowsByName = M.empty
+        , mcBioFlowsByCAS = M.fromList [(waterCAS, [lakeWater, oceanWater])]
+        , mcSynonymDB = emptySynonymDB
+        , mcActivities = M.empty
+        }
+
+-- A CF pinned to the "lake" subcompartment, and a wildcard-subcomp CF
+-- (empty subcomp = matches any flow subcomp).
+nicheCF, wildcardCF :: MethodCF
+nicheCF = (mkWaterCF "lake water" "water" Output 7){mcfCompartment = Just (Compartment "water" "lake" "")}
+wildcardCF = mkWaterCF "sea water" "water" Output 3
+
+buildSubcompTables :: [MethodCF] -> IO MethodTables
+buildSubcompTables factors = do
+    let method =
+            Method
+                { methodId = mkUUID 120
+                , methodName = "Water use (subcomp)"
+                , methodDescription = Nothing
+                , methodUnit = "m3"
+                , methodCategory = "Water use"
+                , methodMethodology = Nothing
+                , methodFactors = factors
+                }
+    mappings <- mapMethodFlows defaultMappers subCtx method
+    let raw = buildMethodTables M.empty mappings
+    pure (fillBroadcastVector defaultUnitConfig M.empty subFlows raw)
+
+-- ---------------------------------------------------------------------------
+-- Fixture: regionalized rows must stay out of the global tables
+-- ---------------------------------------------------------------------------
+
+-- A regionalized CAS-only-matchable CF: belongs in 'mtRegionalCasCF'.
+regionalCasMethod :: Method
+regionalCasMethod =
+    Method
+        { methodId = mkUUID 130
+        , methodName = "Water use (regional CAS)"
+        , methodDescription = Nothing
+        , methodUnit = "m3"
+        , methodCategory = "Water use"
+        , methodMethodology = Nothing
+        , methodFactors = [atLocation "FR" (mkWaterCF "river water" "natural resource" Input 9)]
+        }
+
+-- A global + a regionalized row, both UUID-matched to the same flow. The
+-- regionalized row comes last so, were it admitted to 'mtUuidCF',
+-- 'M.fromList' (last wins) would clobber the global value.
+uuidRegionalMethod :: Method
+uuidRegionalMethod =
+    Method
+        { methodId = mkUUID 131
+        , methodName = "Water use (regional UUID)"
+        , methodDescription = Nothing
+        , methodUnit = "m3"
+        , methodCategory = "Water use"
+        , methodMethodology = Nothing
+        , methodFactors =
+            [ (mkWaterCF "global row" "natural resource" Input 5){mcfFlowRef = bfId river}
+            , atLocation "IN" ((mkWaterCF "regional row" "natural resource" Input 100){mcfFlowRef = bfId river})
+            ]
+        }
+
+-- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
 
@@ -284,3 +364,31 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- methane shares CAS 74-82-8 but is a distinct variant the method
             -- excludes — it must stay uncharacterized, not inherit +27.
             M.member (bfId methaneFossil) (mtBroadcast tables) `shouldBe` False
+
+    describe "CAS bridge respects subcompartments" $ do
+        it "a niche-subcomp CF does not broadcast onto same-CAS flows in other subcomps" $ do
+            tables <- buildSubcompTables [nicheCF]
+            M.lookup (bfId lakeWater) (mtBroadcast tables) `shouldBe` Just 7
+            M.member (bfId oceanWater) (mtBroadcast tables) `shouldBe` False
+
+        it "a wildcard-subcomp CF reaches subcomps the niche CF does not pin" $ do
+            tables <- buildSubcompTables [nicheCF, wildcardCF]
+            -- Exact subcomp slot wins for "lake"; the wildcard slot covers the rest.
+            M.lookup (bfId lakeWater) (mtBroadcast tables) `shouldBe` Just 7
+            M.lookup (bfId oceanWater) (mtBroadcast tables) `shouldBe` Just 3
+
+    describe "regionalized rows stay out of the global tables" $ do
+        it "routes a location-bearing CAS-matched CF to mtRegionalCasCF only" $ do
+            mappings <- mapMethodFlows defaultMappers mapCtx regionalCasMethod
+            let tables = buildMethodTables M.empty mappings
+            M.lookup (waterCAS, "resource", "") (mtRegionalCasCF tables)
+                `shouldBe` Just (M.fromList [("FR", (9, "m3"))])
+            M.member (waterCAS, "resource", "") (mtCasCF tables) `shouldBe` False
+
+        it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
+            mappings <- mapMethodFlows defaultMappers mapCtx uuidRegionalMethod
+            let tables = buildMethodTables M.empty mappings
+            -- The global row stands; the location row lives in the regional
+            -- table instead of clobbering the flow's universal value.
+            M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")
+            M.lookup (bfId river, "IN") (mtRegionalizedCF tables) `shouldBe` Just (100, "m3")
