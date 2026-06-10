@@ -174,6 +174,8 @@ spec = do
                             ]
                     , mtExactCF = M.empty
                     , mtFallbackCF = M.empty
+                    , mtCasCF = M.empty
+                    , mtRegionalCasCF = M.empty
                     , mtRegionalizedCF = M.empty
                     , mtCompartmentMap = M.empty
                     , mtBroadcast = M.empty

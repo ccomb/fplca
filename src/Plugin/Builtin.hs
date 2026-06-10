@@ -92,7 +92,14 @@ defaultRegistry =
 
 -- | The default mapper cascade: UUID → CAS → Name → Synonym
 defaultMappers :: [MapperHandle]
-defaultMappers = [uuidMapper, casMapper, nameMapper, synonymMapper]
+-- Specific identity (UUID, then name, then synonym) before the generic CAS
+-- bridge. A CF whose flow name/synonym pins a specific DB flow (e.g. EF's
+-- "methane (biogenic)" → ecoinvent "Methane, non-fossil") must win over a bare
+-- CAS match, which cannot tell same-CAS variants apart (fossil vs biogenic
+-- methane both carry CAS 74-82-8). CAS is the fallback only where the name is
+-- silent (e.g. AWARE "river water" → ecoinvent "Water, river", different
+-- vocabularies, same CAS) — there it legitimately bridges every same-CAS flow.
+defaultMappers = [uuidMapper, nameMapper, synonymMapper, casMapper]
 
 -- ──────────────────────────────────────────────
 -- Mapper handles (wrap Method.Mapping functions)
@@ -116,7 +123,11 @@ casMapper =
     MapperHandle
         { mhName = "cas-mapper"
         , mhBackend = Builtin
-        , mhPriority = 10
+        , -- Highest number = runs last: the generic CAS bridge is the fallback
+          -- after the specific UUID/name/synonym matchers (see 'defaultMappers').
+          -- 'Plugin.Config' re-sorts handles by this priority, so the cascade
+          -- order lives here, not only in the 'defaultMappers' list.
+          mhPriority = 30
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf -> do
                 cas <- mcfCAS cf
@@ -130,7 +141,7 @@ nameMapper =
     MapperHandle
         { mhName = "name-mapper"
         , mhBackend = Builtin
-        , mhPriority = 20
+        , mhPriority = 10
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
                 fmap (\f -> MapResult (bfId f) "name" 0.9) $
@@ -143,7 +154,7 @@ synonymMapper =
     MapperHandle
         { mhName = "synonym-mapper"
         , mhBackend = Builtin
-        , mhPriority = 30
+        , mhPriority = 20
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
                 fmap (\f -> MapResult (bfId f) "synonym" 0.8) $

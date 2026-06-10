@@ -299,6 +299,21 @@ data MethodTables = MethodTables
     -- ^ (normalized name, medium, subcompartment) → (CF, unit)
     , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
+    , mtCasCF :: !(M.Map (Text, Text) (Double, Text))
+    {- ^ (CAS, normalized medium) → (CF, unit), from non-regionalized CFs.
+    Read-path fallback after UUID and name. Without it, a CF resolves to a
+    single database flow at build time, so when many flows share one CAS in a
+    compartment (e.g. every water flow shares 7732-18-5) only that one flow is
+    characterized and the rest score zero. Keyed by the CF's own CAS+medium so
+    the read path can reach every same-CAS flow by its own CAS+medium. Empty
+    for methods whose CFs carry no CAS.
+    -}
+    , mtRegionalCasCF :: !(M.Map (Text, Text) (M.Map Text (Double, Text)))
+    {- ^ (CAS, normalized medium) → (location → (CF, unit)), from regionalized
+    CFs. The regionalized analogue of 'mtCasCF': lets the regionalized build
+    characterize every same-CAS flow per location, not just the one a CF
+    resolved to. Empty for methods with no regionalized CAS-bearing CFs.
+    -}
     , mtRegionalizedCF :: !(M.Map (UUID, Text) (Double, Text))
     {- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → (CF, unit).
     Empty for non-regionalized methods. When non-empty, callers should dispatch
@@ -579,12 +594,19 @@ buildMethodTables cmap mappings =
                 [ (bfId flow, (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, ByUUID)) <- mappings
                 ]
-        , mtExactCF =
+        , -- The broadcast name tables (exact + fallback) hold only
+          -- non-regionalized CFs. Location-specific rows belong to
+          -- 'mtRegionalizedCF' / 'mtRegionalCasCF'; letting them in here makes
+          -- every location compete for one name key and 'preferBetter' crowns
+          -- an arbitrary location's value (e.g. a region whose factor is 0
+          -- silently erases the global credit).
+          mtExactCF =
             stripStrategy $
                 M.fromListWith
                     preferBetter
                     [ ((nameKey cf mflow, normMed, normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
+                    , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
@@ -596,11 +618,47 @@ buildMethodTables cmap mappings =
                     preferBetter
                     [ ((nameKey cf mflow, normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
+                    , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
                     , T.null normSub
                     ]
+        , mtCasCF =
+            -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
+            -- read path reaches every database flow sharing that CAS+medium —
+            -- the fix for many flows collapsing onto one CAS (e.g. water).
+            -- Non-regionalized CFs only; the regionalized ones go to
+            -- 'mtRegionalCasCF'.
+            --
+            -- Only CFs that matched by CAS populate this table. A CF whose name
+            -- or synonym pinned a specific flow (e.g. "methane (biogenic)" →
+            -- "Methane, non-fossil") is name-discriminated: broadcasting it to
+            -- every same-CAS flow would leak it onto a sibling the method
+            -- distinguishes (fossil methane), so it stays out of the CAS bridge.
+            M.fromListWith
+                preferLargerMag
+                [ ((cas, normMed), (mcfValue cf, mcfUnit cf))
+                | (cf, Just (_, ByCAS)) <- mappings
+                , Just cas <- [mcfCAS cf]
+                , not (T.null cas)
+                , Nothing <- [mcfConsumerLocation cf]
+                , Just comp <- [mcfCompartment cf]
+                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
+                , let normMed = normalizeMedium (T.toLower normMedRaw)
+                ]
+        , mtRegionalCasCF =
+            M.fromListWith
+                (M.unionWith preferLargerMag)
+                [ ((cas, normMed), M.singleton loc (mcfValue cf, mcfUnit cf))
+                | (cf, Just (_, ByCAS)) <- mappings
+                , Just cas <- [mcfCAS cf]
+                , not (T.null cas)
+                , Just loc <- [mcfConsumerLocation cf]
+                , Just comp <- [mcfCompartment cf]
+                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
+                , let normMed = normalizeMedium (T.toLower normMedRaw)
+                ]
         , mtRegionalizedCF =
             -- Filter: a CF whose own compartment carries a specific subcomp
             -- (e.g. "groundwater, long-term" or "ocean") must only apply to
@@ -621,6 +679,12 @@ buildMethodTables cmap mappings =
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
+
+    -- Dedup CAS-keyed CFs (many same-CAS flows collapse to one key): keep the
+    -- larger-magnitude factor.
+    preferLargerMag (v1, u1) (v2, u2)
+        | abs v1 >= abs v2 = (v1, u1)
+        | otherwise = (v2, u2)
 
     -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
     -- with a specific subcomp must match the flow's subcomp exactly — otherwise
@@ -777,7 +841,18 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                 M.fromListWith
                     M.union
                     [(f, M.singleton loc cf) | ((f, loc), cf) <- M.toList regional]
-         in V.map (`M.lookup` perFlow) bioFlows
+            regionalCas = mtRegionalCasCF tables
+            cmap = mtCompartmentMap tables
+            -- Direct flow→locMap, then fall back to the flow's own CAS+medium so
+            -- every flow sharing a CAS is regionalized per location — not just
+            -- the one a CF resolved to at build time.
+            lookupRow fid =
+                M.lookup fid perFlow
+                    <|> ( M.lookup fid flowDB >>= \flow ->
+                            bfCAS flow
+                                >>= \cas -> M.lookup (cas, fst (flowMediumSub cmap flow)) regionalCas
+                        )
+         in V.map lookupRow bioFlows
 
     -- ProcessId → matrix column index → activity's reference location.
     -- Built once (O(nActivities)) and indexed by column inside the hot loop.
@@ -1111,29 +1186,43 @@ pair for every combination.
 lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe (Double, Text)
 lookupCascadeCF tables flowDB fid =
     M.lookup fid (mtUuidCF tables)
-        <|> (M.lookup fid flowDB >>= byName)
+        <|> (M.lookup fid flowDB >>= byNameOrCas)
   where
-    byName flow =
+    byNameOrCas flow =
         let name = normalizeName (bfName flow)
-            rawCategory = T.toLower (VT.bfCompartmentName flow)
-            (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                (m, rest)
-                    | T.null rest -> (m, T.empty)
-                    | otherwise -> (m, T.drop 1 rest)
-            rawSub =
-                let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
-                 in if T.null s then rawSubFromCat else s
-            Compartment normMedRaw normSub _ =
-                normalizeCompartment (mtCompartmentMap tables) (Compartment rawMed rawSub T.empty)
-            baseMed = normalizeMedium normMedRaw
-         in M.lookup (name, baseMed, normSub) (mtExactCF tables)
+            (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
+         in -- UUID/name miss → fall back to the flow's own CAS + medium, so
+            -- every flow sharing a CAS in a compartment is characterized, not
+            -- just the one a CF resolved to at build time.
+            M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
+                <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
 normalizeMedium m
     | m == "natural resource" = "resource"
     | otherwise = m
+
+{- | The @(normalized medium, subcompartment)@ a database flow resolves to after
+compartment normalization. Shared by the name/CAS read path
+('lookupCascadeCF') and the regionalized CAS fallback so both key a flow the
+same way. Subcomp resolution prefers the explicit 'compartmentSub' field,
+falling back to the tail of a @"medium/sub"@ category name.
+-}
+flowMediumSub :: CompartmentMap -> BiosphereFlow -> (Text, Text)
+flowMediumSub cmap flow =
+    let rawCategory = T.toLower (VT.bfCompartmentName flow)
+        (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
+            (m, rest)
+                | T.null rest -> (m, T.empty)
+                | otherwise -> (m, T.drop 1 rest)
+        rawSub =
+            let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
+             in if T.null s then rawSubFromCat else s
+        Compartment normMedRaw normSub _ =
+            normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
+     in (normalizeMedium normMedRaw, normSub)
 
 {- | Apply the flow→CF unit conversion factor and multiply by the CF value.
 

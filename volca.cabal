@@ -239,6 +239,7 @@ test-suite lca-tests
                      , CrossDBRegionalLCIASubsSpec
                      , CrossDBRegionalLCIASensitivitySpec
                      , RegionalLCIASpec
+                     , SharedCASCoverageSpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec
                      , FlowResolverSpec
