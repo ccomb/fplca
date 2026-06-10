@@ -260,12 +260,14 @@ Carbon dioxide,"Carbon dioxide, fossil"
 "Carbon dioxide, biogenic","Carbon dioxide, non-fossil"
 "Carbon dioxide, from soil or biomass stock","Carbon dioxide, land transformation"
 "Carbon dioxide, from soil or biomass stock","Carbon dioxide, peat oxidation"
+"Carbon dioxide, from soil or biomass stock","Carbon dioxide (land use change)"
 Carbon disulfide,Dithiocarbonic Anhydride
 Carbon disulfide,dithiocarbonic anhydride
 Carbon disulfide,sulfocarbonic anhydride
 Carbon monoxide,"Carbon monoxide, fossil"
 "Carbon monoxide, biogenic","Carbon monoxide, non-fossil"
 "Carbon monoxide, from soil or biomass stock","Carbon monoxide, land transformation"
+"Carbon monoxide, from soil or biomass stock","carbon monoxide (land use change)"
 Carbon trioxide,Carbonate
 Carbonate,Carbonate ion
 "Carboxanilido-2,3-dihydro-6-methyl-1,4-oxathiin",Carboxin
@@ -483,6 +485,7 @@ Methane,"Methane, fossil"
 "Methane, dichloro-, HCC-30",methylenchlorid
 "Methane, from soil or biomass stock","Methane, land transformation"
 "Methane, from soil or biomass stock","Methane, peat oxidation"
+"Methane, from soil or biomass stock","methane (land use change)"
 "Methane, monochloro-, R-40",Methyl Chloride
 "Methane, monochloro-, R-40",Monochloromethane
 "Methane, tetrachloro-, CFC-10","Methane, tetrachloro-, R-10"
