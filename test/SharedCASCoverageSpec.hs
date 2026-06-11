@@ -271,6 +271,83 @@ uuidRegionalMethod =
         }
 
 -- ---------------------------------------------------------------------------
+-- Fixture: unspecified-subcompartment fallback (air emissions)
+-- ---------------------------------------------------------------------------
+
+mkAirFlow :: Integer -> Text -> Text -> BiosphereFlow
+mkAirFlow i name sub =
+    BiosphereFlow
+        { bfId = mkUUID i
+        , bfName = name
+        , bfUnitId = mkUUID 0
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Just (VT.Compartment "air" (if sub == "" then Nothing else Just sub))
+        }
+
+mkAirCF :: Text -> Text -> Double -> MethodCF
+mkAirCF name sub val =
+    MethodCF
+        { mcfFlowRef = mkUUID 999
+        , mcfFlowName = name
+        , mcfDirection = Output
+        , mcfValue = val
+        , mcfCompartment = Just (Compartment "air" sub "")
+        , mcfCAS = Nothing
+        , mcfUnit = "kg"
+        , mcfConsumerLocation = Nothing
+        }
+
+-- A radionuclide emitted to an uncovered subcompartment (the method has no CF
+-- for "low population density, long-term"), one to a covered subcompartment,
+-- and a toxicant emitted to "unspecified (long-term)" (which the method DOES
+-- cover, with a 0 factor).
+radonLongTerm, radonNonUrban, mercuryLongTerm :: BiosphereFlow
+radonLongTerm = mkAirFlow 11 "Radon-222" "low population density, long-term"
+radonNonUrban = mkAirFlow 12 "Radon-222" "non-urban air or from high stacks"
+mercuryLongTerm = mkAirFlow 13 "Mercury" "unspecified (long-term)"
+
+fallbackFlows :: [BiosphereFlow]
+fallbackFlows = [radonLongTerm, radonNonUrban, mercuryLongTerm]
+
+fallbackFlowDB :: M.Map UUID BiosphereFlow
+fallbackFlowDB = M.fromList [(bfId f, f) | f <- fallbackFlows]
+
+fallbackMethod :: Method
+fallbackMethod =
+    Method
+        { methodId = mkUUID 102
+        , methodName = "Air method"
+        , methodDescription = Nothing
+        , methodUnit = "kg"
+        , methodCategory = "Test"
+        , methodMethodology = Nothing
+        , methodFactors =
+            [ mkAirCF "Radon-222" "unspecified" 10
+            , mkAirCF "Radon-222" "non-urban air or from high stacks" 8
+            , mkAirCF "Mercury" "unspecified" 5
+            , mkAirCF "Mercury" "unspecified (long-term)" 0
+            ]
+        }
+
+fallbackCtx :: MapContext
+fallbackCtx =
+    MapContext
+        { mcBioFlowsByUUID = fallbackFlowDB
+        , mcBioFlowsByName = M.fromListWith (++) [(normalizeName (bfName f), [f]) | f <- fallbackFlows]
+        , mcBioFlowsByCAS = M.empty
+        , mcSynonymDB = emptySynonymDB
+        , mcActivities = M.empty
+        }
+
+buildFallbackTables :: IO MethodTables
+buildFallbackTables = do
+    mappings <- mapMethodFlows defaultMappers fallbackCtx fallbackMethod
+    let raw = buildMethodTables M.empty M.empty mappings
+    pure (fillBroadcastVector defaultUnitConfig M.empty fallbackFlowDB raw)
+
+-- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
 
@@ -335,3 +412,21 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- table instead of clobbering the flow's universal value.
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")
             M.lookup (bfId river, "IN") (mtRegionalizedCF tables) `shouldBe` Just (100, "m3")
+
+    describe "unspecified subcompartment is the medium-level fallback" $ do
+        it "an uncovered subcompartment falls back to the unspecified CF" $ do
+            -- Radon-222 emitted to "low population density, long-term" has no
+            -- exact CF; it picks up the unspecified factor (10) instead of 0.
+            tables <- buildFallbackTables
+            M.lookup (bfId radonLongTerm) (mtBroadcast tables) `shouldBe` Just 10
+
+        it "an exact subcompartment still wins over the fallback" $ do
+            tables <- buildFallbackTables
+            M.lookup (bfId radonNonUrban) (mtBroadcast tables) `shouldBe` Just 8
+
+        it "an explicit (long-term) factor takes precedence over the fallback" $ do
+            -- Mercury to "unspecified (long-term)" must resolve to its own 0
+            -- factor, not the (nonzero) unspecified fallback — so a method that
+            -- deliberately zeroes long-term emissions is honoured.
+            tables <- buildFallbackTables
+            M.lookup (bfId mercuryLongTerm) (mtBroadcast tables) `shouldBe` Just 0

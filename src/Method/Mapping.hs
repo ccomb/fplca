@@ -631,6 +631,17 @@ buildMethodTables cmap energyDensities mappings =
                     , not (T.null normSub)
                     ]
         , mtFallbackCF =
+            -- Medium-level default CF for a flow whose specific subcompartment
+            -- has no exact CF. Holds CFs whose own subcompartment is empty or
+            -- "unspecified" — the value a method intends as the catch-all for
+            -- that (name, medium). A flow at an uncovered subcompartment (e.g.
+            -- a radionuclide emitted to "low population density, long-term",
+            -- which EF leaves uncharacterized) thus picks up the unspecified CF,
+            -- as ecoinvent's own implementation does, instead of scoring zero.
+            -- This is safe against the long-term toxicity case: a substance
+            -- that DOES carry a "(long-term)" CF keeps it in 'mtExactCF', which
+            -- is consulted before this fallback, so long-term emissions still
+            -- resolve to their explicit (often zero) factor.
             stripStrategy $
                 M.fromListWith
                     preferBetter
@@ -640,7 +651,7 @@ buildMethodTables cmap energyDensities mappings =
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
-                    , T.null normSub
+                    , T.null normSub || normSub == "unspecified" || normSub == "(unspecified)"
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
