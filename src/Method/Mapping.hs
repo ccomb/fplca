@@ -668,17 +668,24 @@ buildMethodTables cmap energyDensities mappings =
             -- "Methane, non-fossil") is name-discriminated: broadcasting it to
             -- every same-CAS flow would leak it onto a sibling the method
             -- distinguishes (fossil methane), so it stays out of the CAS bridge.
-            M.fromListWith
-                preferLargerMag
-                [ ((cas, normMed), (mcfValue cf, mcfUnit cf))
-                | (cf, Just (_, ByCAS)) <- mappings
-                , Just cas <- [mcfCAS cf]
-                , not (T.null cas)
-                , Nothing <- [mcfConsumerLocation cf]
-                , Just comp <- [mcfCompartment cf]
-                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                , let normMed = normalizeMedium (T.toLower normMedRaw)
-                ]
+            --
+            -- When several CFs share one (CAS, medium), broadcast the
+            -- substance's medium-level default — its unspecified-subcompartment
+            -- factor — rather than the largest. The largest is often a niche
+            -- subcompartment (indoor air can be ~100x the outdoor value) that
+            -- would over-characterize every same-CAS flow the bridge reaches.
+            M.map snd $
+                M.fromListWith
+                    preferUnspecifiedCas
+                    [ ((cas, normMed), (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    | (cf, Just (_, ByCAS)) <- mappings
+                    , Just cas <- [mcfCAS cf]
+                    , not (T.null cas)
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , mtRegionalCasCF =
             M.fromListWith
                 (M.unionWith preferLargerMag)
@@ -721,6 +728,17 @@ buildMethodTables cmap energyDensities mappings =
     preferLargerMag (v1, u1) (v2, u2)
         | abs v1 >= abs v2 = (v1, u1)
         | otherwise = (v2, u2)
+
+    -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
+    -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
+    -- default value when several subcompartment CFs share a (CAS, medium).
+    casSubRank s
+        | T.null s || s == "unspecified" || s == "(unspecified)" = 0 :: Int
+        | otherwise = 1
+    preferUnspecifiedCas a@(ra, (va, _)) b@(rb, (vb, _))
+        | ra /= rb = if ra < rb then a else b
+        | abs va >= abs vb = a
+        | otherwise = b
 
     -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
     -- with a specific subcomp must match the flow's subcomp exactly — otherwise

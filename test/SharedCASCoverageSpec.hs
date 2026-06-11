@@ -348,6 +348,44 @@ buildFallbackTables = do
     pure (fillBroadcastVector defaultUnitConfig M.empty fallbackFlowDB raw)
 
 -- ---------------------------------------------------------------------------
+-- Fixture: the CAS bridge broadcasts the unspecified value, not the niche max
+-- ---------------------------------------------------------------------------
+
+acrCAS :: Text
+acrCAS = "107-13-1"
+
+-- An ecoinvent flow reached only via CAS (its name matches no CF — the JRC
+-- method even misspells it), whose CFs diverge wildly by subcompartment:
+-- indoor air is 100x the unspecified value.
+acrFlow :: BiosphereFlow
+acrFlow = (mkAirFlow 21 "Acrylonitrile" "urban air close to ground"){bfCAS = Just acrCAS}
+
+acrMethod :: Method
+acrMethod =
+    Method
+        { methodId = mkUUID 103
+        , methodName = "Tox method"
+        , methodDescription = Nothing
+        , methodUnit = "kg"
+        , methodCategory = "Test"
+        , methodMethodology = Nothing
+        , methodFactors =
+            [ (mkAirCF "acryolonitrile" "indoor" 100){mcfCAS = Just acrCAS}
+            , (mkAirCF "acryolonitrile" "unspecified" 1){mcfCAS = Just acrCAS}
+            ]
+        }
+
+acrCtx :: MapContext
+acrCtx =
+    MapContext
+        { mcBioFlowsByUUID = M.fromList [(bfId acrFlow, acrFlow)]
+        , mcBioFlowsByName = M.empty
+        , mcBioFlowsByCAS = M.fromList [(acrCAS, [acrFlow])]
+        , mcSynonymDB = emptySynonymDB
+        , mcActivities = M.empty
+        }
+
+-- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
 
@@ -430,3 +468,16 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- deliberately zeroes long-term emissions is honoured.
             tables <- buildFallbackTables
             M.lookup (bfId mercuryLongTerm) (mtBroadcast tables) `shouldBe` Just 0
+
+    describe "CAS bridge broadcasts the unspecified value, not the niche max" $ do
+        it "keeps the unspecified factor when subcompartment CFs diverge" $ do
+            mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
+            let tables = buildMethodTables M.empty M.empty mappings
+            -- indoor air is 100x; the bridge must not broadcast it.
+            M.lookup (acrCAS, "air") (mtCasCF tables) `shouldBe` Just (1, "kg")
+
+        it "reaches the flow with the unspecified factor, not the indoor max" $ do
+            mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
+            let raw = buildMethodTables M.empty M.empty mappings
+                tables = fillBroadcastVector defaultUnitConfig M.empty (mcBioFlowsByUUID acrCtx) raw
+            M.lookup (bfId acrFlow) (mtBroadcast tables) `shouldBe` Just 1
