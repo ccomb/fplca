@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {- | Canonical flow registry — foundation.
@@ -30,13 +31,21 @@ module SubstanceRegistry (
     SubstanceEdge (..),
     ClassResult (..),
     classesFromEdges,
+
+    -- * On-disk format
+    parseSubstanceEdges,
 ) where
 
+import qualified Data.ByteString.Lazy as BL
+import Data.Csv (HasHeader (..), decode)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
-import Data.UUID (UUID)
+import qualified Data.Text as T
+import Data.UUID (UUID, fromText)
+import qualified Data.Vector as V
+import Text.Read (readMaybe)
 
 {- | Connected components of the undirected graph whose edges are the given
 @SameAs@ pairs, by union-find. Each component is the transitive closure of the
@@ -171,3 +180,73 @@ classesFromEdges edges = ClassResult classes conflicts
         , Just ib <- [M.lookup b classOf]
         , ia == ib
         ]
+
+{- | Parse @substance_edges.csv@ into typed edges. Eight columns, with a header:
+
+@
+from_keytype,from_source,from_key,to_keytype,to_source,to_key,relation,scale
+@
+
+* @keytype@ ∈ @cas@ | @uuid@ | @name@. @cas@/@uuid@ are global anchors, so their
+  @source@ column is an optional annotation (ignored); @name@ collides across
+  sources, so its @source@ is required.
+* @relation@ ∈ @sameas@ | @subsumes@ | @proxyfor@ | @distinctfrom@. @scale@ holds
+  the 'Subsumes' split weight in @(0,1]@ or the non-zero 'ProxyFor' conversion
+  factor, and must be empty for @sameas@/@distinctfrom@ — a scale on an identity
+  would contradict it.
+
+Names pass through the injected @normalize@ (the caller supplies
+@SynonymDB.normalizeName@; injected to avoid a module cycle). Every malformed
+row is surfaced as a @Left@ carrying its line number — nothing is dropped.
+-}
+parseSubstanceEdges :: (Text -> NormName) -> BL.ByteString -> Either Text [SubstanceEdge]
+parseSubstanceEdges normalize csvData =
+    case decode HasHeader csvData of
+        Left err -> Left (T.pack ("substance_edges.csv parse error: " <> err))
+        Right rows ->
+            traverse parseRow $
+                zip [2 :: Int ..] (map V.toList (V.toList (rows :: V.Vector (V.Vector Text))))
+  where
+    parseRow (n, [fkt, fsrc, fkey, tkt, tsrc, tkey, rel, scale]) =
+        SubstanceEdge
+            <$> parseKey n fkt fsrc fkey
+            <*> parseKey n tkt tsrc tkey
+            <*> parseRelation n rel scale
+    parseRow (n, fields) =
+        Left (rowErr n ("expected 8 fields, got " <> T.pack (show (length fields))))
+
+    parseKey n kt src key =
+        case T.toLower (T.strip kt) of
+            "cas" -> Right (ByCAS (CASNumber (T.strip key)))
+            "uuid" -> case fromText (T.strip key) of
+                Just u -> Right (ByUUID (FlowUUID u))
+                Nothing -> Left (rowErr n ("invalid UUID '" <> T.strip key <> "'"))
+            "name"
+                | T.null (T.strip src) -> Left (rowErr n "name key needs a source")
+                | otherwise -> Right (ByName (SourceId (T.strip src)) (normalize key))
+            other -> Left (rowErr n ("unknown key type '" <> other <> "' (cas|uuid|name)"))
+
+    parseRelation n rel scale =
+        case (T.toLower (T.strip rel), T.strip scale) of
+            ("sameas", "") -> Right SameAs
+            ("sameas", _) -> Left (rowErr n "sameas takes no scale")
+            ("distinctfrom", "") -> Right DistinctFrom
+            ("distinctfrom", _) -> Left (rowErr n "distinctfrom takes no scale")
+            ("subsumes", s) -> Subsumes . SplitWeight <$> parseWeight n s
+            ("proxyfor", s) -> ProxyFor . ConversionFactor <$> parseFactor n s
+            (other, _) -> Left (rowErr n ("unknown relation '" <> other <> "' (sameas|subsumes|proxyfor|distinctfrom)"))
+
+    parseWeight n s = do
+        w <- parseScale n "subsumes weight" s
+        if w > 0 && w <= 1 then Right w else Left (rowErr n "subsumes weight must be in (0,1]")
+
+    parseFactor n s = do
+        f <- parseScale n "proxyfor factor" s
+        if f /= 0 then Right f else Left (rowErr n "proxyfor factor must be non-zero")
+
+    parseScale :: Int -> Text -> Text -> Either Text Double
+    parseScale n what s
+        | T.null s = Left (rowErr n (what <> " is required"))
+        | otherwise = maybe (Left (rowErr n ("invalid " <> what <> " '" <> s <> "'"))) Right (readMaybe (T.unpack s))
+
+    rowErr n msg = T.pack ("substance_edges.csv row " <> show n <> ": ") <> msg

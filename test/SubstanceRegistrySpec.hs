@@ -1,12 +1,17 @@
 module SubstanceRegistrySpec (spec) where
 
+import qualified Data.ByteString.Lazy.Char8 as BLC
+import Data.Either (isLeft)
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Data.UUID (nil)
 import Test.Hspec
 
 import SubstanceRegistry (
     CASNumber (..),
     ClassResult (..),
+    ConversionFactor (..),
+    FlowUUID (..),
     NormName (..),
     Relation (..),
     SourceId (..),
@@ -15,6 +20,7 @@ import SubstanceRegistry (
     SubstanceKey (..),
     classesFromEdges,
     equivalenceClasses,
+    parseSubstanceEdges,
  )
 
 -- | Normalize the result to a set of sets, so assertions are order-independent.
@@ -31,6 +37,15 @@ cas c = ByCAS (CASNumber (T.pack c))
 
 sameAs :: SubstanceKey -> SubstanceKey -> SubstanceEdge
 sameAs a b = SubstanceEdge a b SameAs
+
+-- A trivial normalizer for the parser tests (the real one is SynonymDB.normalizeName).
+testNorm :: T.Text -> NormName
+testNorm = NormName . T.toLower . T.strip
+
+-- Prefix the header row so each body line is a data row.
+edgesCsv :: String -> BLC.ByteString
+edgesCsv body =
+    BLC.pack ("from_keytype,from_source,from_key,to_keytype,to_source,to_key,relation,scale\n" <> body)
 
 spec :: Spec
 spec = do
@@ -98,3 +113,51 @@ spec = do
                 r = classesFromEdges [SubstanceEdge a b DistinctFrom]
             crClasses r `shouldBe` []
             crConflicts r `shouldBe` []
+
+    describe "parseSubstanceEdges" $ do
+        it "parses a name↔CAS SameAs edge, normalizing the name" $
+            parseSubstanceEdges testNorm (edgesCsv "name,simapro,Formaldehyde,cas,,50-00-0,sameas,\n")
+                `shouldBe` Right [SubstanceEdge (nm "simapro" "formaldehyde") (cas "50-00-0") SameAs]
+
+        it "parses a ProxyFor edge with its conversion factor" $
+            parseSubstanceEdges testNorm (edgesCsv "cas,,1336-36-3,name,jrc,PCB,proxyfor,0.5\n")
+                `shouldBe` Right [SubstanceEdge (cas "1336-36-3") (nm "jrc" "pcb") (ProxyFor (ConversionFactor 0.5))]
+
+        it "parses a Subsumes edge with its split weight" $
+            parseSubstanceEdges testNorm (edgesCsv "name,ef,sulfur oxides,name,ef,sulfur dioxide,subsumes,0.9\n")
+                `shouldBe` Right [SubstanceEdge (nm "ef" "sulfur oxides") (nm "ef" "sulfur dioxide") (Subsumes (SplitWeight 0.9))]
+
+        it "resolves a UUID anchor (ignoring its source annotation)" $
+            fmap (map seFrom) (parseSubstanceEdges testNorm (edgesCsv "uuid,ecoinvent-3.11,00000000-0000-0000-0000-000000000000,cas,,1-1-1,sameas,\n"))
+                `shouldBe` Right [ByUUID (FlowUUID nil)]
+
+        it "parses several rows" $
+            fmap length (parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,sameas,\nname,a,y,name,a,z,sameas,\n"))
+                `shouldBe` Right 2
+
+        it "rejects a name key with no source" $
+            parseSubstanceEdges testNorm (edgesCsv "name,,x,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
+
+        it "rejects a Subsumes edge with no weight" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,subsumes,\n") `shouldSatisfy` isLeft
+
+        it "rejects a Subsumes weight outside (0,1]" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,subsumes,1.5\n") `shouldSatisfy` isLeft
+
+        it "rejects a ProxyFor factor of zero" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,proxyfor,0\n") `shouldSatisfy` isLeft
+
+        it "rejects a SameAs edge carrying a scale" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,sameas,0.5\n") `shouldSatisfy` isLeft
+
+        it "rejects an unknown relation" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,equals,\n") `shouldSatisfy` isLeft
+
+        it "rejects an unknown key type" $
+            parseSubstanceEdges testNorm (edgesCsv "thing,a,x,name,a,y,sameas,\n") `shouldSatisfy` isLeft
+
+        it "rejects a malformed UUID" $
+            parseSubstanceEdges testNorm (edgesCsv "uuid,,not-a-uuid,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
+
+        it "rejects a row with the wrong field count" $
+            parseSubstanceEdges testNorm (edgesCsv "name,a,x,cas,,1-1-1,sameas\n") `shouldSatisfy` isLeft
