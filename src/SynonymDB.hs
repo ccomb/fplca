@@ -40,12 +40,12 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import System.Directory (doesFileExist, getModificationTime)
 
+import SubstanceRegistry (equivalenceClasses)
 import SynonymDB.Types (SynonymDB (..), emptySynonymDB)
 
 {- | Build a SynonymDB from CSV content (two columns: name1, name2).
-Each row declares two names as direct synonyms. No transitive closure:
-if A↔B and B↔C, looking up A returns {A,B} but NOT C.
-This prevents chain pollution (e.g., sulfate→gypsum→calcium→calcite→carbonate→lithium carbonate).
+Each row declares two names as @SameAs@. Names are grouped by transitive
+closure (see 'buildFromPairs'): A↔B and B↔C ⟹ one class {A,B,C}.
 -}
 buildFromCSV :: BL.ByteString -> Either String SynonymDB
 buildFromCSV csvData =
@@ -53,36 +53,40 @@ buildFromCSV csvData =
         Left err -> Left $ "CSV parse error: " <> err
         Right rows -> Right $ buildFromPairs (V.toList (rows :: V.Vector (Text, Text)))
 
-{- | Build SynonymDB from direct pairs (no transitive closure).
-Each pair (A, B) creates a group containing both A and B.
-If A appears in multiple pairs, all its direct partners are in one group.
-But partners' partners are NOT included (no transitivity).
+{- | Build a SynonymDB from @SameAs@ name pairs.
+
+Names are normalized, then grouped into equivalence classes by transitive
+closure (connected components) — the "set of sets" of the canonical flow
+registry. A↔B and B↔C therefore land A, B and C in one class.
+
+Closure is taken honestly, with no silent degree cap. Measured on the current
+reference data, no class exceeds a handful of members (the feared
+sulfate→…→carbonate chain does not occur), so closure is safe. Bad data — a junk
+hub that would fuse unrelated substances — surfaces as an oversized class in
+validation rather than being silently dropped, and genuinely-broader relations
+(SOx ⊃ SO₂) belong in the typed-edge layer, not as @SameAs@.
 -}
 buildFromPairs :: [(Text, Text)] -> SynonymDB
-buildFromPairs pairs =
-    let
-        -- Collect direct neighbors for each name (star topology, not transitive)
-        directNeighbors = foldl addPair M.empty pairs
-        -- Filter: reject names with too many direct synonyms (overly generic terms)
-        maxDirectSynonyms = 50
-        validNeighbors = M.filter ((<= maxDirectSynonyms) . length) directNeighbors
-        -- Build groups: each name's group = itself + its direct neighbors
-        allNames = M.keys validNeighbors
-        numberedGroups = zip [0 ..] [name : M.findWithDefault [] name validNeighbors | name <- allNames]
-        nameToId = M.fromList [(name, gid) | (gid, members) <- numberedGroups, name <- members]
-        idToNames = M.fromList [(gid, members) | (gid, members) <- numberedGroups]
-     in
-        SynonymDB nameToId idToNames
+buildFromPairs = fromClasses . equivalenceClasses . normalizePairs
   where
-    addPair :: M.Map Text [Text] -> (Text, Text) -> M.Map Text [Text]
-    addPair acc (raw1, raw2) =
-        let n1 = normalizeName raw1
-            n2 = normalizeName raw2
-            o1 = T.strip raw1
-            o2 = T.strip raw2
-         in if T.null n1 || T.null n2 || n1 == n2
-                then acc
-                else M.insertWith (++) n1 [o2] $ M.insertWith (++) n2 [o1] acc
+    normalizePairs :: [(Text, Text)] -> [(Text, Text)]
+    normalizePairs raws =
+        [ (n1, n2)
+        | (raw1, raw2) <- raws
+        , let n1 = normalizeName raw1
+        , let n2 = normalizeName raw2
+        , not (T.null n1)
+        , not (T.null n2)
+        , n1 /= n2
+        ]
+
+-- | Number a list of name classes into the bidirectional SynonymDB lookup tables.
+fromClasses :: [[Text]] -> SynonymDB
+fromClasses classes =
+    let numbered = zip [0 ..] classes
+        nameToId = M.fromList [(name, gid) | (gid, members) <- numbered, name <- members]
+        idToNames = M.fromList numbered
+     in SynonymDB nameToId idToNames
 
 {- | Load a SynonymDB from a CSV file, using a binary cache for speed.
   On first load: parse CSV → build SynonymDB → save .cache.zst
@@ -132,19 +136,19 @@ loadFromCSVFileWithCache csvPath = do
             (BS.writeFile cachePath (Zstd.compress 1 (encode db)))
             (\(_ :: SomeException) -> return ())
 
--- | Merge multiple SynonymDBs into one (later entries take priority on ID conflicts).
+{- | Merge multiple SynonymDBs into one, re-closing across them: if one source
+declares A=B and another B=C, the merged DB groups {A,B,C}. Each group is
+reconnected by a star to its first member (enough to preserve its connectivity),
+then the whole edge set is closed again.
+-}
 mergeSynonymDBs :: [SynonymDB] -> SynonymDB
 mergeSynonymDBs [] = emptySynonymDB
 mergeSynonymDBs [db] = db
-mergeSynonymDBs dbs =
-    let
-        -- Collect all groups from all DBs, re-number them
-        allGroups = concatMap (\db -> M.elems (synIdToNames db)) dbs
-        numberedGroups = zip [0 ..] allGroups
-        nameToId = M.fromList [(normalizeName name, gid) | (gid, names) <- numberedGroups, name <- names]
-        idToNames = M.fromList numberedGroups
-     in
-        SynonymDB nameToId idToNames
+mergeSynonymDBs dbs = fromClasses (equivalenceClasses edges)
+  where
+    edges = concatMap groupEdges (concatMap (M.elems . synIdToNames) dbs)
+    groupEdges [] = []
+    groupEdges (m0 : ms) = [(normalizeName m0, normalizeName m) | m <- ms]
 
 -- | Number of synonym names in the database.
 synonymCount :: SynonymDB -> Int
