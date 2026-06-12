@@ -1000,6 +1000,7 @@ strategyToText ByCAS = "cas"
 strategyToText ByName = "name"
 strategyToText BySynonym = "synonym"
 strategyToText ByFuzzy = "fuzzy"
+strategyToText ByProxy = "proxy"
 strategyToText NoMatch = "none"
 
 matchesQuery :: Maybe Text -> Text -> Text -> Bool

@@ -223,6 +223,7 @@ test-suite lca-tests
                      , BrightwayExcelWriterSpec
                      , UnitConversionSpec
                      , PluginSpec
+                     , ProxyEdgeSpec
                      , ServerSpec
                      , ILCDParserSpec
                      , SupplyChainSpec

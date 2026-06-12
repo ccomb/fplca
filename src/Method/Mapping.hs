@@ -44,6 +44,8 @@ module Method.Mapping (
     processContributionsFromTables,
     convertForCharacterization,
     expandSynonymMappings,
+    ProxyTargets (..),
+    expandProxyEdges,
 
     -- * Multi-method scoring
     MethodSetTables (..),
@@ -94,6 +96,7 @@ import Matrix (Inventory, Vector)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
+import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
@@ -111,6 +114,11 @@ data MatchStrategy
       BySynonym
     | -- | Fuzzy string matching
       ByFuzzy
+    | {- | Via a typed @ProxyFor@ edge: a CF borrowed from another flow, scaled
+      by the edge's conversion factor. An approximation, ranked below every
+      direct match so an explicit CF always wins.
+      -}
+      ByProxy
     | -- | No match found
       NoMatch
     deriving (Eq, Show)
@@ -132,6 +140,8 @@ data MappingStats = MappingStats
     -- ^ Matched by synonym
     , msByFuzzy :: !Int
     -- ^ Matched by fuzzy
+    , msByProxy :: !Int
+    -- ^ Matched via a @ProxyFor@ edge
     , msUnmatched :: !Int
     -- ^ Not matched
     }
@@ -146,10 +156,11 @@ instance Semigroup MappingStats where
             (msByName a + msByName b)
             (msBySynonym a + msBySynonym b)
             (msByFuzzy a + msByFuzzy b)
+            (msByProxy a + msByProxy b)
             (msUnmatched a + msUnmatched b)
 
 instance Monoid MappingStats where
-    mempty = MappingStats 0 0 0 0 0 0 0
+    mempty = MappingStats 0 0 0 0 0 0 0 0
 
 -- | Build a MapContext from a Database (convenience for callers)
 buildMapContext :: Database -> MapContext
@@ -204,6 +215,7 @@ strategyFromText t = case T.toLower t of
     "name" -> ByName
     "synonym" -> BySynonym
     "fuzzy" -> ByFuzzy
+    "proxy" -> ByProxy
     _ -> ByFuzzy -- Unknown strategies map to fuzzy
 
 -- ──────────────────────────────────────────────
@@ -284,6 +296,7 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
     tally (Just ByFuzzy) = one{msByFuzzy = 1}
+    tally (Just ByProxy) = one{msByProxy = 1}
     -- 'NoMatch' is not produced by the current matchers; this row exists only
     -- to keep the match exhaustive. Counts as unmatched if ever introduced.
     tally (Just NoMatch) = one{msUnmatched = 1}
@@ -598,6 +611,56 @@ expandSynonymMappings synDB flowsByName mappings =
 -- @resources/land@ via the compartment map), so it's simpler to let
 -- the table keys do the filtering.
 
+{- | Database flow indexes a @ProxyFor@ edge's @to@ side resolves against, keyed
+the three ways a proxy can name it: normalized name, CAS, and flow UUID.
+-}
+data ProxyTargets = ProxyTargets
+    { ptByName :: !(M.Map Text [BiosphereFlow])
+    , ptByCAS :: !(M.Map Text [BiosphereFlow])
+    , ptByUUID :: !(M.Map UUID BiosphereFlow)
+    }
+
+{- | Apply @ProxyFor@ edges at method-table build — the directional counterpart of
+'expandSynonymMappings'. For each edge @from -(f)-> to@, every method CF identified
+by @from@ contributes a CF scaled by @f@ to every database flow identified by @to@,
+tagged 'ByProxy' so it keys under that flow's name and loses to any direct match.
+
+Only 'SR.ProxyFor' edges act here; @SameAs@/@Subsumes@/@DistinctFrom@ live in the
+class/diagnostics layer. An empty edge list is the identity, so the method tables are
+unchanged when no @substance_edges.csv@ is loaded.
+-}
+expandProxyEdges ::
+    ProxyTargets ->
+    [SR.SubstanceEdge] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+expandProxyEdges targets edges mappings =
+    mappings
+        ++ [ (cf{mcfValue = mcfValue cf * f}, Just (toFlow, ByProxy))
+           | (from, to, f) <- proxies
+           , cf <- cfsMatching from
+           , toFlow <- flowsMatching to
+           ]
+  where
+    proxies =
+        [ (SR.seFrom e, SR.seTo e, f)
+        | e <- edges
+        , SR.ProxyFor (SR.ConversionFactor f) <- [SR.seRelation e]
+        ]
+
+    cfs = map fst mappings
+    cfsByName = M.fromListWith (++) [(normalizeName (mcfFlowName cf), [cf]) | cf <- cfs]
+    cfsByCAS = M.fromListWith (++) [(cas, [cf]) | cf <- cfs, Just cas <- [mcfCAS cf], not (T.null cas)]
+    cfsByUUID = M.fromListWith (++) [(mcfFlowRef cf, [cf]) | cf <- cfs]
+
+    cfsMatching (SR.ByName _ (SR.NormName n)) = M.findWithDefault [] n cfsByName
+    cfsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c cfsByCAS
+    cfsMatching (SR.ByUUID (SR.FlowUUID u)) = M.findWithDefault [] u cfsByUUID
+
+    flowsMatching (SR.ByName _ (SR.NormName n)) = M.findWithDefault [] n (ptByName targets)
+    flowsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c (ptByCAS targets)
+    flowsMatching (SR.ByUUID (SR.FlowUUID u)) = maybe [] pure (M.lookup u (ptByUUID targets))
+
 buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap energyDensities mappings =
     MethodTables
@@ -789,10 +852,12 @@ buildMethodTables cmap energyDensities mappings =
         Just (_, s) -> s
         Nothing -> NoMatch
 
-    -- Use matched flow's name only for name/synonym matches
+    -- Use matched flow's name only for name/synonym/proxy matches: those key
+    -- the CF under the database flow it resolved to, not the method CF's own name.
     nameKey cf mflow = normalizeName $ case mflow of
         Just (flow, ByName) -> bfName flow
         Just (flow, BySynonym) -> bfName flow
+        Just (flow, ByProxy) -> bfName flow
         _ -> mcfFlowName cf
 
 {- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
