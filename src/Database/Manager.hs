@@ -149,10 +149,12 @@ import Method.Mapping (
     MethodIndex,
     MethodSetTables,
     MethodTables,
+    ProxyTargets (..),
     RegionalActivityWeights (..),
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
+    expandProxyEdges,
     expandSynonymMappings,
     fillBroadcastVector,
     fillRegionalActivityWeights,
@@ -177,7 +179,8 @@ import Progress (ProgressLevel (..), reportError, reportProgress, reportProgress
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
+import SubstanceRegistry (NormName (..), SubstanceEdge, parseSubstanceEdges)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, synonymCount)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -533,6 +536,11 @@ data DatabaseManager = DatabaseManager
     suggester's synonym-expansion signal. Empty when no path is configured
     or when the file is missing — suggester degrades to plain Jaccard.
     -}
+    , dmSubstanceEdges :: ![SubstanceEdge]
+    {- ^ Typed flow-correspondence edges loaded once at startup from
+    @substance_edges.csv@. Empty when no path is configured; only the
+    @ProxyFor@ edges currently feed the CF cascade ('expandProxyEdges').
+    -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (BioFlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
@@ -593,7 +601,10 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
             -- and pollute the fan-out with thousands of generic PubChem
             -- synonyms like "water" → "4-aminophenol").
             let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-                expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
+                proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
+                expanded =
+                    expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
+                        expandSynonymMappings synDB (dbFlowsByName db) mappings
                 !raw = buildMethodTables cmap energyDensities expanded
                 !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
                 -- Precompute per-activity weights for regionalized methods so
@@ -777,6 +788,21 @@ initDatabaseManager config noCache configPath = do
                 Left err -> do
                     putStrLn $ "warning: could not load chem synonyms from " <> path <> ": " <> err
                     pure emptyChemSynonyms
+    substanceEdges <- case cfgSubstanceEdges config of
+        Nothing -> pure []
+        Just path -> do
+            isFile <- doesFileExist path
+            if not isFile
+                then do
+                    putStrLn $ "warning: substance edges file not found: " <> path
+                    pure []
+                else do
+                    raw <- BL.readFile path
+                    case parseSubstanceEdges (NormName . normalizeName) raw of
+                        Right es -> pure es
+                        Left err -> do
+                            putStrLn $ "warning: could not load substance edges from " <> path <> ": " <> T.unpack err
+                            pure []
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -805,6 +831,7 @@ initDatabaseManager config noCache configPath = do
                 , dmMethodSetTablesCache = methodSetTablesCacheVar
                 , dmMethodIndexCache = methodIndexCacheVar
                 , dmChemSynonyms = chemSyns
+                , dmSubstanceEdges = substanceEdges
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }
