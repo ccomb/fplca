@@ -38,47 +38,45 @@ module SubstanceRegistry (
 
 import qualified Data.ByteString.Lazy as BL
 import Data.Csv (HasHeader (..), decode)
+import qualified Data.Graph as G
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Tree as Tree
 import Data.UUID (UUID, fromText)
 import qualified Data.Vector as V
 import Text.Read (readMaybe)
 
 {- | Connected components of the undirected graph whose edges are the given
-@SameAs@ pairs, by union-find. Each component is the transitive closure of the
-identities reachable through those pairs: @A↔B@ and @B↔C@ ⟹ one class @{A,B,C}@.
+@SameAs@ pairs. Each component is the transitive closure of the identities
+reachable through those pairs: @A↔B@ and @B↔C@ ⟹ one class @{A,B,C}@.
 
 Only identities that appear in at least one pair are returned; an isolated
 identity has no class here. Order within and across classes is unspecified.
 
-Union always points one root at another /distinct/ root, so the parent forest
-stays acyclic and 'root' always terminates.
+Computed via 'Data.Graph' connected components — linear in vertices + edges, so
+it scales to the hundreds of thousands of pairs a method's auto-extracted
+synonyms produce. (A hand-rolled persistent-'Map' union-find without path
+compression did not: it went quadratic on long chains and stalled method load
+for minutes.)
 -}
 equivalenceClasses :: forall a. (Ord a) => [(a, a)] -> [[a]]
 equivalenceClasses pairs =
-    M.elems $ M.fromListWith (++) [(root finalParent x, [x]) | x <- elems]
+    map (map nodeOf . Tree.flatten) (G.components graph)
   where
     elems :: [a]
     elems = S.toList $ S.fromList $ concatMap (\(a, b) -> [a, b]) pairs
 
-    finalParent :: Map a a
-    finalParent = foldl' unite (M.fromList [(x, x) | x <- elems]) pairs
+    adjacency :: Map a [a]
+    adjacency = M.fromListWith (++) $ concatMap (\(a, b) -> [(a, [b]), (b, [a])]) pairs
 
-    unite :: Map a a -> (a, a) -> Map a a
-    unite p (a, b) =
-        let ra = root p a
-            rb = root p b
-         in if ra == rb then p else M.insert ra rb p
+    (graph, fromVertex, _) =
+        G.graphFromEdges [(x, x, M.findWithDefault [] x adjacency) | x <- elems]
 
-    root :: Map a a -> a -> a
-    root p x = case M.lookup x p of
-        Just px
-            | px == x -> x
-            | otherwise -> root p px
-        Nothing -> x
+    nodeOf :: G.Vertex -> a
+    nodeOf v = let (n, _, _) = fromVertex v in n
 
 -- | A CAS registry number (e.g. @50-00-0@). A global substance anchor.
 newtype CASNumber = CASNumber Text
