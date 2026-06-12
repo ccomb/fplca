@@ -42,6 +42,7 @@ module Method.Mapping (
     findSimilarCFs,
     inventoryContributions,
     processContributionsFromTables,
+    lookupCFForFlow,
     convertForCharacterization,
     expandSynonymMappings,
     ProxyTargets (..),

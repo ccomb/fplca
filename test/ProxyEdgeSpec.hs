@@ -12,8 +12,10 @@ import Method.Mapping (
     MappingStats (msByProxy),
     MatchStrategy (..),
     ProxyTargets (..),
+    buildMethodTables,
     computeMappingStats,
     expandProxyEdges,
+    lookupCFForFlow,
  )
 import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
 import qualified SubstanceRegistry as SR
@@ -112,3 +114,13 @@ spec = describe "expandProxyEdges" $ do
         let edges = [proxyEdge (nameKey "phosphorus") (nameKey "phosphate") 0.5]
             result = expandProxyEdges byNameTargets edges baseMappings
         msByProxy (computeMappingStats result) `shouldBe` 1
+
+    -- End-to-end of the cascade: the proxy CF must be reachable by the scoring
+    -- lookup, exactly as a real score queries it.
+    it "characterizes an otherwise-uncharacterized flow through the method tables" $ do
+        let edges = [proxyEdge (nameKey "phosphorus") (nameKey "phosphate") 0.5]
+            tablesNoProxy = buildMethodTables M.empty M.empty baseMappings
+            tablesProxy = buildMethodTables M.empty M.empty (expandProxyEdges byNameTargets edges baseMappings)
+            lookup' ts = lookupCFForFlow ts (bfId phosphateFlow) (Just phosphateFlow)
+        lookup' tablesNoProxy `shouldBe` Nothing
+        fmap fst (lookup' tablesProxy) `shouldBe` Just 1.0 -- 2.0 * 0.5
