@@ -68,6 +68,7 @@ module Method.Mapping (
     -- * Statistics
     MappingStats (..),
     computeMappingStats,
+    strategyPriority,
 ) where
 
 import Control.Applicative ((<|>))
@@ -662,6 +663,20 @@ expandProxyEdges targets edges mappings =
     flowsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c (ptByCAS targets)
     flowsMatching (SR.ByUUID (SR.FlowUUID u)) = maybe [] pure (M.lookup u (ptByUUID targets))
 
+{- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
+heuristic/expanded): when two CFs collide on one flow or table key, the lower
+rank — the more discriminating match — wins. Exported so diagnostics dedup
+with the same preference the score tables use.
+-}
+strategyPriority :: MatchStrategy -> Int
+strategyPriority ByUUID = 0
+strategyPriority ByName = 1
+strategyPriority BySynonym = 2
+strategyPriority ByCAS = 3
+strategyPriority ByFuzzy = 4
+strategyPriority ByProxy = 4
+strategyPriority NoMatch = 4
+
 buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap energyDensities mappings =
     MethodTables
@@ -835,19 +850,10 @@ buildMethodTables cmap energyDensities mappings =
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
-        | stratPriority s1 < stratPriority s2 = (v1, u1, s1)
-        | stratPriority s1 > stratPriority s2 = (v2, u2, s2)
+        | strategyPriority s1 < strategyPriority s2 = (v1, u1, s1)
+        | strategyPriority s1 > strategyPriority s2 = (v2, u2, s2)
         | v1 >= v2 = (v1, u1, s1)
         | otherwise = (v2, u2, s2)
-    -- Same ranking as the mapper cascade (UUID → name → synonym → CAS): when
-    -- two CFs collide on one name key, the name-discriminated row beats the
-    -- generic CAS-matched one.
-    stratPriority ByUUID = 0 :: Int
-    stratPriority ByName = 1
-    stratPriority BySynonym = 2
-    stratPriority ByCAS = 3
-    stratPriority ByFuzzy = 4
-    stratPriority NoMatch = 4
 
     matchStrategy mflow = case mflow of
         Just (_, s) -> s

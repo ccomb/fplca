@@ -42,7 +42,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -1776,9 +1776,14 @@ getFlowCFMapping dbName methodIdText = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
     (collectionName, method) <- loadMethodByUUID methodIdText
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
+    mappings <- liftIO $ DM.effectiveMethodMappings dbManager dbName collectionName db method
+    -- Effective mappings include the synonym fan-out and substance-edge
+    -- expansions, appended after the cascade entries; several may target one
+    -- flow, so keep the most discriminating per flow (the score tables dedup
+    -- the same way via 'preferBetter').
     let reverseIndex =
-            M.fromList
+            M.fromListWith
+                (\a b -> if strategyPriority (snd a) <= strategyPriority (snd b) then a else b)
                 [(bfId f, (cf, strat)) | (cf, Just (f, strat)) <- mappings]
         entries = map (buildFlowEntry db reverseIndex) (V.toList (dbBiosphereOrder db))
         matchedCount = length [() | e <- entries, isJust (fceCfValue e)]
@@ -1798,7 +1803,7 @@ getCharacterization dbName methodIdText flowFilter limitParam = do
     (collectionName, method) <- loadMethodByUUID methodIdText
     let lim = fromMaybe 50 limitParam
         queryLower = fmap T.toLower flowFilter
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
+    mappings <- liftIO $ DM.effectiveMethodMappings dbManager dbName collectionName db method
     let matched =
             [ (cf, f, strat)
             | (cf, Just (f, strat)) <- mappings

@@ -94,6 +94,7 @@ module Database.Manager (
 
     -- * Cached flow mapping
     mapMethodToFlowsCached,
+    effectiveMethodMappings,
     mapMethodToTablesCached,
     mapMethodSetToTablesCached,
     mapMethodToIndexCached,
@@ -566,6 +567,25 @@ mapMethodToFlowsCached manager dbName collection db method = do
             atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
             return result
 
+{- | The mappings scoring actually uses: the cached cascade result expanded
+with the database's synonym fan-out and the configured substance edges.
+Diagnostics (flow-mapping endpoints, coverage audits) must read THIS rather
+than the raw cascade, or they under-report what the score tables contain.
+
+Uses the database's frozen-at-load-time synonym DB (curated-only;
+auto-extracted method synonyms enter 'dmLoadedFlowSyns' after databases are
+loaded, so 'getMergedSynonymDB' would surface them and pollute the fan-out
+with thousands of generic PubChem synonyms like "water" → "4-aminophenol").
+-}
+effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+effectiveMethodMappings manager dbName collection db method = do
+    mappings <- mapMethodToFlowsCached manager dbName collection db method
+    let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+        proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
+    pure $
+        expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
+            expandSynonymMappings synDB (dbFlowsByName db) mappings
+
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
 mapMethodToTablesCached manager dbName collection db method = do
@@ -590,22 +610,12 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
     case M.lookup key cache of
         Just tables -> pure tables
         Nothing -> do
-            mappings <- mapMethodToFlowsCached manager dbName collection db method
+            expanded <- effectiveMethodMappings manager dbName collection db method
             cmap <- getMergedCompartmentMap manager
             energyDensities <- getMergedEnergyDensities manager
             unitConfig <- getMergedUnitConfig manager
             (mFlows, mUnits) <- getMergedFlowMetadata manager
-            -- Use the database's frozen-at-load-time synonym DB (curated-only;
-            -- auto-extracted method synonyms enter @dmLoadedFlowSyns@ after
-            -- databases are loaded, so 'getMergedSynonymDB' would surface them
-            -- and pollute the fan-out with thousands of generic PubChem
-            -- synonyms like "water" → "4-aminophenol").
-            let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-                proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
-                expanded =
-                    expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-                        expandSynonymMappings synDB (dbFlowsByName db) mappings
-                !raw = buildMethodTables cmap energyDensities expanded
+            let !raw = buildMethodTables cmap energyDensities expanded
                 !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
                 -- Precompute per-activity weights for regionalized methods so
                 -- subsequent scoring is a dot product instead of one full
