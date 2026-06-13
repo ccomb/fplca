@@ -32,7 +32,11 @@ module SubstanceRegistry (
     ClassResult (..),
     classesFromEdges,
 
+    -- * CAS enrichment
+    casBindingsFromEdges,
+
     -- * On-disk format
+    KeyNormalizers (..),
     parseSubstanceEdges,
 ) where
 
@@ -179,6 +183,45 @@ classesFromEdges edges = ClassResult classes conflicts
         , ia == ib
         ]
 
+{- | Name→CAS identities asserted by @SameAs@ edges that link a name anchor to
+a CAS anchor (in either direction). CAS is a /global/ anchor, so the binding
+applies to a flow of that name in any source — the edge's 'SourceId' is
+provenance, not a gate (mirroring how the @ProxyFor@ fan-out matches names
+globally). A name bound to two distinct CAS is a data conflict, returned in the
+second component rather than silently resolved (the first wins, but the caller
+is told).
+-}
+casBindingsFromEdges :: [SubstanceEdge] -> (Map NormName CASNumber, [(NormName, (CASNumber, CASNumber))])
+casBindingsFromEdges edges = foldl' (flip insert) (M.empty, []) pairs
+  where
+    pairs =
+        [ nc
+        | e <- edges
+        , seRelation e == SameAs
+        , nc <- nameCasPair (seFrom e) (seTo e)
+        ]
+    nameCasPair (ByName _ n) (ByCAS c) = [(n, c)]
+    nameCasPair (ByCAS c) (ByName _ n) = [(n, c)]
+    nameCasPair _ _ = []
+    insert (n, c) (m, conflicts) =
+        case M.lookup n m of
+            Nothing -> (M.insert n c m, conflicts)
+            Just c'
+                | c' == c -> (m, conflicts)
+                | otherwise -> (m, (n, (c', c)) : conflicts)
+
+{- | The normalizers a CSV row's keys pass through, injected to keep this
+module free of the parser/synonym layers it would otherwise have to import.
+'knName' canonicalizes a flow name (typically @SynonymDB.normalizeName@);
+'knCAS' canonicalizes a CAS string (typically @EcoSpold.Parser2.normalizeCAS@)
+so an edge's CAS lands in the same form as a method's, and the two actually
+meet on the bridge.
+-}
+data KeyNormalizers = KeyNormalizers
+    { knName :: Text -> NormName
+    , knCAS :: Text -> CASNumber
+    }
+
 {- | Parse @substance_edges.csv@ into typed edges. Eight columns, with a header:
 
 @
@@ -193,12 +236,12 @@ from_keytype,from_source,from_key,to_keytype,to_source,to_key,relation,scale
   factor, and must be empty for @sameas@/@distinctfrom@ — a scale on an identity
   would contradict it.
 
-Names pass through the injected @normalize@ (the caller supplies
-@SynonymDB.normalizeName@; injected to avoid a module cycle). Every malformed
-row is surfaced as a @Left@ carrying its line number — nothing is dropped.
+Keys pass through the injected 'KeyNormalizers' (names and CAS; injected to
+avoid a module cycle). Every malformed row is surfaced as a @Left@ carrying its
+line number — nothing is dropped.
 -}
-parseSubstanceEdges :: (Text -> NormName) -> BL.ByteString -> Either Text [SubstanceEdge]
-parseSubstanceEdges normalize csvData =
+parseSubstanceEdges :: KeyNormalizers -> BL.ByteString -> Either Text [SubstanceEdge]
+parseSubstanceEdges norms csvData =
     case decode HasHeader csvData of
         Left err -> Left (T.pack ("substance_edges.csv parse error: " <> err))
         Right rows ->
@@ -215,13 +258,13 @@ parseSubstanceEdges normalize csvData =
 
     parseKey n kt src key =
         case T.toLower (T.strip kt) of
-            "cas" -> Right (ByCAS (CASNumber (T.strip key)))
+            "cas" -> Right (ByCAS (knCAS norms (T.strip key)))
             "uuid" -> case fromText (T.strip key) of
                 Just u -> Right (ByUUID (FlowUUID u))
                 Nothing -> Left (rowErr n ("invalid UUID '" <> T.strip key <> "'"))
             "name"
                 | T.null (T.strip src) -> Left (rowErr n "name key needs a source")
-                | otherwise -> Right (ByName (SourceId (T.strip src)) (normalize key))
+                | otherwise -> Right (ByName (SourceId (T.strip src)) (knName norms key))
             other -> Left (rowErr n ("unknown key type '" <> other <> "' (cas|uuid|name)"))
 
     parseRelation n rel scale =

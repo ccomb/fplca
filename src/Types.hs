@@ -36,6 +36,7 @@ import Control.Lens ((&), (?~))
 import Data.List (nub)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
+import SubstanceRegistry (CASNumber (..), NormName (..))
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
 
@@ -982,6 +983,33 @@ addFlowNameIndexToDatabase db =
         , dbFlowsByCAS = buildFlowCASIndex (dbBioFlows db)
         , dbProductSearchIndex = buildProductSearchIndex (dbActivities db) (dbTechFlows db)
         }
+
+{- | Fill empty @bfCAS@ from registry name→CAS bindings, then rebuild the CAS
+index so the native CAS bridge fires. Holes only — a CAS the database itself
+provided is authoritative and never overwritten, which bounds any risk from a
+binding applying to a name another source uses differently. A no-op (the same
+'Database') when there are no bindings, so this never touches databases the
+registry doesn't speak to.
+-}
+enrichBioFlowCAS :: M.Map NormName CASNumber -> Database -> Database
+enrichBioFlowCAS bindings db
+    | M.null bindings = db
+    | otherwise = addFlowNameIndexToDatabase db{dbBioFlows = fillBioFlowCAS bindings (dbBioFlows db)}
+
+{- | Fill empty @bfCAS@ from name→CAS bindings (holes only) — the pure core of
+'enrichBioFlowCAS', over the flow map alone so it is testable without a whole
+'Database'. A flow that already carries a non-empty CAS is left untouched.
+-}
+fillBioFlowCAS :: M.Map NormName CASNumber -> BioFlowDB -> BioFlowDB
+fillBioFlowCAS bindings = M.map fill
+  where
+    fill f
+        | hasCAS (bfCAS f) = f
+        | otherwise = case M.lookup (NormName (normalizeName (bfName f))) bindings of
+            Just (CASNumber c) -> f{bfCAS = Just c}
+            Nothing -> f
+    hasCAS (Just c) = not (T.null c)
+    hasCAS Nothing = False
 
 {- | Build word-token product search index: lowercased word → IntSet of ProcessIds
 Tokenizes reference product flow names so product search can use index intersection.

@@ -143,6 +143,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
+import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import Method.Mapping (
@@ -180,7 +181,7 @@ import Progress (ProgressLevel (..), reportError, reportProgress, reportProgress
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
-import SubstanceRegistry (NormName (..), SubstanceEdge, parseSubstanceEdges)
+import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
 import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, synonymCount)
 import Types (
     Activity (..),
@@ -207,6 +208,7 @@ import Types (
     deduplicateAttributeFallbacks,
     deduplicateFallbacks,
     deduplicateUnresolved,
+    enrichBioFlowCAS,
     exchangeFlowId,
     exchangeIsReference,
     initializeRuntimeFields,
@@ -539,8 +541,15 @@ data DatabaseManager = DatabaseManager
     -}
     , dmSubstanceEdges :: ![SubstanceEdge]
     {- ^ Typed flow-correspondence edges loaded once at startup from
-    @substance_edges.csv@. Empty when no path is configured; only the
-    @ProxyFor@ edges currently feed the CF cascade ('expandProxyEdges').
+    @substance_edges.csv@. Empty when no path is configured. @ProxyFor@ edges
+    feed the CF cascade ('expandProxyEdges'); @SameAs@ name↔CAS edges feed
+    'dmCasBindings'.
+    -}
+    , dmCasBindings :: !(M.Map NormName CASNumber)
+    {- ^ Name→CAS identities distilled from the @SameAs@ edges, applied to
+    every database at load ('enrichBioFlowCAS') to fill empty @bfCAS@ so the
+    native CAS bridge reaches flows a source left CAS-less (e.g. SimaPro
+    exports). Empty when no edges bind a name to a CAS.
     -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (BioFlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
@@ -808,11 +817,21 @@ initDatabaseManager config noCache configPath = do
                     pure []
                 else do
                     raw <- BL.readFile path
-                    case parseSubstanceEdges (NormName . normalizeName) raw of
+                    case parseSubstanceEdges (KeyNormalizers (NormName . normalizeName) (CASNumber . normalizeCAS)) raw of
                         Right es -> pure es
                         Left err -> do
                             putStrLn $ "warning: could not load substance edges from " <> path <> ": " <> T.unpack err
                             pure []
+    let (substanceCasBindings, casBindingConflicts) = casBindingsFromEdges substanceEdges
+    forM_ casBindingConflicts $ \(NormName n, (CASNumber c1, CASNumber c2)) ->
+        putStrLn $
+            "warning: substance_edges.csv binds flow name '"
+                <> T.unpack n
+                <> "' to two CAS ("
+                <> T.unpack c1
+                <> " kept, "
+                <> T.unpack c2
+                <> " ignored)"
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -842,6 +861,7 @@ initDatabaseManager config noCache configPath = do
                 , dmMethodIndexCache = methodIndexCacheVar
                 , dmChemSynonyms = chemSyns
                 , dmSubstanceEdges = substanceEdges
+                , dmCasBindings = substanceCasBindings
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }
@@ -938,8 +958,12 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
     let transforms = prTransforms (dmPlugins manager)
     result <- loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
     case result of
-        Right (loaded, _fromCache) -> do
-            let indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
+        Right (loaded0, _fromCache) -> do
+            -- Backfill empty bfCAS from the registry's name↔CAS edges before
+            -- indexing, so a CAS-less source (e.g. a SimaPro export) still
+            -- reaches the native CAS bridge.
+            let loaded = loaded0{ldDatabase = enrichBioFlowCAS (dmCasBindings manager) (ldDatabase loaded0)}
+                indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
             atomically $ do
                 modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
                 modifyTVar' indexedDbsVar (M.insert (dcName dbConfig) indexedDb)

@@ -2,6 +2,7 @@ module SubstanceRegistrySpec (spec) where
 
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.Either (isLeft)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.UUID (nil)
@@ -12,12 +13,14 @@ import SubstanceRegistry (
     ClassResult (..),
     ConversionFactor (..),
     FlowUUID (..),
+    KeyNormalizers (..),
     NormName (..),
     Relation (..),
     SourceId (..),
     SplitWeight (..),
     SubstanceEdge (..),
     SubstanceKey (..),
+    casBindingsFromEdges,
     classesFromEdges,
     equivalenceClasses,
     parseSubstanceEdges,
@@ -38,9 +41,26 @@ cas c = ByCAS (CASNumber (T.pack c))
 sameAs :: SubstanceKey -> SubstanceKey -> SubstanceEdge
 sameAs a b = SubstanceEdge a b SameAs
 
+-- A singleton name→CAS binding map, the shape 'casBindingsFromEdges' returns.
+byName1 :: String -> String -> M.Map NormName CASNumber
+byName1 n c = M.singleton (NormName (T.pack n)) (CASNumber (T.pack c))
+
 -- A trivial normalizer for the parser tests (the real one is SynonymDB.normalizeName).
 testNorm :: T.Text -> NormName
 testNorm = NormName . T.toLower . T.strip
+
+-- Mirrors EcoSpold.Parser2.normalizeCAS: strip leading zeros from the first
+-- segment only. Injected so the parser tests exercise CAS canonicalization
+-- without pulling in the parser module.
+testCas :: T.Text -> CASNumber
+testCas c = CASNumber $ case T.splitOn dash (T.strip c) of
+    [a, b, d] -> let a' = T.dropWhile (== '0') a in (if T.null a' then T.pack "0" else a') <> dash <> b <> dash <> d
+    _ -> T.strip c
+  where
+    dash = T.pack "-"
+
+testNorms :: KeyNormalizers
+testNorms = KeyNormalizers testNorm testCas
 
 -- Prefix the header row so each body line is a data row.
 edgesCsv :: String -> BLC.ByteString
@@ -116,48 +136,75 @@ spec = do
 
     describe "parseSubstanceEdges" $ do
         it "parses a name↔CAS SameAs edge, normalizing the name" $
-            parseSubstanceEdges testNorm (edgesCsv "name,simapro,Formaldehyde,cas,,50-00-0,sameas,\n")
+            parseSubstanceEdges testNorms (edgesCsv "name,simapro,Formaldehyde,cas,,50-00-0,sameas,\n")
                 `shouldBe` Right [SubstanceEdge (nm "simapro" "formaldehyde") (cas "50-00-0") SameAs]
 
         it "parses a ProxyFor edge with its conversion factor" $
-            parseSubstanceEdges testNorm (edgesCsv "cas,,1336-36-3,name,jrc,PCB,proxyfor,0.5\n")
+            parseSubstanceEdges testNorms (edgesCsv "cas,,1336-36-3,name,jrc,PCB,proxyfor,0.5\n")
                 `shouldBe` Right [SubstanceEdge (cas "1336-36-3") (nm "jrc" "pcb") (ProxyFor (ConversionFactor 0.5))]
 
         it "parses a Subsumes edge with its split weight" $
-            parseSubstanceEdges testNorm (edgesCsv "name,ef,sulfur oxides,name,ef,sulfur dioxide,subsumes,0.9\n")
+            parseSubstanceEdges testNorms (edgesCsv "name,ef,sulfur oxides,name,ef,sulfur dioxide,subsumes,0.9\n")
                 `shouldBe` Right [SubstanceEdge (nm "ef" "sulfur oxides") (nm "ef" "sulfur dioxide") (Subsumes (SplitWeight 0.9))]
 
         it "resolves a UUID anchor (ignoring its source annotation)" $
-            fmap (map seFrom) (parseSubstanceEdges testNorm (edgesCsv "uuid,ecoinvent-3.11,00000000-0000-0000-0000-000000000000,cas,,1-1-1,sameas,\n"))
+            fmap (map seFrom) (parseSubstanceEdges testNorms (edgesCsv "uuid,ecoinvent-3.11,00000000-0000-0000-0000-000000000000,cas,,1-1-1,sameas,\n"))
                 `shouldBe` Right [ByUUID (FlowUUID nil)]
 
         it "parses several rows" $
-            fmap length (parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,sameas,\nname,a,y,name,a,z,sameas,\n"))
+            fmap length (parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,sameas,\nname,a,y,name,a,z,sameas,\n"))
                 `shouldBe` Right 2
 
         it "rejects a name key with no source" $
-            parseSubstanceEdges testNorm (edgesCsv "name,,x,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,,x,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
 
         it "rejects a Subsumes edge with no weight" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,subsumes,\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,subsumes,\n") `shouldSatisfy` isLeft
 
         it "rejects a Subsumes weight outside (0,1]" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,subsumes,1.5\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,subsumes,1.5\n") `shouldSatisfy` isLeft
 
         it "rejects a ProxyFor factor of zero" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,proxyfor,0\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,proxyfor,0\n") `shouldSatisfy` isLeft
 
         it "rejects a SameAs edge carrying a scale" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,sameas,0.5\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,sameas,0.5\n") `shouldSatisfy` isLeft
 
         it "rejects an unknown relation" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,name,a,y,equals,\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,name,a,y,equals,\n") `shouldSatisfy` isLeft
 
         it "rejects an unknown key type" $
-            parseSubstanceEdges testNorm (edgesCsv "thing,a,x,name,a,y,sameas,\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "thing,a,x,name,a,y,sameas,\n") `shouldSatisfy` isLeft
 
         it "rejects a malformed UUID" $
-            parseSubstanceEdges testNorm (edgesCsv "uuid,,not-a-uuid,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "uuid,,not-a-uuid,cas,,1-1-1,sameas,\n") `shouldSatisfy` isLeft
 
         it "rejects a row with the wrong field count" $
-            parseSubstanceEdges testNorm (edgesCsv "name,a,x,cas,,1-1-1,sameas\n") `shouldSatisfy` isLeft
+            parseSubstanceEdges testNorms (edgesCsv "name,a,x,cas,,1-1-1,sameas\n") `shouldSatisfy` isLeft
+
+        it "canonicalizes the CAS through the injected normalizer (leading zeros)" $
+            fmap (map seTo) (parseSubstanceEdges testNorms (edgesCsv "name,simapro,Lead,cas,,007439-92-1,sameas,\n"))
+                `shouldBe` Right [cas "7439-92-1"]
+
+    describe "casBindingsFromEdges" $ do
+        let bindings = fst . casBindingsFromEdges
+            conflicts = snd . casBindingsFromEdges
+        it "binds a name to a CAS from a SameAs edge, both orientations" $ do
+            bindings [sameAs (nm "agb" "2,4-d") (cas "94-75-7")]
+                `shouldBe` byName1 "2,4-d" "94-75-7"
+            bindings [sameAs (cas "94-75-7") (nm "agb" "2,4-d")]
+                `shouldBe` byName1 "2,4-d" "94-75-7"
+
+        it "ignores ProxyFor, Subsumes, DistinctFrom and name↔name edges" $
+            bindings
+                [ SubstanceEdge (cas "1-1-1") (nm "a" "x") (ProxyFor (ConversionFactor 2))
+                , SubstanceEdge (nm "a" "x") (nm "a" "y") (Subsumes (SplitWeight 0.5))
+                , SubstanceEdge (nm "a" "x") (cas "1-1-1") DistinctFrom
+                , sameAs (nm "a" "x") (nm "a" "y")
+                ]
+                `shouldBe` mempty
+
+        it "reports a name bound to two distinct CAS (first kept)" $ do
+            let es = [sameAs (nm "a" "x") (cas "1-1-1"), sameAs (nm "a" "x") (cas "2-2-2")]
+            bindings es `shouldBe` byName1 "x" "1-1-1"
+            map fst (conflicts es) `shouldBe` [NormName (T.pack "x")]
