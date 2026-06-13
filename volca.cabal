@@ -225,6 +225,7 @@ test-suite lca-tests
                      , PluginSpec
                      , ProxyEdgeSpec
                      , CASBackfillSpec
+                     , RegionFallbackSpec
                      , ServerSpec
                      , ILCDParserSpec
                      , SupplyChainSpec

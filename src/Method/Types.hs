@@ -37,6 +37,9 @@ module Method.Types (
     buildEnergyDensityMapFromCSV,
     energyDensityMapSize,
 
+    -- * Region-suffixed flow names
+    extractLocationSuffix,
+
     -- * Flow Mapping
     FlowMapping (..),
     MatchType (..),
@@ -366,6 +369,45 @@ buildEnergyDensityMapFromCSV csvData =
 -- | Number of entries in the energy-density map.
 energyDensityMapSize :: EnergyDensityMap -> Int
 energyDensityMapSize = M.size
+
+{- | SimaPro encodes regional variants of a flow as a suffix on the flow name:
+@"Nitrogen dioxide, FR"@. Split that suffix off, returning the base name and
+the region code. Two layers use it: the CF parser, to index a CF by
+@(flow, location)@ instead of an opaque concatenated name; and the read-side
+score lookup, to fall a region-suffixed database flow back to the base
+substance's CF when the method doesn't tag that region.
+
+Heuristic: the trailing token must start with an uppercase ASCII letter,
+contain only letters or hyphens, and be 2–6 characters long. This catches:
+
+  * ISO-2 country codes: @FR@, @DE@, @AD@
+  * Regional aggregates: @RER@, @GLO@
+  * @RoW@ (rest of world; mixed case)
+  * Sub-national codes: @FR-IDF@ (if a database adopts them)
+
+But not @"change"@ (lowercase first), @"indoor"@, @"fossil"@, @"ion"@, which
+are legitimate parts of compound flow names. If nothing matches, the original
+name is returned unchanged with no location.
+-}
+extractLocationSuffix :: Text -> (Text, Maybe Text)
+extractLocationSuffix name =
+    case T.breakOnEnd (T.pack ", ") name of
+        (prefixWithSep, candidate)
+            | T.null prefixWithSep -> (name, Nothing) -- no ", " separator
+            | isLocationCode candidate
+            , let cleaned = T.dropEnd 2 prefixWithSep -- drop trailing ", "
+            , not (T.null cleaned) ->
+                (cleaned, Just candidate)
+            | otherwise -> (name, Nothing)
+  where
+    isLocationCode t
+        | T.length t < 2 || T.length t > 6 = False
+        | otherwise =
+            let firstC = T.head t
+                rest = T.unpack (T.tail t)
+             in firstC >= 'A'
+                    && firstC <= 'Z'
+                    && all (\c -> (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') rest
 
 -- | How a method flow was matched to a database flow
 data MatchType

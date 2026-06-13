@@ -1327,6 +1327,20 @@ lookupCascadeCF tables flowDB fid =
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
                 <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
+                <|> regionBaseFallback flow baseMed normSub
+
+    -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
+    -- doesn't tag falls back to the base substance's CF: an unregionalized CF
+    -- for "Ammonia" applies to the emission wherever it occurs. Only fires
+    -- after every direct lookup misses, and only when the suffix is a real
+    -- region code (extractLocationSuffix leaves "Methane, fossil" untouched).
+    regionBaseFallback flow baseMed normSub =
+        case extractLocationSuffix (bfName flow) of
+            (base, Just _) ->
+                let bname = normalizeName base
+                 in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
+                        <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
+            _ -> Nothing
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
