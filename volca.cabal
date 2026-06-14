@@ -226,6 +226,7 @@ test-suite lca-tests
                      , ProxyEdgeSpec
                      , CASBackfillSpec
                      , RegionFallbackSpec
+                     , EnergyResourceFillSpec
                      , ServerSpec
                      , ILCDParserSpec
                      , SupplyChainSpec

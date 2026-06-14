@@ -36,6 +36,7 @@ module Method.Types (
     EnergyDensityMap,
     buildEnergyDensityMapFromCSV,
     energyDensityMapSize,
+    parseEnergyDensitySuffix,
 
     -- * Region-suffixed flow names
     extractLocationSuffix,
@@ -61,6 +62,7 @@ import qualified Data.Vector as V
 import qualified Expr
 import GHC.Generics (Generic)
 import SynonymDB (normalizeName)
+import Text.Read (readMaybe)
 
 -- | Direction of a biosphere flow (input from or output to environment)
 data FlowDirection
@@ -369,6 +371,34 @@ buildEnergyDensityMapFromCSV csvData =
 -- | Number of entries in the energy-density map.
 energyDensityMapSize :: EnergyDensityMap -> Int
 energyDensityMapSize = M.size
+
+{- | Parse a flow name that encodes an energy density as a suffix —
+@"Coal, 18 MJ per kg"@, @"Gas, natural, 35 MJ per m3"@, @"Uranium, 2291 GJ per
+kg"@ — into @(base substance name, density)@. The value and energy unit are
+taken verbatim (@332 GJ@), leaving the GJ→MJ conversion to the unit machinery
+downstream. The @per {unit}@ denominator becomes the density's native unit, so
+the conversion can bring the flow's quantity into the unit the density is
+denominated against (a flow in @g@ against a @per kg@ density still converts).
+
+Only the joule family (kJ/MJ/GJ/TJ) counts as the energy token, so a name that
+merely contains @" per "@ (e.g. @"Water, per capita"@) is not mistaken for a
+density. The base keeps internal qualifiers ("Gas, natural") and drops only the
+trailing separator.
+-}
+parseEnergyDensitySuffix :: Text -> Maybe (Text, EnergyDensity)
+parseEnergyDensitySuffix name =
+    case T.breakOn (T.pack " per ") name of
+        (left, rest)
+            | Just after <- T.stripPrefix (T.pack " per ") rest
+            , (eunit : nTok : baseRev) <- reverse (T.words left)
+            , isJouleUnit eunit
+            , Just n <- readMaybe (T.unpack nTok)
+            , (nativeUnit : _) <- T.words after ->
+                Just (cleanBase (reverse baseRev), EnergyDensity n eunit nativeUnit)
+        _ -> Nothing
+  where
+    isJouleUnit u = T.toUpper u `elem` map T.pack ["KJ", "MJ", "GJ", "TJ"]
+    cleanBase ws = T.dropWhileEnd (\c -> c == ',' || c == ' ') (T.unwords ws)
 
 {- | SimaPro encodes regional variants of a flow as a suffix on the flow name:
 @"Nitrogen dioxide, FR"@. Split that suffix off, returning the base name and

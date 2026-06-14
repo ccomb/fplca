@@ -1328,6 +1328,7 @@ lookupCascadeCF tables flowDB fid =
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
                 <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
                 <|> regionBaseFallback flow baseMed normSub
+                <|> energyResourceFallback flow baseMed normSub
 
     -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
     -- doesn't tag falls back to the base substance's CF: an unregionalized CF
@@ -1341,6 +1342,29 @@ lookupCascadeCF tables flowDB fid =
                  in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
                         <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
             _ -> Nothing
+
+    -- An energy-resource flow whose name encodes its density ("Coal, 18 MJ per
+    -- kg") borrows the CF of its resource family (coal/oil/gas/uranium…) — the
+    -- generic per-MJ resource CF. The density itself is applied downstream by
+    -- 'convertAndMultiply', which name-parses the same suffix, so here we only
+    -- return the base CF. The resource family is resolved through the known
+    -- energy resources ('mtEnergyDensities'), so an unknown resource never
+    -- borrows a CF. Last in the cascade: only fires when all else misses.
+    energyResourceFallback flow baseMed normSub =
+        case parseEnergyDensitySuffix (bfName flow) of
+            Just (base, _) ->
+                let fam = firstWord (normalizeName base)
+                 in foldr
+                        (\rname acc -> resourceCF rname baseMed normSub <|> acc)
+                        Nothing
+                        [rname | rname <- M.keys (mtEnergyDensities tables), firstWord rname == fam]
+            Nothing -> Nothing
+
+    resourceCF rname baseMed normSub =
+        M.lookup (rname, baseMed, normSub) (mtExactCF tables)
+            <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
+
+    firstWord = T.takeWhile (/= ' ') . T.strip
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
@@ -1448,7 +1472,13 @@ convertAndMultiply ::
     Double
 convertAndMultiply unitConfig unitDB energyDensities mflow (cfVal, cfUnit) qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
-        mDensity = mflow >>= \f -> M.lookup (normalizeName (bfName f)) energyDensities
+        -- Density from the curated CSV first; else parse it from the flow name
+        -- ("Coal, 18 MJ per kg" → 18 MJ), so energy-resource variants the CSV
+        -- doesn't enumerate still convert mass/volume → energy.
+        mDensity =
+            mflow >>= \f ->
+                M.lookup (normalizeName (bfName f)) energyDensities
+                    <|> fmap snd (parseEnergyDensitySuffix (bfName f))
         converted = energyAwareConversion unitConfig flowUnit cfUnit mDensity qty
      in converted * cfVal
 
