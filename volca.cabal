@@ -227,6 +227,7 @@ test-suite lca-tests
                      , CASBackfillSpec
                      , RegionFallbackSpec
                      , EnergyResourceFillSpec
+                     , SubBlindCFSpec
                      , ServerSpec
                      , ILCDParserSpec
                      , SupplyChainSpec

@@ -76,7 +76,7 @@ import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.Either (lefts, rights)
-import Data.List (find, sortOn)
+import Data.List (find, nub, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
@@ -314,6 +314,14 @@ data MethodTables = MethodTables
     -- ^ (normalized name, medium, subcompartment) → (CF, unit)
     , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
+    , mtSubBlindCF :: !(M.Map (Text, Text) (Double, Text))
+    {- ^ (normalized name, medium) → (CF, unit), but only where the substance's
+    factor is the SAME across every subcompartment — i.e. the subcompartment
+    genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
+    == any sub). Lets a flow whose sub matches no exact CF and has no
+    unspecified fallback still resolve, without guessing for a substance whose
+    factor DOES vary by sub (water by source), which is omitted as ambiguous.
+    -}
     , mtCasCF :: !(M.Map (Text, Text) (Double, Text))
     {- ^ (CAS, normalized medium) → (CF, unit), from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
@@ -732,6 +740,21 @@ buildMethodTables cmap energyDensities mappings =
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
                     , isUnspecifiedSub normSub
                     ]
+        , mtSubBlindCF =
+            -- Keep a (name, medium) entry only when every subcompartment's CF
+            -- agrees: then the sub is irrelevant and a sub-mismatched flow can
+            -- safely borrow it. A substance whose factor varies by sub is
+            -- dropped here, so this never guesses across a real distinction.
+            M.mapMaybe agreedValue $
+                M.fromListWith
+                    (++)
+                    [ ((nameKey cf mflow, normMed), [(mcfValue cf, mcfUnit cf)])
+                    | (cf, mflow) <- mappings
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
             -- read path reaches every database flow sharing that CAS+medium —
@@ -803,6 +826,12 @@ buildMethodTables cmap energyDensities mappings =
         }
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
+
+    -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
+    -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
+    agreedValue vus = case nub (map fst vus) of
+        [_] -> case vus of vu : _ -> Just vu; [] -> Nothing
+        _ -> Nothing
 
     -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
     -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
@@ -1327,6 +1356,7 @@ lookupCascadeCF tables flowDB fid =
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
                 <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
+                <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
                 <|> regionBaseFallback flow baseMed normSub
                 <|> energyResourceFallback flow baseMed normSub
 
