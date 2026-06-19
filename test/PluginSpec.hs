@@ -62,7 +62,10 @@ spec = do
     describe "Mapper cascade ordering" $ do
         it "defaultMappers has 4 mappers in priority order" $ do
             length defaultMappers `shouldBe` 4
-            map mhName defaultMappers `shouldBe` ["uuid-mapper", "cas-mapper", "name-mapper", "synonym-mapper"]
+            -- CAS is the fallback after the specific UUID/name/synonym matchers,
+            -- so it cannot leak a same-CAS CF across a name split (fossil vs
+            -- biogenic methane); see SharedCASCoverageSpec.
+            map mhName defaultMappers `shouldBe` ["uuid-mapper", "name-mapper", "synonym-mapper", "cas-mapper"]
 
         it "priorities are strictly increasing" $ do
             let priorities = map mhPriority defaultMappers
