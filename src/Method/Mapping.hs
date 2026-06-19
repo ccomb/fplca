@@ -745,7 +745,8 @@ buildMethodTables cmap mappings =
     stratPriority ByName = 1
     stratPriority BySynonym = 2
     stratPriority ByCAS = 3
-    stratPriority _ = 4
+    stratPriority ByFuzzy = 4
+    stratPriority NoMatch = 4
 
     matchStrategy mflow = case mflow of
         Just (_, s) -> s
