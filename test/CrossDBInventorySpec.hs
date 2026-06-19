@@ -178,6 +178,7 @@ spec = do
                     , mtRegionalCasCF = M.empty
                     , mtRegionalizedCF = M.empty
                     , mtCompartmentMap = M.empty
+                    , mtEnergyDensities = M.empty
                     , mtBroadcast = M.empty
                     , mtRegionalActivityWeights = Nothing
                     }

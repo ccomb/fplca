@@ -97,7 +97,7 @@ import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandl
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig, convertUnit, isKnownUnit)
+import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeUnit)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -328,6 +328,14 @@ data MethodTables = MethodTables
     Applied to both CF compartments at build time and database flow
     compartments at query time, so both sides converge to the same
     canonical form. Empty map = identity, no normalization.
+    -}
+    , mtEnergyDensities :: !EnergyDensityMap
+    {- ^ Normalized flow name → energy density (MJ per native flow unit).
+    Lets an energy-denominated CF (dimension @energy@, e.g. a JRC fossil CF in
+    MJ) characterize a mass/volume inventory flow (kg, Sm3): the flow quantity
+    is converted to energy via its density before the CF multiply. Flows with
+    no entry behave exactly as before — an energy CF vs. a mass flow still
+    yields a zero effective CF. Empty map = feature inactive.
     -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
@@ -590,8 +598,8 @@ expandSynonymMappings synDB flowsByName mappings =
 -- @resources/land@ via the compartment map), so it's simpler to let
 -- the table keys do the filtering.
 
-buildMethodTables :: CompartmentMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
-buildMethodTables cmap mappings =
+buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
+buildMethodTables cmap energyDensities mappings =
     MethodTables
         { mtUuidCF =
             -- Non-regionalized rows only, like the name tables below: a
@@ -687,6 +695,7 @@ buildMethodTables cmap mappings =
                 , cfSubcompMatchesFlow cf flow
                 ]
         , mtCompartmentMap = cmap
+        , mtEnergyDensities = energyDensities
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
@@ -793,7 +802,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
   where
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (Just flow) cfTuple 1.0)
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfTuple 1.0)
 
 {- | Precompute per-activity-column contributions for a regionalized method.
 
@@ -919,6 +928,7 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                             convertAndMultiply
                                 unitCfg
                                 unitDB
+                                (mtEnergyDensities tables)
                                 (M.lookup flowUUID flowDB)
                                 cfTuple
                                 bioVal
@@ -1013,14 +1023,14 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 
     legacyScoreFlow fid qty = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (M.lookup fid flowDB) cfTuple qty)
+        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cfTuple qty)
 
 {- | Back-compat wrapper: build tables on the fly. Prefer the cached path
 ('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty M.empty mappings)
 
 {- | LCIA score with automatic dispatch.
 
@@ -1244,17 +1254,64 @@ flowMediumSub cmap flow =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
      in (normalizeMedium normMedRaw, normSub)
 
+{- | True when @unit@ is dimensionally an energy unit (same exponent vector as
+the reference @mj@). Used to detect the energy-CF-vs-non-energy-flow case the
+energy-density bridge targets, without hardcoding any unit string.
+-}
+isEnergyUnit :: UnitConfig -> Text -> Bool
+isEnergyUnit cfg unit =
+    case (lookupUnitDef cfg unit, lookupUnitDef cfg "MJ") of
+        (Just a, Just energyRef) -> udDimension a == udDimension energyRef
+        _ -> False
+
+{- | Flow→CF conversion factor for @qty@ units of flow, applying the
+energy-density bridge when it is needed and available.
+
+The bridge fires only when the CF is energy-denominated, the flow is __not__
+(its unit isn't an energy unit), and the flow carries an 'EnergyDensity'. The
+inventory quantity is first brought into the density's native unit, then turned
+into energy: @qNative × E@, where @E@ is the density value converted from its
+declared energy unit into the CF's unit. Either conversion failing — the flow
+unit can't reach the native unit, or the energy unit can't reach the CF unit —
+yields @0@: we refuse a wrong-basis or wrong-dimension factor rather than
+silently using the raw value.
+
+Every other case (matching dimensions, no density, or an energy flow) defers
+to 'convertForCharacterization', so flows without a density are unchanged.
+-}
+energyAwareConversion :: UnitConfig -> Text -> Text -> Maybe EnergyDensity -> Double -> Double
+energyAwareConversion cfg flowUnit cfUnit mDensity qty =
+    case mDensity of
+        Just (EnergyDensity ev energyUnit nativeUnit)
+            | isEnergyUnit cfg cfUnit
+            , not (isEnergyUnit cfg flowUnit) ->
+                fromMaybe 0 $ do
+                    qtyNative <- toNativeQty flowUnit nativeUnit
+                    factor <- convertUnit cfg energyUnit cfUnit ev
+                    pure (qtyNative * factor)
+        _ -> convertForCharacterization cfg flowUnit cfUnit qty
+  where
+    -- Bring the inventory quantity into the unit the density is denominated
+    -- against: identical units need no table entry, otherwise a same-dimension
+    -- conversion. An incompatible or unknown unit yields 'Nothing' → 0.
+    toNativeQty fu nu
+        | normalizeUnit fu == normalizeUnit nu = Just qty
+        | otherwise = convertUnit cfg fu nu qty
+
 {- | Apply the flow→CF unit conversion factor and multiply by the CF value.
 
-Delegates to 'convertForCharacterization' for the conversion step, so a
-dimensional mismatch between flow and CF units lands an effective @0@
-(refuse to score wrong-dimension data) rather than silently passing the
-unconverted quantity through. Pass @qty = 1.0@ to obtain the effective-CF
-factor used at build time; pass an actual quantity for inline scoring.
+Delegates to 'energyAwareConversion', which falls back to
+'convertForCharacterization' unless the energy-density bridge applies — so a
+dimensional mismatch between flow and CF units lands an effective @0@ (refuse
+to score wrong-dimension data) rather than silently passing the unconverted
+quantity through. Pass @qty = 1.0@ to obtain the effective-CF factor used at
+build time; pass an actual quantity for inline scoring.
 -}
 convertAndMultiply ::
     UnitConfig ->
     UnitDB ->
+    -- | Normalized-flow-name → energy density, for the energy-CF bridge.
+    EnergyDensityMap ->
     {- | Pre-resolved flow if the caller already has it; @Nothing@ defaults to
     the identity factor (no flow record means no flow unit known).
     -}
@@ -1263,9 +1320,10 @@ convertAndMultiply ::
     (Double, Text) ->
     Double ->
     Double
-convertAndMultiply unitConfig unitDB mflow (cfVal, cfUnit) qty =
+convertAndMultiply unitConfig unitDB energyDensities mflow (cfVal, cfUnit) qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
-        converted = convertForCharacterization unitConfig flowUnit cfUnit qty
+        mDensity = mflow >>= \f -> M.lookup (normalizeName (bfName f)) energyDensities
+        converted = energyAwareConversion unitConfig flowUnit cfUnit mDensity qty
      in converted * cfVal
 
 {- | Per-flow contributions over an 'Inventory', keyed by flow UUID (possibly
@@ -1309,7 +1367,7 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
             Just flow -> case lookupCascadeCF tables flowDB fid of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
                 Just cfTuple@(cfVal, _) ->
-                    let !contribution = convertAndMultiply unitConfig unitDB (Just flow) cfTuple qty
+                    let !contribution = convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfTuple qty
                      in ((flow, cfVal, contribution) : contribs, unknowns)
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
@@ -1350,7 +1408,7 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
                 Nothing -> 0
                 Just _ -> case lookupCascadeCF tables flowDB flowUUID of
                     Nothing -> 0
-                    Just cfTuple -> convertAndMultiply unitConfig unitDB mflow cfTuple 1.0
+                    Just cfTuple -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cfTuple 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in
@@ -1591,7 +1649,7 @@ scoreBatched unitCfg unitDB flowDB bt inventory
                 case lookupCascadeCF tables flowDB uuid of
                     Nothing -> 0
                     Just cfTuple ->
-                        convertAndMultiply unitCfg unitDB (M.lookup uuid flowDB) cfTuple qty
+                        convertAndMultiply unitCfg unitDB (mtEnergyDensities tables) (M.lookup uuid flowDB) cfTuple qty
             scores = U.create $ do
                 mv <- MU.replicate nMethods (0.0 :: Double)
                 mapM_

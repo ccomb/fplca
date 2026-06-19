@@ -31,6 +31,12 @@ module Method.Types (
     normalizeCompartment,
     compartmentMapSize,
 
+    -- * Energy density (mass/volume → energy for energy-denominated CFs)
+    EnergyDensity (..),
+    EnergyDensityMap,
+    buildEnergyDensityMapFromCSV,
+    energyDensityMapSize,
+
     -- * Flow Mapping
     FlowMapping (..),
     MatchType (..),
@@ -51,6 +57,7 @@ import Data.UUID (UUID)
 import qualified Data.Vector as V
 import qualified Expr
 import GHC.Generics (Generic)
+import SynonymDB (normalizeName)
 
 -- | Direction of a biosphere flow (input from or output to environment)
 data FlowDirection
@@ -306,6 +313,59 @@ normalizeCompartment cmap (Compartment med sub qual) =
 -- | Number of entries in the compartment map.
 compartmentMapSize :: CompartmentMap -> Int
 compartmentMapSize = M.size
+
+{- | Energy content of a flow, used to characterize an energy-denominated CF
+(e.g. a JRC fossil-resource CF in MJ) against an inventory flow given in mass or
+volume (kg, Sm3, …).
+
+A row @Coal, hard,18.01,MJ,kg@ reads: 1 kg of @Coal, hard@ carries 18.01 MJ.
+'edEnergyUnit' is the unit of the energy amount (converted to the CF's unit at
+score time); 'edNativeUnit' is the unit the content is denominated against, so
+the inventory quantity is brought into that unit before the density is applied.
+Naming the native unit keeps the bridge dimensionally honest: a flow reported in
+a different but compatible unit (g, t) still scores correctly, and one whose
+unit can't be converted to the native unit scores 0 instead of by a wrong basis.
+-}
+data EnergyDensity = EnergyDensity
+    { edValue :: !Double
+    , edEnergyUnit :: !Text
+    , edNativeUnit :: !Text
+    }
+    deriving (Eq, Show, Generic)
+
+instance NFData EnergyDensity
+
+{- | Normalized flow name → energy density. Keyed by 'SynonymDB.normalizeName'
+so the scoring read paths can look a flow up by the same canonical name they
+already use for CF matching.
+-}
+type EnergyDensityMap = M.Map Text EnergyDensity
+
+{- | Build an 'EnergyDensityMap' from CSV content.
+CSV columns (with header): @flow_name, value, energy_unit, native_unit@ — e.g.
+@Coal, hard,18.01,MJ,kg@. Keys are normalized at parse time so the union of
+active CSVs and the read-path lookups agree. Each row is validated: a
+non-positive value or a missing unit is a load error, never a silently inert or
+wrong-dimension entry.
+-}
+buildEnergyDensityMapFromCSV :: BL.ByteString -> Either String EnergyDensityMap
+buildEnergyDensityMapFromCSV csvData =
+    case decode HasHeader csvData of
+        Left err -> Left $ "CSV parse error: " <> err
+        Right rows ->
+            M.fromList <$> traverse toEntry (V.toList (rows :: V.Vector (Text, Double, Text, Text)))
+  where
+    toEntry (name, value, energyUnit, nativeUnit)
+        | value <= 0 =
+            Left $ "energy density must be positive (flow: " <> T.unpack name <> ")"
+        | T.null (T.strip energyUnit) || T.null (T.strip nativeUnit) =
+            Left $ "energy density needs an energy unit and a native unit (flow: " <> T.unpack name <> ")"
+        | otherwise =
+            Right (normalizeName name, EnergyDensity value (T.strip energyUnit) (T.strip nativeUnit))
+
+-- | Number of entries in the energy-density map.
+energyDensityMapSize :: EnergyDensityMap -> Int
+energyDensityMapSize = M.size
 
 -- | How a method flow was matched to a database flow
 data MatchType

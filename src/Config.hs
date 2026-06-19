@@ -71,6 +71,7 @@ data Config = Config
     , cfgFlowSynonyms :: ![RefDataConfig]
     , cfgCompartmentMappings :: ![RefDataConfig]
     , cfgUnits :: ![RefDataConfig]
+    , cfgEnergyDensities :: ![RefDataConfig]
     , cfgPlugins :: ![PluginConfig]
     , cfgHosting :: !(Maybe HostingConfig)
     , cfgGeographies :: !(Maybe FilePath) -- Path to geographies CSV (code,display_name,parents)
@@ -172,6 +173,7 @@ defaultConfig =
         , cfgFlowSynonyms = []
         , cfgCompartmentMappings = []
         , cfgUnits = []
+        , cfgEnergyDensities = []
         , cfgPlugins = []
         , cfgHosting = Nothing
         , cfgGeographies = Nothing
@@ -189,6 +191,7 @@ instance DecodeTOML Config where
         cfgFlowSynonyms <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "flow-synonyms"
         cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
         cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
+        cfgEnergyDensities <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "energy-densities"
         cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
         cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         cfgGeographies <- getFieldOpt "geographies"
@@ -343,6 +346,7 @@ applyDataDir mDataDir cfg =
         , cfgFlowSynonyms = map (mapPath resolve) (cfgFlowSynonyms cfg)
         , cfgCompartmentMappings = map (mapPath resolve) (cfgCompartmentMappings cfg)
         , cfgUnits = map (mapPath resolve) (cfgUnits cfg)
+        , cfgEnergyDensities = map (mapPath resolve) (cfgEnergyDensities cfg)
         }
   where
     resolve = redirectIntoDataDir mDataDir

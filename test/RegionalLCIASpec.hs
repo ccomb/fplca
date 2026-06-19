@@ -159,7 +159,7 @@ buildTables ::
     [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
     MethodTables
 buildTables db hier mappings =
-    let raw = buildMethodTables M.empty mappings
+    let raw = buildMethodTables M.empty M.empty mappings
         withBroadcast =
             fillBroadcastVector kgUnitConfig (dbUnits db) (dbBioFlows db) raw
      in fillRegionalActivityWeights
