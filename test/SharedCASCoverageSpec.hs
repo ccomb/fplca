@@ -154,7 +154,7 @@ mapCtx =
 buildTablesFor :: Method -> IO MethodTables
 buildTablesFor method = do
     mappings <- mapMethodFlows defaultMappers mapCtx method
-    let raw = buildMethodTables M.empty mappings
+    let raw = buildMethodTables M.empty M.empty mappings
     pure (fillBroadcastVector defaultUnitConfig M.empty flowDB raw)
 
 buildTables :: IO MethodTables
@@ -232,7 +232,7 @@ carbonSynonyms =
 buildCarbonTables :: IO MethodTables
 buildCarbonTables = do
     mappings <- mapMethodFlows defaultMappers carbonSynonyms biogenicMethaneMethod
-    let raw = buildMethodTables M.empty mappings
+    let raw = buildMethodTables M.empty M.empty mappings
     pure (fillBroadcastVector defaultUnitConfig M.empty carbonFlows raw)
 
 -- ---------------------------------------------------------------------------
@@ -323,14 +323,14 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
     describe "regionalized rows stay out of the global tables" $ do
         it "routes a location-bearing CAS-matched CF to mtRegionalCasCF only" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx regionalCasMethod
-            let tables = buildMethodTables M.empty mappings
+            let tables = buildMethodTables M.empty M.empty mappings
             M.lookup (waterCAS, "resource") (mtRegionalCasCF tables)
                 `shouldBe` Just (M.fromList [("FR", (9, "m3"))])
             M.member (waterCAS, "resource") (mtCasCF tables) `shouldBe` False
 
         it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx uuidRegionalMethod
-            let tables = buildMethodTables M.empty mappings
+            let tables = buildMethodTables M.empty M.empty mappings
             -- The global row stands; the location row lives in the regional
             -- table instead of clobbering the flow's universal value.
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")

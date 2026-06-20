@@ -1,0 +1,191 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+{- | The energy-density bridge: characterize an energy-denominated CF (a JRC
+fossil-resource CF in MJ, where the method assumes the inventory is already in
+energy units) against an inventory flow given in mass or volume (kg, Sm3).
+
+Native ecoinvent supplies fossil resources by mass/volume, but the EF v3.1
+"Resource use, fossils" CFs are denominated in MJ with value 1.0. Without a
+per-flow energy density the flow/CF unit pair is cross-dimensional, so
+'convertForCharacterization' returns 0 and every fossil flow scores 0. Supplying
+an energy density E (MJ per native unit) brings the flow's quantity into the
+density's native unit and contributes @qNative * E@ MJ, matching the energy CF.
+
+The fixtures drive the real table build + broadcast fill + scoring so they track
+the engine's actual behaviour:
+  * a kg flow + an energy CF + a density of 26.4 MJ/kg yields an effective CF of
+    26.4 (not 0), and a 1 kg inventory scores 26.4;
+  * a flow declared in a *different but compatible* unit (tonne) is converted
+    into the density's native unit first, so 1 t scores 1000 × 26.4;
+  * a flow whose unit is *dimensionally incompatible* with the native unit (m3
+    vs kg) scores 0 — refuse a wrong basis rather than multiply blindly;
+  * the SAME flow WITHOUT a density still yields 0 (no regression);
+  * a same-dimension pair (mass flow + mass CF) is untouched by the machinery.
+Plus the CSV reader: it keys by normalized name and rejects malformed rows.
+-}
+module EnergyDensityCFSpec (spec) where
+
+import qualified Data.ByteString.Lazy.Char8 as BLC
+import Data.Either (isLeft)
+import qualified Data.Map.Strict as M
+import Data.Text (Text)
+import Data.UUID (UUID)
+import qualified Data.UUID as UUID
+import Test.Hspec
+
+import Method.Mapping
+import Method.Types (Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), buildEnergyDensityMapFromCSV)
+import SynonymDB (normalizeName)
+import Types (BiosphereFlow (..), Unit (..), UnitDB)
+import qualified Types as VT
+import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
+
+-- ---------------------------------------------------------------------------
+-- Unit metadata: a UnitConfig + a UnitDB that know kg, tonne, m3 and MJ
+-- ---------------------------------------------------------------------------
+
+-- A UnitConfig that knows two mass units (kg, tonne), a volume unit (m3) and an
+-- energy unit (MJ); the shipped 'defaultUnitConfig' has no energy units, so the
+-- bridge can't fire against it. Mirrors how production loads data/units.csv.
+unitConfig :: UnitConfig
+unitConfig =
+    either (const defaultUnitConfig) id $
+        buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\ntonne,mass,1000.0\nm3,volume,1.0\nmj,energy,1.0e6\n")
+
+uidKg, uidTonne, uidM3 :: UUID
+uidKg = UUID.fromWords64 1 0
+uidTonne = UUID.fromWords64 2 0
+uidM3 = UUID.fromWords64 3 0
+
+mkUnit :: UUID -> Text -> Unit
+mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}
+
+-- UnitDB so each flow's bfUnitId resolves to its declared unit.
+unitDB :: UnitDB
+unitDB =
+    M.fromList
+        [ (uidKg, mkUnit uidKg "kg")
+        , (uidTonne, mkUnit uidTonne "tonne")
+        , (uidM3, mkUnit uidM3 "m3")
+        ]
+
+-- ---------------------------------------------------------------------------
+-- Flow + CF fixtures
+-- ---------------------------------------------------------------------------
+
+-- All coal-flow variants share this UUID so the energy CF matches by UUID
+-- regardless of the declared unit; only 'bfUnitId' differs between them.
+coalId :: UUID
+coalId = UUID.fromWords64 10 0
+
+-- A fossil-resource flow (like ecoinvent's "Coal, hard") in a chosen unit.
+coalFlowIn :: UUID -> BiosphereFlow
+coalFlowIn unitId =
+    BiosphereFlow
+        { bfId = coalId
+        , bfName = "Coal, hard"
+        , bfUnitId = unitId
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Just (VT.Compartment "natural resource" Nothing)
+        }
+
+-- An energy-denominated CF (value 1.0, unit MJ) matched to the coal flow by
+-- UUID, so it lands in 'mtUuidCF' and reaches the flow through the cascade.
+energyCF :: MethodCF
+energyCF =
+    MethodCF
+        { mcfFlowRef = coalId
+        , mcfFlowName = "Coal, hard"
+        , mcfDirection = Input
+        , mcfValue = 1.0
+        , mcfCompartment = Just (Compartment "natural resource" "" "")
+        , mcfCAS = Nothing
+        , mcfUnit = "MJ"
+        , mcfConsumerLocation = Nothing
+        }
+
+-- A same-dimension CF (mass, kg) on the same flow — the control: the
+-- energy-density machinery must not perturb it.
+massCF :: MethodCF
+massCF = energyCF{mcfValue = 3.0, mcfUnit = "kg"}
+
+-- Energy density for "Coal, hard": 26.4 MJ per kg. Keyed exactly as
+-- 'buildEnergyDensityMapFromCSV' keys a data/energy_density.csv row.
+coalDensities :: EnergyDensityMap
+coalDensities = M.fromList [(normalizeName "Coal, hard", EnergyDensity 26.4 "MJ" "kg")]
+
+-- Build tables (with broadcast) for a flow + energy-density set + CF.
+tablesFor :: BiosphereFlow -> EnergyDensityMap -> MethodCF -> MethodTables
+tablesFor flow densities cf =
+    let fdb = M.singleton (bfId flow) flow
+        raw = buildMethodTables M.empty densities [(cf, Just (flow, ByUUID))]
+     in fillBroadcastVector unitConfig unitDB fdb raw
+
+-- Score a @qty@-unit inventory of @flow@ against the given tables.
+scoreFlow :: BiosphereFlow -> Double -> MethodTables -> Double
+scoreFlow flow qty tables =
+    loScore (computeLCIAScoreFromTables unitConfig unitDB (M.singleton (bfId flow) flow) (M.singleton (bfId flow) qty) tables)
+
+-- Effective (broadcast) CF for the coal flow, asserted within tolerance to
+-- avoid IEEE-754 surprises on the conversion factors.
+broadcastShouldBeNear :: MethodTables -> Double -> Expectation
+broadcastShouldBeNear tables expected =
+    case M.lookup coalId (mtBroadcast tables) of
+        Just v -> v `shouldSatisfy` near expected
+        Nothing -> expectationFailure "expected a broadcast entry for the coal flow"
+
+near :: Double -> Double -> Bool
+near expected v = abs (v - expected) < 1e-6
+
+-- ---------------------------------------------------------------------------
+-- Spec
+-- ---------------------------------------------------------------------------
+
+spec :: Spec
+spec = do
+    describe "Energy-density bridge: energy CF vs. mass or volume flow" $ do
+        it "applies the energy density to the effective CF (26.4, not 0)" $
+            broadcastShouldBeNear (tablesFor (coalFlowIn uidKg) coalDensities energyCF) 26.4
+
+        it "scores 1 kg of coal as 26.4 MJ" $
+            scoreFlow (coalFlowIn uidKg) 1.0 (tablesFor (coalFlowIn uidKg) coalDensities energyCF)
+                `shouldSatisfy` near 26.4
+
+        it "converts a flow declared in tonne into the density's native kg first (1 t → 26400)" $ do
+            let flow = coalFlowIn uidTonne
+                tables = tablesFor flow coalDensities energyCF
+            broadcastShouldBeNear tables 26400
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 26400
+
+        it "refuses a flow whose unit is dimensionally incompatible with the native unit (m3 vs kg → 0)" $ do
+            let flow = coalFlowIn uidM3
+                tables = tablesFor flow coalDensities energyCF
+            broadcastShouldBeNear tables 0
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 0
+
+        it "leaves the energy CF at 0 when the flow has no energy density (regression guard)" $ do
+            let flow = coalFlowIn uidKg
+                tables = tablesFor flow M.empty energyCF
+            broadcastShouldBeNear tables 0
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 0
+
+        it "does not perturb a same-dimension (mass) CF, with or without a density" $ do
+            let flow = coalFlowIn uidKg
+            broadcastShouldBeNear (tablesFor flow coalDensities massCF) 3.0
+            broadcastShouldBeNear (tablesFor flow M.empty massCF) 3.0
+
+    describe "buildEnergyDensityMapFromCSV" $ do
+        it "parses a valid row, keyed by normalized flow name" $
+            case buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\n\"Coal, hard\",18.01,MJ,kg\n") of
+                Left err -> expectationFailure err
+                Right m -> M.lookup (normalizeName "Coal, hard") m `shouldBe` Just (EnergyDensity 18.01 "MJ" "kg")
+
+        it "rejects a non-positive value" $
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,0,MJ,kg\n")
+                `shouldSatisfy` isLeft
+
+        it "rejects a missing native unit" $
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,9.76,MJ,\n")
+                `shouldSatisfy` isLeft

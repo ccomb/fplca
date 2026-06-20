@@ -94,7 +94,7 @@ spec = do
                 uidKg = mkUuid 200
                 cf = mkCF fid 1.0
                 m1 = mkMethod 1 "m1" [cf]
-                tables0 = buildMethodTables M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))]
+                tables0 = buildMethodTables M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))]
                 fdb = M.singleton fid (mkFlow fid "co2" uidKg)
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 filled = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb tables0
@@ -110,7 +110,7 @@ spec = do
                 uidKg = mkUuid 200
                 cf = mkCF fid 1.0
                 tables0 =
-                    (buildMethodTables M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
+                    (buildMethodTables M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
                         { mtRegionalizedCF = M.singleton (fid, "FR") (2.0, "kg")
                         }
                 m1 = mkMethod 1 "m1" [cf]
@@ -143,9 +143,9 @@ spec = do
                 mC = mkMethod 3 "C" [cfC1]
 
                 fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
-                tA = fill (buildMethodTables M.empty [(cfA1, Just (flow1, ByUUID))])
-                tB = fill (buildMethodTables M.empty [(cfB1, Just (flow1, ByUUID)), (cfB2, Just (flow2, ByUUID))])
-                tC = fill (buildMethodTables M.empty [(cfC1, Just (flow1, ByUUID))])
+                tA = fill (buildMethodTables M.empty M.empty [(cfA1, Just (flow1, ByUUID))])
+                tB = fill (buildMethodTables M.empty M.empty [(cfB1, Just (flow1, ByUUID)), (cfB2, Just (flow2, ByUUID))])
+                tC = fill (buildMethodTables M.empty M.empty [(cfC1, Just (flow1, ByUUID))])
 
                 mst = buildMethodSetTables [(mA, tA), (mB, tB), (mC, tC)]
 
@@ -185,7 +185,7 @@ spec = do
                 fdb = M.singleton fid (mkFlow fid "co2" uidKg)
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
-                t = fill (buildMethodTables M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
+                t = fill (buildMethodTables M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
                 mst = buildMethodSetTables [(m1, t), (m2, t)]
                 results =
                     computeLCIAScoreSetFromTables
@@ -210,7 +210,7 @@ spec = do
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 t =
                     fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb $
-                        buildMethodTables M.empty [(cf, Just (mkFlow fidIn "co2" uidKg, ByUUID))]
+                        buildMethodTables M.empty M.empty [(cf, Just (mkFlow fidIn "co2" uidKg, ByUUID))]
                 mst = buildMethodSetTables [(m1, t)]
                 inv = M.fromList [(fidIn, 2.0), (fidOut, 100.0)]
                 results =
@@ -254,6 +254,7 @@ spec = do
                     fillBroadcastVector UnitConversion.defaultUnitConfig udb buildFlowDB $
                         buildMethodTables
                             M.empty
+                            M.empty
                             [ (cfBuild, Just (mkFlow fidBuild "co2" uidKg, ByUUID))
                             , (cfCross, Just (mkFlow fidCrossDB "co2" uidKg, ByUUID))
                             ]
@@ -279,7 +280,7 @@ spec = do
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
                 t =
                     fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb $
-                        buildMethodTables M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))]
+                        buildMethodTables M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))]
                 mB = mkMethod 2 "B" [cf]
                 mA = mkMethod 1 "A" [cf]
                 mC = mkMethod 3 "C" [cf]
@@ -311,16 +312,17 @@ spec = do
                 cf3a = mkCF fid1 1.0
                 cf3b = (mkCF fid2 25.0){mcfFlowName = "ch4"}
                 tNonRegio1 =
-                    fill (buildMethodTables M.empty [(cf1a, Just (flow1, ByUUID))])
+                    fill (buildMethodTables M.empty M.empty [(cf1a, Just (flow1, ByUUID))])
                 tRegio =
                     fill
-                        ( (buildMethodTables M.empty [(cf2a, Just (flow1, ByUUID))])
+                        ( (buildMethodTables M.empty M.empty [(cf2a, Just (flow1, ByUUID))])
                             { mtRegionalizedCF = M.singleton (fid1, "FR") (7.0, "kg")
                             }
                         )
                 tNonRegio2 =
                     fill
                         ( buildMethodTables
+                            M.empty
                             M.empty
                             [ (cf3a, Just (flow1, ByUUID))
                             , (cf3b, Just (flow2, ByUUID))
@@ -398,7 +400,7 @@ spec = do
                     , (cfOcean, Just (flowUns, ByName))
                     , (cfOcean, Just (flowOcean, ByName))
                     ]
-                tables = buildMethodTables M.empty mappings
+                tables = buildMethodTables M.empty M.empty mappings
                 regio = mtRegionalizedCF tables
             -- Pre-fix: this was (0.0, "kg") — clobbered by cfOcean. The
             -- filter drops (cfOcean, flowUns) so the wildcard cfUns survives.
@@ -427,8 +429,8 @@ spec = do
                         , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
                         , mcfConsumerLocation = Just "DE"
                         }
-                tEmpty = buildMethodTables M.empty [(cfEmpty, Just (flowOcean, ByName))]
-                tUnspec = buildMethodTables M.empty [(cfUnspecified, Just (flowOcean, ByName))]
+                tEmpty = buildMethodTables M.empty M.empty [(cfEmpty, Just (flowOcean, ByName))]
+                tUnspec = buildMethodTables M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
             -- Both wildcard forms apply to a specific-subcomp flow.
             M.lookup (fid, "DE") (mtRegionalizedCF tEmpty) `shouldBe` Just (2.0, "kg")
             M.lookup (fid, "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (7.0, "kg")
@@ -446,5 +448,5 @@ spec = do
                         , mcfCompartment = Nothing
                         , mcfConsumerLocation = Just "IT"
                         }
-                tables = buildMethodTables M.empty [(cf, Just (flowAny, ByName))]
+                tables = buildMethodTables M.empty M.empty [(cf, Just (flowAny, ByName))]
             M.lookup (fid, "IT") (mtRegionalizedCF tables) `shouldBe` Just (4.0, "kg")

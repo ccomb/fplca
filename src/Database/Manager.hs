@@ -78,6 +78,7 @@ module Database.Manager (
     getFlowSynonymGroups,
     getMergedSynonymDB,
     getMergedCompartmentMap,
+    getMergedEnergyDensities,
     getMergedUnitConfig,
     getMergedFlowMetadata,
     getLocationHierarchy,
@@ -160,12 +161,15 @@ import Method.Mapping (
  )
 import Method.Types (
     CompartmentMap,
+    EnergyDensityMap,
     Method (..),
     MethodCF,
     MethodCollection (..),
     ScoringSet (..),
     buildCompartmentMapFromCSV,
+    buildEnergyDensityMapFromCSV,
     compartmentMapSize,
+    energyDensityMapSize,
  )
 import Plugin.Config (buildRegistry)
 import Plugin.Types (PluginRegistry (..), TransformContext (..), TransformHandle (..), TransformResult (..))
@@ -492,6 +496,9 @@ data DatabaseManager = DatabaseManager
     , -- Reference data: unit definitions
       dmAvailableUnitDefs :: !(TVar (Map Text RefDataConfig))
     , dmLoadedUnitDefs :: !(TVar (Map Text UnitConversion.UnitConfig))
+    , -- Reference data: energy densities (mass/volume → energy for energy-denominated CFs)
+      dmAvailableEnergyDensities :: !(TVar (Map Text RefDataConfig))
+    , dmLoadedEnergyDensities :: !(TVar (Map Text EnergyDensityMap))
     , dmNoCache :: !Bool -- Caching disabled flag
     , dmPlugins :: !PluginRegistry -- Plugin registry (built-in + external)
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
@@ -577,6 +584,7 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
         Nothing -> do
             mappings <- mapMethodToFlowsCached manager dbName collection db method
             cmap <- getMergedCompartmentMap manager
+            energyDensities <- getMergedEnergyDensities manager
             unitConfig <- getMergedUnitConfig manager
             (mFlows, mUnits) <- getMergedFlowMetadata manager
             -- Use the database's frozen-at-load-time synonym DB (curated-only;
@@ -586,7 +594,7 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
             -- synonyms like "water" → "4-aminophenol").
             let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
                 expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
-                !raw = buildMethodTables cmap expanded
+                !raw = buildMethodTables cmap energyDensities expanded
                 !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
                 -- Precompute per-activity weights for regionalized methods so
                 -- subsequent scoring is a dot product instead of one full
@@ -736,17 +744,21 @@ initDatabaseManager config noCache configPath = do
     uploadedFlowSyns <- discoverUploadedRefData "uploads/flow-synonyms"
     uploadedCompMaps <- discoverUploadedRefData "uploads/compartment-mappings"
     uploadedUnitDefs <- discoverUploadedRefData "uploads/units"
+    uploadedEnergyDensities <- discoverUploadedRefData "uploads/energy-densities"
     -- Resolve reference data paths relative to config directory
     let resolveRdPath rd = rd{rdPath = resolveRelative (rdPath rd)}
     let allFlowSyns = map resolveRdPath (cfgFlowSynonyms config) ++ uploadedFlowSyns
         allCompMaps = map resolveRdPath (cfgCompartmentMappings config) ++ uploadedCompMaps
         allUnitDefs = map resolveRdPath (cfgUnits config) ++ uploadedUnitDefs
+        allEnergyDensities = map resolveRdPath (cfgEnergyDensities config) ++ uploadedEnergyDensities
     availableFlowSynsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allFlowSyns]
     loadedFlowSynsVar <- newTVarIO M.empty
     availableCompMapsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allCompMaps]
     loadedCompMapsVar <- newTVarIO M.empty
     availableUnitDefsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allUnitDefs]
     loadedUnitDefsVar <- newTVarIO M.empty
+    availableEnergyDensitiesVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allEnergyDensities]
+    loadedEnergyDensitiesVar <- newTVarIO M.empty
 
     geographies <- case cfgGeographies config of
         Nothing -> return M.empty
@@ -783,6 +795,8 @@ initDatabaseManager config noCache configPath = do
                 , dmLoadedCompMaps = loadedCompMapsVar
                 , dmAvailableUnitDefs = availableUnitDefsVar
                 , dmLoadedUnitDefs = loadedUnitDefsVar
+                , dmAvailableEnergyDensities = availableEnergyDensitiesVar
+                , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
                 , dmNoCache = noCache
                 , dmPlugins = buildRegistry (cfgPlugins config)
                 , dmGeographies = geographies
@@ -805,6 +819,7 @@ initDatabaseManager config noCache configPath = do
     autoLoadFlowSynonyms loadedFlowSynsVar allFlowSyns
     autoLoadRefData compMapOps loadedCompMapsVar allCompMaps
     autoLoadRefData unitDefOps loadedUnitDefsVar allUnitDefs
+    autoLoadRefData energyDensityOps loadedEnergyDensitiesVar allEnergyDensities
 
     totalStart <- getCurrentTime
 
@@ -2876,6 +2891,14 @@ getMergedCompartmentMap manager = do
     loaded <- readTVarIO (dmLoadedCompMaps manager)
     return $ M.unions (M.elems loaded)
 
+{- | Get the merged 'EnergyDensityMap' from all loaded energy-density sets.
+First-wins union over active CSVs, mirroring 'getMergedCompartmentMap'.
+-}
+getMergedEnergyDensities :: DatabaseManager -> IO EnergyDensityMap
+getMergedEnergyDensities manager = do
+    loaded <- readTVarIO (dmLoadedEnergyDensities manager)
+    return $ M.unions (M.elems loaded)
+
 {- | Get the merged UnitConfig from all loaded unit definitions.
 Memoized: pure over the loaded-unit-def set, invalidated on mutation.
 -}
@@ -3041,6 +3064,17 @@ unitDefOps =
         UnitConversion.unitCount
         "units"
         "uploads/units"
+        rdIsUploaded
+
+energyDensityOps :: RefDataOps EnergyDensityMap
+energyDensityOps =
+    RefDataOps
+        dmAvailableEnergyDensities
+        dmLoadedEnergyDensities
+        (first T.pack . buildEnergyDensityMapFromCSV)
+        energyDensityMapSize
+        "energy densities"
+        "uploads/energy-densities"
         rdIsUploaded
 
 listRefDataG :: RefDataOps a -> DatabaseManager -> IO [RefDataStatus]

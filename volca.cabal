@@ -240,6 +240,7 @@ test-suite lca-tests
                      , CrossDBRegionalLCIASensitivitySpec
                      , RegionalLCIASpec
                      , SharedCASCoverageSpec
+                     , EnergyDensityCFSpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec
                      , FlowResolverSpec
