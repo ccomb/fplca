@@ -722,3 +722,5 @@ brown coal,"Coal, brown"
 crude oil,"Oil, crude"
 hard coal,"Coal, hard"
 natural gas,"Gas, natural"
+"Particulate Matter, < 2.5 um",particles (PM2.5)
+"Particulate Matter, > 2.5 um and < 10um",particles (PM10)

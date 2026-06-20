@@ -631,6 +631,17 @@ buildMethodTables cmap energyDensities mappings =
                     , not (T.null normSub)
                     ]
         , mtFallbackCF =
+            -- Medium-level default CF for a flow whose specific subcompartment
+            -- has no exact CF. Holds CFs whose own subcompartment is empty or
+            -- "unspecified" — the value a method intends as the catch-all for
+            -- that (name, medium). A flow at an uncovered subcompartment (e.g.
+            -- a radionuclide emitted to "low population density, long-term",
+            -- which EF leaves uncharacterized) thus picks up the unspecified CF,
+            -- as ecoinvent's own implementation does, instead of scoring zero.
+            -- This is safe against the long-term toxicity case: a substance
+            -- that DOES carry a "(long-term)" CF keeps it in 'mtExactCF', which
+            -- is consulted before this fallback, so long-term emissions still
+            -- resolve to their explicit (often zero) factor.
             stripStrategy $
                 M.fromListWith
                     preferBetter
@@ -640,7 +651,7 @@ buildMethodTables cmap energyDensities mappings =
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
-                    , T.null normSub
+                    , isUnspecifiedSub normSub
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
@@ -657,37 +668,49 @@ buildMethodTables cmap energyDensities mappings =
             -- "Methane, non-fossil") is name-discriminated: broadcasting it to
             -- every same-CAS flow would leak it onto a sibling the method
             -- distinguishes (fossil methane), so it stays out of the CAS bridge.
-            M.fromListWith
-                preferLargerMag
-                [ ((cas, normMed), (mcfValue cf, mcfUnit cf))
-                | (cf, Just (_, ByCAS)) <- mappings
-                , Just cas <- [mcfCAS cf]
-                , not (T.null cas)
-                , Nothing <- [mcfConsumerLocation cf]
-                , Just comp <- [mcfCompartment cf]
-                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                , let normMed = normalizeMedium (T.toLower normMedRaw)
-                ]
+            --
+            -- When several CFs share one (CAS, medium), broadcast the
+            -- substance's medium-level default — its unspecified-subcompartment
+            -- factor — rather than the largest. The largest is often a niche
+            -- subcompartment (indoor air can be ~100x the outdoor value) that
+            -- would over-characterize every same-CAS flow the bridge reaches.
+            M.map snd $
+                M.fromListWith
+                    preferUnspecifiedCas
+                    [ ((cas, normMed), (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    | (cf, Just (_, ByCAS)) <- mappings
+                    , Just cas <- [mcfCAS cf]
+                    , not (T.null cas)
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , mtRegionalCasCF =
-            M.fromListWith
-                (M.unionWith preferLargerMag)
-                [ ((cas, normMed), M.singleton loc (mcfValue cf, mcfUnit cf))
-                | (cf, Just (_, ByCAS)) <- mappings
-                , Just cas <- [mcfCAS cf]
-                , not (T.null cas)
-                , Just loc <- [mcfConsumerLocation cf]
-                , Just comp <- [mcfCompartment cf]
-                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                , let normMed = normalizeMedium (T.toLower normMedRaw)
-                ]
+            -- Same unspecified-default preference as 'mtCasCF', applied per
+            -- location: when several subcompartment CFs collide on one
+            -- (CAS, medium, location) the medium-level default wins over a
+            -- niche subcompartment, rather than the largest magnitude.
+            M.map (M.map snd) $
+                M.fromListWith
+                    (M.unionWith preferUnspecifiedCas)
+                    [ ((cas, normMed), M.singleton loc (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    | (cf, Just (_, ByCAS)) <- mappings
+                    , Just cas <- [mcfCAS cf]
+                    , not (T.null cas)
+                    , Just loc <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , mtRegionalizedCF =
             -- Filter: a CF whose own compartment carries a specific subcomp
             -- (e.g. "groundwater, long-term" or "ocean") must only apply to
             -- flows in that exact subcomp — otherwise a CF=0 set explicitly for
             -- a niche subcomp leaks onto flows in other subcomps via
             -- ByName/synonym fan-out and clobbers the correct (unspecified)
-            -- fallback CF. CFs with subcomp "(unspecified)" / empty are
-            -- wildcards and match any flow subcomp.
+            -- fallback CF. CFs with no specific subcomp ('isUnspecifiedSub')
+            -- are wildcards and match any flow subcomp.
             M.fromList
                 [ ((bfId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
@@ -702,19 +725,25 @@ buildMethodTables cmap energyDensities mappings =
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
 
-    -- Dedup CAS-keyed CFs colliding on one (CAS, medium) key (many same-CAS
-    -- flows collapse to one key, e.g. several name variants of a substance):
-    -- keep the larger-magnitude factor. Deliberately biased toward overstating
-    -- the impact — the bridge is a last-resort fallback and an understated
-    -- factor would be invisible, while an overstated one shows up in validation.
-    preferLargerMag (v1, u1) (v2, u2)
-        | abs v1 >= abs v2 = (v1, u1)
-        | otherwise = (v2, u2)
+    -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
+    -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
+    -- default value when several subcompartment CFs collide on one key. On a
+    -- tie (no unspecified CF present) keep the larger magnitude — the bridge is
+    -- a last-resort fallback, so an overstated factor surfaces in validation
+    -- while an understated one would be invisible.
+    casSubRank s
+        | isUnspecifiedSub s = 0 :: Int
+        | otherwise = 1
+    preferUnspecifiedCas a@(ra, (va, _)) b@(rb, (vb, _))
+        | ra /= rb = if ra < rb then a else b
+        | abs va >= abs vb = a
+        | otherwise = b
 
-    -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
-    -- with a specific subcomp must match the flow's subcomp exactly — otherwise
-    -- an explicit-zero niche-subcomp CF would clobber the correct
-    -- (unspecified) CF for flows in other subcomps via ByName/synonym fan-out.
+    -- A CF whose subcomp names no specific subcompartment ('isUnspecifiedSub')
+    -- is a wildcard. A CF with a specific subcomp must match the flow's subcomp
+    -- exactly — otherwise an explicit-zero niche-subcomp CF would clobber the
+    -- correct (unspecified) CF for flows in other subcomps via ByName/synonym
+    -- fan-out.
     --
     -- Both sides go through 'normalizeCompartment' so a compartments.csv rule
     -- that rewrites a subcomp can't desynchronise the filter from the sibling
@@ -738,8 +767,7 @@ buildMethodTables cmap energyDensities mappings =
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
                 !flowSubN = T.toLower (T.strip flowSubRaw)
-             in T.null cfSubN
-                    || cfSubN == "(unspecified)"
+             in isUnspecifiedSub cfSubN
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
@@ -1233,6 +1261,18 @@ normalizeMedium :: Text -> Text
 normalizeMedium m
     | m == "natural resource" = "resource"
     | otherwise = m
+
+{- | A subcompartment that names no specific subcompartment — empty, or either
+spelling of unspecified. Such a CF is the medium-level default: it
+characterizes any flow in that medium whose own subcompartment the method
+doesn't cover. The single source of truth for "is this the catch-all subcomp",
+so the fallback table, the CAS-bridge rank, and the regionalized wildcard
+filter can't drift apart on which spellings count (they did: the filter once
+omitted bare @unspecified@). Inputs are expected already lower-cased via
+'normalizeCompartment'.
+-}
+isUnspecifiedSub :: Text -> Bool
+isUnspecifiedSub s = T.null s || s == "unspecified" || s == "(unspecified)"
 
 {- | The @(normalized medium, subcompartment)@ a database flow resolves to after
 compartment normalization. Shared by the name/CAS read path

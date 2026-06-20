@@ -429,11 +429,23 @@ spec = do
                         , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
                         , mcfConsumerLocation = Just "DE"
                         }
+                -- Bare "unspecified" (no parens) is the spelling 'compartments.csv'
+                -- emits (e.g. "emissions to water,unspecified,long-term,…"); the
+                -- filter once treated only "" / "(unspecified)" as wildcards and
+                -- silently dropped this one. It must also act as a wildcard.
+                cfUnspecBare =
+                    (mkCF fid 9.0)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" "unspecified" "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
                 tEmpty = buildMethodTables M.empty M.empty [(cfEmpty, Just (flowOcean, ByName))]
                 tUnspec = buildMethodTables M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
-            -- Both wildcard forms apply to a specific-subcomp flow.
+                tUnspecBare = buildMethodTables M.empty M.empty [(cfUnspecBare, Just (flowOcean, ByName))]
+            -- All three wildcard forms apply to a specific-subcomp flow.
             M.lookup (fid, "DE") (mtRegionalizedCF tEmpty) `shouldBe` Just (2.0, "kg")
             M.lookup (fid, "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (7.0, "kg")
+            M.lookup (fid, "DE") (mtRegionalizedCF tUnspecBare) `shouldBe` Just (9.0, "kg")
 
         it "keeps CF when mcfCompartment is Nothing (no subcomp info)" $ do
             let fid = mkUuid 120
