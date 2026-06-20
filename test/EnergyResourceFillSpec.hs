@@ -52,6 +52,21 @@ coalTables eds =
 coalDensity :: EnergyDensityMap
 coalDensity = M.singleton (normalizeName "Coal, hard") (EnergyDensity 18.01 "MJ" "kg")
 
+-- Two coal-family resources with DISAGREEING generic CFs, both known to the
+-- engine: the family factor is ambiguous, so the fallback must not guess.
+disagreeingCoalTables :: MethodTables
+disagreeingCoalTables =
+    buildMethodTables
+        M.empty
+        ( M.fromList
+            [ (normalizeName "Coal, hard", EnergyDensity 18 "MJ" "kg")
+            , (normalizeName "Coal, brown", EnergyDensity 8 "MJ" "kg")
+            ]
+        )
+        [ (resourceCF "Coal, hard" 1.0, Just (mkFlow 1 "Coal, hard", ByName))
+        , (resourceCF "Coal, brown" 2.0, Just (mkFlow 2 "Coal, brown", ByName))
+        ]
+
 -- Borrowed raw CF (the density is applied later by convertAndMultiply).
 borrowFor :: EnergyDensityMap -> Text -> Maybe Double
 borrowFor eds flowName =
@@ -78,5 +93,8 @@ spec = do
             borrowFor coalDensity "Coal, 29.3 MJ per kg" `shouldBe` Just 1.0
         it "does NOT borrow when the resource family is unknown to the engine" $
             borrowFor M.empty "Coal, 18 MJ per kg" `shouldBe` Nothing
+        it "does NOT borrow when same-family CFs disagree (ambiguous, never guesses)" $
+            fmap fst (lookupCFForFlow disagreeingCoalTables (mkUUID 99) (Just (mkFlow 99 "Coal, 18 MJ per kg")))
+                `shouldBe` Nothing
         it "does NOT fill a non-energy name" $
             borrowFor coalDensity "Water, per capita" `shouldBe` Nothing

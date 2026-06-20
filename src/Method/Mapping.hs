@@ -829,8 +829,8 @@ buildMethodTables cmap energyDensities mappings =
 
     -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
     -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
-    agreedValue vus = case nub (map fst vus) of
-        [_] -> case vus of vu : _ -> Just vu; [] -> Nothing
+    agreedValue vus = case nub vus of
+        [vu] -> Just vu
         _ -> Nothing
 
     -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
@@ -1382,13 +1382,22 @@ lookupCascadeCF tables flowDB fid =
     -- borrows a CF. Last in the cascade: only fires when all else misses.
     energyResourceFallback flow baseMed normSub =
         case parseEnergyDensitySuffix (bfName flow) of
+            Nothing -> Nothing
             Just (base, _) ->
                 let fam = firstWord (normalizeName base)
-                 in foldr
-                        (\rname acc -> resourceCF rname baseMed normSub <|> acc)
-                        Nothing
-                        [rname | rname <- M.keys (mtEnergyDensities tables), firstWord rname == fam]
-            Nothing -> Nothing
+                    candidates =
+                        [ cf
+                        | rname <- M.keys (mtEnergyDensities tables)
+                        , firstWord rname == fam
+                        , Just cf <- [resourceCF rname baseMed normSub]
+                        ]
+                 in -- Borrow only when the family's resolving CFs agree (the generic
+                    -- per-MJ factor). If "Coal, hard" and "Coal, brown" disagree the
+                    -- family CF is ambiguous, so drop rather than pick one arbitrarily
+                    -- by Map order — same "never guess" rule as 'agreedValue'.
+                    case nub candidates of
+                        [cf] -> Just cf
+                        _ -> Nothing
 
     resourceCF rname baseMed normSub =
         M.lookup (rname, baseMed, normSub) (mtExactCF tables)
