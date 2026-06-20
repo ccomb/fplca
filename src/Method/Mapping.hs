@@ -651,7 +651,7 @@ buildMethodTables cmap energyDensities mappings =
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
-                    , T.null normSub || normSub == "unspecified" || normSub == "(unspecified)"
+                    , isUnspecifiedSub normSub
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
@@ -704,8 +704,8 @@ buildMethodTables cmap energyDensities mappings =
             -- flows in that exact subcomp — otherwise a CF=0 set explicitly for
             -- a niche subcomp leaks onto flows in other subcomps via
             -- ByName/synonym fan-out and clobbers the correct (unspecified)
-            -- fallback CF. CFs with subcomp "(unspecified)" / empty are
-            -- wildcards and match any flow subcomp.
+            -- fallback CF. CFs with no specific subcomp ('isUnspecifiedSub')
+            -- are wildcards and match any flow subcomp.
             M.fromList
                 [ ((bfId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
@@ -733,17 +733,18 @@ buildMethodTables cmap energyDensities mappings =
     -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
     -- default value when several subcompartment CFs share a (CAS, medium).
     casSubRank s
-        | T.null s || s == "unspecified" || s == "(unspecified)" = 0 :: Int
+        | isUnspecifiedSub s = 0 :: Int
         | otherwise = 1
     preferUnspecifiedCas a@(ra, (va, _)) b@(rb, (vb, _))
         | ra /= rb = if ra < rb then a else b
         | abs va >= abs vb = a
         | otherwise = b
 
-    -- A CF compartment of (unspecified) / empty subcomp is a wildcard. A CF
-    -- with a specific subcomp must match the flow's subcomp exactly — otherwise
-    -- an explicit-zero niche-subcomp CF would clobber the correct
-    -- (unspecified) CF for flows in other subcomps via ByName/synonym fan-out.
+    -- A CF whose subcomp names no specific subcompartment ('isUnspecifiedSub')
+    -- is a wildcard. A CF with a specific subcomp must match the flow's subcomp
+    -- exactly — otherwise an explicit-zero niche-subcomp CF would clobber the
+    -- correct (unspecified) CF for flows in other subcomps via ByName/synonym
+    -- fan-out.
     --
     -- Both sides go through 'normalizeCompartment' so a compartments.csv rule
     -- that rewrites a subcomp can't desynchronise the filter from the sibling
@@ -767,8 +768,7 @@ buildMethodTables cmap energyDensities mappings =
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
                 !flowSubN = T.toLower (T.strip flowSubRaw)
-             in T.null cfSubN
-                    || cfSubN == "(unspecified)"
+             in isUnspecifiedSub cfSubN
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
@@ -1262,6 +1262,18 @@ normalizeMedium :: Text -> Text
 normalizeMedium m
     | m == "natural resource" = "resource"
     | otherwise = m
+
+{- | A subcompartment that names no specific subcompartment — empty, or either
+spelling of unspecified. Such a CF is the medium-level default: it
+characterizes any flow in that medium whose own subcompartment the method
+doesn't cover. The single source of truth for "is this the catch-all subcomp",
+so the fallback table, the CAS-bridge rank, and the regionalized wildcard
+filter can't drift apart on which spellings count (they did: the filter once
+omitted bare @unspecified@). Inputs are expected already lower-cased via
+'normalizeCompartment'.
+-}
+isUnspecifiedSub :: Text -> Bool
+isUnspecifiedSub s = T.null s || s == "unspecified" || s == "(unspecified)"
 
 {- | The @(normalized medium, subcompartment)@ a database flow resolves to after
 compartment normalization. Shared by the name/CAS read path
