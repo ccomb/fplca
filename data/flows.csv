@@ -724,3 +724,124 @@ hard coal,"Coal, hard"
 natural gas,"Gas, natural"
 "Particulate Matter, < 2.5 um",particles (PM2.5)
 "Particulate Matter, > 2.5 um and < 10um",particles (PM10)
+"Occupation, annual crop",arable
+"Occupation, annual crop, greenhouse","arable, greenhouse"
+"Occupation, annual crop, irrigated","arable, irrigated"
+"Occupation, annual crop, irrigated, intensive","arable, irrigated, intensive"
+"Occupation, annual crop, non-irrigated","arable, non-irrigated"
+"Occupation, annual crop, non-irrigated, extensive","arable, non-irrigated, extensive"
+"Occupation, annual crop, non-irrigated, intensive","arable, non-irrigated, intensive"
+"Occupation, arable land, unspecified use",arable
+"Occupation, bare area (non-use)",bare area
+"Occupation, construction site",construction site
+"Occupation, cropland fallow (non-use)","arable, fallow"
+"Occupation, dump site",dump site
+"Occupation, forest, extensive","forest, extensive"
+"Occupation, forest, intensive","forest, intensive"
+"Occupation, forest, unspecified",forest
+"Occupation, grassland, natural (non-use)","grassland, not used"
+"Occupation, grassland, natural, for livestock grazing","grassland, for livestock grazing"
+"Occupation, industrial area",industrial area
+"Occupation, mineral extraction site",mineral extraction site
+"Occupation, pasture, man made",pasture/meadow
+"Occupation, pasture, man made, extensive","pasture/meadow, extensive"
+"Occupation, pasture, man made, intensive","pasture/meadow, intensive"
+"Occupation, permanent crop",permanent crops
+"Occupation, permanent crop, irrigated","permanent crops, irrigated"
+"Occupation, permanent crop, irrigated, intensive","permanent crops, irrigated, intensive"
+"Occupation, permanent crop, non-irrigated","permanent crops, non-irrigated"
+"Occupation, permanent crop, non-irrigated, intensive","permanent crops, non-irrigated, intensive"
+"Occupation, shrub land, sclerophyllous",shrub land
+"Occupation, traffic area, rail network","traffic area, rail network"
+"Occupation, traffic area, rail/road embankment","traffic area, rail/road embankment"
+"Occupation, traffic area, road network","traffic area, road network"
+"Occupation, unspecified",unspecified
+"Occupation, unspecified, natural (non-use)","unspecified, natural"
+"Occupation, urban, continuously built","urban, continuously built"
+"Occupation, urban, discontinuously built","urban, discontinuously built"
+"Occupation, urban, green area","urban, green areas"
+"Occupation, urban/industrial fallow (non-use)",urban/industrial fallow
+"Transformation, from annual crop",from arable
+"Transformation, from annual crop, greenhouse","from arable, greenhouse"
+"Transformation, from annual crop, irrigated","from arable, irrigated"
+"Transformation, from annual crop, irrigated, intensive","from arable, irrigated, intensive"
+"Transformation, from annual crop, non-irrigated","from arable, non-irrigated"
+"Transformation, from annual crop, non-irrigated, extensive","from arable, non-irrigated, extensive"
+"Transformation, from annual crop, non-irrigated, intensive","from arable, non-irrigated, intensive"
+"Transformation, from arable land, unspecified use",from arable
+"Transformation, from cropland fallow (non-use)","from arable, fallow"
+"Transformation, from dump site",from dump site
+"Transformation, from dump site, inert material landfill",from dump site
+"Transformation, from dump site, residual material landfill",from dump site
+"Transformation, from dump site, sanitary landfill",from dump site
+"Transformation, from dump site, slag compartment",from dump site
+"Transformation, from forest, extensive","from forest, extensive"
+"Transformation, from forest, intensive","from forest, intensive"
+"Transformation, from forest, primary (non-use)","from forest, primary"
+"Transformation, from forest, secondary (non-use)","from forest, secondary"
+"Transformation, from forest, unspecified",from forest
+"Transformation, from grassland, natural (non-use)","from grassland, not used"
+"Transformation, from grassland, natural, for livestock grazing","from grassland, for livestock grazing"
+"Transformation, from heterogeneous, agricultural","from agriculture, mosaic"
+"Transformation, from industrial area",from industrial area
+"Transformation, from mineral extraction site",from mineral extraction site
+"Transformation, from pasture, man made",from pasture/meadow
+"Transformation, from pasture, man made, extensive","from pasture/meadow, extensive"
+"Transformation, from pasture, man made, intensive","from pasture/meadow, intensive"
+"Transformation, from permanent crop",from permanent crops
+"Transformation, from permanent crop, irrigated","from permanent crops, irrigated"
+"Transformation, from permanent crop, irrigated, intensive","from permanent crops, irrigated, intensive"
+"Transformation, from permanent crop, non-irrigated","from permanent crops, non-irrigated"
+"Transformation, from permanent crop, non-irrigated, extensive","from permanent crops, non-irrigated, extensive"
+"Transformation, from permanent crop, non-irrigated, intensive","from permanent crops, non-irrigated, intensive"
+"Transformation, from shrub land, sclerophyllous",from shrub land
+"Transformation, from traffic area, rail/road embankment","from traffic area, rail/road embankment"
+"Transformation, from traffic area, road network","from traffic area, road network"
+"Transformation, from unspecified",from unspecified
+"Transformation, from unspecified, natural (non-use)","from unspecified, natural"
+"Transformation, from urban, continuously built","from urban, continuously built"
+"Transformation, from urban, green area","from urban, green areas"
+"Transformation, from wetland, inland (non-use)","from wetlands, inland"
+"Transformation, to annual crop",to arable
+"Transformation, to annual crop, greenhouse","to arable, greenhouse"
+"Transformation, to annual crop, irrigated","to arable, irrigated"
+"Transformation, to annual crop, irrigated, extensive","to arable, irrigated, extensive"
+"Transformation, to annual crop, irrigated, intensive","to arable, irrigated, intensive"
+"Transformation, to annual crop, non-irrigated","to arable, non-irrigated"
+"Transformation, to annual crop, non-irrigated, extensive","to arable, non-irrigated, extensive"
+"Transformation, to annual crop, non-irrigated, intensive","to arable, non-irrigated, intensive"
+"Transformation, to arable land, unspecified use",to arable
+"Transformation, to bare area (non-use)",to bare area
+"Transformation, to cropland fallow (non-use)","to arable, fallow"
+"Transformation, to dump site",to dump site
+"Transformation, to dump site, inert material landfill",to dump site
+"Transformation, to dump site, residual material landfill",to dump site
+"Transformation, to dump site, sanitary landfill",to dump site
+"Transformation, to dump site, slag compartment",to dump site
+"Transformation, to forest, extensive","to forest, extensive"
+"Transformation, to forest, intensive","to forest, intensive"
+"Transformation, to forest, secondary (non-use)","to forest, secondary"
+"Transformation, to forest, unspecified",to forest
+"Transformation, to grassland, natural (non-use)","to grassland, not used"
+"Transformation, to grassland, natural, for livestock grazing","to grassland, for livestock grazing"
+"Transformation, to heterogeneous, agricultural","to agriculture, mosaic"
+"Transformation, to industrial area",to industrial area
+"Transformation, to mineral extraction site",to mineral extraction site
+"Transformation, to pasture, man made",to pasture/meadow
+"Transformation, to pasture, man made, extensive","to pasture/meadow, extensive"
+"Transformation, to pasture, man made, intensive","to pasture/meadow, intensive"
+"Transformation, to permanent crop",to permanent crops
+"Transformation, to permanent crop, irrigated","to permanent crops, irrigated"
+"Transformation, to permanent crop, irrigated, intensive","to permanent crops, irrigated, intensive"
+"Transformation, to permanent crop, non-irrigated","to permanent crops, non-irrigated"
+"Transformation, to permanent crop, non-irrigated, intensive","to permanent crops, non-irrigated, intensive"
+"Transformation, to shrub land, sclerophyllous",to shrub land
+"Transformation, to traffic area, rail network","to traffic area, rail network"
+"Transformation, to traffic area, rail/road embankment","to traffic area, rail/road embankment"
+"Transformation, to traffic area, road network","to traffic area, road network"
+"Transformation, to unspecified",to unspecified
+"Transformation, to unspecified, natural (non-use)","to unspecified, natural"
+"Transformation, to urban, continuously built","to urban, continuously built"
+"Transformation, to urban, discontinuously built","to urban, discontinuously built"
+"Transformation, to urban/industrial fallow (non-use)",to urban/industrial fallow
+"Transformation, to wetland, inland (non-use)","to wetlands, inland"
