@@ -94,6 +94,7 @@ module Database.Manager (
 
     -- * Cached flow mapping
     mapMethodToFlowsCached,
+    effectiveMethodMappings,
     mapMethodToTablesCached,
     mapMethodSetToTablesCached,
     mapMethodToIndexCached,
@@ -142,6 +143,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
+import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import Method.Mapping (
@@ -149,10 +151,12 @@ import Method.Mapping (
     MethodIndex,
     MethodSetTables,
     MethodTables,
+    ProxyTargets (..),
     RegionalActivityWeights (..),
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
+    expandProxyEdges,
     expandSynonymMappings,
     fillBroadcastVector,
     fillRegionalActivityWeights,
@@ -177,7 +181,8 @@ import Progress (ProgressLevel (..), reportError, reportProgress, reportProgress
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, synonymCount)
+import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -203,6 +208,7 @@ import Types (
     deduplicateAttributeFallbacks,
     deduplicateFallbacks,
     deduplicateUnresolved,
+    enrichBioFlowCAS,
     exchangeFlowId,
     exchangeIsReference,
     initializeRuntimeFields,
@@ -533,6 +539,18 @@ data DatabaseManager = DatabaseManager
     suggester's synonym-expansion signal. Empty when no path is configured
     or when the file is missing — suggester degrades to plain Jaccard.
     -}
+    , dmSubstanceEdges :: ![SubstanceEdge]
+    {- ^ Typed flow-correspondence edges loaded once at startup from
+    @substance_edges.csv@. Empty when no path is configured. @ProxyFor@ edges
+    feed the CF cascade ('expandProxyEdges'); @SameAs@ name↔CAS edges feed
+    'dmCasBindings'.
+    -}
+    , dmCasBindings :: !(M.Map NormName CASNumber)
+    {- ^ Name→CAS identities distilled from the @SameAs@ edges, applied to
+    every database at load ('enrichBioFlowCAS') to fill empty @bfCAS@ so the
+    native CAS bridge reaches flows a source left CAS-less (e.g. SimaPro
+    exports). Empty when no edges bind a name to a CAS.
+    -}
     , dmMergedFlowMetadataCache :: !(TVar (Maybe (BioFlowDB, UnitDB)))
     {- ^ Memoized 'M.unions' of every loaded DB's flows/units.
     Invalidated on any 'dmLoadedDbs' mutation; collision detection
@@ -558,6 +576,25 @@ mapMethodToFlowsCached manager dbName collection db method = do
             atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
             return result
 
+{- | The mappings scoring actually uses: the cached cascade result expanded
+with the database's synonym fan-out and the configured substance edges.
+Diagnostics (flow-mapping endpoints, coverage audits) must read THIS rather
+than the raw cascade, or they under-report what the score tables contain.
+
+Uses the database's frozen-at-load-time synonym DB (curated-only;
+auto-extracted method synonyms enter 'dmLoadedFlowSyns' after databases are
+loaded, so 'getMergedSynonymDB' would surface them and pollute the fan-out
+with thousands of generic PubChem synonyms like "water" → "4-aminophenol").
+-}
+effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+effectiveMethodMappings manager dbName collection db method = do
+    mappings <- mapMethodToFlowsCached manager dbName collection db method
+    let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+        proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
+    pure $
+        expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
+            expandSynonymMappings synDB (dbFlowsByName db) mappings
+
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
 mapMethodToTablesCached manager dbName collection db method = do
@@ -582,19 +619,12 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
     case M.lookup key cache of
         Just tables -> pure tables
         Nothing -> do
-            mappings <- mapMethodToFlowsCached manager dbName collection db method
+            expanded <- effectiveMethodMappings manager dbName collection db method
             cmap <- getMergedCompartmentMap manager
             energyDensities <- getMergedEnergyDensities manager
             unitConfig <- getMergedUnitConfig manager
             (mFlows, mUnits) <- getMergedFlowMetadata manager
-            -- Use the database's frozen-at-load-time synonym DB (curated-only;
-            -- auto-extracted method synonyms enter @dmLoadedFlowSyns@ after
-            -- databases are loaded, so 'getMergedSynonymDB' would surface them
-            -- and pollute the fan-out with thousands of generic PubChem
-            -- synonyms like "water" → "4-aminophenol").
-            let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-                expanded = expandSynonymMappings synDB (dbFlowsByName db) mappings
-                !raw = buildMethodTables cmap energyDensities expanded
+            let !raw = buildMethodTables cmap energyDensities expanded
                 !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
                 -- Precompute per-activity weights for regionalized methods so
                 -- subsequent scoring is a dot product instead of one full
@@ -777,6 +807,31 @@ initDatabaseManager config noCache configPath = do
                 Left err -> do
                     putStrLn $ "warning: could not load chem synonyms from " <> path <> ": " <> err
                     pure emptyChemSynonyms
+    substanceEdges <- case cfgSubstanceEdges config of
+        Nothing -> pure []
+        Just path -> do
+            isFile <- doesFileExist path
+            if not isFile
+                then do
+                    putStrLn $ "warning: substance edges file not found: " <> path
+                    pure []
+                else do
+                    raw <- BL.readFile path
+                    case parseSubstanceEdges (KeyNormalizers (NormName . normalizeName) (CASNumber . normalizeCAS)) raw of
+                        Right es -> pure es
+                        Left err -> do
+                            putStrLn $ "warning: could not load substance edges from " <> path <> ": " <> T.unpack err
+                            pure []
+    let (substanceCasBindings, casBindingConflicts) = casBindingsFromEdges substanceEdges
+    forM_ casBindingConflicts $ \(NormName n, (CASNumber c1, CASNumber c2)) ->
+        putStrLn $
+            "warning: substance_edges.csv binds flow name '"
+                <> T.unpack n
+                <> "' to two CAS ("
+                <> T.unpack c1
+                <> " kept, "
+                <> T.unpack c2
+                <> " ignored)"
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
 
@@ -805,6 +860,8 @@ initDatabaseManager config noCache configPath = do
                 , dmMethodSetTablesCache = methodSetTablesCacheVar
                 , dmMethodIndexCache = methodIndexCacheVar
                 , dmChemSynonyms = chemSyns
+                , dmSubstanceEdges = substanceEdges
+                , dmCasBindings = substanceCasBindings
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
                 }
@@ -901,8 +958,12 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
     let transforms = prTransforms (dmPlugins manager)
     result <- loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
     case result of
-        Right (loaded, _fromCache) -> do
-            let indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
+        Right (loaded0, _fromCache) -> do
+            -- Backfill empty bfCAS from the registry's name↔CAS edges before
+            -- indexing, so a CAS-less source (e.g. a SimaPro export) still
+            -- reaches the native CAS bridge.
+            let loaded = loaded0{ldDatabase = enrichBioFlowCAS (dmCasBindings manager) (ldDatabase loaded0)}
+                indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
             atomically $ do
                 modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
                 modifyTVar' indexedDbsVar (M.insert (dcName dbConfig) indexedDb)
@@ -3371,6 +3432,18 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             -- Build SynonymDB directly from pairs (skip CSV round-trip)
             let !synDB = buildFromPairs pairs
             atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
+            -- Transitive closure has no degree cap, so a junk hub that fused
+            -- unrelated substances would silently pollute the fan-out. Surface
+            -- any implausibly large class (threshold 100, matching the offline
+            -- synonyms compiler) instead of dropping it silently.
+            forM_ (oversizedClasses 100 synDB) $ \cls ->
+                reportProgress Warning $
+                    "  [AUTO] "
+                        <> T.unpack slug
+                        <> ": synonym closure fused "
+                        <> show (length cls)
+                        <> " names into one class (possible junk hub); e.g. "
+                        <> T.unpack (T.intercalate ", " (take 5 cls))
             reportProgress Info $
                 "  [AUTO] "
                     <> T.unpack slug

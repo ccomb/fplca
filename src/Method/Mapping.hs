@@ -42,8 +42,11 @@ module Method.Mapping (
     findSimilarCFs,
     inventoryContributions,
     processContributionsFromTables,
+    lookupCFForFlow,
     convertForCharacterization,
     expandSynonymMappings,
+    ProxyTargets (..),
+    expandProxyEdges,
 
     -- * Multi-method scoring
     MethodSetTables (..),
@@ -65,6 +68,7 @@ module Method.Mapping (
     -- * Statistics
     MappingStats (..),
     computeMappingStats,
+    strategyPriority,
 ) where
 
 import Control.Applicative ((<|>))
@@ -72,7 +76,7 @@ import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.Either (lefts, rights)
-import Data.List (find, sortOn)
+import Data.List (find, nub, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
@@ -94,6 +98,7 @@ import Matrix (Inventory, Vector)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
+import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
@@ -111,6 +116,11 @@ data MatchStrategy
       BySynonym
     | -- | Fuzzy string matching
       ByFuzzy
+    | {- | Via a typed @ProxyFor@ edge: a CF borrowed from another flow, scaled
+      by the edge's conversion factor. An approximation, ranked below every
+      direct match so an explicit CF always wins.
+      -}
+      ByProxy
     | -- | No match found
       NoMatch
     deriving (Eq, Show)
@@ -132,6 +142,8 @@ data MappingStats = MappingStats
     -- ^ Matched by synonym
     , msByFuzzy :: !Int
     -- ^ Matched by fuzzy
+    , msByProxy :: !Int
+    -- ^ Matched via a @ProxyFor@ edge
     , msUnmatched :: !Int
     -- ^ Not matched
     }
@@ -146,10 +158,11 @@ instance Semigroup MappingStats where
             (msByName a + msByName b)
             (msBySynonym a + msBySynonym b)
             (msByFuzzy a + msByFuzzy b)
+            (msByProxy a + msByProxy b)
             (msUnmatched a + msUnmatched b)
 
 instance Monoid MappingStats where
-    mempty = MappingStats 0 0 0 0 0 0 0
+    mempty = MappingStats 0 0 0 0 0 0 0 0
 
 -- | Build a MapContext from a Database (convenience for callers)
 buildMapContext :: Database -> MapContext
@@ -204,6 +217,7 @@ strategyFromText t = case T.toLower t of
     "name" -> ByName
     "synonym" -> BySynonym
     "fuzzy" -> ByFuzzy
+    "proxy" -> ByProxy
     _ -> ByFuzzy -- Unknown strategies map to fuzzy
 
 -- ──────────────────────────────────────────────
@@ -284,6 +298,7 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
     tally (Just ByFuzzy) = one{msByFuzzy = 1}
+    tally (Just ByProxy) = one{msByProxy = 1}
     -- 'NoMatch' is not produced by the current matchers; this row exists only
     -- to keep the match exhaustive. Counts as unmatched if ever introduced.
     tally (Just NoMatch) = one{msUnmatched = 1}
@@ -299,6 +314,14 @@ data MethodTables = MethodTables
     -- ^ (normalized name, medium, subcompartment) → (CF, unit)
     , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
+    , mtSubBlindCF :: !(M.Map (Text, Text) (Double, Text))
+    {- ^ (normalized name, medium) → (CF, unit), but only where the substance's
+    factor is the SAME across every subcompartment — i.e. the subcompartment
+    genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
+    == any sub). Lets a flow whose sub matches no exact CF and has no
+    unspecified fallback still resolve, without guessing for a substance whose
+    factor DOES vary by sub (water by source), which is omitted as ambiguous.
+    -}
     , mtCasCF :: !(M.Map (Text, Text) (Double, Text))
     {- ^ (CAS, normalized medium) → (CF, unit), from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
@@ -598,6 +621,70 @@ expandSynonymMappings synDB flowsByName mappings =
 -- @resources/land@ via the compartment map), so it's simpler to let
 -- the table keys do the filtering.
 
+{- | Database flow indexes a @ProxyFor@ edge's @to@ side resolves against, keyed
+the three ways a proxy can name it: normalized name, CAS, and flow UUID.
+-}
+data ProxyTargets = ProxyTargets
+    { ptByName :: !(M.Map Text [BiosphereFlow])
+    , ptByCAS :: !(M.Map Text [BiosphereFlow])
+    , ptByUUID :: !(M.Map UUID BiosphereFlow)
+    }
+
+{- | Apply @ProxyFor@ edges at method-table build — the directional counterpart of
+'expandSynonymMappings'. For each edge @from -(f)-> to@, every method CF identified
+by @from@ contributes a CF scaled by @f@ to every database flow identified by @to@,
+tagged 'ByProxy' so it keys under that flow's name and loses to any direct match.
+
+Only 'SR.ProxyFor' edges act here; @SameAs@/@Subsumes@/@DistinctFrom@ live in the
+class/diagnostics layer. An empty edge list is the identity, so the method tables are
+unchanged when no @substance_edges.csv@ is loaded.
+-}
+expandProxyEdges ::
+    ProxyTargets ->
+    [SR.SubstanceEdge] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+expandProxyEdges targets edges mappings =
+    mappings
+        ++ [ (cf{mcfValue = mcfValue cf * f}, Just (toFlow, ByProxy))
+           | (from, to, f) <- proxies
+           , cf <- cfsMatching from
+           , toFlow <- flowsMatching to
+           ]
+  where
+    proxies =
+        [ (SR.seFrom e, SR.seTo e, f)
+        | e <- edges
+        , SR.ProxyFor (SR.ConversionFactor f) <- [SR.seRelation e]
+        ]
+
+    cfs = map fst mappings
+    cfsByName = M.fromListWith (++) [(normalizeName (mcfFlowName cf), [cf]) | cf <- cfs]
+    cfsByCAS = M.fromListWith (++) [(cas, [cf]) | cf <- cfs, Just cas <- [mcfCAS cf], not (T.null cas)]
+    cfsByUUID = M.fromListWith (++) [(mcfFlowRef cf, [cf]) | cf <- cfs]
+
+    cfsMatching (SR.ByName _ (SR.NormName n)) = M.findWithDefault [] n cfsByName
+    cfsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c cfsByCAS
+    cfsMatching (SR.ByUUID (SR.FlowUUID u)) = M.findWithDefault [] u cfsByUUID
+
+    flowsMatching (SR.ByName _ (SR.NormName n)) = M.findWithDefault [] n (ptByName targets)
+    flowsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c (ptByCAS targets)
+    flowsMatching (SR.ByUUID (SR.FlowUUID u)) = maybe [] pure (M.lookup u (ptByUUID targets))
+
+{- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
+heuristic/expanded): when two CFs collide on one flow or table key, the lower
+rank — the more discriminating match — wins. Exported so diagnostics dedup
+with the same preference the score tables use.
+-}
+strategyPriority :: MatchStrategy -> Int
+strategyPriority ByUUID = 0
+strategyPriority ByName = 1
+strategyPriority BySynonym = 2
+strategyPriority ByCAS = 3
+strategyPriority ByFuzzy = 4
+strategyPriority ByProxy = 4
+strategyPriority NoMatch = 4
+
 buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables cmap energyDensities mappings =
     MethodTables
@@ -652,6 +739,21 @@ buildMethodTables cmap energyDensities mappings =
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
                     , isUnspecifiedSub normSub
+                    ]
+        , mtSubBlindCF =
+            -- Keep a (name, medium) entry only when every subcompartment's CF
+            -- agrees: then the sub is irrelevant and a sub-mismatched flow can
+            -- safely borrow it. A substance whose factor varies by sub is
+            -- dropped here, so this never guesses across a real distinction.
+            M.mapMaybe agreedValue $
+                M.fromListWith
+                    (++)
+                    [ ((nameKey cf mflow, normMed), [(mcfValue cf, mcfUnit cf)])
+                    | (cf, mflow) <- mappings
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
@@ -725,6 +827,12 @@ buildMethodTables cmap energyDensities mappings =
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
 
+    -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
+    -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
+    agreedValue vus = case nub vus of
+        [vu] -> Just vu
+        _ -> Nothing
+
     -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
     -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
     -- default value when several subcompartment CFs collide on one key. On a
@@ -771,28 +879,21 @@ buildMethodTables cmap energyDensities mappings =
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
-        | stratPriority s1 < stratPriority s2 = (v1, u1, s1)
-        | stratPriority s1 > stratPriority s2 = (v2, u2, s2)
+        | strategyPriority s1 < strategyPriority s2 = (v1, u1, s1)
+        | strategyPriority s1 > strategyPriority s2 = (v2, u2, s2)
         | v1 >= v2 = (v1, u1, s1)
         | otherwise = (v2, u2, s2)
-    -- Same ranking as the mapper cascade (UUID → name → synonym → CAS): when
-    -- two CFs collide on one name key, the name-discriminated row beats the
-    -- generic CAS-matched one.
-    stratPriority ByUUID = 0 :: Int
-    stratPriority ByName = 1
-    stratPriority BySynonym = 2
-    stratPriority ByCAS = 3
-    stratPriority ByFuzzy = 4
-    stratPriority NoMatch = 4
 
     matchStrategy mflow = case mflow of
         Just (_, s) -> s
         Nothing -> NoMatch
 
-    -- Use matched flow's name only for name/synonym matches
+    -- Use matched flow's name only for name/synonym/proxy matches: those key
+    -- the CF under the database flow it resolved to, not the method CF's own name.
     nameKey cf mflow = normalizeName $ case mflow of
         Just (flow, ByName) -> bfName flow
         Just (flow, BySynonym) -> bfName flow
+        Just (flow, ByProxy) -> bfName flow
         _ -> mcfFlowName cf
 
 {- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
@@ -1255,6 +1356,54 @@ lookupCascadeCF tables flowDB fid =
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
                 <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
+                <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
+                <|> regionBaseFallback flow baseMed normSub
+                <|> energyResourceFallback flow baseMed normSub
+
+    -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
+    -- doesn't tag falls back to the base substance's CF: an unregionalized CF
+    -- for "Ammonia" applies to the emission wherever it occurs. Only fires
+    -- after every direct lookup misses, and only when the suffix is a real
+    -- region code (extractLocationSuffix leaves "Methane, fossil" untouched).
+    regionBaseFallback flow baseMed normSub =
+        case extractLocationSuffix (bfName flow) of
+            (base, Just _) ->
+                let bname = normalizeName base
+                 in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
+                        <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
+            _ -> Nothing
+
+    -- An energy-resource flow whose name encodes its density ("Coal, 18 MJ per
+    -- kg") borrows the CF of its resource family (coal/oil/gas/uranium…) — the
+    -- generic per-MJ resource CF. The density itself is applied downstream by
+    -- 'convertAndMultiply', which name-parses the same suffix, so here we only
+    -- return the base CF. The resource family is resolved through the known
+    -- energy resources ('mtEnergyDensities'), so an unknown resource never
+    -- borrows a CF. Last in the cascade: only fires when all else misses.
+    energyResourceFallback flow baseMed normSub =
+        case parseEnergyDensitySuffix (bfName flow) of
+            Nothing -> Nothing
+            Just (base, _) ->
+                let fam = firstWord (normalizeName base)
+                    candidates =
+                        [ cf
+                        | rname <- M.keys (mtEnergyDensities tables)
+                        , firstWord rname == fam
+                        , Just cf <- [resourceCF rname baseMed normSub]
+                        ]
+                 in -- Borrow only when the family's resolving CFs agree (the generic
+                    -- per-MJ factor). If "Coal, hard" and "Coal, brown" disagree the
+                    -- family CF is ambiguous, so drop rather than pick one arbitrarily
+                    -- by Map order — same "never guess" rule as 'agreedValue'.
+                    case nub candidates of
+                        [cf] -> Just cf
+                        _ -> Nothing
+
+    resourceCF rname baseMed normSub =
+        M.lookup (rname, baseMed, normSub) (mtExactCF tables)
+            <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
+
+    firstWord = T.takeWhile (/= ' ') . T.strip
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
@@ -1362,7 +1511,13 @@ convertAndMultiply ::
     Double
 convertAndMultiply unitConfig unitDB energyDensities mflow (cfVal, cfUnit) qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
-        mDensity = mflow >>= \f -> M.lookup (normalizeName (bfName f)) energyDensities
+        -- Density from the curated CSV first; else parse it from the flow name
+        -- ("Coal, 18 MJ per kg" → 18 MJ), so energy-resource variants the CSV
+        -- doesn't enumerate still convert mass/volume → energy.
+        mDensity =
+            mflow >>= \f ->
+                M.lookup (normalizeName (bfName f)) energyDensities
+                    <|> fmap snd (parseEnergyDensitySuffix (bfName f))
         converted = energyAwareConversion unitConfig flowUnit cfUnit mDensity qty
      in converted * cfVal
 

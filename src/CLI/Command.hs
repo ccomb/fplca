@@ -637,6 +637,9 @@ executeFlowMappingCommand registry fmt database manager opts = do
                             when (msByFuzzy stats > 0) $
                                 putStrLn $
                                     "  by Fuzzy:   " ++ show (msByFuzzy stats)
+                            when (msByProxy stats > 0) $
+                                putStrLn $
+                                    "  by Proxy:   " ++ show (msByProxy stats)
                             putStrLn $ "Unmatched:  " ++ show (msUnmatched stats)
                             putStrLn ""
                             putStrLn $ "DB biosphere flows: " ++ show dbBioCount
@@ -691,6 +694,7 @@ executeFlowMappingCommand registry fmt database manager opts = do
                                         , "byName" .= msByName stats
                                         , "bySynonym" .= msBySynonym stats
                                         , "byFuzzy" .= msByFuzzy stats
+                                        , "byProxy" .= msByProxy stats
                                         , "unmatched" .= msUnmatched stats
                                         , "dbBiosphereFlows" .= dbBioCount
                                         , "characterized" .= characterizedCount
@@ -739,6 +743,7 @@ strategyText ByCAS = "cas"
 strategyText ByName = "name"
 strategyText BySynonym = "synonym"
 strategyText ByFuzzy = "fuzzy"
+strategyText ByProxy = "proxy"
 strategyText NoMatch = "none"
 
 -- | Get names of biosphere flows not matched by any CF

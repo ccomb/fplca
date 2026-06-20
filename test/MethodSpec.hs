@@ -116,11 +116,18 @@ spec = do
                 let db = buildFromPairs [("CO2", "Carbon dioxide"), ("CH4", "Methane")]
                 lookupSynonymGroup db "co2" `shouldNotBe` lookupSynonymGroup db "ch4"
 
-            it "prevents overly generic terms (>50 direct synonyms) from dominating" $ do
-                -- "generic" paired with 51 substances; each substance should still be findable
-                let pairs = map ("generic",) (map (T.pack . show) [1 .. 51 :: Int])
+            it "closes a high-degree hub into one class instead of silently dropping it" $ do
+                -- A hub paired with 51 names closes into a single 52-member class.
+                -- The old star topology silently dropped such hubs; the registry
+                -- takes the honest closure — bad hub data surfaces as an oversized
+                -- class in validation, and genuinely-broader relations belong in the
+                -- typed-edge layer, not as SameAs.
+                let pairs = map (("hub",) . T.pack . show) [1 .. 51 :: Int]
                     db = buildFromPairs pairs
-                lookupSynonymGroup db "1" `shouldNotBe` Nothing
+                    g1 = lookupSynonymGroup db "1"
+                g1 `shouldNotBe` Nothing
+                lookupSynonymGroup db "51" `shouldBe` g1
+                fmap length (g1 >>= getSynonyms db) `shouldBe` Just 52
 
         describe "mergeSynonymDBs" $ do
             it "returns empty DB for empty list" $

@@ -51,6 +51,7 @@ library
                      , Database.MatrixBuild
                      , Database.Upload
                      , Database.UploadedDatabase
+                     , SubstanceRegistry
                      , SynonymDB
                      , SynonymDB.Types
                      , SynonymDB.Extract
@@ -222,6 +223,11 @@ test-suite lca-tests
                      , BrightwayExcelWriterSpec
                      , UnitConversionSpec
                      , PluginSpec
+                     , ProxyEdgeSpec
+                     , CASBackfillSpec
+                     , RegionFallbackSpec
+                     , EnergyResourceFillSpec
+                     , SubBlindCFSpec
                      , ServerSpec
                      , ILCDParserSpec
                      , SupplyChainSpec
@@ -253,6 +259,7 @@ test-suite lca-tests
                      , MethodCollectionCacheSpec
                      , MethodResolveSpec
                      , ChemSynonymsSpec
+                     , SubstanceRegistrySpec
                      , SynonymDBSpec
                      , UploadedDatabaseSpec
                      , UploadSizeSpec
