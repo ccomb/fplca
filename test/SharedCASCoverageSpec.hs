@@ -385,6 +385,24 @@ acrCtx =
         , mcActivities = M.empty
         }
 
+-- Regionalized analogue of 'acrMethod': both CFs carry a location, so they
+-- land in 'mtRegionalCasCF' rather than 'mtCasCF'. Same divergence — indoor
+-- air is 100x the unspecified value — at one location.
+acrRegionalMethod :: Method
+acrRegionalMethod =
+    Method
+        { methodId = mkUUID 104
+        , methodName = "Tox method (regional)"
+        , methodDescription = Nothing
+        , methodUnit = "kg"
+        , methodCategory = "Test"
+        , methodMethodology = Nothing
+        , methodFactors =
+            [ atLocation "FR" ((mkAirCF "acryolonitrile" "indoor" 100){mcfCAS = Just acrCAS})
+            , atLocation "FR" ((mkAirCF "acryolonitrile" "unspecified" 1){mcfCAS = Just acrCAS})
+            ]
+        }
+
 -- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
@@ -481,3 +499,12 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             let raw = buildMethodTables M.empty M.empty mappings
                 tables = fillBroadcastVector defaultUnitConfig M.empty (mcBioFlowsByUUID acrCtx) raw
             M.lookup (bfId acrFlow) (mtBroadcast tables) `shouldBe` Just 1
+
+        it "the regional bridge keeps the unspecified value per location too" $ do
+            -- FR carries both the indoor (100) and the unspecified (1) CF; the
+            -- regionalized bridge must keep the medium-level default, not the
+            -- niche max — same rule as the non-regional 'mtCasCF'.
+            mappings <- mapMethodFlows defaultMappers acrCtx acrRegionalMethod
+            let tables = buildMethodTables M.empty M.empty mappings
+            M.lookup (acrCAS, "air") (mtRegionalCasCF tables)
+                `shouldBe` Just (M.fromList [("FR", (1, "kg"))])

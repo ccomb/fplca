@@ -687,17 +687,22 @@ buildMethodTables cmap energyDensities mappings =
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
                     ]
         , mtRegionalCasCF =
-            M.fromListWith
-                (M.unionWith preferLargerMag)
-                [ ((cas, normMed), M.singleton loc (mcfValue cf, mcfUnit cf))
-                | (cf, Just (_, ByCAS)) <- mappings
-                , Just cas <- [mcfCAS cf]
-                , not (T.null cas)
-                , Just loc <- [mcfConsumerLocation cf]
-                , Just comp <- [mcfCompartment cf]
-                , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                , let normMed = normalizeMedium (T.toLower normMedRaw)
-                ]
+            -- Same unspecified-default preference as 'mtCasCF', applied per
+            -- location: when several subcompartment CFs collide on one
+            -- (CAS, medium, location) the medium-level default wins over a
+            -- niche subcompartment, rather than the largest magnitude.
+            M.map (M.map snd) $
+                M.fromListWith
+                    (M.unionWith preferUnspecifiedCas)
+                    [ ((cas, normMed), M.singleton loc (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    | (cf, Just (_, ByCAS)) <- mappings
+                    , Just cas <- [mcfCAS cf]
+                    , not (T.null cas)
+                    , Just loc <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , mtRegionalizedCF =
             -- Filter: a CF whose own compartment carries a specific subcomp
             -- (e.g. "groundwater, long-term" or "ocean") must only apply to
@@ -720,18 +725,12 @@ buildMethodTables cmap energyDensities mappings =
   where
     stripStrategy = M.map (\(v, u, _) -> (v, u))
 
-    -- Dedup CAS-keyed CFs colliding on one (CAS, medium) key (many same-CAS
-    -- flows collapse to one key, e.g. several name variants of a substance):
-    -- keep the larger-magnitude factor. Deliberately biased toward overstating
-    -- the impact — the bridge is a last-resort fallback and an understated
-    -- factor would be invisible, while an overstated one shows up in validation.
-    preferLargerMag (v1, u1) (v2, u2)
-        | abs v1 >= abs v2 = (v1, u1)
-        | otherwise = (v2, u2)
-
     -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
     -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level
-    -- default value when several subcompartment CFs share a (CAS, medium).
+    -- default value when several subcompartment CFs collide on one key. On a
+    -- tie (no unspecified CF present) keep the larger magnitude — the bridge is
+    -- a last-resort fallback, so an overstated factor surfaces in validation
+    -- while an understated one would be invisible.
     casSubRank s
         | isUnspecifiedSub s = 0 :: Int
         | otherwise = 1
