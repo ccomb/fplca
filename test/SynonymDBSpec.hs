@@ -3,9 +3,10 @@
 module SynonymDBSpec (spec) where
 
 import qualified Data.Set as S
+import Data.Text (pack)
 import Test.Hspec
 
-import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup)
+import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, oversizedClasses)
 
 spec :: Spec
 spec = do
@@ -29,3 +30,14 @@ spec = do
 
         it "gives both ends of the chain the same group id" $
             lookupSynonymGroup db "alpha" `shouldBe` lookupSynonymGroup db "gamma"
+
+    describe "oversizedClasses" $ do
+        -- A junk hub fuses everything it touches into one transitive class.
+        let hub = buildFromPairs [("hub", "s" <> pack (show i)) | i <- [1 :: Int .. 12]]
+
+        it "flags a class larger than the bound (a closure that fused a junk hub)" $
+            map length (oversizedClasses 10 hub) `shouldBe` [13]
+
+        it "stays silent when every class is within the bound" $
+            oversizedClasses 10 (buildFromPairs [("alpha", "beta"), ("beta", "gamma")])
+                `shouldBe` []

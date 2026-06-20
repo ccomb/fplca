@@ -182,7 +182,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, synonymCount)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -3432,6 +3432,18 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             -- Build SynonymDB directly from pairs (skip CSV round-trip)
             let !synDB = buildFromPairs pairs
             atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
+            -- Transitive closure has no degree cap, so a junk hub that fused
+            -- unrelated substances would silently pollute the fan-out. Surface
+            -- any implausibly large class (threshold 100, matching the offline
+            -- synonyms compiler) instead of dropping it silently.
+            forM_ (oversizedClasses 100 synDB) $ \cls ->
+                reportProgress Warning $
+                    "  [AUTO] "
+                        <> T.unpack slug
+                        <> ": synonym closure fused "
+                        <> show (length cls)
+                        <> " names into one class (possible junk hub); e.g. "
+                        <> T.unpack (T.intercalate ", " (take 5 cls))
             reportProgress Info $
                 "  [AUTO] "
                     <> T.unpack slug

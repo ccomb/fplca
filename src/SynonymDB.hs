@@ -21,6 +21,7 @@ module SynonymDB (
     normalizeName,
     mergeSynonymDBs,
     synonymCount,
+    oversizedClasses,
 
     -- * Re-exports
     SynonymDB (..),
@@ -62,9 +63,9 @@ registry. A↔B and B↔C therefore land A, B and C in one class.
 Closure is taken honestly, with no silent degree cap. Measured on the current
 reference data, no class exceeds a handful of members (the feared
 sulfate→…→carbonate chain does not occur), so closure is safe. Bad data — a junk
-hub that would fuse unrelated substances — surfaces as an oversized class in
-validation rather than being silently dropped, and genuinely-broader relations
-(SOx ⊃ SO₂) belong in the typed-edge layer, not as @SameAs@.
+hub that would fuse unrelated substances — surfaces through 'oversizedClasses'
+(the loader warns) rather than being silently dropped, and genuinely-broader
+relations (SOx ⊃ SO₂) belong in the typed-edge layer, not as @SameAs@.
 -}
 buildFromPairs :: [(Text, Text)] -> SynonymDB
 buildFromPairs = fromClasses . equivalenceClasses . normalizePairs
@@ -153,6 +154,15 @@ mergeSynonymDBs dbs = fromClasses (equivalenceClasses edges)
 -- | Number of synonym names in the database.
 synonymCount :: SynonymDB -> Int
 synonymCount = M.size . synNameToId
+
+{- | Synonym classes with more than @maxSize@ members. Transitive closure has no
+degree cap (a hub no longer silently truncates at 50), so an implausibly large
+class — a junk hub that fused unrelated substances through one bad pair — must be
+surfaced rather than silently polluting the synonym fan-out. The loader warns on
+whatever this returns; an empty result means the closure stayed plausible.
+-}
+oversizedClasses :: Int -> SynonymDB -> [[Text]]
+oversizedClasses maxSize = filter ((> maxSize) . length) . M.elems . synIdToNames
 
 {- | Normalize a name for lookup in the synonym database
 
