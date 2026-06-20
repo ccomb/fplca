@@ -310,11 +310,11 @@ should be computed once per method and reused across inventories.
 data MethodTables = MethodTables
     { mtUuidCF :: !(M.Map UUID (Double, Text))
     -- ^ UUID-matched CFs: exact flow id → (CF value, CF unit)
-    , mtExactCF :: !(M.Map (Text, Text, Text) (Double, Text))
+    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) (Double, Text))
     -- ^ (normalized name, medium, subcompartment) → (CF, unit)
-    , mtFallbackCF :: !(M.Map (Text, Text) (Double, Text))
+    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
-    , mtSubBlindCF :: !(M.Map (Text, Text) (Double, Text))
+    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
     {- ^ (normalized name, medium) → (CF, unit), but only where the substance's
     factor is the SAME across every subcompartment — i.e. the subcompartment
     genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
@@ -322,7 +322,7 @@ data MethodTables = MethodTables
     unspecified fallback still resolve, without guessing for a substance whose
     factor DOES vary by sub (water by source), which is omitted as ambiguous.
     -}
-    , mtCasCF :: !(M.Map (Text, Text) (Double, Text))
+    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) (Double, Text))
     {- ^ (CAS, normalized medium) → (CF, unit), from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
     single database flow at build time, so when many flows share one CAS in a
@@ -335,7 +335,7 @@ data MethodTables = MethodTables
     (minerals are reachable only through this bridge). Empty for methods whose
     CFs carry no CAS.
     -}
-    , mtRegionalCasCF :: !(M.Map (Text, Text) (M.Map Text (Double, Text)))
+    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Text (Double, Text)))
     {- ^ (CAS, normalized medium) → (location → (CF, unit)), from regionalized
     CFs. The regionalized analogue of 'mtCasCF': lets the regionalized build
     characterize every same-CAS flow per location, not just the one a CF
@@ -709,7 +709,7 @@ buildMethodTables cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normMed, normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -732,7 +732,7 @@ buildMethodTables cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((nameKey cf mflow, normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -748,7 +748,7 @@ buildMethodTables cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((nameKey cf mflow, normMed), [(mcfValue cf, mcfUnit cf)])
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [(mcfValue cf, mcfUnit cf)])
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -779,7 +779,7 @@ buildMethodTables cmap energyDensities mappings =
             M.map snd $
                 M.fromListWith
                     preferUnspecifiedCas
-                    [ ((cas, normMed), (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
@@ -796,7 +796,7 @@ buildMethodTables cmap energyDensities mappings =
             M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith preferUnspecifiedCas)
-                    [ ((cas, normMed), M.singleton loc (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    [ ((SR.CASNumber cas, Medium normMed), M.singleton loc (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
@@ -1008,7 +1008,7 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                 M.lookup fid perFlow
                     <|> ( M.lookup fid flowDB >>= \flow ->
                             bfCAS flow
-                                >>= \cas -> M.lookup (cas, fst (flowMediumSub cmap flow)) regionalCas
+                                >>= \cas -> M.lookup (SR.CASNumber cas, fst (flowMediumSub cmap flow)) regionalCas
                         )
          in V.map lookupRow bioFlows
 
@@ -1348,14 +1348,14 @@ lookupCascadeCF tables flowDB fid =
         <|> (M.lookup fid flowDB >>= byNameOrCas)
   where
     byNameOrCas flow =
-        let name = normalizeName (bfName flow)
+        let name = SR.NormName (normalizeName (bfName flow))
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
             -- just the one a CF resolved to at build time.
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
-                <|> (bfCAS flow >>= \cas -> M.lookup (cas, baseMed) (mtCasCF tables))
+                <|> (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
                 <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
                 <|> regionBaseFallback flow baseMed normSub
                 <|> energyResourceFallback flow baseMed normSub
@@ -1368,7 +1368,7 @@ lookupCascadeCF tables flowDB fid =
     regionBaseFallback flow baseMed normSub =
         case extractLocationSuffix (bfName flow) of
             (base, Just _) ->
-                let bname = normalizeName base
+                let bname = SR.NormName (normalizeName base)
                  in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
                         <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
             _ -> Nothing
@@ -1389,7 +1389,7 @@ lookupCascadeCF tables flowDB fid =
                         [ cf
                         | rname <- M.keys (mtEnergyDensities tables)
                         , firstWord rname == fam
-                        , Just cf <- [resourceCF rname baseMed normSub]
+                        , Just cf <- [resourceCF (SR.NormName rname) baseMed normSub]
                         ]
                  in -- Borrow only when the family's resolving CFs agree (the generic
                     -- per-MJ factor). If "Coal, hard" and "Coal, brown" disagree the
@@ -1429,7 +1429,7 @@ compartment normalization. Shared by the name/CAS read path
 same way. Subcomp resolution prefers the explicit 'compartmentSub' field,
 falling back to the tail of a @"medium/sub"@ category name.
 -}
-flowMediumSub :: CompartmentMap -> BiosphereFlow -> (Text, Text)
+flowMediumSub :: CompartmentMap -> BiosphereFlow -> (Medium, Subcompartment)
 flowMediumSub cmap flow =
     let rawCategory = T.toLower (VT.bfCompartmentName flow)
         (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
@@ -1441,7 +1441,7 @@ flowMediumSub cmap flow =
              in if T.null s then rawSubFromCat else s
         Compartment normMedRaw normSub _ =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
-     in (normalizeMedium normMedRaw, normSub)
+     in (Medium (normalizeMedium normMedRaw), Subcompartment normSub)
 
 {- | True when @unit@ is dimensionally an energy unit (same exponent vector as
 the reference @mj@). Used to detect the energy-CF-vs-non-energy-flow case the

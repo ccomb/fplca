@@ -14,6 +14,8 @@ module Method.Types (
     MethodCF (..),
     FlowDirection (..),
     Compartment (..),
+    Medium (..),
+    Subcompartment (..),
 
     -- * Method Collection (with normalization/weighting)
     MethodCollection (..),
@@ -79,6 +81,22 @@ qualifier: "long-term" or ""
 -}
 data Compartment = Compartment !Text !Text !Text
     deriving (Eq, Show, Generic, NFData, Store, ToJSON, FromJSON)
+
+{- | A normalized compartment medium (the output of 'normalizeMedium' applied to
+a 'normalizeCompartment'-ed medium, e.g. @"air"@, @"water"@, @"resource"@). A
+lookup-key axis: distinguishing it from a bare 'Text' (and from a
+'Subcompartment') keeps the CF lookup tables from silently confusing a medium
+with a name or subcompartment.
+-}
+newtype Medium = Medium Text
+    deriving (Eq, Ord, Show)
+
+{- | A normalized compartment subcompartment (e.g. @"surface water"@,
+@"(unspecified)"@). The third lookup-key axis alongside 'Medium' and a
+normalized name; a newtype so it can't be swapped with a medium in a key tuple.
+-}
+newtype Subcompartment = Subcompartment Text
+    deriving (Eq, Ord, Show)
 
 {- | A characterization factor from a method file
 

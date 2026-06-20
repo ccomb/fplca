@@ -33,9 +33,10 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping
-import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..))
+import Method.Types (Compartment (..), FlowDirection (..), Medium (..), Method (..), MethodCF (..))
 import Plugin.Builtin (defaultMappers)
 import Plugin.Types (MapContext (..))
+import SubstanceRegistry (CASNumber (..))
 import SynonymDB (buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
@@ -457,9 +458,9 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
         it "routes a location-bearing CAS-matched CF to mtRegionalCasCF only" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx regionalCasMethod
             let tables = buildMethodTables M.empty M.empty mappings
-            M.lookup (waterCAS, "resource") (mtRegionalCasCF tables)
+            M.lookup (CASNumber waterCAS, Medium "resource") (mtRegionalCasCF tables)
                 `shouldBe` Just (M.fromList [("FR", (9, "m3"))])
-            M.member (waterCAS, "resource") (mtCasCF tables) `shouldBe` False
+            M.member (CASNumber waterCAS, Medium "resource") (mtCasCF tables) `shouldBe` False
 
         it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx uuidRegionalMethod
@@ -492,7 +493,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
             let tables = buildMethodTables M.empty M.empty mappings
             -- indoor air is 100x; the bridge must not broadcast it.
-            M.lookup (acrCAS, "air") (mtCasCF tables) `shouldBe` Just (1, "kg")
+            M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables) `shouldBe` Just (1, "kg")
 
         it "reaches the flow with the unspecified factor, not the indoor max" $ do
             mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
@@ -506,5 +507,5 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- niche max — same rule as the non-regional 'mtCasCF'.
             mappings <- mapMethodFlows defaultMappers acrCtx acrRegionalMethod
             let tables = buildMethodTables M.empty M.empty mappings
-            M.lookup (acrCAS, "air") (mtRegionalCasCF tables)
+            M.lookup (CASNumber acrCAS, Medium "air") (mtRegionalCasCF tables)
                 `shouldBe` Just (M.fromList [("FR", (1, "kg"))])
