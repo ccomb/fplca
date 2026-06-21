@@ -182,7 +182,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -990,6 +990,26 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
                     <> " with synonyms, "
                     <> show (length pairs)
                     <> " pairs"
+            -- A biosphere flow whose name carries a "/unit" suffix that
+            -- 'normalizeName' does not strip silently misses its CF (the SimaPro
+            -- unit-in-name convention; e.g. a "/MJ" absent from 'unitSuffixes').
+            -- Surface it so the fix — add the unit to 'unitSuffixes' — is visible.
+            let uncoveredUnits =
+                    uncoveredUnitSuffixes
+                        (UnitConversion.isKnownUnit unitConfig)
+                        (map bfName (M.elems bioFlowDb))
+            forM_ (M.toList uncoveredUnits) $ \(unit, egs) ->
+                reportProgress Warning $
+                    "  [UNIT] "
+                        <> T.unpack (dcName dbConfig)
+                        <> ": flow-name suffix /"
+                        <> T.unpack unit
+                        <> " not stripped on "
+                        <> show (length egs)
+                        <> " flows (add \"/"
+                        <> T.unpack (T.toLower unit)
+                        <> "\" to unitSuffixes); e.g. "
+                        <> T.unpack (T.intercalate ", " (take 3 egs))
             autoCreateFlowSynonyms
                 manager
                 (dcName dbConfig)

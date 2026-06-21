@@ -23,6 +23,10 @@ module SynonymDB (
     synonymCount,
     oversizedClasses,
 
+    -- * Unit suffixes
+    unitSuffixes,
+    uncoveredUnitSuffixes,
+
     -- * Re-exports
     SynonymDB (..),
     emptySynonymDB,
@@ -183,10 +187,8 @@ normalizeName name =
         t2 = T.unwords $ T.words t1
         -- Strip ", in ground" suffix
         t3 = stripSuffix ", in ground" $ stripSuffix " in ground" t2
-        -- Strip a trailing SimaPro unit suffix (/kg, /m3, /Sm3). SimaPro encodes a
-        -- flow's unit in its name ("Gas, natural/m3"); dropping it lets the unit
-        -- variant share the registry node of the base resource.
-        t4 = foldr stripSuffix t3 ["/kg", "/m3", "/sm3"]
+        -- Strip a trailing SimaPro unit suffix; see 'unitSuffixes'.
+        t4 = foldr stripSuffix t3 unitSuffixes
         -- Remove punctuation. Inlined char predicate: the old version used
         -- @T.filter (`notElem` (",()'\"" :: String))@ which forces 'T.filter'
         -- to traverse a 5-cons-cell @[Char]@ list per input character. With
@@ -205,6 +207,37 @@ normalizeName name =
         if suffix `T.isSuffixOf` txt
             then T.dropEnd (T.length suffix) txt
             else txt
+
+{- | Unit suffixes that 'normalizeName' strips. SimaPro bakes a flow's unit into
+its name (e.g. @"Gas, natural/m3"@); dropping the suffix lets a unit variant
+share the registry node — and thus the CF — of its base resource.
+
+MUST be lowercase: 'normalizeName' lowercases before it strips, so an uppercase
+entry would never fire. Extending this list is the fix when 'uncoveredUnitSuffixes'
+warns that a loaded database carries an un-stripped @/unit@ suffix.
+-}
+unitSuffixes :: [Text]
+unitSuffixes = ["/kg", "/m3", "/sm3"]
+
+{- | Flow names that will silently miss CF matching because they carry a trailing
+@"/unit"@ for a real unit 'unitSuffixes' does not strip. Grouped by the offending
+unit (each value lists example flow names) so a load-time warning is actionable —
+add @"/unit"@ to 'unitSuffixes'. Empty when coverage is complete.
+
+The unit test is supplied by the caller (@UnitConversion.isKnownUnit cfg@), so this
+module stays free of a unit-system dependency.
+-}
+uncoveredUnitSuffixes :: (Text -> Bool) -> [Text] -> M.Map Text [Text]
+uncoveredUnitSuffixes isUnit names =
+    M.fromListWith
+        (<>)
+        [ (seg, [name])
+        | name <- names
+        , let (prefix, seg) = T.breakOnEnd "/" name
+        , not (T.null prefix)
+        , isUnit seg
+        , ("/" <> T.toLower seg) `notElem` unitSuffixes
+        ]
 
 -- | Look up the synonym group ID for a flow name
 lookupSynonymGroup :: SynonymDB -> Text -> Maybe Int
