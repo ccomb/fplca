@@ -207,7 +207,7 @@ class TestDispatcher:
         """``min_quantity`` Python → ``min-quantity`` wire."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "root": {"processId": "x", "name": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "root": {"processId": "x", "activityName": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             "supplyChain": [],
             "edges": [],
             "totalActivities": 0,
@@ -225,7 +225,7 @@ class TestDispatcher:
         """preset= must reach the supply-chain endpoint as a query param."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "root": {"processId": "x", "name": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "root": {"processId": "x", "activityName": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             "supplyChain": [],
             "edges": [],
             "totalActivities": 0,
