@@ -171,7 +171,7 @@ Normalization rules:
 - Strip leading/trailing whitespace
 - Collapse multiple spaces to single space
 - Strip ", in ground" suffix (ecoinvent resource naming)
-- Strip "/kg" suffix (SimaPro unit convention)
+- Strip a trailing SimaPro unit suffix ("/kg", "/m3", "/Sm3")
 - Remove punctuation: commas, parentheses, quotes
 -}
 normalizeName :: Text -> Text
@@ -183,8 +183,10 @@ normalizeName name =
         t2 = T.unwords $ T.words t1
         -- Strip ", in ground" suffix
         t3 = stripSuffix ", in ground" $ stripSuffix " in ground" t2
-        -- Strip "/kg" suffix
-        t4 = stripSuffix "/kg" t3
+        -- Strip a trailing SimaPro unit suffix (/kg, /m3, /Sm3). SimaPro encodes a
+        -- flow's unit in its name ("Gas, natural/m3"); dropping it lets the unit
+        -- variant share the registry node of the base resource.
+        t4 = foldr stripSuffix t3 ["/kg", "/m3", "/sm3"]
         -- Remove punctuation. Inlined char predicate: the old version used
         -- @T.filter (`notElem` (",()'\"" :: String))@ which forces 'T.filter'
         -- to traverse a 5-cons-cell @[Char]@ list per input character. With
