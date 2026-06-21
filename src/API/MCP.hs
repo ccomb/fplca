@@ -609,7 +609,7 @@ callGetActivity rid args (db, _) = runTool rid $ do
         Success ai ->
             -- Single resolve: take the activity name from the 'ActivityInfo'
             -- already in hand instead of asking the engine to resolve the PID again.
-            let attach = attachMarketHintByName (pfaName (piActivity ai))
+            let attach = attachMarketHintByName (pfaActivityName (piActivity ai))
                 payload
                     | noFilters = val
                     | otherwise =
@@ -1464,12 +1464,12 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unit
                 )
     pure $
         object $
-            [ "process_id" .= pidText
-            , "activity_name" .= actName
-            , "product_name" .= prodName
+            [ "processId" .= pidText
+            , "activityName" .= actName
+            , "productName" .= prodName
             , "location" .= actLoc
             , "contribution" .= c
-            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+            , "contributionPercent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
             ]
                 ++ webUrlPair
 

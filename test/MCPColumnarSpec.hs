@@ -147,8 +147,8 @@ spec = do
                 `shouldBe` Just
                     ( Array
                         ( V.fromList
-                            [ String "name"
-                            , String "process_id"
+                            [ String "activityName"
+                            , String "processId"
                             , String "web_url"
                             , String "total"
                             , String "acd"
@@ -202,8 +202,8 @@ spec = do
                 `shouldBe` Just
                     ( Array
                         ( V.fromList
-                            [ String "name"
-                            , String "process_id"
+                            [ String "activityName"
+                            , String "processId"
                             , String "web_url"
                             , String "functional_unit"
                             , String "total"
@@ -238,8 +238,8 @@ spec = do
                 `shouldBe` Just
                     ( Array
                         ( V.fromList
-                            [ String "name"
-                            , String "process_id"
+                            [ String "activityName"
+                            , String "processId"
                             , String "web_url"
                             , String "total"
                             , String "dominant_indicator"
@@ -272,8 +272,8 @@ spec = do
                 `shouldBe` Just
                     ( Array
                         ( V.fromList
-                            [ String "name"
-                            , String "process_id"
+                            [ String "activityName"
+                            , String "processId"
                             , String "total"
                             , String "acd"
                             , String "cch"

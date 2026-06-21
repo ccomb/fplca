@@ -247,9 +247,9 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                 { imRootActivity =
                     ActivitySummary
                         { prsProcessId = processIdToText db processId
-                        , prsName = activityName rootActivity
+                        , prsActivityName = activityName rootActivity
                         , prsLocation = activityLocation rootActivity
-                        , prsProduct = prodName
+                        , prsProductName = prodName
                         , prsProductAmount = prodAmount
                         , prsProductUnit = prodUnit
                         , prsAllocationPercent = activityAllocationPercent rootActivity
@@ -1070,15 +1070,15 @@ convertActivityForAPI unitCfg db processId activity =
         linkMap = buildCrossDBLinkMap db processId
      in ActivityForAPI
             { pfaProcessId = processIdToText db processId
-            , pfaName = activityName activity
+            , pfaActivityName = activityName activity
             , pfaDescription = activityDescription activity
             , pfaSynonyms = activitySynonyms activity
             , pfaClassifications = activityClassification activity
             , pfaLocation = activityLocation activity
             , pfaUnit = activityUnit activity
-            , pfaReferenceProduct = if T.null refProdName then Nothing else Just refProdName
-            , pfaReferenceProductAmount = if T.null refProdName then Nothing else Just refProdAmount
-            , pfaReferenceProductUnit = if T.null refProdName then Nothing else Just refProdUnit
+            , pfaProductName = if T.null refProdName then Nothing else Just refProdName
+            , pfaProductAmount = if T.null refProdName then Nothing else Just refProdAmount
+            , pfaProductUnit = if T.null refProdName then Nothing else Just refProdUnit
             , pfaAllProducts = allProducts
             , pfaExchanges = map (toExchangeWithUnit unitCfg db linkMap) (exchanges activity)
             , pfaNativeType = activityNativeType activity
@@ -1194,7 +1194,7 @@ toExchangeWithUnit cfg db links exchange =
             , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
             , ewuFlowName = flowName
             , ewuCompartment = compartment
-            , ewuTargetActivity = trName <$> target
+            , ewuTargetActivityName = trName <$> target
             , ewuTargetLocation = trLocation <$> target
             , ewuTargetProcessId = trProcessId <$> target
             , ewuExComment = exchangeComment exchange
@@ -1232,9 +1232,9 @@ mkActivitySummary db processId activity =
     let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
      in ActivitySummary
             { prsProcessId = processIdToText db processId
-            , prsName = activityName activity
+            , prsActivityName = activityName activity
             , prsLocation = activityLocation activity
-            , prsProduct = prodName
+            , prsProductName = prodName
             , prsProductAmount = prodAmount
             , prsProductUnit = prodUnit
             , prsAllocationPercent = activityAllocationPercent activity
@@ -1250,9 +1250,9 @@ unknownActivitySummary :: Database -> ProcessId -> ActivitySummary
 unknownActivitySummary db pid =
     ActivitySummary
         { prsProcessId = processIdToText db pid
-        , prsName = "Unknown"
+        , prsActivityName = "Unknown"
         , prsLocation = ""
-        , prsProduct = "Unknown"
+        , prsProductName = "Unknown"
         , prsProductAmount = 1.0
         , prsProductUnit = ""
         , prsAllocationPercent = Nothing
@@ -1324,9 +1324,9 @@ crossDBLinkToSummary link =
                 <> UUID.toText (cdlSupplierActUUID link)
                 <> "_"
                 <> UUID.toText (cdlSupplierProdUUID link)
-        , prsName = cdlFlowName link
+        , prsActivityName = cdlFlowName link
         , prsLocation = cdlLocation link
-        , prsProduct = cdlFlowName link
+        , prsProductName = cdlFlowName link
         , prsProductAmount = 1.0
         , prsProductUnit = cdlExchangeUnit link
         , prsAllocationPercent = Nothing
@@ -1492,16 +1492,16 @@ getPathTo db solver pidText target = do
                                                 let act = dbActivities db V.! i
                                                     sf = scalingOf i
                                                     base =
-                                                        [ "process_id" .= processIdToText db (fromIntegral i)
-                                                        , "name" .= activityName act
+                                                        [ "processId" .= processIdToText db (fromIntegral i)
+                                                        , "activityName" .= activityName act
                                                         , "location" .= activityLocation act
                                                         , "unit" .= activityUnit act
-                                                        , "cumulative_quantity" .= (sf * rootRefAmount)
-                                                        , "scaling_factor" .= sf
+                                                        , "cumulativeQuantity" .= (sf * rootRefAmount)
+                                                        , "scalingFactor" .= sf
                                                         ]
                                                  in object $ case mRatio of
                                                         Nothing -> base
-                                                        Just r -> base ++ ["local_step_ratio" .= r]
+                                                        Just r -> base ++ ["localStepRatio" .= r]
                                             steps =
                                                 mkStep firstPid (Nothing :: Maybe Double)
                                                     : [ mkStep c (Just ratio)
@@ -1621,7 +1621,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
              in SupplyChainEntry
                     { sceProcessId = qualify pid
                     , sceDatabaseName = dbName
-                    , sceName = activityName activity
+                    , sceActivityName = activityName activity
                     , sceLocation = activityLocation activity
                     , sceQuantity = scalingFactor * quantityMult
                     , sceUnit = activityUnit activity
@@ -1670,7 +1670,7 @@ sortAndPaginate core entries =
         offset = fromMaybe 0 (afcOffset core)
         isDesc = afcOrder core == Just "desc"
         comparator = case afcSort core of
-            Just "name" -> \a b -> compare (sceName a) (sceName b)
+            Just "name" -> \a b -> compare (sceActivityName a) (sceActivityName b)
             Just "location" -> \a b -> compare (sceLocation a) (sceLocation b)
             Just "unit" -> \a b -> compare (sceUnit a) (sceUnit b)
             Just "depth" -> \a b -> compare (sceDepth a) (sceDepth b)
@@ -1709,9 +1709,9 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText db processId
-                , prsName = activityName rootActivity
+                , prsActivityName = activityName rootActivity
                 , prsLocation = activityLocation rootActivity
-                , prsProduct =
+                , prsProductName =
                     fromMaybe
                         (activityName rootActivity)
                         (getReferenceProductName (dbTechFlows db) rootActivity)
@@ -1771,9 +1771,9 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText rootDb rootPid
-                , prsName = activityName rootActivity
+                , prsActivityName = activityName rootActivity
                 , prsLocation = activityLocation rootActivity
-                , prsProduct =
+                , prsProductName =
                     fromMaybe
                         (activityName rootActivity)
                         (getReferenceProductName (dbTechFlows rootDb) rootActivity)
@@ -2812,11 +2812,11 @@ getConsumers db dbName processIdText cnf = do
 
         isDesc = afcOrder core == Just "desc"
         crCmp = case afcSort core of
-            Just "name" -> \a b -> compare (crName a) (crName b)
+            Just "name" -> \a b -> compare (crActivityName a) (crActivityName b)
             Just "location" -> \a b -> compare (crLocation a) (crLocation b)
             Just "amount" -> \a b -> compare (crProductAmount a) (crProductAmount b)
             Just "unit" -> \a b -> compare (crProductUnit a) (crProductUnit b)
-            Just "product" -> \a b -> compare (crProduct a) (crProduct b)
+            Just "product" -> \a b -> compare (crProductName a) (crProductName b)
             _ -> \a b -> compare (crDepth a) (crDepth b)
         allResults = L.sortBy (if isDesc then flip crCmp else crCmp) rawResults
 

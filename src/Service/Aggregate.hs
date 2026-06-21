@@ -220,7 +220,7 @@ rowsFromDirect db act =
             , rowQuantity = exchangeAmount ex
             , rowIsInput = Just (exchangeIsInput ex)
             , rowIsReference = Just (exchangeIsReference ex)
-            , rowTargetName = fmap prsName target
+            , rowTargetName = fmap prsActivityName target
             , rowLocation = fmap prsLocation target
             , rowExchangeType = Just (exchangeKindOf ex)
             , rowClassifications = M.empty
@@ -232,7 +232,7 @@ rowsFromSupplyChain response =
   where
     mkRow e =
         AggRow
-            { rowName = sceName e
+            { rowName = sceActivityName e
             , rowFlowId = sceProcessId e
             , rowUnit = sceUnit e
             , rowQuantity = sceQuantity e
