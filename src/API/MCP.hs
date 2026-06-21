@@ -1464,12 +1464,12 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unit
                 )
     pure $
         object $
-            [ "processId" .= pidText
-            , "activityName" .= actName
-            , "productName" .= prodName
+            [ "process_id" .= pidText
+            , "activity_name" .= actName
+            , "product_name" .= prodName
             , "location" .= actLoc
             , "contribution" .= c
-            , "contributionPercent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
+            , "contribution_percent" .= (if score /= 0 then c / score * 100 else 0 :: Double)
             ]
                 ++ webUrlPair
 
