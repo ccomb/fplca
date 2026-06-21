@@ -235,30 +235,30 @@ def readme_namespace() -> dict[str, Any]:
 
     activity_a = Activity(
         process_id="aaaa1111-aaaa-bbbb-cccc-111122223333_dddd2222-eeee-ffff-aaaa-444455556666",
-        name="Wheat flour, type 55, at plant",
+        activity_name="Wheat flour, type 55, at plant",
         location="FR",
-        product="wheat flour",
+        product_name="wheat flour",
         product_amount=1.0,
         product_unit="kg",
     )
     activity_b = Activity(
         process_id="bbbb2222-aaaa-bbbb-cccc-111122223333_eeee3333-eeee-ffff-aaaa-444455556666",
-        name="Wheat flour, type 65, at plant",
+        activity_name="Wheat flour, type 65, at plant",
         location="FR",
-        product="wheat flour",
+        product_name="wheat flour",
         product_amount=1.0,
         product_unit="kg",
     )
     activity_detail = ActivityDetail(
         process_id=activity_a.process_id,
-        name=activity_a.name,
+        activity_name=activity_a.activity_name,
         location=activity_a.location,
         unit="kg",
         description=["Bread-making wheat flour, soft variety, T55."],
         classifications={"ISIC rev.4 ecoinvent": "1061: Manufacture of grain mill products"},
-        reference_product="wheat flour",
-        reference_product_amount=1.0,
-        reference_product_unit="kg",
+        product_name="wheat flour",
+        product_amount=1.0,
+        product_unit="kg",
         all_products=[activity_a],
         exchanges=[
             TechnosphereExchange(
@@ -266,7 +266,7 @@ def readme_namespace() -> dict[str, Any]:
                 amount=1.31,
                 unit="kg",
                 role=TechRole.INPUT,
-                target_activity="Soft wheat grain production, FR",
+                target_activity_name="Soft wheat grain production, FR",
                 target_location="FR",
                 target_process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
             ),
@@ -286,7 +286,7 @@ def readme_namespace() -> dict[str, Any]:
         entries=[
             SupplyChainEntry(
                 process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
-                name="Soft wheat grain, at farm",
+                activity_name="Soft wheat grain, at farm",
                 location="FR",
                 quantity=1.31,
                 unit="kg",
@@ -296,9 +296,9 @@ def readme_namespace() -> dict[str, Any]:
     )
     consumer_b = ConsumerResult(
         process_id=activity_b.process_id,
-        name="Sandwich bread, sliced, at plant",
+        activity_name="Sandwich bread, sliced, at plant",
         location="FR",
-        product="bread",
+        product_name="bread",
         product_amount=1.0,
         product_unit="kg",
         depth=1,

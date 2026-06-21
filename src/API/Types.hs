@@ -177,9 +177,9 @@ deriving via (Stripped (SearchResults a)) instance (ToSchema a) => ToSchema (Sea
 -- | Minimal activity information for navigation
 data ActivitySummary = ActivitySummary
     { prsProcessId :: Text -- ProcessId format: activity_uuid_product_uuid
-    , prsName :: Text
+    , prsActivityName :: Text
     , prsLocation :: Text
-    , prsProduct :: Text -- Reference product name
+    , prsProductName :: Text -- Reference product name
     , prsProductAmount :: Double -- Reference product amount
     , prsProductUnit :: Text -- Reference product unit name
     , prsAllocationPercent :: Maybe Double -- SimaPro coproduct allocation (%, 0..100); Nothing for non-allocated bases
@@ -192,9 +192,9 @@ data ActivitySummary = ActivitySummary
 -- | Consumer result — ActivitySummary enriched with BFS depth from the queried supplier
 data ConsumerResult = ConsumerResult
     { crProcessId :: Text
-    , crName :: Text
+    , crActivityName :: Text
     , crLocation :: Text
-    , crProduct :: Text
+    , crProductName :: Text
     , crProductAmount :: Double
     , crProductUnit :: Text
     , crDepth :: Int -- hops from the queried supplier (1 = direct consumer)
@@ -839,7 +839,7 @@ dedicated field so the UI can render a Database column without parsing.
 data SupplyChainEntry = SupplyChainEntry
     { sceProcessId :: Text
     , sceDatabaseName :: Text -- database the entry lives in
-    , sceName :: Text
+    , sceActivityName :: Text
     , sceLocation :: Text
     , sceQuantity :: Double -- scalingFactor × root reference product amount (physical amount per functional unit)
     , sceUnit :: Text
@@ -1045,7 +1045,7 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuUnitName :: Text -- Unit name for the exchange
     , ewuFlowName :: Text -- Name of the flow being exchanged
     , ewuCompartment :: Maybe Compartment -- Biosphere compartment, Nothing for technosphere
-    , ewuTargetActivity :: Maybe Text -- For technosphere: name of target activity
+    , ewuTargetActivityName :: Maybe Text -- For technosphere: name of target activity
     , ewuTargetLocation :: Maybe Text -- For technosphere: location of target activity
     , ewuTargetProcessId :: Maybe Text -- For technosphere: ProcessId for navigation (activityUUID_productUUID)
     , ewuExComment :: Maybe Text -- Free-text per-exchange comment (mirrors exchangeComment)
@@ -1057,15 +1057,15 @@ data ExchangeWithUnit = ExchangeWithUnit
 -- | Activity information optimized for API responses
 data ActivityForAPI = ActivityForAPI
     { pfaProcessId :: Text -- ProcessId format: "activityUUID_productUUID"
-    , pfaName :: Text
+    , pfaActivityName :: Text
     , pfaDescription :: [Text] -- Description par paragraphes
     , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
     , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
     , pfaLocation :: Text
     , pfaUnit :: Text -- Unité de référence
-    , pfaReferenceProduct :: Maybe Text -- Name of the reference product (output)
-    , pfaReferenceProductAmount :: Maybe Double -- Amount of reference product
-    , pfaReferenceProductUnit :: Maybe Text -- Unit of reference product
+    , pfaProductName :: Maybe Text -- Name of the reference product (output)
+    , pfaProductAmount :: Maybe Double -- Amount of reference product
+    , pfaProductUnit :: Maybe Text -- Unit of reference product
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type

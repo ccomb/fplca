@@ -58,7 +58,7 @@ def resolve_substitutions(client: Client):
         if not tgt:
             print(f"  WARNING: target not found: {tgt_query!r} ({tgt_loc})")
             continue
-        print(f"  {src.name[:60]} → {tgt.name[:60]}")
+        print(f"  {src.activity_name[:60]} → {tgt.activity_name[:60]}")
         pairs.append((src, tgt))
     return pairs
 
@@ -94,7 +94,7 @@ def main():
 
     for src, tgt in sub_pairs:
         resp = client.get_consumers(src.process_id, limit=10000)
-        print(f"  {src.name[:50]}: {len(resp.consumers)} downstream consumers")
+        print(f"  {src.activity_name[:50]}: {len(resp.consumers)} downstream consumers")
         for consumer in resp.consumers:
             applicable.append((consumer, src, tgt))
 
@@ -109,14 +109,14 @@ def main():
         writer = csv.writer(f)
         writer.writerow(["process_id", "name", "location", "raw_ingredient"])
         for product, src, _tgt in applicable:
-            writer.writerow([product.process_id, product.name, product.location, src.name])
+            writer.writerow([product.process_id, product.activity_name, product.location, src.activity_name])
     print(f"  Written {len(applicable)} products to substitutable_products.csv")
 
     # ── Step 3: Apply substitutions on a sample ───────────────────────
     print(f"\nStep 3: Applying substitutions on first {min(5, len(applicable))} products...")
 
     for product, src, tgt in applicable[:5]:
-        print(f"\n  Product: {product.name[:70]}")
+        print(f"\n  Product: {product.activity_name[:70]}")
 
         # Find the consumer link for this specific product
         consumer_id = find_consumer_id(client, product.process_id, src.process_id)

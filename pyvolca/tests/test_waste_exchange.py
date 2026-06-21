@@ -37,7 +37,7 @@ def _waste_ewu(*, is_input: bool, target: dict | None = None) -> dict:
         },
         "flowName": "Organic carbon, placed in landfill",
         "unitName": "kg",
-        "targetActivity": (target or {}).get("name"),
+        "targetActivityName": (target or {}).get("activityName"),
         "targetLocation": (target or {}).get("location"),
         "targetProcessId": (target or {}).get("processId"),
     }
@@ -70,20 +70,20 @@ class TestParseExchangeWaste:
         assert ex.amount == 2.5
         assert ex.unit == "kg"
         assert ex.is_input is False
-        assert ex.target_activity is None
+        assert ex.target_activity_name is None
         assert ex.target_location is None
         assert ex.target_process_id is None
 
     def test_linked_waste_input_carries_treatment_target(self):
         target = {
-            "name": "Landfill of organic waste, FR",
+            "activityName": "Landfill of organic waste, FR",
             "location": "FR",
             "processId": "tttt0000-aaaa-bbbb-cccc-111122223333_pppp1111-eeee-ffff-aaaa-444455556666",
         }
         ex = parse_exchange(_waste_ewu(is_input=True, target=target))
         assert isinstance(ex, WasteExchange)
         assert ex.is_input is True
-        assert ex.target_activity == "Landfill of organic waste, FR"
+        assert ex.target_activity_name == "Landfill of organic waste, FR"
         assert ex.target_location == "FR"
         assert ex.target_process_id == target["processId"]
 
@@ -99,7 +99,7 @@ class TestParseExchangeWaste:
         tech = parse_exchange({
             "exchange": {"tag": "TechnosphereExchange", "amount": 1.0, "role": "Input"},
             "flowName": "wheat", "unitName": "kg",
-            "targetActivity": None, "targetLocation": None, "targetProcessId": None,
+            "targetActivityName": None, "targetLocation": None, "targetProcessId": None,
         })
         bio = parse_exchange({
             "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
@@ -115,7 +115,7 @@ class TestParseExchangeWaste:
         tech = parse_exchange({
             "exchange": {"tag": "TechnosphereExchange", "amount": 1.0, "role": "Input"},
             "flowName": "wheat", "unitName": "kg",
-            "targetActivity": None, "targetLocation": None, "targetProcessId": None,
+            "targetActivityName": None, "targetLocation": None, "targetProcessId": None,
         })
         bio = parse_exchange({
             "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
@@ -134,18 +134,18 @@ class TestParseExchangeDetailWaste:
         assert isinstance(ex, WasteExchange)
         assert ex.flow_name == "Organic carbon, placed in landfill"
         assert ex.is_input is False
-        assert ex.target_activity is None
+        assert ex.target_activity_name is None
 
     def test_waste_with_linked_treatment_target(self):
         target = {
-            "name": "Treatment, municipal solid waste, sanitary landfill",
+            "activityName": "Treatment, municipal solid waste, sanitary landfill",
             "location": "CH",
             "processId": "wwww1111-aaaa-bbbb-cccc-111122223333_qqqq2222-eeee-ffff-aaaa-444455556666",
         }
         ex = parse_exchange_detail(_waste_ed(is_input=True, target=target))
         assert isinstance(ex, WasteExchange)
         assert ex.is_input is True
-        assert ex.target_activity == target["name"]
+        assert ex.target_activity_name == target["activityName"]
         assert ex.target_location == "CH"
 
     def test_mismatched_flow_kind_rejected(self):

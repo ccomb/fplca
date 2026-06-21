@@ -18,6 +18,16 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.6.0] - 2026-06-21
+
+Breaking: an activity's name fields are renamed for clarity. Needs the companion engine release (the wire keys changed too).
+
+### Breaking changes
+
+- `Activity.name` → `activity_name` and `Activity.product` → `product_name` — and the same on `ConsumerResult`, `SupplyChainEntry`, `PathStep`, and `ActivityDetail` (whose `reference_product` / `reference_product_amount` / `reference_product_unit` become `product_name` / `product_amount` / `product_unit`). A technosphere exchange's `target_activity` is now `target_activity_name`.
+- Why: an activity can yield several products, so the *name* belongs to the activity (shared across its products) while the *product* is what tells them apart — `name` / `product` invited mixing the two. A "process" is an `(activity, product)` pair, addressed by `process_id`; it has no name of its own (compose a label from `activity_name` + `product_name`).
+- Migration: `.name` → `.activity_name`, `.product` → `.product_name`, `.reference_product` → `.product_name`, `.target_activity` → `.target_activity_name`.
+
 ## [0.5.1] - 2026-05-31
 
 Two bug fixes for engine 0.7.0. No API change — just upgrade.

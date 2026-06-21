@@ -10,9 +10,9 @@ from volca import Activity, SearchResults
 def _activity_dict(name: str) -> dict:
     return {
         "processId": name,
-        "name": name,
+        "activityName": name,
         "location": "FR",
-        "product": "p",
+        "productName": "p",
         "productAmount": 1.0,
         "productUnit": "kg",
     }
@@ -43,8 +43,8 @@ class TestSearchResultsBasics:
             _page(["a", "b", "c"], offset=0, limit=3, total=3),
             parse=Activity.from_json,
         )
-        assert sr[0].name == "a"
-        assert sr[2].name == "c"
+        assert sr[0].activity_name == "a"
+        assert sr[2].activity_name == "c"
 
     def test_page_size_mirrors_wire_limit(self):
         sr = SearchResults.from_raw(
@@ -68,7 +68,7 @@ class TestSearchResultsBasics:
         )
         sliced = sr[:2]
         assert isinstance(sliced, list)
-        assert [a.name for a in sliced] == ["a", "b"]
+        assert [a.activity_name for a in sliced] == ["a", "b"]
 
     def test_search_time_ms_preserved(self):
         sr = SearchResults.from_raw(
@@ -85,7 +85,7 @@ class TestSearchResultsIteration:
             _page(["a", "b"], offset=0, limit=20, total=2),
             parse=Activity.from_json,
         )
-        names = [a.name for a in sr]
+        names = [a.activity_name for a in sr]
         assert names == ["a", "b"]
 
     def test_lazy_multi_page_fetch(self):
@@ -105,7 +105,7 @@ class TestSearchResultsIteration:
             parse=Activity.from_json,
             fetch=fetch,
         )
-        names = [a.name for a in sr]
+        names = [a.activity_name for a in sr]
         assert names == ["a", "b", "c", "d", "e"]
         # Two follow-up fetches: offsets 2 and 4.
         assert calls == [(2, 2), (4, 2)]
@@ -155,8 +155,8 @@ class TestSearchResultsIteration:
             parse=Activity.from_json,
             fetch=fetch,
         )
-        first = [a.name for a in sr]
-        second = [a.name for a in sr]
+        first = [a.activity_name for a in sr]
+        second = [a.activity_name for a in sr]
         assert first == ["a", "b", "c", "d"]
         assert second == first
         # Exactly one follow-up fetch — the second iteration replays the cache.
@@ -236,9 +236,9 @@ class TestConsumersResponseLazyPagination:
         def consumer_dict(pid: str) -> dict:
             return {
                 "processId": pid,
-                "name": pid,
+                "activityName": pid,
                 "location": "FR",
-                "product": "p",
+                "productName": "p",
                 "productAmount": 1.0,
                 "productUnit": "kg",
                 "depth": 1,
@@ -271,6 +271,6 @@ class TestConsumersResponseLazyPagination:
             make_response(envelope(["c"], 2, 2, 3)),
         ]
         resp: ConsumersResponse = client.get_consumers("root_pid", page_size=2)
-        names = [c.name for c in resp.consumers]
+        names = [c.activity_name for c in resp.consumers]
         assert names == ["a", "b", "c"]
         assert len(resp.consumers) == 3

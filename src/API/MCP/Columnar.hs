@@ -92,7 +92,7 @@ the columnar JSON shape:
 { "scoring_set":     "PEF"
 , "scoring_unit":    "µPts PEF"
 , "functional_unit": "1.00 cubic meter of ..."   -- only when all rows agree
-, "columns": ["name", "process_id", "web_url", "total", "acd", ...]
+, "columns": ["activity_name", "process_id", "web_url", "total", "acd", ...]
 , "rows":    [[...], [...], ...]
 , "not_found": [...]
 , "invalid":   [...]
@@ -151,8 +151,8 @@ toColumnarBatch summaryOnly mBaseUrl dbName coll ss bir =
     webUrlCol = ["web_url" | isJust mBaseUrl]
     fixedColumns :: [Text]
     fixedColumns
-        | isHeterogeneous = ["name", "process_id"] ++ webUrlCol ++ ["functional_unit", "total"]
-        | otherwise = ["name", "process_id"] ++ webUrlCol ++ ["total"]
+        | isHeterogeneous = ["activity_name", "process_id"] ++ webUrlCol ++ ["functional_unit", "total"]
+        | otherwise = ["activity_name", "process_id"] ++ webUrlCol ++ ["total"]
     columns :: [Text]
     columns
         | summaryOnly = fixedColumns ++ ["dominant_indicator"]

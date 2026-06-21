@@ -149,7 +149,7 @@ def detect_pattern(activity: ActivityDetail) -> str:
 
     wfldb_inputs = [
         e for e in tech_inputs
-        if e.target_activity and "WFLDB" in e.target_activity
+        if e.target_activity_name and "WFLDB" in e.target_activity_name
     ]
     if len(wfldb_inputs) == 1:
         return "wrapper_wfldb"
@@ -261,8 +261,8 @@ def _find_layered_operations(
             ClassificationFilter("Category type", "processing", MatchMode.EXACT),
         ],
     ).entries
-    real = [e for e in ops if not e.name.startswith("[Dummy]")]
-    dummy_op = not real and any(e.name.startswith("[Dummy]") for e in ops)
+    real = [e for e in ops if not e.activity_name.startswith("[Dummy]")]
+    dummy_op = not real and any(e.activity_name.startswith("[Dummy]") for e in ops)
     return real, dummy_op
 
 
@@ -306,7 +306,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
         wfldb_e = next(
             (
                 e for e in act.technosphere_inputs
-                if e.target_activity and "WFLDB" in e.target_activity
+                if e.target_activity_name and "WFLDB" in e.target_activity_name
             ),
             None,
         )
@@ -343,7 +343,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
                 (
                     e for e in act.technosphere_inputs
                     if e.target_process_id
-                    and not (e.target_activity or "").startswith("[Dummy]")
+                    and not (e.target_activity_name or "").startswith("[Dummy]")
                 ),
                 None,
             )
@@ -351,10 +351,10 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
                 raw_entry = _find_layered_raw(client, parent.target_process_id)
 
         if raw_entry is not None:
-            raw_name = raw_entry.name
+            raw_name = raw_entry.activity_name
             raw_kg = _kg_equiv(raw_entry)
         if operations:
-            operation_name = "; ".join(o.name for o in operations)
+            operation_name = "; ".join(o.activity_name for o in operations)
 
     if target_pattern == "layered":
         sc_scope, sc_depth = "supply_chain", 2
@@ -421,7 +421,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
     # wrapping activity name) become the co-product list.
     allocation = parse_allocation(target_description)
     if not co_products and allocation is not None and allocation.factors:
-        act_name_l = act.name.lower()
+        act_name_l = act.activity_name.lower()
         main_key = max(
             allocation.factors,
             key=lambda k: sum(1 for w in k.split() if w in act_name_l),

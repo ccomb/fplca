@@ -137,7 +137,7 @@ spec = do
             supplyVec <- computeScalingVector db rootPid
             -- Only pid 1's name contains the token "y".
             let entries = scrSupplyChain (buildWithName db rootPid supplyVec (Just "Y"))
-            map sceName entries `shouldBe` ["production of product Y"]
+            map sceActivityName entries `shouldBe` ["production of product Y"]
 
         it "accepts typos via edit-distance expansion" $ do
             db <- loadWithIndex
@@ -195,7 +195,7 @@ spec = do
             case getConsumers db "test-db" pidZ (mapConsumerCore (\c -> c{afcName = Just "X"}) emptyConsumer) of
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
                 Right cr -> do
-                    map crName (srResults (crrResults cr)) `shouldBe` ["production of product X"]
+                    map crActivityName (srResults (crrResults cr)) `shouldBe` ["production of product X"]
                     srTotal (crrResults cr) `shouldBe` 1
 
         it "accepts typos in the name filter" $ do

@@ -609,7 +609,7 @@ callGetActivity rid args (db, _) = runTool rid $ do
         Success ai ->
             -- Single resolve: take the activity name from the 'ActivityInfo'
             -- already in hand instead of asking the engine to resolve the PID again.
-            let attach = attachMarketHintByName (pfaName (piActivity ai))
+            let attach = attachMarketHintByName (pfaActivityName (piActivity ai))
                 payload
                     | noFilters = val
                     | otherwise =

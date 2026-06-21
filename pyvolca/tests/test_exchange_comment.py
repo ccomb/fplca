@@ -42,7 +42,7 @@ def _ewu(tag: str, *, ex_comment: str | None, inner_comment: str | None) -> dict
         "exchange": inner,
         "flowName": "wheat",
         "unitName": "kg",
-        "targetActivity": None,
+        "targetActivityName": None,
         "targetLocation": None,
         "targetProcessId": None,
     }

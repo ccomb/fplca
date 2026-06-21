@@ -18,7 +18,12 @@ See `README.md` for the full feature spec.
 - **LCI** — life-cycle inventory: the raw physical flows (emissions, resources) for a product.
 - **LCIA** — impact assessment: LCI flows × characterization factors → impact scores.
 - **CF** — characterization factor: one flow's contribution to one impact category.
-- **Activity / Exchange / Flow** — a process / one input-output line / the substance or product exchanged.
+- **Activity** — a real-world transformation (`activityUUID`); may be **multi-output**. Owns `activity_name` and `all_products`. A *grouping* — never scored directly.
+- **Product** — a reference output (a technosphere flow). Owns `product_name`.
+- **Process** — a **single-output** unit = one `(activity, product)` pair, addressed by `process_id = activityUUID_productUUID`. Carries `activity_name` + `product_name`; **it has no name of its own** — a display label is generated on demand (`activity_name` + `product_name`), never stored or emitted as `process_name`. **This is the unit you search, get, and score.**
+- **Exchange / Flow** — one input-output line / the substance or product exchanged.
+
+**Field names: `process_id`, `activity_name`, `product_name`. There is no `process_name`** — it would be a derived value, so the consumer generates the label. The word "activity" is overloaded in the field: ecoinvent/Brightway call a single-output dataset an "activity" (with a reference product); SimaPro/ILCD/ISO call it a "(unit) process". VoLCA keeps both crisp — **activity = the grouping, process = the (activity, product) unit.** The API *verbs* are activity-named by ecoinvent convention but all operate on **processes**: **`search_activities` / `get_activity` / `score_activities` / `get_contributing_activities` return one process per `(activity, product)`.** `search_activities` filters by `activity_name` and/or `product_name` and always returns processes — to find the lowest-impact way to make a product, `search_activities(product=X)` → processes → `score_activities` → compare. (SimaPro conflates the two: its process name is often empty and the activity name leaks into the product string; VoLCA keeps the two fields separate and surfaces the gap honestly rather than fabricating a name.)
 
 ## Commands
 
