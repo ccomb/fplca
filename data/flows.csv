@@ -893,3 +893,14 @@ natural gas,"Gas, natural"
 "Transformation, to permanent crop, fruit, intensive","to permanent crops, irrigated, intensive"
 "Transformation, to traffic area, road embankment","to traffic area, rail/road embankment"
 "Transformation, to unspecified, used","to unspecified, used"
+"Particulates, < 2.5 um",particles (PM2.5)
+"Particulates, < 10 um",particles (PM10)
+"Particulates, > 2.5 um, and < 10um",particles (PM10)
+"Particulates, < 10 um (mobile)",particles (PM10)
+"Particulates, < 10 um (stationary)",particles (PM10)
+"Energy, from coal",hard coal
+"Energy, from coal, brown",brown coal
+"Energy, from oil",crude oil
+"Energy, from gas, natural",natural gas
+"Energy, from peat",peat
+"Energy, from uranium",uranium
