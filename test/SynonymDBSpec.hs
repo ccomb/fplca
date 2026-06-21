@@ -6,7 +6,7 @@ import qualified Data.Set as S
 import Data.Text (pack)
 import Test.Hspec
 
-import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, oversizedClasses)
+import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses)
 
 spec :: Spec
 spec = do
@@ -41,3 +41,12 @@ spec = do
         it "stays silent when every class is within the bound" $
             oversizedClasses 10 (buildFromPairs [("alpha", "beta"), ("beta", "gamma")])
                 `shouldBe` []
+
+    describe "normalizeName" $ do
+        it "strips a trailing SimaPro unit suffix (/kg, /m3, /Sm3) so unit variants share a node" $ do
+            normalizeName "Gas, natural/m3" `shouldBe` "gas natural"
+            normalizeName "Gas, natural/Sm3" `shouldBe` "gas natural"
+            normalizeName "Coal, hard/kg" `shouldBe` "coal hard"
+
+        it "leaves a name without a unit suffix unchanged (modulo casing/punctuation)" $
+            normalizeName "Gas, natural" `shouldBe` "gas natural"
