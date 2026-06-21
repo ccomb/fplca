@@ -845,3 +845,51 @@ natural gas,"Gas, natural"
 "Transformation, to urban, discontinuously built","to urban, discontinuously built"
 "Transformation, to urban/industrial fallow (non-use)",to urban/industrial fallow
 "Transformation, to wetland, inland (non-use)","to wetlands, inland"
+"Occupation, agriculture",agriculture
+"Occupation, dump site, benthos",dump site
+"Occupation, forest, intensive, normal","forest, intensive"
+"Occupation, forest, intensive, short-cycle","forest, intensive"
+"Occupation, forest, used","forest, used"
+"Occupation, grassland/pasture/meadow",grassland/pasture/meadow
+"Occupation, heterogeneous, agricultural","agriculture, mosaic"
+"Occupation, industrial area, benthos",industrial area
+"Occupation, industrial area, vegetation",industrial area
+"Occupation, permanent crop, fruit",permanent crops
+"Occupation, permanent crop, fruit, intensive","permanent crops, irrigated, intensive"
+"Occupation, permanent crop, vine",permanent crops
+"Occupation, traffic area",traffic area
+"Occupation, traffic area, road embankment","traffic area, rail/road embankment"
+"Occupation, unspecified, used","unspecified, used"
+"Occupation, wetland","wetlands, inland"
+"Transformation, from agriculture",from agriculture
+"Transformation, from annual crop, non-irrigated, fallow","from arable, fallow"
+"Transformation, from forest, intensive, clear-cutting","from forest, intensive"
+"Transformation, from forest, intensive, clear-cutting","from forest, intensive"
+"Transformation, from forest, used","from forest, used"
+"Transformation, from grassland",from grassland
+"Transformation, from grassland",from grassland
+"Transformation, from grassland/pasture/meadow",from grassland/pasture/meadow
+"Transformation, from industrial area, benthos",from industrial area
+"Transformation, from industrial area, built up",from industrial area
+"Transformation, from industrial area, vegetation",from industrial area
+"Transformation, from permanent crop, fruit",from permanent crops
+"Transformation, from permanent crop, vine",from permanent crops
+"Transformation, from traffic area, rail embankment","from traffic area, rail/road embankment"
+"Transformation, from tropical rain forest","from forest, natural"
+"Transformation, from unspecified, used","from unspecified, used"
+"Transformation, from urban, discontinuously built","from urban, discontinuously built"
+"Transformation, to agriculture",to agriculture
+"Transformation, to annual crop, fallow","to arable, fallow"
+"Transformation, to annual crop, non-irrigated, fallow","to arable, fallow"
+"Transformation, to dump site, benthos",to dump site
+"Transformation, to forest, intensive, clear-cutting","to forest, intensive"
+"Transformation, to forest, intensive, normal","to forest, intensive"
+"Transformation, to forest, intensive, short-cycle","to forest, intensive"
+"Transformation, to forest, used","to forest, used"
+"Transformation, to grassland/pasture/meadow",to grassland/pasture/meadow
+"Transformation, to industrial area, benthos",to industrial area
+"Transformation, to industrial area, built up",to industrial area
+"Transformation, to industrial area, vegetation",to industrial area
+"Transformation, to permanent crop, fruit, intensive","to permanent crops, irrigated, intensive"
+"Transformation, to traffic area, road embankment","to traffic area, rail/road embankment"
+"Transformation, to unspecified, used","to unspecified, used"
