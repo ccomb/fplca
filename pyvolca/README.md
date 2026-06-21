@@ -105,10 +105,10 @@ Other listings: `c.list_classifications()` returns the classification systems an
 plants = c.search_activities(name="wheat flour, at plant", page_size=5)
 print(f"{len(plants)} matches; showing page 1 ({plants.page_size} items)")
 for a in plants:
-    print(f"{a.process_id}  {a.name} ({a.location})")
+    print(f"{a.process_id}  {a.activity_name} → {a.product_name} ({a.location})")
 ```
 
-`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together — `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` carries `process_id`, `name`, `location`, `product`, `product_amount`, `product_unit`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
+`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together — `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` is a process — an `(activity, product)` pair — carrying `process_id`, `activity_name`, `location`, `product_name`, `product_amount`, `product_unit`. A process has no name of its own; compose a label from `activity_name` + `product_name`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
 
 ## Inspect an activity
 
@@ -117,7 +117,7 @@ for a in plants:
 ```python
 detail = c.get_activity(plants[0].process_id)
 for ex in detail.technosphere_inputs:
-    print(f"{ex.amount:.4g} {ex.unit} of {ex.flow_name} ← {ex.target_activity}")
+    print(f"{ex.amount:.4g} {ex.unit} of {ex.flow_name} ← {ex.target_activity_name}")
 ```
 
 `get_activity` returns a typed `ActivityDetail`. Use `.inputs` / `.outputs` / `.technosphere_inputs` to filter the exchanges; each entry is an `Exchange` — either a `TechnosphereExchange` (an input or output of an intermediate product) or a `BiosphereExchange` (resource extracted or pollutant emitted).
@@ -130,7 +130,7 @@ for ex in detail.technosphere_inputs:
 chain = c.get_supply_chain(plants[0].process_id, name="at farm", limit=20)
 print(f"{chain.filtered_activities} of {chain.total_activities} upstream activities match 'at farm'")
 for entry in chain.entries[:5]:
-    print(f"  {entry.quantity:.4g} {entry.unit} of {entry.name} ({entry.location})")
+    print(f"  {entry.quantity:.4g} {entry.unit} of {entry.activity_name} ({entry.location})")
 ```
 
 For *"how exactly does this root reach a specific upstream supplier?"*, use `get_path_to(process_id, target=...)` — returns a `PathResult` of ordered `PathStep`s root → target with cumulative quantities and step ratios.
@@ -142,7 +142,7 @@ For *"how exactly does this root reach a specific upstream supplier?"*, use `get
 ```python
 result = c.get_consumers(plants[0].process_id, max_depth=2, page_size=10)
 for cons in result.consumers:
-    print(f"  depth={cons.depth}  {cons.name} ({cons.location})")
+    print(f"  depth={cons.depth}  {cons.activity_name} ({cons.location})")
 ```
 
 Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[ConsumerResult]` — same paginated iterator semantics as `search_activities`. When `include_edges=True`, `result.edges` carries the technosphere edges so callers can reconstruct supplier→consumer paths without a second round trip. Pass `classification_filters=[...]` to restrict to a category.
@@ -799,19 +799,20 @@ One activity in a database — the row returned by /activities search.
 
 ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
 and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
-:meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …). ``name`` is
-the activity name (e.g. ``"wheat flour, at plant"``); ``product`` is the
-reference output product (e.g. ``"wheat flour"``); ``product_amount`` and
-``product_unit`` describe the functional unit (typically ``1.0`` of
-``"kg"`` / ``"MJ"`` / etc.). ``location`` is the geography code
-(``"FR"``, ``"GLO"``, ``"RoW"``…).
+:meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …).
+``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
+``product_name`` is the reference output product (e.g. ``"wheat flour"``);
+``product_amount`` and ``product_unit`` describe the functional unit
+(typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
+geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
+its own — compose a label from ``activity_name`` + ``product_name``.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
-| `name` | `str` | — |
+| `activity_name` | `str` | — |
 | `location` | `str` | — |
-| `product` | `str` | — |
+| `product_name` | `str` | — |
 | `product_amount` | `float` | — |
 | `product_unit` | `str` | — |
 
@@ -841,14 +842,14 @@ instead of walking the raw exchanges list.
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
-| `name` | `str` | — |
+| `activity_name` | `str` | — |
 | `location` | `str` | — |
 | `unit` | `str` | — |
 | `description` | `list[str]` | — |
 | `classifications` | `dict[str, str]` | — |
-| `reference_product` | `str \| None` | — |
-| `reference_product_amount` | `float \| None` | — |
-| `reference_product_unit` | `str \| None` | — |
+| `product_name` | `str \| None` | — |
+| `product_amount` | `float \| None` | — |
+| `product_unit` | `str \| None` | — |
 | `all_products` | `list[Activity]` | — |
 | `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | — |
 
@@ -1003,9 +1004,9 @@ Activity that consumes a given supplier, with BFS depth.
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
-| `name` | `str` | — |
+| `activity_name` | `str` | — |
 | `location` | `str` | — |
-| `product` | `str` | — |
+| `product_name` | `str` | — |
 | `product_amount` | `float` | — |
 | `product_unit` | `str` | — |
 | `depth` | `int` | — |
@@ -1288,14 +1289,14 @@ Shortest upstream path from a root process to a matching activity.
 
 One step in the supply chain path returned by get_path_to.
 
-Note: the /path endpoint emits snake_case JSON directly (built via
-aeson's `object [...]` rather than generic ToJSON), so it bypasses
-the engine's stripLowerPrefix transform.
+Note: the /path endpoint is hand-built (aeson `object [...]`) but now
+emits camelCase keys (``processId``, ``activityName``,
+``cumulativeQuantity``, …) like the rest of the API.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
-| `name` | `str` | — |
+| `activity_name` | `str` | — |
 | `location` | `str` | — |
 | `unit` | `str` | — |
 | `cumulative_quantity` | `float` | — |
@@ -1453,7 +1454,7 @@ second :meth:`Client.get_activity` round trip.
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
-| `name` | `str` | — |
+| `activity_name` | `str` | — |
 | `location` | `str` | — |
 | `quantity` | `float` | — |
 | `unit` | `str` | — |
@@ -1471,7 +1472,7 @@ producing activity's classifications describe the product taxonomy.
 | `amount` | `float` | — |
 | `unit` | `str` | — |
 | `role` | `TechRole` | — |
-| `target_activity` | `str \| None` | — |
+| `target_activity_name` | `str \| None` | — |
 | `target_location` | `str \| None` | — |
 | `target_process_id` | `str \| None` | — |
 | `comment` | `str \| None` | None |
@@ -1493,7 +1494,7 @@ product input. Orphan waste (no linked treatment) contributes zero impact
 | `amount` | `float` | — |
 | `unit` | `str` | — |
 | `is_input` | `bool` | — |
-| `target_activity` | `str \| None` | — |
+| `target_activity_name` | `str \| None` | — |
 | `target_location` | `str \| None` | — |
 | `target_process_id` | `str \| None` | — |
 | `comment` | `str \| None` | None |

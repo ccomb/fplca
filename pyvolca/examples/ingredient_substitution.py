@@ -54,7 +54,7 @@ def main():
             return
 
         flour = wheat_flour[0]
-        print(f"  Found: {flour.name} ({flour.location}) [{flour.process_id}]")
+        print(f"  Found: {flour.activity_name} ({flour.location}) [{flour.process_id}]")
 
         chain = c.get_supply_chain(flour.process_id, name="at farm", limit=100, include_edges=True)
         print(f"  Total upstream activities: {chain.total_activities}")
@@ -68,7 +68,7 @@ def main():
             )
             print("  Top 5 'at farm' ingredients:")
             for entry in chain.entries[:5]:
-                print(f"    {entry.quantity:.4f} {entry.unit} of {entry.name} ({entry.location})")
+                print(f"    {entry.quantity:.4f} {entry.unit} of {entry.activity_name} ({entry.location})")
 
         # ── Phase 3: Substitute conventional → organic wheat ───────────
         print("\nPhase 3: Ingredient substitution (conventional → organic wheat)...")
@@ -81,7 +81,7 @@ def main():
             print(f"  ERROR: conventional wheat not found (query: {conv_query!r})")
             return
         from_activity = conv_fr[0]
-        print(f"  From: {from_activity.name} ({from_activity.location}) [{from_activity.process_id}]")
+        print(f"  From: {from_activity.activity_name} ({from_activity.location}) [{from_activity.process_id}]")
 
         # Find organic wheat (the "to")
         org_query = "Soft wheat grain, organic, 15% moisture, Central Region, at feed plant"
@@ -91,12 +91,12 @@ def main():
             print(f"  ERROR: organic wheat not found (query: {org_query!r})")
             return
         to_activity = org_fr[0]
-        print(f"  To:   {to_activity.name} ({to_activity.location}) [{to_activity.process_id}]")
+        print(f"  To:   {to_activity.activity_name} ({to_activity.location}) [{to_activity.process_id}]")
 
         # Find which activity consumes the conventional wheat (from supply chain edges)
         consumer_edges = [e for e in chain.edges if e.from_id == from_activity.process_id]
         if not consumer_edges:
-            print(f"  ERROR: no consumer found for {from_activity.name} in supply chain edges")
+            print(f"  ERROR: no consumer found for {from_activity.activity_name} in supply chain edges")
             return
         consumer_id = consumer_edges[0].to_id
         print(f"  Consumer: {consumer_id}")
@@ -108,7 +108,7 @@ def main():
         print(f"\n  Substituted supply chain: {variant_chain.total_activities} activities")
         print(f"  Top 10 entries:")
         for entry in variant_chain.entries[:10]:
-            print(f"    {entry.quantity:.6f} {entry.unit} of {entry.name} ({entry.location})")
+            print(f"    {entry.quantity:.6f} {entry.unit} of {entry.activity_name} ({entry.location})")
 
 
 if __name__ == "__main__":

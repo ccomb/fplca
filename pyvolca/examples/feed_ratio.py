@@ -59,8 +59,8 @@ def print_supply_chain(
         print(f"\n  {label} ({len(entries)} activities, {per_kg:.3f} kg/kg)")
         for e in sorted(entries, key=lambda x: -x.quantity):
             e_per_kg = e.quantity / ref_amount if ref_amount > 0 else e.quantity
-            print(f"    {e_per_kg:.4f} {e.unit}/kg  {e.name} ({e.location})")
-            csv_rows.append({"category": path, "name": e.name, "location": e.location,
+            print(f"    {e_per_kg:.4f} {e.unit}/kg  {e.activity_name} ({e.location})")
+            csv_rows.append({"category": path, "name": e.activity_name, "location": e.location,
                              "quantity": e.quantity, "unit": e.unit,
                              "per_kg_product": round(e_per_kg, 6)})
 
@@ -100,9 +100,9 @@ def main():
     if args.name:
         idx = 0
     else:
-        idx = select_from_list(products, "Select product", lambda p: f"{p.name} ({p.location})")
+        idx = select_from_list(products, "Select product", lambda p: f"{p.activity_name} ({p.location})")
     product = products[idx]
-    print(f"\nAnalyzing: {product.name}")
+    print(f"\nAnalyzing: {product.activity_name}")
 
     # Step 2: Get supply chain grouped by classification
     print("\nFetching supply chain...")
@@ -133,8 +133,8 @@ def main():
     all_products = activity.get("activity", {}).get("allProducts", [])
     ref_amount = float(all_products[0]["productAmount"]) if all_products else 1.0
 
-    csv_rows = print_supply_chain(groups, ref_amount, product.name, filter_text if not args.prefix else (args.prefix or ""))
-    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in product.name)[:50]
+    csv_rows = print_supply_chain(groups, ref_amount, product.activity_name, filter_text if not args.prefix else (args.prefix or ""))
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in product.activity_name)[:50]
     export_csv(csv_rows, f"supply_chain_{safe_name}.csv")
 
 

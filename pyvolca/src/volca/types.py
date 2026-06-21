@@ -431,18 +431,19 @@ class Activity(FromJson):
 
     ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
     and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
-    :meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …). ``name`` is
-    the activity name (e.g. ``"wheat flour, at plant"``); ``product`` is the
-    reference output product (e.g. ``"wheat flour"``); ``product_amount`` and
-    ``product_unit`` describe the functional unit (typically ``1.0`` of
-    ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the geography code
-    (``"FR"``, ``"GLO"``, ``"RoW"``…).
+    :meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …).
+    ``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
+    ``product_name`` is the reference output product (e.g. ``"wheat flour"``);
+    ``product_amount`` and ``product_unit`` describe the functional unit
+    (typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
+    geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
+    its own — compose a label from ``activity_name`` + ``product_name``.
     """
 
     process_id: str
-    name: str
+    activity_name: str
     location: str
-    product: str
+    product_name: str
     product_amount: float
     product_unit: str
 
@@ -467,9 +468,9 @@ class Flow(FromJson):
 class ConsumerResult(FromJson):
     """Activity that consumes a given supplier, with BFS depth."""
     process_id: str
-    name: str
+    activity_name: str
     location: str
-    product: str
+    product_name: str
     product_amount: float
     product_unit: str
     depth: int  # hops from the queried supplier (1 = direct consumer)
@@ -490,7 +491,7 @@ class SupplyChainEntry(FromJson):
     """
 
     process_id: str
-    name: str
+    activity_name: str
     location: str
     quantity: float
     unit: str
@@ -502,12 +503,12 @@ class SupplyChainEntry(FromJson):
 class PathStep:
     """One step in the supply chain path returned by get_path_to.
 
-    Note: the /path endpoint emits snake_case JSON directly (built via
-    aeson's `object [...]` rather than generic ToJSON), so it bypasses
-    the engine's stripLowerPrefix transform.
+    Note: the /path endpoint is hand-built (aeson `object [...]`) but now
+    emits camelCase keys (``processId``, ``activityName``,
+    ``cumulativeQuantity``, …) like the rest of the API.
     """
     process_id: str
-    name: str
+    activity_name: str
     location: str
     unit: str
     cumulative_quantity: float
@@ -517,13 +518,13 @@ class PathStep:
     @classmethod
     def from_json(cls, d: dict) -> "PathStep":
         return cls(
-            process_id=d["process_id"],
-            name=d["name"],
+            process_id=d["processId"],
+            activity_name=d["activityName"],
             location=d["location"],
             unit=d["unit"],
-            cumulative_quantity=d["cumulative_quantity"],
-            scaling_factor=d["scaling_factor"],
-            local_step_ratio=d.get("local_step_ratio"),
+            cumulative_quantity=d["cumulativeQuantity"],
+            scaling_factor=d["scalingFactor"],
+            local_step_ratio=d.get("localStepRatio"),
         )
 
 
@@ -720,7 +721,7 @@ class TechnosphereExchange:
     amount: float
     unit: str
     role: TechRole
-    target_activity: str | None
+    target_activity_name: str | None
     target_location: str | None
     target_process_id: str | None
     comment: str | None = None
@@ -754,7 +755,7 @@ class TechnosphereExchange:
             amount=inner["amount"],
             unit=ewu["unitName"],
             role=TechRole(inner["role"]),
-            target_activity=ewu.get("targetActivity"),
+            target_activity_name=ewu.get("targetActivityName"),
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
             comment=_exchange_comment(ewu, inner),
@@ -835,7 +836,7 @@ class WasteExchange:
     amount: float
     unit: str
     is_input: bool  # True = consumed by treatment process; False = generated (typical case)
-    target_activity: str | None
+    target_activity_name: str | None
     target_location: str | None
     target_process_id: str | None
     comment: str | None = None
@@ -860,7 +861,7 @@ class WasteExchange:
             amount=inner["amount"],
             unit=ewu["unitName"],
             is_input=inner["isInput"],
-            target_activity=ewu.get("targetActivity"),
+            target_activity_name=ewu.get("targetActivityName"),
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
             comment=_exchange_comment(ewu, inner),
@@ -913,7 +914,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             amount=inner["amount"],
             unit=unit,
             role=TechRole(inner["role"]),
-            target_activity=target.get("name"),
+            target_activity_name=target.get("activityName"),
             target_location=target.get("location"),
             target_process_id=target.get("processId"),
             comment=comment,
@@ -942,7 +943,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             amount=inner["amount"],
             unit=unit,
             is_input=inner["isInput"],
-            target_activity=target.get("name"),
+            target_activity_name=target.get("activityName"),
             target_location=target.get("location"),
             target_process_id=target.get("processId"),
             comment=comment,
@@ -963,14 +964,14 @@ class ActivityDetail:
     """
 
     process_id: str
-    name: str
+    activity_name: str
     location: str
     unit: str
     description: list[str]
     classifications: dict[str, str]
-    reference_product: str | None
-    reference_product_amount: float | None
-    reference_product_unit: str | None
+    product_name: str | None
+    product_amount: float | None
+    product_unit: str | None
     all_products: list[Activity]
     exchanges: list[Exchange]
 
@@ -980,14 +981,14 @@ class ActivityDetail:
         pfa = d["activity"]
         return cls(
             process_id=pfa["processId"],
-            name=pfa["name"],
+            activity_name=pfa["activityName"],
             location=pfa["location"],
             unit=pfa["unit"],
             description=pfa.get("description", []),
             classifications=pfa.get("classifications", {}),
-            reference_product=pfa.get("referenceProduct"),
-            reference_product_amount=pfa.get("referenceProductAmount"),
-            reference_product_unit=pfa.get("referenceProductUnit"),
+            product_name=pfa.get("productName"),
+            product_amount=pfa.get("productAmount"),
+            product_unit=pfa.get("productUnit"),
             all_products=[Activity.from_json(a) for a in pfa.get("allProducts", [])],
             exchanges=[parse_exchange(e) for e in pfa.get("exchanges", [])],
         )

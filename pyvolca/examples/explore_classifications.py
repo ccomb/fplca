@@ -42,7 +42,7 @@ def main():
     for i, act in enumerate(all_activities[:sample_size]):
         detail = c.get_activity(act.process_id)
         classifications = detail.get("activity", {}).get("classifications", {})
-        name_vs_class.append((act.name, classifications))
+        name_vs_class.append((act.activity_name, classifications))
 
         for k, v in classifications.items():
             key_counts[k] += 1
@@ -97,7 +97,7 @@ def main():
     flour_results = c.search_activities(name="Wheat flour, type 55", limit=5)
     if flour_results:
         flour = flour_results[0]
-        print(f"  Root: {flour.name} ({flour.location})")
+        print(f"  Root: {flour.activity_name} ({flour.location})")
         chain = c.get_supply_chain(flour.process_id, limit=200)
         print(f"  Supply chain: {chain.total_activities} activities, showing {len(chain.entries)}")
 
@@ -122,7 +122,7 @@ def main():
         print(f"\n  Sample entries with classifications:")
         for entry in chain.entries[:15]:
             cls_str = ", ".join(f"{k}={v}" for k, v in entry.classifications.items())
-            print(f"    {entry.quantity:.4f} {entry.unit} {entry.name}")
+            print(f"    {entry.quantity:.4f} {entry.unit} {entry.activity_name}")
             if cls_str:
                 print(f"      Classifications: {cls_str}")
     else:

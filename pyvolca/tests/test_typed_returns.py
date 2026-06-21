@@ -49,13 +49,13 @@ from volca.client import _substitution_body
 class TestSupplyChainHasMore:
     def _root(self) -> Activity:
         return Activity(
-            process_id="a", name="A", location="FR",
-            product="p", product_amount=1.0, product_unit="kg",
+            process_id="a", activity_name="A", location="FR",
+            product_name="p", product_amount=1.0, product_unit="kg",
         )
 
     def _entry(self, name: str) -> SupplyChainEntry:
         return SupplyChainEntry(
-            process_id=f"{name}_pid", name=name, location="FR",
+            process_id=f"{name}_pid", activity_name=name, location="FR",
             quantity=1.0, unit="kg", scaling_factor=1.0,
         )
 
@@ -294,8 +294,8 @@ class TestInventoryParsing:
         result = InventoryResult.from_json({
             "metadata": {
                 "rootActivity": {
-                    "processId": "p", "name": "n", "location": "FR",
-                    "product": "p", "productAmount": 1.0, "productUnit": "kg",
+                    "processId": "p", "activityName": "n", "location": "FR",
+                    "productName": "p", "productAmount": 1.0, "productUnit": "kg",
                 },
                 "totalFlows": 3, "emissionFlows": 2, "resourceFlows": 1,
             },

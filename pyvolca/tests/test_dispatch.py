@@ -161,8 +161,8 @@ class TestDispatcher:
         client, session = mocked_client
         page1 = {
             "results": [
-                {"processId": "a", "name": "A", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
-                {"processId": "b", "name": "B", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+                {"processId": "a", "activityName": "A", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
+                {"processId": "b", "activityName": "B", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             ],
             "total": 3,
             "offset": 0,
@@ -172,7 +172,7 @@ class TestDispatcher:
         }
         page2 = {
             "results": [
-                {"processId": "c", "name": "C", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+                {"processId": "c", "activityName": "C", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             ],
             "total": 3,
             "offset": 2,
@@ -186,7 +186,7 @@ class TestDispatcher:
         assert len(results) == 3
         assert results.page_size == 2
         assert results.has_more is True
-        names = [a.name for a in results]
+        names = [a.activity_name for a in results]
         assert names == ["A", "B", "C"]
         # Page 2 was fetched lazily during iteration.
         assert session.get.call_count == 2
@@ -207,7 +207,7 @@ class TestDispatcher:
         """``min_quantity`` Python → ``min-quantity`` wire."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "root": {"processId": "x", "name": "y", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "root": {"processId": "x", "name": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             "supplyChain": [],
             "edges": [],
             "totalActivities": 0,
@@ -225,7 +225,7 @@ class TestDispatcher:
         """preset= must reach the supply-chain endpoint as a query param."""
         client, session = mocked_client
         session.get.return_value = make_response({
-            "root": {"processId": "x", "name": "y", "location": "FR", "product": "p", "productAmount": 1.0, "productUnit": "kg"},
+            "root": {"processId": "x", "name": "y", "location": "FR", "productName": "p", "productAmount": 1.0, "productUnit": "kg"},
             "supplyChain": [],
             "edges": [],
             "totalActivities": 0,
