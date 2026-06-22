@@ -13,7 +13,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
-from . import _download
+from . import _compat, _download
 
 
 class Server:
@@ -122,6 +122,17 @@ class Server:
         except requests.ConnectionError:
             return False
 
+    def _check_wire(self) -> None:
+        """Verify the running engine speaks a wire pyvolca understands.
+
+        Local import of :class:`Client` keeps the server/client modules free of
+        an import cycle. ``get_version`` is ungated, so this works even against
+        an incompatible engine (the point is to fail with a clear message).
+        """
+        from .client import Client
+
+        _compat.check(Client(self.base_url, password=self.password).get_version())
+
     def start(self, idle_timeout: int = 300, wait_timeout: int = 120) -> None:
         """Spawn the engine process if it is not already serving, and wait until ready.
 
@@ -134,6 +145,9 @@ class Server:
         No-op if a healthy server is already reachable on ``base_url``.
         """
         if self.is_alive():
+            # A server is already up — we didn't spawn it, so verify the wire
+            # but leave it running on a mismatch; it isn't ours to stop.
+            self._check_wire()
             return
 
         binary = self._find_binary()
@@ -155,6 +169,13 @@ class Server:
         deadline = time.monotonic() + wait_timeout
         while time.monotonic() < deadline:
             if self.is_alive():
+                # We spawned this engine: if it speaks an incompatible wire,
+                # tear it down rather than leave an unusable process running.
+                try:
+                    self._check_wire()
+                except Exception:
+                    self.stop()
+                    raise
                 return
             time.sleep(0.5)
 

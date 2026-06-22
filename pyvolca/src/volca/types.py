@@ -1210,12 +1210,15 @@ class ServerVersion:
 
     ``git_tag`` is None for untagged dev builds. ``build_target`` names the
     platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
+    ``wire_version`` is the engine's advertised JSON wire-format revision, or
+    None for engines that predate it (everything up to v0.7.x).
     """
 
     version: str
     git_hash: str
     git_tag: str | None
     build_target: str
+    wire_version: int | None = None
 
     @classmethod
     def from_json(cls, d: dict) -> "ServerVersion":
@@ -1224,6 +1227,9 @@ class ServerVersion:
             git_hash=d["gitHash"],
             git_tag=d.get("gitTag") or None,
             build_target=d["buildTarget"],
+            # Plain .get (not "... or None"): wire 0 is a distinct value, not
+            # "absent". Absent (old engine) → None; present → the int verbatim.
+            wire_version=d.get("wireVersion"),
         )
 
 

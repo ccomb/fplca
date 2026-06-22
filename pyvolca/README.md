@@ -1376,6 +1376,8 @@ Server build metadata returned by :meth:`Client.get_version`.
 
 ``git_tag`` is None for untagged dev builds. ``build_target`` names the
 platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
+``wire_version`` is the engine's advertised JSON wire-format revision, or
+None for engines that predate it (everything up to v0.7.x).
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1383,6 +1385,7 @@ platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
 | `git_hash` | `str` | — |
 | `git_tag` | `str \| None` | — |
 | `build_target` | `str` | — |
+| `wire_version` | `int \| None` | None |
 
 ### `Substitution`
 
