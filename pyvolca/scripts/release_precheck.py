@@ -85,6 +85,9 @@ def check_newer_than_pypi(v: str) -> Row:
         return FAIL, "newer than PyPI", f"{v} is already published"
     latest = data.get("info", {}).get("version", "")
     vt, lt = _semver(v), _semver(latest)
+    if latest and (vt is None or lt is None):
+        # Don't claim "newer" on a comparison we couldn't actually make.
+        return WARN, "newer than PyPI", f"can't compare {v} to non-semver latest {latest!r}"
     if vt and lt and vt <= lt:
         return FAIL, "newer than PyPI", f"{v} is not newer than {latest}"
     return PASS, "newer than PyPI", f"{v} > {latest or '(none)'}"
