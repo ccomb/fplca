@@ -1083,6 +1083,13 @@ withActivityAndMethod dbName collectionName processIdText methodIdText k = do
 getOpenApiSpec :: AppM Value
 getOpenApiSpec = return $ toJSON volcaOpenApi
 
+{- | Wire-format revision advertised on /api/v1/version. BUMP this whenever a
+breaking change to the JSON wire shape lands (field rename/removal, type
+narrowing, newly-required field). Clients compare it to decide compatibility.
+-}
+currentWireVersion :: Int
+currentWireVersion = 1
+
 getVersion :: AppM Value
 getVersion =
     return $
@@ -1091,6 +1098,7 @@ getVersion =
             , "gitHash" .= Version.gitHash
             , "gitTag" .= Version.gitTag
             , "buildTarget" .= Version.buildTarget
+            , "wireVersion" .= currentWireVersion
             ]
 
 getHosting :: AppM Value

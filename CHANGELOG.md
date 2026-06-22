@@ -15,6 +15,9 @@
   on the database setup view (and in the load log) so you can verify the
   dependency is the release you intended rather than trust a cross-version match
   as exact.
+- `/api/v1/version` now reports a `wireVersion` integer. Clients read it at
+  connect time to confirm they speak this engine's JSON format, so a version
+  mismatch fails with a clear message instead of a confusing decode error.
 
 ## [0.7.0] - 2026-05-29
 
