@@ -407,7 +407,12 @@ class Client:
         Also regenerates the `.pyi` type stubs in the installed pyvolca
         package directory so IDE autocomplete reflects the current engine.
         Useful when the engine is upgraded without reinstalling pyvolca.
+
+        This is the explicit "the engine was upgraded" path — the likeliest
+        place to meet a wire mismatch — so it runs the same one-shot gate as
+        :meth:`_load_operations`, refusing a spec pyvolca can't decode.
         """
+        self._ensure_compatible()
         spec = self._json(self._session.get(f"{self.base_url}/api/v1/openapi.json"))
         self._operations = _parse_spec(spec)
         from . import _stub_gen

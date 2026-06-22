@@ -648,6 +648,10 @@ Also regenerates the `.pyi` type stubs in the installed pyvolca
 package directory so IDE autocomplete reflects the current engine.
 Useful when the engine is upgraded without reinstalling pyvolca.
 
+This is the explicit "the engine was upgraded" path — the likeliest
+place to meet a wire mismatch — so it runs the same one-shot gate as
+:meth:`_load_operations`, refusing a spec pyvolca can't decode.
+
 ##### `Client.relink(dep_db: str, mapping_csv: str, db_name: str | None = None) -> dict`
 
 Re-link a database against a dependency using a name→name alias CSV.

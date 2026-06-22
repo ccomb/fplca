@@ -102,6 +102,15 @@ def test_load_operations_gate_rejects_old_engine(make_response) -> None:
         c._load_operations()
 
 
+def test_refresh_stubs_is_gated(make_response) -> None:
+    """The explicit engine-upgrade path honours the wire gate, and refuses
+    before fetching the spec it would otherwise fail to decode."""
+    c, session = _client_with_version(make_response, wire=None)
+    with pytest.raises(VoLCAError):
+        c.refresh_stubs()
+    assert session.get.call_count == 1  # version checked; openapi.json never fetched
+
+
 def test_ensure_compatible_is_one_shot(make_response) -> None:
     c, session = _client_with_version(make_response, wire=_compat.REQUIRED_WIRE)
     c._ensure_compatible()
