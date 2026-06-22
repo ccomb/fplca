@@ -13,6 +13,23 @@ pip install pyvolca
 
 Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run one as a child process, or point `Client` at any reachable instance.
 
+## Compatibility
+
+pyvolca speaks one revision of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine — too old fails with a clear error, newer than this client knows warns. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
+
+| pyvolca | wire | compatible engine |
+|---------|------|-------------------|
+| `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
+| `0.6.x` | `1` | `≥ v0.8.0` |
+
+<!-- BEGIN: compatibility -->
+
+_Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
+
+This build of **pyvolca 0.6.0** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+
+<!-- END: compatibility -->
+
 ## First choose: connect to an existing server, or start one locally
 
 `pyvolca` is only the Python client library. It does not contain the VoLCA databases and it does not install the VoLCA engine binary.
