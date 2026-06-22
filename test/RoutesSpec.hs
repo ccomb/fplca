@@ -233,6 +233,19 @@ routeSpecs = do
                 Just (Object km) -> KM.member "version" km
                 _ -> False
 
+        it "GET /api/v1/version advertises an integer 'wireVersion'" $ \b -> do
+            -- wireVersion is the field clients read to detect a JSON wire-format
+            -- mismatch at connect time; a rename, removal, or retype silently
+            -- breaks that check, so assert both presence and that it decodes as
+            -- a JSON number rather than just 'body length > 0'.
+            resp <- doGet b "/api/v1/version"
+            statusCode (responseStatus resp) `shouldBe` 200
+            decode (responseBody resp) `shouldSatisfy` \case
+                Just (Object km) -> case KM.lookup "wireVersion" km of
+                    Just (Number _) -> True
+                    _ -> False
+                _ -> False
+
         it "GET /api/v1/openapi.json returns an OpenAPI 3 document with 'paths'" $ \b -> do
             -- The OpenAPI spec is served at /api/v1/openapi.json (not /openapi).
             -- We check the actual contract (openapi+paths keys), not the byte
