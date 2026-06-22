@@ -76,6 +76,7 @@ from .types import (
     SupplyChain,
     parse_exchange_detail,
 )
+from . import _compat
 
 
 class VoLCAError(Exception):
@@ -374,15 +375,31 @@ class Client:
             self._session.headers["Authorization"] = f"Bearer {password}"
         # Lazily fetched on first _call() invocation.
         self._operations: dict[str, _Operation] | None = None
+        # One-shot wire-compatibility gate (see _ensure_compatible).
+        self._checked = False
 
     # -- Spec / dispatch plumbing --
 
     def _load_operations(self) -> dict[str, _Operation]:
         """Fetch the OpenAPI spec and build the dispatch table (cached)."""
         if self._operations is None:
+            self._ensure_compatible()
             spec = self._json(self._session.get(f"{self.base_url}/api/v1/openapi.json"))
             self._operations = _parse_spec(spec)
         return self._operations
+
+    def _ensure_compatible(self) -> None:
+        """One-shot wire-compatibility gate, run before the first real call.
+
+        Placed inside the spec-fetch branch so it fires once per client, right
+        before we first depend on the engine's wire — and never for a client
+        that was handed a preloaded operation table (the offline fixtures).
+        ``get_version`` is a direct GET, so this does not recurse.
+        """
+        if self._checked:
+            return
+        _compat.check(self.get_version())
+        self._checked = True
 
     def refresh_stubs(self) -> None:
         """Fetch the OpenAPI spec from the server and refresh the dispatch table.
@@ -390,7 +407,12 @@ class Client:
         Also regenerates the `.pyi` type stubs in the installed pyvolca
         package directory so IDE autocomplete reflects the current engine.
         Useful when the engine is upgraded without reinstalling pyvolca.
+
+        This is the explicit "the engine was upgraded" path — the likeliest
+        place to meet a wire mismatch — so it runs the same one-shot gate as
+        :meth:`_load_operations`, refusing a spec pyvolca can't decode.
         """
+        self._ensure_compatible()
         spec = self._json(self._session.get(f"{self.base_url}/api/v1/openapi.json"))
         self._operations = _parse_spec(spec)
         from . import _stub_gen

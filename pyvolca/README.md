@@ -13,6 +13,23 @@ pip install pyvolca
 
 Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run one as a child process, or point `Client` at any reachable instance.
 
+## Compatibility
+
+pyvolca speaks one revision of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine — too old fails with a clear error, newer than this client knows warns. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
+
+| pyvolca | wire | compatible engine |
+|---------|------|-------------------|
+| `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
+| `0.6.x` | `1` | `≥ v0.8.0` |
+
+<!-- BEGIN: compatibility -->
+
+_Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
+
+This build of **pyvolca 0.6.0** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+
+<!-- END: compatibility -->
+
 ## First choose: connect to an existing server, or start one locally
 
 `pyvolca` is only the Python client library. It does not contain the VoLCA databases and it does not install the VoLCA engine binary.
@@ -630,6 +647,10 @@ Fetch the OpenAPI spec from the server and refresh the dispatch table.
 Also regenerates the `.pyi` type stubs in the installed pyvolca
 package directory so IDE autocomplete reflects the current engine.
 Useful when the engine is upgraded without reinstalling pyvolca.
+
+This is the explicit "the engine was upgraded" path — the likeliest
+place to meet a wire mismatch — so it runs the same one-shot gate as
+:meth:`_load_operations`, refusing a spec pyvolca can't decode.
 
 ##### `Client.relink(dep_db: str, mapping_csv: str, db_name: str | None = None) -> dict`
 
@@ -1376,6 +1397,8 @@ Server build metadata returned by :meth:`Client.get_version`.
 
 ``git_tag`` is None for untagged dev builds. ``build_target`` names the
 platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
+``wire_version`` is the engine's advertised JSON wire-format revision, or
+None for engines that predate it (everything up to v0.7.x).
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1383,6 +1406,7 @@ platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
 | `git_hash` | `str` | — |
 | `git_tag` | `str \| None` | — |
 | `build_target` | `str` | — |
+| `wire_version` | `int \| None` | None |
 
 ### `Substitution`
 
