@@ -247,17 +247,6 @@ mkBioFlow cat =
         , bfCompartment = Just (VT.Compartment cat Nothing)
         }
 
-mkTechFlow :: Text -> TechnosphereFlow
-mkTechFlow _cat =
-    TechnosphereFlow
-        { tfId = nil
-        , tfName = "test"
-        , tfUnitId = nil
-        , tfSynonyms = M.empty
-        , tfCAS = Nothing
-        , tfSubstanceId = Nothing
-        }
-
 -- | Build a minimal TreeExport from a list of (id, parentId, name) and edges (from,to)
 mkTreeExport :: [(Text, Maybe Text, Text)] -> [(Text, Text)] -> TreeExport
 mkTreeExport nodeSpecs edgeSpecs =

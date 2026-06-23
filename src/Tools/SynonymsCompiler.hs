@@ -276,9 +276,9 @@ parseILCDFlowForSynonyms path = do
                 (_, rest) | T.null rest -> Nothing
                 (_, rest) ->
                     let afterOpen = T.drop 1 $ T.dropWhile (/= '>') rest
-                        value = T.takeWhile (/= '<') afterOpen
+                        inner = T.takeWhile (/= '<') afterOpen
                      in if close `T.isInfixOf` rest
-                            then Just (T.strip value)
+                            then Just (T.strip inner)
                             else Nothing
 
 -- | Load pairs from a 2-column CSV (name1,name2)
@@ -339,8 +339,8 @@ mergeNamePairs pairs initialGroups =
         initialGroupMap = M.fromList (zip [0 ..] (map S.fromList initialGroups))
         nextId = length initialGroups
 
-        -- Process each pair
-        (finalNameMap, finalGroupMap, _) = foldl' mergePair (initialMap, initialGroupMap, nextId) pairs
+        -- Process each pair (only the group sets are needed downstream)
+        (_, finalGroupMap, _) = foldl' mergePair (initialMap, initialGroupMap, nextId) pairs
      in
         map S.toList (M.elems finalGroupMap)
   where

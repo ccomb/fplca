@@ -19,15 +19,14 @@ import API.Resources (Resource)
 import qualified API.Resources as R
 import API.Types
 import Control.Lens ((%~), (&), (.~), (?~), (^.))
-import Data.Aeson (Value, toJSON)
+import Data.Aeson (Value)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
 import qualified Data.OpenApi.Lens as OA
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
+import Database.Manager (DatabaseSetupInfo)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (LocationFallback, LocationKind, LocationUnresolved)
 import qualified Version
 
 {- | Orphan schema instance forward declaration for the login request body.
