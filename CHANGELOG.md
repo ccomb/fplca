@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- A loaded database can be exported to any of the five supported formats —
+  SimaPro CSV, EcoSpold 1, EcoSpold 2, ILCD, and Brightway Excel — from both the
+  API and the CLI, so a database can be moved between tools or re-saved after edits.
+- A loaded database can be edited in place: copy it under a new name, delete a
+  filtered selection of activities, or relink it against a dependency through a
+  name-to-name alias map.
+- Activity records now carry separate `activity_name` and `product_name` fields,
+  instead of the old `name`/`product` that blurred an activity and its reference
+  product.
 - A partial EcoSpold2 import (a handful of `.spold` files cut from a full
   database) now becomes analyzable by loading its matching ecoinvent background
   as a dependency: each input is linked to the exact background activity it
@@ -18,6 +27,27 @@
 - `/api/v1/version` now reports a `wireVersion` integer. Clients read it at
   connect time to confirm they speak this engine's JSON format, so a version
   mismatch fails with a clear message instead of a confusing decode error.
+
+### Changed
+- Far broader EF 3.1 impact coverage: flows are matched by CAS number across
+  naming schemes, a substance registry bridges nomenclatures, sub-compartments
+  fall back sensibly, energy-carrier flows are characterized from their energy
+  content, land use is regionalized with per-country factors, and a large synonym
+  set links ecoinvent and Agribalyse flows to the method. Many products that
+  previously scored short are now characterized.
+- Large database uploads stream as raw bytes instead of base64-encoded JSON,
+  cutting memory use and time on big files.
+- A supplier substitution applies across every consumer of the substituted
+  product, not only the process you queried.
+
+### Fixed
+- ecoinvent waste-treatment activities import and score correctly: the reference
+  flow stays in the technosphere (these activities are no longer dropped) and
+  cross-database waste keeps the correct sign.
+- EcoSpold packages whose datasets live in a sub-directory now load.
+- Requesting a well-formed but non-existent process returns a clear "activity not
+  found" instead of a confusing error.
+- A missing reference CSV is reported as an error instead of crashing the load.
 
 ## [0.7.0] - 2026-05-29
 
