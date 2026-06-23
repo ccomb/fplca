@@ -382,7 +382,7 @@ Built in two steps:
      on @operationId@ (e.g. @"get_impacts"@).
 -}
 volcaOpenApi :: OpenApi
-volcaOpenApi = API.OpenApi.enrichWithResources (toOpenApi (Proxy :: Proxy LCAAPI))
+volcaOpenApi = API.OpenApi.stampInfo (API.OpenApi.enrichWithResources (toOpenApi (Proxy :: Proxy LCAAPI)))
 
 {- | Expand a named classification preset from config into the
 (system, value, exact) triples used by the Service/Aggregate layers.
