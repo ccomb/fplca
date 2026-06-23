@@ -1,0 +1,12 @@
+# weeder configuration — finds unused exports and dead modules that `-Wall` cannot see
+# (it only catches unused *local* binds and imports, never unused *exports*).
+#
+# weeder reads `.hie` files, so build with HIE info first:
+#   cabal build --ghc-options='-fwrite-ide-info -hiedir .hie' && weeder
+# `roots` keeps legitimate entry points from being reported as dead.
+
+roots = [
+  "^Main\\.main$",       # executable entry point
+  "^Paths_volca\\.",     # cabal-generated module
+]
+type-class-roots = true   # instance methods are reachable via their class
