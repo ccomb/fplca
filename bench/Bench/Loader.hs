@@ -27,7 +27,7 @@ import qualified Data.Text as T
 import qualified Database.CrossLinking as CL
 import qualified Database.Loader as Loader
 import qualified SynonymDB.Types as Syn
-import Types (cdlTotalInputs, sdbActivities)
+import Types (GeographyPolicy (..), cdlTotalInputs, sdbActivities)
 import qualified UnitConversion as UC
 
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
@@ -132,6 +132,7 @@ registerCrossDbLinking = do
                             Syn.emptySynonymDB
                             UC.defaultUnitConfig
                             M.empty
+                            GeoGlobal
                             fgPath
                     case probeRes of
                         Left err -> do
@@ -179,6 +180,7 @@ crossLinkBench bgIndex fgPath = nfIO $ do
             Syn.emptySynonymDB
             UC.defaultUnitConfig
             M.empty
+            GeoGlobal
             fgPath
     case r of
         Left err -> evaluate (T.length err)
