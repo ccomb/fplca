@@ -113,8 +113,8 @@ uuidMapper =
         , mhPriority = 0
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (bfId f) "uuid" 1.0) $
-                    Mapping.findFlowByUUID (mcBioFlowsByUUID ctx) (mcfFlowRef cf)
+                (\f -> MapResult (bfId f) "uuid" 1.0)
+                    <$> Mapping.findFlowByUUID (mcBioFlowsByUUID ctx) (mcfFlowRef cf)
             _ -> Nothing
         }
 
@@ -144,8 +144,8 @@ nameMapper =
         , mhPriority = 10
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (bfId f) "name" 0.9) $
-                    Mapping.findFlowByNameComp (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                (\f -> MapResult (bfId f) "name" 0.9)
+                    <$> Mapping.findFlowByNameComp (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
             _ -> Nothing
         }
 
@@ -157,8 +157,8 @@ synonymMapper =
         , mhPriority = 20
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
-                fmap (\f -> MapResult (bfId f) "synonym" 0.8) $
-                    Mapping.findFlowBySynonymComp (mcSynonymDB ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                (\f -> MapResult (bfId f) "synonym" 0.8)
+                    <$> Mapping.findFlowBySynonymComp (mcSynonymDB ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
             _ -> Nothing
         }
 
@@ -291,16 +291,13 @@ nameSearcher =
                     , let nameLower = T.toLower (bfName f)
                           synMatches =
                             any
-                                (\syns -> any (T.isInfixOf queryLower . T.toLower) (S.toList syns))
+                                (any (T.isInfixOf queryLower . T.toLower) . S.toList)
                                 (M.elems (bfSynonyms f))
                     , T.isInfixOf queryLower nameLower || synMatches
-                    , let score =
-                            if queryLower == nameLower
-                                then 1.0
-                                else
-                                    if T.isPrefixOf queryLower nameLower
-                                        then 0.9
-                                        else 0.7
+                    , let score
+                            | queryLower == nameLower = 1.0
+                            | T.isPrefixOf queryLower nameLower = 0.9
+                            | otherwise = 0.7
                     ]
                 limited = take (sqLimit query) matches
             pure [SearchResult (bfId f) (bfName f) s M.empty | (f, s) <- limited]

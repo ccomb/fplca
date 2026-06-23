@@ -44,7 +44,7 @@ import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
 import Data.List (dropWhileEnd)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, isJust, isNothing, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, maybeToList)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -776,7 +776,7 @@ extractLocation name =
     --   "Product (WFLDB)/CN U"       → ("Product (WFLDB)", "CN")
     --   "Product/ha/GLO/I U"         → ("Product/ha", "GLO")
     -- Scans rightward through slash-separated segments for the first geo code.
-    extractSlashLocation n = go n
+    extractSlashLocation = go
       where
         go t = case T.breakOnEnd "/" t of
             ("", _) -> Nothing
@@ -941,9 +941,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
         rawAmount = resolveAmount env prAmountRaw prAmount
         (effUnitName, amount) =
             if isRef
-                then case UnitConversion.normalizeToCanonical unitCfg prUnit rawAmount of
-                    Just canonical -> canonical
-                    Nothing -> (prUnit, rawAmount)
+                then fromMaybe (prUnit, rawAmount) (UnitConversion.normalizeToCanonical unitCfg prUnit rawAmount)
                 else (prUnit, rawAmount)
         flowUUID = generateFlowUUID cleanName "" effUnitName
         unitUUID = generateUnitUUID effUnitName

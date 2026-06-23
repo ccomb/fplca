@@ -191,7 +191,7 @@ parseFlowXML bytes =
                 , fpsTextAccum = []
                 , fpsInBaseName = inBase
                 , fpsInSynonyms = inSyn
-                , fpsLangIsEn = if isElement tag "synonyms" then False else fpsLangIsEn s
+                , fpsLangIsEn = not (isElement tag "synonyms") && fpsLangIsEn s
                 , fpsInFlowProperty = inFP
                 }
 

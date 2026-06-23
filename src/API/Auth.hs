@@ -24,12 +24,9 @@ authMiddleware expectedPassword app req respond =
         isLoginEndpoint = requestMethod req == "POST" && path == "/api/v1/auth"
      in -- Only protect /api/ routes; static files and SPA index are public
         -- (so the browser can load the login page)
-        if not isApiRoute || isLoginEndpoint
+        if not isApiRoute || isLoginEndpoint || isAuthenticated expectedPassword req
             then app req respond
-            else
-                if isAuthenticated expectedPassword req
-                    then app req respond
-                    else respond unauthorized
+            else respond unauthorized
   where
     unauthorized =
         responseLBS

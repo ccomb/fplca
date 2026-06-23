@@ -2,6 +2,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TupleSections #-}
 
 {- | Cross-Database Activity Linking
 
@@ -67,6 +68,7 @@ module Database.CrossLinking (
     normalizeUnicode,
 ) where
 
+import Data.Bifunctor (first)
 import Data.Char (isAlpha, isUpper)
 import Data.Foldable (find)
 import Data.List (maximumBy)
@@ -619,7 +621,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                             Nothing ->
                                                 CrossDBNotLinked (LocationUnavailable effectiveLocation)
                                     _ ->
-                                        let scored = map (\(entry, kind) -> (scoreEntry effectiveLocation entry, kind)) accepted
+                                        let scored = map (first (scoreEntry effectiveLocation)) accepted
                                             !(bestCand, bestKind) = maximumBy (comparing (cdbScore . fst)) scored
                                             -- Other databases whose surviving best candidate ties the
                                             -- winner's score. Dedup by DB name to ignore intra-DB ties.
@@ -636,9 +638,9 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                          in if cdbScore bestCand >= lcThreshold
                                                 then
                                                     let warnings =
-                                                            if T.null location || bestKind == ExactLoc
-                                                                then []
-                                                                else [UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind]
+                                                            [ UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind
+                                                            | not (T.null location || bestKind == ExactLoc)
+                                                            ]
                                                      in CrossDBLinked
                                                             { cdlrActivityUUID = cdbActivityUUID bestCand
                                                             , cdlrProductUUID = cdbProductUUID bestCand
@@ -698,7 +700,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
         let permissive =
                 mapMaybe
                     ( \(_, SupplierEntry{seLocation}) ->
-                        (\k -> (seLocation, k))
+                        (seLocation,)
                             <$> acceptableLocation GeoGlobal lcLocationHierarchy queryLoc seLocation
                     )
                     candidates

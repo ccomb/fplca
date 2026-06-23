@@ -21,6 +21,7 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate, transpose)
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Text (Text)
@@ -237,7 +238,7 @@ extractLoadedDbNames = fromMaybe [] . parseMaybe go
     go :: Value -> Parser [Text]
     go = withObject "resp" $ \obj -> do
         dbs <- obj .: "dlrDatabases"
-        fmap catMaybes $ mapM getName dbs
+        catMaybes <$> mapM getName dbs
     getName :: Value -> Parser (Maybe Text)
     getName = withObject "db" $ \db -> do
         status <- db .: "dsaStatus"
@@ -310,9 +311,9 @@ buildQuery params =
   where
     urlEncode = concatMap encodeChar
     encodeChar c
-        | c >= 'A' && c <= 'Z' = [c]
-        | c >= 'a' && c <= 'z' = [c]
-        | c >= '0' && c <= '9' = [c]
+        | isAsciiUpper c = [c]
+        | isAsciiLower c = [c]
+        | isDigit c = [c]
         | c `elem` ("-_.~" :: String) = [c]
         | otherwise = '%' : showHex2 (fromEnum c)
     showHex2 n = [hexDigit (n `div` 16), hexDigit (n `mod` 16)]
@@ -427,7 +428,7 @@ extractTable :: [Value] -> ([String], [[String]])
 extractTable [] = ([], [])
 extractTable rows@(Object first : _) =
     let keys = map fst (KM.toList first)
-        headers = map (Key.toString) keys
+        headers = map Key.toString keys
         dataRows = map (rowValues keys) rows
      in (headers, dataRows)
 extractTable rows = (["value"], map (\v -> [cellValue v]) rows)

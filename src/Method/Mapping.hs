@@ -816,8 +816,8 @@ buildMethodTables cmap energyDensities mappings =
             M.fromList
                 [ ((bfId flow, loc), (mcfValue cf, mcfUnit cf))
                 | (cf, Just (flow, _)) <- mappings
-                , Just loc <- [mcfConsumerLocation cf]
                 , cfSubcompMatchesFlow cf flow
+                , Just loc <- [mcfConsumerLocation cf]
                 ]
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
@@ -1923,9 +1923,7 @@ findSimilarCFs syns idx flow maxN
 
             -- Same-medium candidates (cheap scan); fall back to whole index
             -- only when we have no medium info to filter by.
-            mediumIdxs = case M.lookup flowMedium (miByMedium idx) of
-                Just is -> is
-                Nothing -> [0 .. V.length (miCFs idx) - 1]
+            mediumIdxs = fromMaybe [0 .. V.length (miCFs idx) - 1] (M.lookup flowMedium (miByMedium idx))
 
             casBridgeIdxs = case flowCAS' of
                 Nothing -> []

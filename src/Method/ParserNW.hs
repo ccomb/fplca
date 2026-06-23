@@ -21,6 +21,7 @@ module Method.ParserNW (
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
+import Data.Char (isAsciiUpper)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -98,5 +99,5 @@ decode = TE.decodeUtf8With TEE.lenientDecode
 
 toLowerASCII :: Char -> Char
 toLowerASCII c
-    | c >= 'A' && c <= 'Z' = toEnum (fromEnum c + 32)
+    | isAsciiUpper c = toEnum (fromEnum c + 32)
     | otherwise = c

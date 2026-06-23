@@ -29,7 +29,7 @@ module Config (
     resolveLoadOrder,
 ) where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, unless, when)
 import Data.List (isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -362,7 +362,7 @@ validateConfig cfg = do
     -- Check for duplicate database names
     let dbNames = map dcName (cfgDatabases cfg)
         duplicates = findDuplicates dbNames
-    when (not $ null duplicates) $
+    unless (null duplicates) $
         Left $
             "Duplicate database names: " <> T.intercalate ", " duplicates
 
@@ -376,7 +376,7 @@ validateConfig cfg = do
     let nameSet = S.fromList dbNames
     forM_ (cfgDatabases cfg) $ \db ->
         forM_ (dcDepends db) $ \dep ->
-            when (not $ S.member dep nameSet) $
+            unless (S.member dep nameSet) $
                 Left $
                     "Database \"" <> dcName db <> "\" depends on unknown database: \"" <> dep <> "\""
 
@@ -389,7 +389,7 @@ validateConfig cfg = do
 
 -- | Find duplicates in a list
 findDuplicates :: (Eq a) => [a] -> [a]
-findDuplicates xs = go [] [] xs
+findDuplicates = go [] []
   where
     go _ dups [] = dups
     go seen dups (x : rest)
@@ -429,6 +429,6 @@ resolveLoadOrder configs =
         | otherwise = Left "Cycle detected in database dependencies"
     go revAdj degrees (n : q) result expected =
         let dependents = M.findWithDefault [] n revAdj
-            degrees' = foldl (\d dep -> M.adjust (subtract 1) dep d) degrees dependents
+            degrees' = foldl (flip (M.adjust (subtract 1))) degrees dependents
             newReady = [dep | dep <- dependents, M.findWithDefault 1 dep degrees' == 0]
          in go revAdj degrees' (q ++ newReady) (n : result) expected

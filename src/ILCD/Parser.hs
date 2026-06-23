@@ -126,8 +126,8 @@ listXMLFiles d = do
 parseUnitGroups :: FilePath -> IO (M.Map UUID (Text, Int))
 parseUnitGroups dir = do
     files <- listXMLFiles dir
-    results <- mapM (\f -> parseUnitGroupXML <$> BS.readFile f) files
-    return $ M.fromList [r | Just r <- results]
+    results <- mapM (fmap parseUnitGroupXML . BS.readFile) files
+    return $ M.fromList (Data.Maybe.catMaybes results)
 
 data UGState = UGState
     { ugUUID :: !Text
@@ -191,8 +191,8 @@ parseUnitGroupXML bytes =
 parseFlowProperties :: FilePath -> IO (M.Map UUID UUID)
 parseFlowProperties dir = do
     files <- listXMLFiles dir
-    results <- mapM (\f -> parseFlowPropertyXML <$> BS.readFile f) files
-    return $ M.fromList [r | Just r <- results]
+    results <- mapM (fmap parseFlowPropertyXML . BS.readFile) files
+    return $ M.fromList (Data.Maybe.catMaybes results)
 
 data FPState = FPState
     { fpUUID :: !Text
@@ -483,7 +483,7 @@ parseProcessXML bytes =
             let ex =
                     ILCDExchangeRaw
                         { ierInternalId = psExInternalId s
-                        , ierFlowRef = maybe UUID.nil id (UUID.fromText (psExFlowRef s))
+                        , ierFlowRef = Data.Maybe.fromMaybe UUID.nil (UUID.fromText (psExFlowRef s))
                         , ierDirection = psExDirection s
                         , ierAmount = psExAmount s
                         , ierLocation = psExLocation s
@@ -522,8 +522,8 @@ parseProcessFilesParallel files = do
     return $ concat workerResults
   where
     parseWorker paths = do
-        results <- mapM (\f -> parseProcessXML <$> BS.readFile f) paths
-        return [r | Just r <- results]
+        results <- mapM (fmap parseProcessXML . BS.readFile) paths
+        return (Data.Maybe.catMaybes results)
 
 --------------------------------------------------------------------------------
 -- Build ActivityMap from raw processes

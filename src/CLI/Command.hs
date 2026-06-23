@@ -314,10 +314,10 @@ executeExportMatricesCommand registry database outputDir = do
             ehExport exporter ctx outputDir
         Nothing -> Service.exportUniversalMatrixFormat outputDir database
     reportProgress Info "Matrix export completed"
-    reportProgress Info $ "  - ie_index.csv (activity index)"
-    reportProgress Info $ "  - ee_index.csv (biosphere flow index)"
-    reportProgress Info $ "  - A_public.csv (technosphere matrix)"
-    reportProgress Info $ "  - B_public.csv (biosphere matrix)"
+    reportProgress Info "  - ie_index.csv (activity index)"
+    reportProgress Info "  - ee_index.csv (biosphere flow index)"
+    reportProgress Info "  - A_public.csv (technosphere matrix)"
+    reportProgress Info "  - B_public.csv (biosphere matrix)"
 
 -- | Execute plugin list command
 executePluginList :: PluginRegistry -> OutputFormat -> IO ()
@@ -338,14 +338,11 @@ executePluginList registry fmt = do
   where
     pluginEntry name typ backend mPriority =
         object $
-            concat
-                [
-                    [ "name" .= name
-                    , "type" .= (typ :: T.Text)
-                    , "backend" .= backendText backend
-                    ]
-                , maybe [] (\p -> ["priority" .= p]) mPriority
-                ]
+            [ "name" .= name
+            , "type" .= (typ :: T.Text)
+            , "backend" .= backendText backend
+            ]
+                ++ maybe [] (\p -> ["priority" .= p]) mPriority
     backendText Builtin = "builtin" :: T.Text
     backendText (External p) = "external:" <> T.pack p
 

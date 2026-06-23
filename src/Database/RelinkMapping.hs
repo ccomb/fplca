@@ -88,8 +88,8 @@ blank (whitespace-only) cell normalizes to 'Nothing' so "absent" has a single
 representation before any consumer relies on it.
 -}
 optField :: Csv.NamedRecord -> [Text] -> Csv.Parser (Maybe Text)
-optField r names =
-    foldr (\nm acc -> (blankToNothing <$> r .: enc nm) <|> acc) (pure Nothing) names
+optField r =
+    foldr (\nm acc -> (blankToNothing <$> r .: enc nm) <|> acc) (pure Nothing)
   where
     blankToNothing = mfilter (not . T.null) . Just . T.strip
 
@@ -129,8 +129,8 @@ with conflicting targets, fail rather than silently pick one. Identical
 duplicates collapse harmlessly.
 -}
 buildAliasMap :: [AliasRow] -> Either Text (Map Text Text)
-buildAliasMap rows =
-    foldr step (Right M.empty) rows
+buildAliasMap =
+    foldr step (Right M.empty)
   where
     step row acc = do
         m <- acc

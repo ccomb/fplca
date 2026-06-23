@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -81,6 +82,7 @@ import Control.Exception (SomeException, catch, evaluate, throwIO, toException, 
 import Control.Monad (forM_, unless, void, when)
 import Data.Int (Int32)
 import qualified Data.Map as M
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -243,7 +245,7 @@ submitters that committed before 'csAlive' flipped end up here.
 drainShutdown :: TQueue WorkerMsg -> IO ()
 drainShutdown inbox = do
     leftover <- atomically $ flushTQueue inbox
-    forM_ leftover $ \m -> case m of
+    forM_ leftover $ \case
         WSolve _ rv ->
             putMVar rv (Left $ toException $ userError "MUMPS solver shut down")
         WStop ack -> putMVar ack ()
@@ -493,13 +495,11 @@ applySparseMatrix sparseTriples nRows inputVec =
     let resultVec = U.create $ do
             result <- MU.new nRows
             forM_ [0 .. nRows - 1] $ \i -> MU.write result i 0.0
-            forM_ sparseTriples $ \(i, j, val) -> do
-                if j < U.length inputVec
-                    then do
-                        oldVal <- MU.read result i
-                        let newVal = oldVal + val * (inputVec U.! j)
-                        MU.write result i newVal
-                    else return ()
+            forM_ sparseTriples $ \(i, j, val) ->
+                when (j < U.length inputVec) $ do
+                    oldVal <- MU.read result i
+                    let newVal = oldVal + val * (inputVec U.! j)
+                    MU.write result i newVal
             return result
      in resultVec
 
@@ -877,7 +877,7 @@ depDemandsToVector ::
 depDemandsToVector unitConfig depDbName depDb demands = do
     converted <- traverse convertEntry (M.toList demands)
     let n = fromIntegral (dbActivityCount depDb) :: Int
-        entries = [e | Just e <- converted]
+        entries = catMaybes converted
     Right $ U.accum (+) (U.replicate n 0.0) entries
   where
     actIdx = dbActivityIndex depDb

@@ -7,6 +7,7 @@ import CLI.Parser (commandParser)
 import CLI.Types
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, bracket, try)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value)
 import qualified Data.Aeson
@@ -62,7 +63,7 @@ runRepl mgr rc globalOpts cfgFile = do
             Nothing -> return () -- Ctrl+D
             Just input -> do
                 cont <- dispatch stateRef (words input)
-                if cont then loop stateRef else return ()
+                when cont $ loop stateRef
 
     dispatch _ [] = return True
     dispatch _ [":quit"] = return False

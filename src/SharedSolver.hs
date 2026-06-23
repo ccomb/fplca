@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 {- |
 Module      : SharedSolver
@@ -440,7 +441,7 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
         -- sum across demands (we currently only call with K=1, but keep the
         -- shape aligned with goWithDeps for future batching).
         let localByRoot = map (\s -> processContributionsFromTables unitConfig unitDB flowDB db s tables) scalings
-            localTagged = M.mapKeys ((,) dbName) (foldr (M.unionWith (+)) M.empty localByRoot)
+            localTagged = M.mapKeys (dbName,) (foldr (M.unionWith (+)) M.empty localByRoot)
         if depth >= maxDepsDepth
             then pure (Right localTagged)
             else do
