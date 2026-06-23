@@ -1561,6 +1561,12 @@ Returns:
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
 
+
+
+_Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
+
+This build of **pyvolca 0.6.0** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+
 <!-- END: api-reference -->
 
 ## See also
