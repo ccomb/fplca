@@ -10,6 +10,7 @@ module Expr (
     collectIdentifiers,
 ) where
 
+import Control.Monad (void)
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes)
@@ -183,12 +184,12 @@ pSynPrimary =
     choice
         [ between (symbol "(") (symbol ")") pSynExpr
         , pSynFunc
-        , () <$ pNumber
+        , void pNumber
         , pSynIdent
         ]
 
 pSynIdent :: Parser ()
-pSynIdent = () <$ lexeme ((:) <$> (letterChar <|> char '_') <*> many (alphaNumChar <|> char '_'))
+pSynIdent = void (lexeme ((:) <$> (letterChar <|> char '_') <*> many (alphaNumChar <|> char '_')))
 
 pSynFunc :: Parser ()
 pSynFunc =
@@ -206,4 +207,4 @@ pSynFunc1 :: Text -> Parser ()
 pSynFunc1 name = try $ lexeme (string name) *> between (symbol "(") (symbol ")") pSynExpr
 
 pSynFunc2 :: Text -> Parser ()
-pSynFunc2 name = try $ lexeme (string name) *> symbol "(" *> pSynExpr *> symbol ";" *> pSynExpr *> symbol ")" *> pure ()
+pSynFunc2 name = try $ void (lexeme (string name) *> symbol "(" *> pSynExpr *> symbol ";" *> pSynExpr *> symbol ")")

@@ -49,7 +49,6 @@ import Types (
     Indexes (..),
     ProductIndex (..),
     Unit (..),
-    emptyCrossDBLinkingStats,
  )
 import qualified UnitConversion as UC
 
@@ -145,6 +144,7 @@ emptyDatabase =
         , dbActivities = V.empty
         , dbTechFlows = M.empty
         , dbBioFlows = M.empty
+        , dbWasteFlows = M.empty
         , dbUnits = M.empty
         , dbIndexes = Indexes M.empty M.empty M.empty M.empty
         , dbTechnosphereTriples = U.empty
@@ -155,7 +155,7 @@ emptyDatabase =
         , dbBiosphereCount = 0
         , dbCrossDBLinks = []
         , dbDependsOn = []
-        , dbLinkingStats = emptyCrossDBLinkingStats
+        , dbLinkingStats = mempty
         , dbSynonymDB = Nothing
         , dbFlowsByName = M.empty
         , dbFlowsByCAS = M.empty
@@ -197,7 +197,7 @@ buildFixture =
             ]
 
         methods = [mkMethod m [] | m <- [1 .. nMethods]]
-        rawTables = [buildMethodTables M.empty (mappingsFor s) | s <- [1 .. nMethods]]
+        rawTables = [buildMethodTables M.empty M.empty (mappingsFor s) | s <- [1 .. nMethods]]
         filledTables = map (fillBroadcastVector unitCfg unitDB flowDB) rawTables
         setTables = buildMethodSetTables (zip methods filledTables)
 
@@ -338,7 +338,7 @@ registerReal = do
                             mappings <- mapMethodToFlows Builtin.defaultMappers db method
                             let unitDB = dbUnits db
                                 flowDB = dbBioFlows db
-                                tables0 = buildMethodTables M.empty mappings
+                                tables0 = buildMethodTables M.empty M.empty mappings
                                 !tables = fillBroadcastVector UC.defaultUnitConfig unitDB flowDB tables0
                                 !nCFs = length (methodFactors method)
                             putStrLn "[bench] lcia.real.score_method: computing inventory for first product..."

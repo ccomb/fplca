@@ -795,9 +795,7 @@ buildUnitGroups units =
 -- | Get flow usage count across all activities
 getFlowUsageCount :: Database -> UUID -> Int
 getFlowUsageCount db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> 0
-        Just activityUUIDs -> length activityUUIDs
+    maybe 0 length (M.lookup flowUUID (idxByFlow $ dbIndexes db))
 
 {- | Get flows used by an activity as lightweight summaries. Each exchange
 lookup is resolved against the appropriate side (tech vs bio) and wrapped
@@ -1563,7 +1561,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
             | i <- [0 .. n - 1]
             , let v = supplyVec U.! i
             , abs v > minQ
-            , maybe True ((/=) (fromIntegral i)) mRootPid
+            , Just (fromIntegral i) /= mRootPid
             ]
 
         -- One pass: adjacency (for BFS + edges) + consumer counts.
@@ -2084,9 +2082,9 @@ globalFromMustLiveInRoot :: RootDb -> [Substitution] -> Either ServiceError ()
 globalFromMustLiveInRoot rootDb subs =
     case [ fromDb
          | sub <- subs
-         , AllConsumers <- [subScope sub]
          , let (fromDb, _) = parseSubRef rootDb (subFrom sub)
          , fromDb /= unRootDb rootDb
+         , AllConsumers <- [subScope sub]
          ] of
         [] -> Right ()
         (d : _) ->

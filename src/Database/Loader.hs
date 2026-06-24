@@ -1,6 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -85,18 +83,19 @@ import Control.Monad
 import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
-import Data.Either (partitionEithers)
+import Data.Either (lefts, partitionEithers, rights)
 import Data.List (sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
+import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
 import Data.Store (decodeEx, encode)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import Data.Typeable (typeOf, typeRepFingerprint)
+import Data.Typeable (typeRep, typeRepFingerprint)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
@@ -189,7 +188,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 -}
 schemaSignature :: Word64
 schemaSignature =
-    let Fingerprint hi lo = typeRepFingerprint (typeOf (undefined :: Database))
+    let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
      in hi `xor` lo `xor` 7
 
 {- |
@@ -727,11 +726,11 @@ loadEcoSpoldDirectory locationAliases dir = do
         results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1 ..] workers)
 
         -- Check for errors from any worker
-        let errors = [e | Left e <- results]
+        let errors = lefts results
         case errors of
             (firstErr : _) -> return $ Left firstErr
             [] -> do
-                let successResults = [r | Right r <- results]
+                let successResults = rights results
                 let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip9 successResults
                 let !finalProcMap = M.unions procMaps
                 let !finalTechFlowMap = M.unionsWith mergeTechFlows techFlowMaps
@@ -809,10 +808,10 @@ loadEcoSpoldDirectory locationAliases dir = do
 
         let procEntries = zipWith (buildProcEntry isEcoSpold1) okFiles procs
 
-        case [e | Left e <- procEntries] of
+        case lefts procEntries of
             (firstErr : _) -> return $ Left firstErr
             [] -> do
-                let !procMap = M.fromList [e | Right e <- procEntries]
+                let !procMap = M.fromList (rights procEntries)
                 let !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
                 let !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
                 let !wasteFlowMap = M.fromList [(wfId f, f) | f <- allWastes]
@@ -1712,7 +1711,7 @@ reportCrossDBLinkingStats nActivities stats = do
 
     -- Missing suppliers
     let !missing = sortOn (\(_, (cnt, _)) -> Down cnt) $ M.toList (cdlUnresolvedProducts stats)
-    when (not (null missing)) $ do
+    unless (null missing) $ do
         reportProgress Warning $
             printf "Missing suppliers: %d products unresolved" (length missing)
         forM_ (take 20 missing) $ \(name, (cnt, blocker)) ->
@@ -1724,7 +1723,7 @@ reportCrossDBLinkingStats nActivities stats = do
 
     -- Unknown units
     let !unknowns = S.toList (cdlUnknownUnits stats)
-    when (not (null unknowns)) $
+    unless (null unknowns) $
         reportProgress Warning $
             printf "Unknown units: %s" (T.unpack $ T.intercalate ", " unknowns)
 

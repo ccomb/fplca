@@ -23,12 +23,8 @@ Converts exchange amount to the target activity's reference unit for proper scal
 getConvertedExchangeAmount :: UnitConfig -> Database -> Exchange -> UUID -> Double
 getConvertedExchangeAmount unitCfg db exchange targetActivityUUID =
     let originalAmount = exchangeAmount exchange
-        exchangeUnitName = case M.lookup (exchangeUnitId exchange) (dbUnits db) of
-            Just unit -> unitName unit
-            Nothing -> "unknown"
-        targetReferenceUnit = case findActivityByActivityUUID db targetActivityUUID of
-            Just targetActivity -> activityUnit targetActivity
-            Nothing -> "unknown"
+        exchangeUnitName = maybe "unknown" unitName (M.lookup (exchangeUnitId exchange) (dbUnits db))
+        targetReferenceUnit = maybe "unknown" activityUnit (findActivityByActivityUUID db targetActivityUUID)
      in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
             then originalAmount
             else convertExchangeAmount unitCfg exchangeUnitName targetReferenceUnit originalAmount

@@ -52,7 +52,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, isTechnosphereExchange, processIdToText, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -1429,13 +1429,12 @@ mkMcpCrossDBEntry ::
     Text ->
     -- | method UUID text
     Text ->
-    BioFlowDB ->
     UnitDB ->
     -- | total score (for share %)
     Double ->
     ((Text, ProcessId), Double) ->
     IO Value
-mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText flowDB unitDB score ((depDbName, pid), c) = do
+mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText unitDB score ((depDbName, pid), c) = do
     mLd <- getDatabase dbManager depDbName
     let (actName, actLoc, prodName, pidText) = case mLd of
             Just ld ->
@@ -1708,7 +1707,7 @@ callGetContributingActivities dbManager mBaseUrl rid args =
             sorted = L.sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
             top = take lim sorted
             hasNeg = any (\(_, c) -> c < 0) top
-        rows <- liftIO $ mapM (mkMcpCrossDBEntry dbManager dbName mBaseUrl (lrCollection req) (lrMethodIdText req) mFlows mUnits score) top
+        rows <- liftIO $ mapM (mkMcpCrossDBEntry dbManager dbName mBaseUrl (lrCollection req) (lrMethodIdText req) mUnits score) top
         pure $
             toolSuccessJson rid $
                 object

@@ -15,6 +15,7 @@ module Types (
 
 import API.JsonOptions (Stripped (..))
 import Control.DeepSeq (NFData)
+import Control.Monad ((<=<))
 import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
@@ -81,7 +82,7 @@ bfCompartmentName = maybe "" compartmentName . bfCompartment
 when neither the source nor the medium recorded one.
 -}
 bfCompartmentSub :: BiosphereFlow -> Maybe Text
-bfCompartmentSub = (>>= compartmentSub) . bfCompartment
+bfCompartmentSub = compartmentSub <=< bfCompartment
 
 {- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
 biosphere side also gets named variants instead of a load-bearing 'Bool'.

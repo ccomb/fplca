@@ -12,22 +12,22 @@ entry in 'API.Resources'. The actual spec derivation from 'LCAAPI'
 lives in 'API.Routes' to break an otherwise-circular dependency
 (API.Routes -> API.OpenApi -> API.Routes).
 -}
-module API.OpenApi (enrichWithResources) where
+module API.OpenApi (enrichWithResources, stampInfo) where
 
 import API.JsonOptions (strippedSchemaOptions)
 import API.Resources (Resource)
 import qualified API.Resources as R
 import API.Types
-import Control.Lens ((%~), (&), (?~), (^.))
-import Data.Aeson (Value, toJSON)
+import Control.Lens ((%~), (&), (.~), (?~), (^.))
+import Data.Aeson (Value)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import Data.OpenApi
 import qualified Data.OpenApi.Lens as OA
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Manager (DatabaseSetupInfo, DependencyChoice, DependencyStatus, MissingSupplier)
+import Database.Manager (DatabaseSetupInfo)
 import Network.HTTP.Types.Method (StdMethod (..))
-import Types (LocationFallback, LocationKind, LocationUnresolved)
+import qualified Version
 
 {- | Orphan schema instance forward declaration for the login request body.
 The real type lives in "API.Routes"; this is defined there and re-imported
@@ -74,6 +74,17 @@ instance ToSchema BinaryContent where
         pure $
             NamedSchema (Just "OctetStream") $
                 mempty & type_ ?~ OpenApiString & format ?~ "binary"
+
+{- | Stamp the spec's @info@ block so each generated @openapi.json@ self-identifies:
+@info.version@ = the engine version, @info.title@ = the engine name. servant-openapi3
+leaves both blank, which makes a published spec un-anchorable; stamping them lets a
+release's surface be diffed against the previous one.
+-}
+stampInfo :: OpenApi -> OpenApi
+stampInfo spec =
+    spec
+        & OA.info . OA.title .~ "VoLCA"
+        & OA.info . OA.version .~ T.pack Version.version
 
 {- | Walk the spec and stamp metadata from 'API.Resources' onto each
 resource-backed operation. Operations without a matching 'Resource'

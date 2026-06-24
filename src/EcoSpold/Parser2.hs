@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
 
@@ -321,13 +322,13 @@ resolveGroups inG outG st =
 
 -- | Warning emitted (as a singleton, else empty) when an exchange has no unit name.
 missingUnitWarning :: String -> Text -> Text -> [String]
-missingUnitWarning kind flowId unitName =
+missingUnitWarning kind flowId unitNm =
     [ "[WARNING] Missing unit name for "
         ++ kind
         ++ " exchange with flow ID: "
         ++ T.unpack flowId
         ++ " - using 'UNKNOWN_UNIT' placeholder"
-    | T.null unitName
+    | T.null unitNm
     ]
 
 -- | Parse a UUID, treating the empty string as the nil UUID (no warning).
@@ -673,7 +674,7 @@ parseWithXeno xmlContent processId = do
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
-         in (\act -> (act, techs, bios, wastes, units)) <$> applyCutoffStrategy activity
+         in (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
 
 -- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))

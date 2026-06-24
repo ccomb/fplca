@@ -28,6 +28,7 @@ module Database.UploadedDatabase (
 
 import Control.Exception (SomeException, try)
 import Control.Monad (filterM, forM)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -122,7 +123,7 @@ parseMetaToml content = do
             , let v = T.strip $ T.drop 1 rest
             ]
         getValue key = lookup key kvPairs
-        unquote t = T.dropAround (== '"') t
+        unquote = T.dropAround (== '"')
 
     version <- getValue "version" >>= readMaybe . T.unpack
     displayName <- unquote <$> getValue "displayName"
@@ -192,7 +193,7 @@ scanUploadsIn dir = do
                 return $ case maybeMeta of
                     Just meta -> Just (slug, dirPath, meta)
                     Nothing -> Nothing
-            return [r | Just r <- results]
+            return (catMaybes results)
 
 {- | Discover all uploaded databases by scanning the uploads directory
 Scans ./uploads/databases/ first, then legacy ./uploads/ for backward compat

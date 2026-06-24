@@ -2,6 +2,7 @@
 
 module CLI.Types where
 
+import Data.Char (isAsciiUpper)
 import Data.Text (Text)
 import GHC.Generics
 
@@ -225,4 +226,4 @@ parseOutputFormat s = case map toLower s of
     "pretty" -> Just Pretty
     _ -> Nothing
   where
-    toLower c = if c >= 'A' && c <= 'Z' then toEnum (fromEnum c + 32) else c
+    toLower c = if isAsciiUpper c then toEnum (fromEnum c + 32) else c

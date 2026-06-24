@@ -276,9 +276,9 @@ parseILCDFlowForSynonyms path = do
                 (_, rest) | T.null rest -> Nothing
                 (_, rest) ->
                     let afterOpen = T.drop 1 $ T.dropWhile (/= '>') rest
-                        value = T.takeWhile (/= '<') afterOpen
+                        inner = T.takeWhile (/= '<') afterOpen
                      in if close `T.isInfixOf` rest
-                            then Just (T.strip value)
+                            then Just (T.strip inner)
                             else Nothing
 
 -- | Load pairs from a 2-column CSV (name1,name2)
@@ -320,7 +320,7 @@ buildSynonymDB :: CASGroups -> [SynonymPair] -> SynonymDB
 buildSynonymDB casGroups namePairs =
     let
         -- Step 1: Create initial groups from CAS
-        casGroupsList = [(S.toList names) | names <- M.elems casGroups, S.size names >= 2]
+        casGroupsList = [S.toList names | names <- M.elems casGroups, S.size names >= 2]
         -- Step 2: Merge name pairs
         allGroups = mergeNamePairs namePairs casGroupsList
         -- Step 3: Build maps, enforcing size cap
@@ -339,8 +339,8 @@ mergeNamePairs pairs initialGroups =
         initialGroupMap = M.fromList (zip [0 ..] (map S.fromList initialGroups))
         nextId = length initialGroups
 
-        -- Process each pair
-        (finalNameMap, finalGroupMap, _) = foldl' mergePair (initialMap, initialGroupMap, nextId) pairs
+        -- Process each pair (only the group sets are needed downstream)
+        (_, finalGroupMap, _) = foldl' mergePair (initialMap, initialGroupMap, nextId) pairs
      in
         map S.toList (M.elems finalGroupMap)
   where
@@ -350,8 +350,8 @@ mergeNamePairs pairs initialGroups =
             (Just g1, Just g2) | g1 == g2 -> (nameMap, groupMap, nid)
             -- Both in different groups: merge smaller into larger (with cap)
             (Just g1, Just g2) ->
-                let s1 = maybe S.empty id (M.lookup g1 groupMap)
-                    s2 = maybe S.empty id (M.lookup g2 groupMap)
+                let s1 = fromMaybe S.empty (M.lookup g1 groupMap)
+                    s2 = fromMaybe S.empty (M.lookup g2 groupMap)
                     merged = S.union s1 s2
                  in if S.size merged > 100
                         then (nameMap, groupMap, nid) -- skip: would exceed cap

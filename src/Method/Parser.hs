@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Parser for ILCD LCIA Method XML files using Xeno SAX parser.
@@ -32,7 +31,7 @@ import Method.Types
 
 -- | Parse an ILCD LCIA Method XML file
 parseMethodFile :: FilePath -> IO (Either String Method)
-parseMethodFile path = parseMethodFileWithFlows M.empty path
+parseMethodFile = parseMethodFileWithFlows M.empty
 
 -- | Parse with ILCD flow info enrichment
 parseMethodFileWithFlows :: M.Map UUID ILCDFlowInfo -> FilePath -> IO (Either String Method)
@@ -348,9 +347,7 @@ extractFlowName txt =
         findMarker (m : ms) = case T.breakOn m txt of
             (before, rest) | not (T.null rest) -> Just before
             _ -> findMarker ms
-     in T.strip $ case findMarker markers of
-            Just before -> before
-            Nothing -> txt -- no marker found: use full text
+     in T.strip $ fromMaybe txt (findMarker markers) -- no marker found: use full text
 
 {- | Extract compartment info from shortDescription as fallback
 Format: "... Emissions to air, non-urban ..."

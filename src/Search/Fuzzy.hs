@@ -22,9 +22,9 @@ module Search.Fuzzy (
 
 import Control.Monad (forM_)
 import Control.Monad.ST (runST)
-import Data.List (sortBy)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Ord (Down (..), comparing)
+import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -94,7 +94,7 @@ Results sorted by (jaccard desc, editDistance asc).
 editCandidates :: BM25Index -> Text -> [Text]
 editCandidates idx q
     | S.null qTrigs = []
-    | otherwise = map (\(c, _, _) -> c) (sortBy (comparing sortKey) scored)
+    | otherwise = map (\(c, _, _) -> c) (sortOn sortKey scored)
   where
     qTrigs = trigramsOf q
     k = maxEditK (T.length q)
@@ -117,7 +117,7 @@ prefixCandidates :: BM25Index -> Text -> [Text]
 prefixCandidates idx q
     | T.length q < minPrefixLen = []
     | S.size qTrigs < minSharedTrigrams = []
-    | otherwise = map fst (sortBy (comparing sortKey) scored)
+    | otherwise = map fst (sortOn sortKey scored)
   where
     qTrigs = trigramsOf q
     qLen = T.length q

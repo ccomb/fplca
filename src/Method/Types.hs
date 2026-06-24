@@ -51,11 +51,11 @@ module Method.Types (
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.Csv (HasHeader (..), decode)
-import Data.List (sortBy)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Maybe
-import Data.Ord (comparing)
 import Data.Store (Store)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -275,7 +275,7 @@ resolveComputed env formulas = foldl step (Right env) sorted
   where
     -- Simple topological sort: evaluate in order of formula length as heuristic
     -- (shorter formulas are less likely to depend on longer ones)
-    sorted = sortBy (comparing (T.length . snd)) (M.toList formulas)
+    sorted = sortOn (T.length . snd) (M.toList formulas)
     step (Left err) _ = Left err
     step (Right currentEnv) (varName, formula) =
         case Expr.evaluate currentEnv formula of
@@ -453,9 +453,8 @@ extractLocationSuffix name =
         | otherwise =
             let firstC = T.head t
                 rest = T.unpack (T.tail t)
-             in firstC >= 'A'
-                    && firstC <= 'Z'
-                    && all (\c -> (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') rest
+             in isAsciiUpper firstC
+                    && all (\c -> isAsciiUpper c || isAsciiLower c || c == '-') rest
 
 -- | How a method flow was matched to a database flow
 data MatchType

@@ -4,6 +4,7 @@
 module CLI.Parser where
 
 import CLI.Types
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Options.Applicative
@@ -110,7 +111,7 @@ commandParser =
 -- | Database command parser with optional subcommand (defaults to list)
 databaseParser :: Parser Command
 databaseParser =
-    Database . maybe DbList id
+    Database . fromMaybe DbList
         <$> optional
             ( subparser
                 ( OA.command "list" (info (pure DbList) (progDesc "List databases"))
@@ -169,7 +170,7 @@ deleteActivitiesArgsParser =
 -- | Method command parser with optional subcommand (defaults to list)
 methodParser :: Parser Command
 methodParser =
-    Method . maybe McList id
+    Method . fromMaybe McList
         <$> optional
             ( subparser
                 ( OA.command "list" (info (pure McList) (progDesc "List method collections"))
@@ -181,7 +182,7 @@ methodParser =
 -- | Plugin command parser with optional subcommand (defaults to list)
 pluginParser :: Parser Command
 pluginParser =
-    Plugin . maybe PluginList id
+    Plugin . fromMaybe PluginList
         <$> optional
             ( subparser
                 (OA.command "list" (info (pure PluginList) (progDesc "List registered plugins")))
@@ -265,10 +266,10 @@ searchFlowsParser = do
 
 -- | Impacts (LCIA) command parser
 impactsParser :: Parser Command
-impactsParser = do
-    uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for impact assessment")
-    options <- lciaOptionsParser
-    pure $ Impacts uuid options
+impactsParser =
+    Impacts
+        <$> argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for impact assessment")
+        <*> lciaOptionsParser
 
 -- | LCIA options parser
 lciaOptionsParser :: Parser LCIAOptions
@@ -280,10 +281,10 @@ lciaOptionsParser = do
 
 -- | Debug matrices command parser
 debugMatricesParser :: Parser Command
-debugMatricesParser = do
-    uuid <- argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for matrix debugging")
-    options <- debugMatricesOptionsParser
-    pure $ DebugMatrices uuid options
+debugMatricesParser =
+    DebugMatrices
+        <$> argument textReader (metavar "PROCESS_ID" <> help "ProcessId (activity_uuid_product_uuid format) for matrix debugging")
+        <*> debugMatricesOptionsParser
 
 -- | Debug matrices options parser
 debugMatricesOptionsParser :: Parser DebugMatricesOptions

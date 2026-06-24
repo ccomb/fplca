@@ -92,7 +92,7 @@ writeEcoSpold2 meta sdb = do
     env =
         ResolveEnv
             { reTechName = \u -> tfName <$> M.lookup u techFlows
-            , reBioFlow = \u -> M.lookup u bioFlows
+            , reBioFlow = (`M.lookup` bioFlows)
             , reWasteName = \u -> wfName <$> M.lookup u wasteFlows
             , reTechSyns = \u -> maybe M.empty tfSynonyms (M.lookup u techFlows)
             , reBioSyns = \u -> maybe M.empty bfSynonyms (M.lookup u bioFlows)

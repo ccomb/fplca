@@ -76,6 +76,7 @@ import Amount (readAmount)
 import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -531,7 +532,7 @@ flowFields res ex = case ex of
                 FlowFields
                     (bfName bf)
                     (bfCompartmentName bf)
-                    (maybe "" id (bfCompartmentSub bf))
+                    (fromMaybe "" (bfCompartmentSub bf))
                     (bfCAS bf)
             Nothing -> FlowFields "" "" "" Nothing
     WasteExchange{waFlowId = fid} ->

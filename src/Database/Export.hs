@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 {- | Format dispatch for database export.
 
@@ -51,14 +52,14 @@ serializeDatabase fmt db = case fmt of
     EcoSpold1 -> noWarn (BL.fromStrict . TE.encodeUtf8 <$> ES1.writeDatabase ES1.canonicalWriterOptions db)
     EcoSpold2 -> noWarn (zipText <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb)
     ILCDProcess -> noWarn (ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb)
-    BrightwayExcel -> (\bytes -> (bytes, BE.wasteManifest sdb)) <$> BE.renderWorkbook BE.defaultWriterConfig sdb
+    BrightwayExcel -> (,BE.wasteManifest sdb) <$> BE.renderWorkbook BE.defaultWriterConfig sdb
     OpenLcaJsonLd ->
         Left "openLCA JSON-LD export is not supported"
     UnknownFormat ->
         Left "cannot export to an unknown format"
   where
     sdb = toSimpleDatabase db
-    noWarn = fmap (\bytes -> (bytes, []))
+    noWarn = fmap (,[])
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted

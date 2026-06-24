@@ -1,0 +1,72 @@
+# weeder configuration — finds unused exports and dead modules that `-Wall` cannot see
+# (it only catches unused *local* binds and imports, never unused *exports*).
+#
+# weeder reads `.hie` files, and HIE format is GHC-version-specific, so weeder
+# must be built with the same GHC as the project. Generate HIE for every
+# component (lib + exe + test + bench) so cross-component use is visible — the
+# exe and the test suite both define a module named `Main`, so let cabal write
+# HIE into each component's own build tree rather than a shared -hiedir (a shared
+# dir makes the two Main.hie collide and hides the real entry point):
+#   cabal build all --enable-tests --enable-benchmarks \
+#     --builddir=dist-weeder --ghc-options=-fwrite-ide-info
+#   weeder --hie-directory dist-weeder +RTS -K512m -RTS
+# (the larger RTS stack avoids a stack-overflow segfault on the big modules).
+#
+# `roots` keeps legitimate entry points — and exports consumed only outside this
+# repository — from being reported as dead.
+
+roots = [
+  "^Main\\.main$",       # executable entry point
+  "^Paths_volca\\.",     # cabal-generated module
+
+  # ---------------------------------------------------------------------------
+  # Public library API exported for out-of-repo consumers.
+  #
+  # `volca` is a library: these symbols live in `exposed-modules` and are part
+  # of the engine's surface for external clients (Python bindings, downstream
+  # services, embedders). weeder only sees this repo, so anything used solely by
+  # an external consumer looks dead. Rooting them keeps the API stable; revisit
+  # if a symbol is confirmed to have no consumer anywhere.
+  # ---------------------------------------------------------------------------
+  "^API\\.Resources\\.(requiredParams|optionalParams|cliName)$",
+  "^API\\.Types\\.(apiFlowId|apiFlowSynonyms)$",
+  "^Database\\.Loader\\.(validateCacheFile|loadDatabaseFromCacheFile|loadUncompressedCacheFile)$",
+  "^Database\\.Manager\\.(loadDatabaseFromConfig|loadDatabaseFromConfigWithCrossDB|getStagedDatabase)$",
+  "^Method\\.Mapping\\.computeLCIAScoreWithDiagnostics$",
+  "^Method\\.ParserNW\\.parseNormWeightCSV$",
+  "^Method\\.ParserSimaPro\\.parseSimaProMethodCSV$",
+  "^Plugin\\.Bridge\\.(callPluginBatch|parseLines)$",
+  "^Plugin\\.Builtin\\.flowContribution$",
+  "^SharedSolver\\.(computeScalingVectorCached|computeInventoryMatrixCached)$",
+  "^Service\\.(getActivityTree|getActivityInventoryWithSharedSolver)$",
+  "^Service\\.(runPreComputeValidation|runPostComputeValidation|hasValidationErrors)$",
+  "^Types\\.(flowKindUnitId|searchProductsByLocation|lookupTechFlow|lookupBioFlow)$",
+  "^UnitConversion\\.(newUnknownUnitTracker|warnIfUnknownUnit|getUnknownUnits)$",
+
+  # Database-export writers — one entry point per output format. Exported so any
+  # client can serialise a loaded database; not all are exercised in-repo yet.
+  "^BrightwayExcel\\.Writer\\.writeBrightwayExcel$",
+  "^SimaPro\\.Writer\\.writeSimaProCSV$",
+
+  # mumps-hs is a separate package; withMUMPSSolver is its bracket-style public
+  # helper, kept alongside the lower-level solver entry points it wraps.
+  "^Numerical\\.MUMPS\\.Solver\\.withMUMPSSolver$",
+
+  # ---------------------------------------------------------------------------
+  # Known-dead, kept here as an explicit baseline rather than silently deleted
+  # so a maintainer can prune them in a dedicated, reviewed pass:
+  #
+  #   * Service.{computeLCIA,exportLCIAAsXML,exportLCIAAsCSV} — "(placeholder)"
+  #     stubs with no-op bodies (superseded by Method.Mapping + Matrix.Export).
+  #   * API.MCP.Enrich.valueText, API.Routes.inventoriesWithDeps — leftover
+  #     helpers with no remaining caller.
+  #   * test fixtures with no referencing spec (GoldenData sample* / the
+  #     SAMPLE.min expectations, TestHelpers.findActivityByUUID).
+  # ---------------------------------------------------------------------------
+  "^Service\\.(computeLCIA|exportLCIAAsXML|exportLCIAAsCSV)$",
+  "^API\\.MCP\\.Enrich\\.valueText$",
+  "^API\\.Routes\\.inventoriesWithDeps$",
+  "^GoldenData\\.(sampleMin3ActivityY|sampleMin3TechMatrix|sampleMin3BioMatrix|sampleMinExpectedSupply|sampleMinExpectedCO2)$",
+  "^TestHelpers\\.findActivityByUUID$",
+]
+type-class-roots = true   # instance methods are reachable via their class

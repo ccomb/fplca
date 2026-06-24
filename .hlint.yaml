@@ -1,0 +1,13 @@
+# HLint configuration for the VoLCA engine.
+#
+# Its presence activates the hlint step in CI, which otherwise skips when no config is
+# found. Run locally with: hlint src/
+#
+# The hygiene pass either *fixes* a hint or *baselines* it here with a one-line reason.
+# All default hints on src/ are fixed; the single baseline below is a deliberate
+# exception where the suggested rewrite conflicts with a stronger code-safety rule.
+
+# `cells !! 0` is guarded by `length cells > colIdx + 2`, so it never fails — but the
+# suggested `head cells` is a partial function we ban project-wide. Keep the guarded
+# indexing rather than reintroduce `head`.
+- ignore: {name: "Use head", within: Method.ParserCSV}
