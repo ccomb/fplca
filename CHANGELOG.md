@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.0] - 2026-06-24
 
 ### Added
 - A loaded database can be exported to any of the five supported formats —
