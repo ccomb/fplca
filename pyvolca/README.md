@@ -26,7 +26,7 @@ pyvolca speaks one revision of the engine's JSON wire format; the engine adverti
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.6.0** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+This build of **pyvolca 0.7.0** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
 
 <!-- END: compatibility -->
 
@@ -828,6 +828,14 @@ and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
 geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
 its own — compose a label from ``activity_name`` + ``product_name``.
 
+``allocation_percent`` is this product's share (0..100) of the parent
+activity's exchanges in a multi-output (allocated) process — e.g. a
+cheese activity that also yields whey, cream and permeate gives each
+product its own share, summing to ~100. It is ``None`` for single-output
+processes. ``allocation_formula`` carries the raw symbolic formula when
+the source expressed the share as an expression rather than a number,
+else ``None``.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | — |
@@ -836,6 +844,8 @@ its own — compose a label from ``activity_name`` + ``product_name``.
 | `product_name` | `str` | — |
 | `product_amount` | `float` | — |
 | `product_unit` | `str` | — |
+| `allocation_percent` | `float \| None` | None |
+| `allocation_formula` | `str \| None` | None |
 
 ### `ActivityContribution`
 

@@ -18,6 +18,29 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.7.0] - 2026-06-24
+
+Co-product allocation shares are now visible from the typed client.
+
+### Added
+
+- `Activity.allocation_percent` / `Activity.allocation_formula` — a co-product's
+  share of its parent activity's burden. They populate every
+  `ActivityDetail.all_products` entry, so a multi-output process (e.g. a cheese
+  that also yields whey, cream and permeate) shows how its impact is split across
+  products. `None` for single-output processes.
+- `ActivityDetail.allocation_percent` — the share of the process you fetched.
+
+### Changed
+
+- `ActivityDetail.is_allocated` now reads the structured shares on
+  `all_products` instead of scraping the description text: more reliable, and it
+  matches the factor the engine actually applied (the description's allocation
+  comment is rounded and can drift — e.g. 52.62% in text vs 51.4% applied).
+- `agribalyse.is_allocated` and `agribalyse.decompose` enumerate co-products
+  from those structured shares the same way, keeping the description-text parse
+  as a fallback for older Agribalyse databases without structured shares.
+
 ## [0.6.0] - 2026-06-21
 
 Breaking: an activity's name fields are renamed for clarity. Needs the companion engine release (the wire keys changed too).
