@@ -776,7 +776,7 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
                         , lrTopContributors = topContributors
                         }
     results <- traverse mkResultIO ctxs
-    let rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- results]
+    let rawScoreMap = rawScoreMapByName results
     (scoringResults, scoringIndicators) <-
         computeAllScoringSets (mcScoringSets collection) rawScoreMap
     pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators (Service.buildCutoffWaste db activity))
@@ -824,7 +824,7 @@ activityLCIABatchH dbName processIdText collectionName mSub = do
                 (\m -> computeCategoryResult dbManager dbName collectionName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
                 methods
     let results = map (enrichWithNW dcLookup mNW) rawResults
-        rawScoreMap = M.fromList [(lrCategory r, lrScore r) | r <- rawResults]
+        rawScoreMap = rawScoreMapByName rawResults
     (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
     when (isNothing mSub) $
         liftIO $ do
@@ -2018,6 +2018,17 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> getStats
             :<|> getClassificationPresets
             :<|> getOpenApiSpec
+
+{- | Build the scoring input map (impact method name → raw score) from LCIA
+results. Keyed by method NAME, which is unique per collection — not by
+'lrCategory', which for ILCD methods is the coarse damage class (e.g. all four
+"Climate change-*" methods share category "Climate change"; the three freshwater
+ecotoxicity methods share "Aquatic eco-toxicity"). Keying by category collapses
+such methods and breaks single-score resolution ("Unknown variable: …"). For
+SimaPro-adapted methods name == category, so their scoring is unchanged.
+-}
+rawScoreMapByName :: [LCIAResult] -> M.Map Text Double
+rawScoreMapByName results = M.fromList [(lrMethodName r, lrScore r) | r <- results]
 
 {- | Evaluate every scoring set against the raw impact score map.
 Returns (setName → scoreName → value, setName → varName → ScoringIndicator).
