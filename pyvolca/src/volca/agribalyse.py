@@ -477,8 +477,10 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
 def is_allocated(activity: ActivityDetail) -> bool:
     """True iff the activity splits its burden across several co-products.
 
-    Thin alias for :attr:`ActivityDetail.is_allocated`, which reads the
-    structured allocation shares on ``all_products`` rather than the
-    description text.
+    Prefers the structured allocation shares on ``all_products``
+    (:attr:`ActivityDetail.is_allocated`), falling back to an allocation block
+    in the description text for older Agribalyse databases that carry no
+    structured shares — the same precedence :func:`decompose` uses to
+    enumerate co-products.
     """
-    return activity.is_allocated
+    return activity.is_allocated or parse_allocation(activity.description) is not None

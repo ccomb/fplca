@@ -505,3 +505,30 @@ class TestActivityAllocation:
         }})
         assert detail.allocation_percent is None
         assert detail.is_allocated is False
+
+    def test_agribalyse_is_allocated_falls_back_to_description_text(self):
+        # Older Agribalyse databases carry no structured allocation_percent on
+        # all_products, only an allocation block in the description. The generic
+        # property reads structured shares only (→ False), but the Agribalyse
+        # helper must still recognise the split via the text fallback that
+        # `decompose` relies on.
+        from volca.agribalyse import is_allocated as agribalyse_is_allocated
+
+        detail = ActivityDetail.from_json({"activity": {
+            "processId": "butter_butter", "activityName": "Butter production",
+            "location": "FR", "unit": "kg",
+            "description": [
+                "Allocation method: dry matter. "
+                "butter 33%, skimmed milk 63%, buttermilk 4%"
+            ],
+            "allProducts": [
+                {"processId": "butter_butter", "activityName": "Butter production",
+                 "location": "FR", "productName": "butter",
+                 "productAmount": 1.0, "productUnit": "kg"},
+                {"processId": "butter_skim", "activityName": "Butter production",
+                 "location": "FR", "productName": "skimmed milk",
+                 "productAmount": 1.9, "productUnit": "kg"},
+            ],
+        }})
+        assert detail.is_allocated is False
+        assert agribalyse_is_allocated(detail) is True

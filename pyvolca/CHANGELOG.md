@@ -33,12 +33,13 @@ Co-product allocation shares are now visible from the typed client.
 
 ### Changed
 
-- `ActivityDetail.is_allocated` (and `agribalyse.is_allocated`) now read the
-  structured shares on `all_products` instead of scraping the description text:
-  more reliable, and it matches the factor the engine actually applied (the
-  description's allocation comment is rounded and can drift — e.g. 52.62% in text
-  vs 51.4% applied). `agribalyse.decompose` enumerates co-products the same way,
-  keeping the text parse as a fallback for older databases.
+- `ActivityDetail.is_allocated` now reads the structured shares on
+  `all_products` instead of scraping the description text: more reliable, and it
+  matches the factor the engine actually applied (the description's allocation
+  comment is rounded and can drift — e.g. 52.62% in text vs 51.4% applied).
+- `agribalyse.is_allocated` and `agribalyse.decompose` enumerate co-products
+  from those structured shares the same way, keeping the description-text parse
+  as a fallback for older Agribalyse databases without structured shares.
 
 ## [0.6.0] - 2026-06-21
 
