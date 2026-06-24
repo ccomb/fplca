@@ -101,10 +101,14 @@ _FACTOR_STOPWORDS = {
 
 
 def parse_allocation(description: list[str]) -> Allocation | None:
-    """Parse allocation factors from a process's pfaDescription paragraphs.
+    """Parse the allocation block from a process's description paragraphs.
 
-    Returns ``None`` when no allocation block is found (genuine mono-product
-    processes) or when the text cannot be parsed.
+    The authoritative per-product shares live on the structured
+    ``ActivityDetail.all_products`` (``allocation_percent``); this text parse
+    is kept for the human-readable allocation *method* (dry matter, economic,
+    …), which the wire doesn't carry, and as a fallback for older databases
+    without structured shares. Returns ``None`` when no allocation block is
+    found (genuine mono-product processes) or when the text can't be parsed.
     """
     text = " ".join(description or [])
     if not _ALLOC_KEYWORD_RE.search(text):
@@ -299,6 +303,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
     # sub-processes), so we re-detect once after descending.
     target_pid = process_id
     target_description = act.description
+    alloc_act = act  # detail that owns the allocation shares (all_products)
     target_pattern = pattern
     dummy_op = False
     operation_name: str | None = None
@@ -314,6 +319,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
             target_pid = wfldb_e.target_process_id
             target_act = client.get_activity(target_pid)
             target_description = target_act.description
+            alloc_act = target_act
             target_pattern = detect_pattern(target_act)
 
     # Pattern C: for layered processes, point the aggregate queries at the
@@ -415,11 +421,20 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
     co_products = [(name, qty, unit) for (name, unit), qty in grouped.items()]
 
     # Agribalyse uses allocation-based modelling, so co-products rarely
-    # appear as technosphere outputs — they're recorded in the allocation
-    # block of the description instead. Fall back to the parsed allocation:
-    # siblings of the main product (whose name is the closest match to the
-    # wrapping activity name) become the co-product list.
+    # appear as technosphere outputs — the engine records each co-product's
+    # allocation share on all_products instead. Prefer that authoritative
+    # split (allocation_percent); the description text is rounded and can
+    # drift from the applied factor, so it's only a fallback for older
+    # databases without structured shares. `allocation` is still parsed for
+    # its human-readable method label (dry matter, economic, …).
     allocation = parse_allocation(target_description)
+    if not co_products:
+        co_products = [
+            (p.product_name, p.allocation_percent / 100.0, "kg/kg")
+            for p in alloc_act.all_products
+            if p.allocation_percent is not None
+            and p.process_id != alloc_act.process_id
+        ]
     if not co_products and allocation is not None and allocation.factors:
         act_name_l = act.activity_name.lower()
         main_key = max(
@@ -460,5 +475,10 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
 
 
 def is_allocated(activity: ActivityDetail) -> bool:
-    """True iff an activity's description contains a parseable allocation block."""
-    return parse_allocation(activity.description) is not None
+    """True iff the activity splits its burden across several co-products.
+
+    Thin alias for :attr:`ActivityDetail.is_allocated`, which reads the
+    structured allocation shares on ``all_products`` rather than the
+    description text.
+    """
+    return activity.is_allocated
