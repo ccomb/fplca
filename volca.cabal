@@ -291,6 +291,7 @@ test-suite lca-tests
                      , AuthSpec
                      , CLISpec
                      , RoutesSpec
+                     , ScoringKeySpec
                      , NumericEdgesSpec
                      , AggregateSpec
                      , ConfigWriterSpec
