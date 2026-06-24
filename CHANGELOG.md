@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.1] - 2026-06-24
+
+### Fixed
+- Aggregate single scores (e.g. a PEF score) now compute correctly on JRC ILCD
+  method collections such as EF 3.1. They previously failed with `Unknown
+  variable` whenever a collection held several methods sharing one coarse
+  damage category — for EF 3.1 the four climate-change methods, the freshwater
+  ecotoxicity methods, and the resource-depletion methods each collapsed
+  together, so their per-method scoring variables could not resolve.
+  SimaPro-adapted methods were never affected.
+
 ## [0.8.0] - 2026-06-24
 
 ### Added
