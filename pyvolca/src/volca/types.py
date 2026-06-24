@@ -438,6 +438,14 @@ class Activity(FromJson):
     (typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
     geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
     its own — compose a label from ``activity_name`` + ``product_name``.
+
+    ``allocation_percent`` is this product's share (0..100) of the parent
+    activity's exchanges in a multi-output (allocated) process — e.g. a
+    cheese activity that also yields whey, cream and permeate gives each
+    product its own share, summing to ~100. It is ``None`` for single-output
+    processes. ``allocation_formula`` carries the raw symbolic formula when
+    the source expressed the share as an expression rather than a number,
+    else ``None``.
     """
 
     process_id: str
@@ -446,6 +454,8 @@ class Activity(FromJson):
     product_name: str
     product_amount: float
     product_unit: str
+    allocation_percent: float | None = None
+    allocation_formula: str | None = None
 
 
 @dataclass
@@ -1026,14 +1036,30 @@ class ActivityDetail:
         ]
 
     @property
-    def is_allocated(self) -> bool:
-        """True iff description contains a parseable allocation block.
+    def allocation_percent(self) -> float | None:
+        """This process's own allocation share (0..100), or ``None``.
 
-        Implemented in volca/agribalyse.py to keep Agribalyse-specific text
-        parsing out of the generic types module.
+        A multi-output process splits the parent activity's burden across its
+        co-products; every :attr:`all_products` entry carries its share. This
+        returns the share of *this* process — the entry whose ``process_id``
+        matches — and ``None`` for single-output processes.
         """
-        from .agribalyse import parse_allocation
-        return parse_allocation(self.description) is not None
+        return next(
+            (p.allocation_percent for p in self.all_products
+             if p.process_id == self.process_id),
+            None,
+        )
+
+    @property
+    def is_allocated(self) -> bool:
+        """True iff the activity splits its burden across several co-products.
+
+        Reads the structured ``allocation_percent`` the engine sets on each
+        :attr:`all_products` entry (authoritative), not the description text.
+        """
+        return sum(
+            1 for p in self.all_products if p.allocation_percent is not None
+        ) > 1
 
 
 # ---------------------------------------------------------------------------

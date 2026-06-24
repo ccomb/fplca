@@ -18,6 +18,7 @@ import pytest
 
 from volca import (
     Activity,
+    ActivityDetail,
     AggregateOp,
     AggregateScope,
     BioDirection,
@@ -422,3 +423,85 @@ class TestContributingParsing:
         })
         assert ca.activities[0].activity_name == "Farm"
         assert ca.activities[0].share_pct == 38.2
+
+
+# ---------------------------------------------------------------------------
+# Co-product allocation surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestActivityAllocation:
+    """Each co-product's allocation share surfaces on the typed client.
+
+    The engine carries ``allocationPercent`` on every ``allProducts`` entry,
+    but the client used to drop it: ``Activity`` declared only six fields and
+    ``FromJson`` keeps only declared keys. A multi-output process (cheese →
+    cheese / whey / cream / permeate / whey concentrated) thus lost its split.
+    """
+
+    def test_activity_from_json_surfaces_allocation(self):
+        a = Activity.from_json({
+            "processId": "cheese_cream", "activityName": "Abondance cheese production",
+            "location": "Europe, Western", "productName": "...1 kg of cream...",
+            "productAmount": 0.0686, "productUnit": "kg",
+            "allocationPercent": 2.27, "allocationFormula": None,
+        })
+        assert a.allocation_percent == 2.27
+        assert a.allocation_formula is None
+
+    def test_activity_from_json_defaults_when_absent(self):
+        # Search results carry no allocation — must default to None, not crash.
+        a = Activity.from_json({
+            "processId": "flour", "activityName": "Wheat flour", "location": "FR",
+            "productName": "wheat flour", "productAmount": 1.0, "productUnit": "kg",
+        })
+        assert a.allocation_percent is None
+        assert a.allocation_formula is None
+
+    @staticmethod
+    def _cheese_envelope() -> dict:
+        def prod(pid: str, name: str, amount: float, pct: float) -> dict:
+            return {
+                "processId": pid, "activityName": "Abondance cheese production",
+                "location": "Europe, Western", "productName": name,
+                "productAmount": amount, "productUnit": "kg",
+                "allocationPercent": pct, "allocationFormula": None,
+            }
+        return {"activity": {
+            "processId": "cheese_cheese",
+            "activityName": "Abondance cheese production",
+            "location": "Europe, Western", "unit": "kg",
+            "allProducts": [
+                prod("cheese_perm", "...1 kg of permeate...", 5.58, 24.3),
+                prod("cheese_whey", "...1 kg of whey...", 0.776, 4.39),
+                prod("cheese_cheese", "...1 kg of Abondance cheese...", 1.0, 51.4),
+                prod("cheese_cream", "...1 kg of cream...", 0.0686, 2.27),
+                prod("cheese_wheyc", "...1 kg of whey concentrated...", 1.13, 17.6),
+            ],
+        }}
+
+    def test_all_products_carry_allocation(self):
+        detail = ActivityDetail.from_json(self._cheese_envelope())
+        shares = {p.product_name: p.allocation_percent for p in detail.all_products}
+        assert shares["...1 kg of Abondance cheese..."] == 51.4
+        assert sum(p.allocation_percent for p in detail.all_products) == pytest.approx(99.96)
+
+    def test_allocation_percent_property_returns_own_share(self):
+        # detail.process_id == cheese_cheese → its own share is the cheese one.
+        detail = ActivityDetail.from_json(self._cheese_envelope())
+        assert detail.allocation_percent == 51.4
+
+    def test_is_allocated_true_for_multi_output(self):
+        assert ActivityDetail.from_json(self._cheese_envelope()).is_allocated is True
+
+    def test_is_allocated_false_for_mono_product(self):
+        detail = ActivityDetail.from_json({"activity": {
+            "processId": "flour", "activityName": "Wheat flour", "location": "FR",
+            "unit": "kg",
+            "allProducts": [{
+                "processId": "flour", "activityName": "Wheat flour", "location": "FR",
+                "productName": "wheat flour", "productAmount": 1.0, "productUnit": "kg",
+            }],
+        }})
+        assert detail.allocation_percent is None
+        assert detail.is_allocated is False
