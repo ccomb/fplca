@@ -82,6 +82,13 @@ executeRemoteCommand mgr rc globalOpts cmd = do
     case cmd of
         Database DbList ->
             apiGet mgr rc "/api/v1/db" >>= output fmt jp
+        Database (DbLoad name) ->
+            -- Load endpoint takes no body; the empty object is ignored server-side.
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack name ++ "/load") (object [])
+                >>= output fmt jp
+        Database (DbUnload name) ->
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack name ++ "/unload") (object [])
+                >>= outputStatus fmt jp "unload"
         Database (DbUpload args) ->
             executeUpload mgr rc fmt jp "/api/v1/db/upload" args
         Database (DbDelete name) ->

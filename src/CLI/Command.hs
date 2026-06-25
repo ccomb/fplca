@@ -97,6 +97,10 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             exitFailure
         Database DbList ->
             DM.listDatabases manager >>= out . toJSON
+        Database (DbLoad name) ->
+            executeDbLoad registry outputFormat manager name
+        Database (DbUnload name) ->
+            executeDbUnload registry outputFormat manager name
         Database (DbUpload args) ->
             executeDbUpload registry outputFormat manager args
         Database (DbDelete name) ->
@@ -512,6 +516,34 @@ executeDbDeleteActivities registry fmt manager args = do
         Right deleted -> do
             reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
             outputResult registry fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
+
+{- | Execute database load: bring a configured database (and its declared
+dependencies) into memory. Any failed dependency is surfaced in the output.
+-}
+executeDbLoad :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
+executeDbLoad registry fmt manager name = do
+    result <- DM.loadDatabase manager name
+    case result of
+        Left err -> do
+            reportError $ "Load failed: " ++ T.unpack err
+            exitFailure
+        Right (_loaded, deps) -> do
+            reportProgress Info $ "Loaded database: " ++ T.unpack name
+            outputResult registry fmt $ object ["loaded" .= name, "dependencies" .= deps]
+
+{- | Execute database unload: drop a database from memory (refused while another
+loaded database still depends on it).
+-}
+executeDbUnload :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
+executeDbUnload registry fmt manager name = do
+    result <- DM.unloadDatabase manager name
+    case result of
+        Left err -> do
+            reportError $ "Unload failed: " ++ T.unpack err
+            exitFailure
+        Right () -> do
+            reportProgress Info $ "Unloaded database: " ++ T.unpack name
+            outputResult registry fmt $ object ["unloaded" .= name]
 
 -- | Execute database copy command
 executeDbCopy :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> Text -> IO ()

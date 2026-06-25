@@ -115,6 +115,8 @@ databaseParser =
         <$> optional
             ( subparser
                 ( OA.command "list" (info (pure DbList) (progDesc "List databases"))
+                    <> OA.command "load" (info (DbLoad <$> textArg "DB" "Name of the configured database to load" <**> helper) (progDesc "Load a configured database into memory"))
+                    <> OA.command "unload" (info (DbUnload <$> textArg "DB" "Name of the loaded database to unload" <**> helper) (progDesc "Unload a database from memory"))
                     <> OA.command "upload" (info (DbUpload <$> uploadArgsParser) (progDesc "Upload a database from a local file"))
                     <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
