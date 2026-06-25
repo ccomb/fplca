@@ -1880,19 +1880,27 @@ Pre-loads declared dependencies (from TOML config) so cross-DB linking works,
 then loads the target database.
 -}
 loadDatabase :: DatabaseManager -> Text -> IO (Either Text (LoadedDatabase, [DepLoadResult]))
-loadDatabase manager dbName = do
-    -- Pre-load declared dependencies so they're available for cross-DB linking
-    availableDbs <- readTVarIO (dmAvailableDbs manager)
-    let configDeps = maybe [] dcDepends (M.lookup dbName availableDbs)
-    depResults1 <- autoLoadDeps manager configDeps
+loadDatabase manager dbName = fmap flattenLoad (try go)
+  where
+    -- A fresh load parses/reads from disk and can throw. Fold any exception
+    -- into the Left this function already returns, so every surface (REST,
+    -- MCP, CLI) gets one total Either to handle instead of each having to
+    -- remember its own catch.
+    flattenLoad :: Either SomeException (Either Text a) -> Either Text a
+    flattenLoad = either (Left . T.pack . show) id
+    go = do
+        -- Pre-load declared dependencies so they're available for cross-DB linking
+        availableDbs <- readTVarIO (dmAvailableDbs manager)
+        let configDeps = maybe [] dcDepends (M.lookup dbName availableDbs)
+        depResults1 <- autoLoadDeps manager configDeps
 
-    result <- loadDatabaseSingle manager dbName
-    case result of
-        Left err -> return (Left err)
-        Right loaded -> do
-            -- Also auto-load any runtime-discovered dependencies
-            depResults2 <- autoLoadDeps manager (dbDependsOn (ldDatabase loaded))
-            return (Right (loaded, depResults1 ++ depResults2))
+        result <- loadDatabaseSingle manager dbName
+        case result of
+            Left err -> return (Left err)
+            Right loaded -> do
+                -- Also auto-load any runtime-discovered dependencies
+                depResults2 <- autoLoadDeps manager (dbDependsOn (ldDatabase loaded))
+                return (Right (loaded, depResults1 ++ depResults2))
 
 {- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
 When a valid cache exists, reconstructs staged state from the cached Database

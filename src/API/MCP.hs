@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 {- | MCP (Model Context Protocol) server endpoint.
 Implements Streamable HTTP transport (MCP spec 2025-03-26).
@@ -9,7 +8,6 @@ GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes i
 module API.MCP (mcpApp, toolDefinitions, callTool, selectMethod) where
 
 import Control.Concurrent.STM (readTVarIO)
-import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap (KeyMap)
@@ -502,13 +500,7 @@ dependency that fails to load is surfaced in the 'dependencies' array
 callLoadDatabase :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callLoadDatabase dbManager rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
-    -- A fresh load parses/reads from disk and can throw, so catch like the
-    -- REST handler does and surface it as a tool error rather than crashing.
-    res <- liftIO $ try (DM.loadDatabase dbManager dbName)
-    (_loaded, deps) <- case res of
-        Left (e :: SomeException) -> throwE ("Load failed: " <> T.pack (show e))
-        Right (Left err) -> throwE err
-        Right (Right ok) -> pure ok
+    (_loaded, deps) <- ExceptT (DM.loadDatabase dbManager dbName)
     pure $
         toolSuccessJson rid $
             object

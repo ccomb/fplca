@@ -170,14 +170,11 @@ getDatabases = do
 loadDatabaseHandler :: Text -> AppM LoadDatabaseResponse
 loadDatabaseHandler dbName = do
     dbManager <- asks aeDbManager
-    eitherResult <- liftIO $ try $ loadDatabase dbManager dbName
-    case eitherResult of
-        Left (ex :: SomeException) ->
-            return $ LoadFailed ("Server exception: " <> T.pack (show ex))
-        Right (Left err) -> return $ LoadFailed err
-        Right (Right (loadedDb, depResults)) -> do
-            let status = makeStatusFromLoadedDb loadedDb
-            return $ LoadSucceeded status depResults
+    result <- liftIO $ loadDatabase dbManager dbName
+    case result of
+        Left err -> return $ LoadFailed err
+        Right (loadedDb, depResults) ->
+            return $ LoadSucceeded (makeStatusFromLoadedDb loadedDb) depResults
 
 -- | Unload a database from memory
 unloadDatabaseHandler :: Text -> AppM ActivateResponse
