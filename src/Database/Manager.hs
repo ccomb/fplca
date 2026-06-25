@@ -109,12 +109,13 @@ module Database.Manager (
 ) where
 
 import API.JsonOptions (Stripped (..))
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
 import Control.Lens ((&), (?~))
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
@@ -519,6 +520,13 @@ data DatabaseManager = DatabaseManager
     These depend only on (db, collection, method), so building them once per
     triple saves O(n log n) Map constructions on every LCIA call.
     -}
+    , dmMethodTablesInflight :: !(TVar (Map (Text, Text, UUID) (TMVar (Either SomeException MethodTables))))
+    {- ^ Single-flight slots guarding 'dmMethodTablesCache' builds. The first
+    caller for a key installs an empty 'TMVar' and runs the (expensive) build;
+    concurrent callers — including the load-time warm-up — await that slot
+    instead of each rebuilding the same tables. The slot is removed when the
+    build finishes, so a failed build is retried rather than cached.
+    -}
     , dmMethodSetTablesCache :: !(TVar (Map (Text, Text, [UUID]) MethodSetTables))
     {- ^ Cached stacked CF tables for multi-method scoring.
     Key is (dbName, collection, sortedMethodIds) so subset-arbitrary requests
@@ -617,46 +625,120 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
     cache <- readTVarIO (dmMethodTablesCache manager)
     case M.lookup key cache of
         Just tables -> pure tables
-        Nothing -> do
-            expanded <- effectiveMethodMappings manager dbName collection db method
-            cmap <- getMergedCompartmentMap manager
-            energyDensities <- getMergedEnergyDensities manager
-            unitConfig <- getMergedUnitConfig manager
-            (mFlows, mUnits) <- getMergedFlowMetadata manager
-            let !raw = buildMethodTables cmap energyDensities expanded
-                !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
-                -- Precompute per-activity weights for regionalized methods so
-                -- subsequent scoring is a dot product instead of one full
-                -- biosphere-triple walk per pid. No-op when the method has no
-                -- regional CFs (broadcast fast path handles those).
-                !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
-            -- Surface the deduplicated regionalized CF gaps ONCE, here at
-            -- table-build time, rather than per-pid × per-method on the hot
-            -- scoring path. This WARN is the single source of truth for
-            -- coverage gaps: 'computeRegionalizedLCIAScore' returns a
-            -- partial 'Right' with tainted activities contributing 0, so
-            -- score time no longer signals the gap.
-            case mtRegionalActivityWeights tables of
-                Nothing -> pure ()
-                Just raw' ->
-                    unless (null (rawMissingPairs raw')) $
-                        reportProgress Warning $
-                            "[LCIA "
-                                <> T.unpack (methodName method)
-                                <> "] "
-                                <> show (length (rawMissingPairs raw'))
-                                <> " regionalized (flow, location) pair(s) without CF coverage "
-                                <> "(after walking parent regions and universal broadcast). "
-                                <> "Samples: "
-                                <> show
-                                    ( take
-                                        3
-                                        [ (show fid, T.unpack loc)
-                                        | (fid, loc) <- rawMissingPairs raw'
-                                        ]
-                                    )
-            atomically $ modifyTVar' (dmMethodTablesCache manager) (M.insert key tables)
-            pure tables
+        Nothing ->
+            -- Single-flight: the expensive build runs once per key even under a
+            -- concurrent panel request + load-time warm-up racing on it.
+            singleFlight
+                (dmMethodTablesInflight manager)
+                key
+                (modifyTVar' (dmMethodTablesCache manager) . M.insert key)
+                (buildMethodTablesFor manager dbName collection db hier method)
+
+{- | Build the LCIA lookup tables for one method against a database: resolve the
+CF→flow mappings, stack them into the broadcast/CAS/regional tables, and
+precompute the regionalized per-activity weights. The deduplicated regional
+coverage gaps are surfaced once here, at build time, rather than per-pid on the
+scoring path. Caching and single-flighting are the caller's responsibility.
+-}
+buildMethodTablesFor ::
+    DatabaseManager -> Text -> Text -> Database -> M.Map Text [Text] -> Method -> IO MethodTables
+buildMethodTablesFor manager dbName collection db hier method = do
+    expanded <- effectiveMethodMappings manager dbName collection db method
+    cmap <- getMergedCompartmentMap manager
+    energyDensities <- getMergedEnergyDensities manager
+    unitConfig <- getMergedUnitConfig manager
+    (mFlows, mUnits) <- getMergedFlowMetadata manager
+    let !raw = buildMethodTables cmap energyDensities expanded
+        !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
+        -- Precompute per-activity weights for regionalized methods so subsequent
+        -- scoring is a dot product instead of one biosphere-triple walk per pid.
+        !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
+    case mtRegionalActivityWeights tables of
+        Nothing -> pure ()
+        Just raw' ->
+            unless (null (rawMissingPairs raw')) $
+                reportProgress Warning $
+                    "[LCIA "
+                        <> T.unpack (methodName method)
+                        <> "] "
+                        <> show (length (rawMissingPairs raw'))
+                        <> " regionalized (flow, location) pair(s) without CF coverage "
+                        <> "(after walking parent regions and universal broadcast). "
+                        <> "Samples: "
+                        <> show (take 3 [(show fid, T.unpack loc) | (fid, loc) <- rawMissingPairs raw'])
+    pure tables
+
+{- | Run @build@ at most once per @key@ across concurrent callers. The first
+caller installs a slot and runs the build; others block on the same result
+rather than duplicating the work. @onSuccess@ runs in the slot-clearing
+transaction, so a built value lands in its cache atomically with the release. A
+failed build clears the slot — the next caller retries — and re-throws.
+-}
+singleFlight ::
+    (Ord k) =>
+    TVar (Map k (TMVar (Either SomeException a))) ->
+    k ->
+    (a -> STM ()) ->
+    IO a ->
+    IO a
+singleFlight inflightVar key onSuccess build = do
+    (slot, owner) <- atomically $ do
+        inflight <- readTVar inflightVar
+        case M.lookup key inflight of
+            Just s -> pure (s, False)
+            Nothing -> do
+                s <- newEmptyTMVar
+                writeTVar inflightVar (M.insert key s inflight)
+                pure (s, True)
+    if not owner
+        then either Control.Exception.throwIO pure =<< atomically (readTMVar slot)
+        else do
+            result <- try build
+            atomically $ do
+                modifyTVar' inflightVar (M.delete key)
+                either (const (pure ())) onSuccess result
+                putTMVar slot result
+            either Control.Exception.throwIO pure result
+
+{- | Kick off a background warm-up of every loaded method's lookup tables
+against @dbName@, so the expensive (regional) build is paid once at load time
+rather than on the first user score. Single-flighting means a request arriving
+mid-warm joins the in-flight build instead of starting a second one.
+
+Methods are built one at a time in a single background thread — deliberately
+sequential rather than 'mapMethodSetToTablesCached''s concurrent fan-out: the
+heavy regional builds (e.g. AWARE water use) thrash the GC when run in parallel,
+so serial warming is both lower-peak-memory and faster wall-clock here. A
+failure is logged, not fatal — the on-demand path rebuilds and surfaces it.
+-}
+warmMethodTables :: DatabaseManager -> Text -> Database -> IO ()
+warmMethodTables manager dbName db = void $ forkIO $ do
+    collections <- readTVarIO (dmLoadedMethods manager)
+    let methods = [(collName, m) | (collName, mc) <- M.toList collections, m <- mcMethods mc]
+    t0 <- getCurrentTime
+    reportProgress Info $
+        "[warm] " <> T.unpack dbName <> ": warming " <> show (length methods) <> " method table(s) in background…"
+    forM_ methods $ \(collName, method) -> do
+        r <- try (void (mapMethodToTablesCached manager dbName collName db method))
+        case r of
+            Right () -> pure ()
+            Left (e :: SomeException) ->
+                reportProgress Warning $
+                    "[warm] "
+                        <> T.unpack dbName
+                        <> " / "
+                        <> T.unpack collName
+                        <> " / "
+                        <> T.unpack (methodName method)
+                        <> ": "
+                        <> show e
+    t1 <- getCurrentTime
+    reportProgress Info $
+        "[warm] "
+            <> T.unpack dbName
+            <> ": done ("
+            <> show (round (realToFrac (diffUTCTime t1 t0) :: Double) :: Int)
+            <> "s)"
 
 {- | Cached stacked CF tables for multi-method scoring. Built once per
 (dbName, sortedMethodIds), so two requests asking for the same method set
@@ -715,6 +797,7 @@ clearMethodMappingCache :: DatabaseManager -> IO ()
 clearMethodMappingCache manager = atomically $ do
     writeTVar (dmMethodMappingCache manager) M.empty
     writeTVar (dmMethodTablesCache manager) M.empty
+    writeTVar (dmMethodTablesInflight manager) M.empty
     writeTVar (dmMethodSetTablesCache manager) M.empty
     writeTVar (dmMethodIndexCache manager) M.empty
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
@@ -728,6 +811,7 @@ clearMethodMappingCacheForDb :: DatabaseManager -> Text -> IO ()
 clearMethodMappingCacheForDb manager dbName = atomically $ do
     modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
+    modifyTVar' (dmMethodTablesInflight manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
     modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
@@ -795,6 +879,7 @@ initDatabaseManager config noCache configPath = do
 
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
+    methodTablesInflightVar <- newTVarIO M.empty
     methodSetTablesCacheVar <- newTVarIO M.empty
     methodIndexCacheVar <- newTVarIO M.empty
     chemSyns <- case cfgChemSynonyms config of
@@ -856,6 +941,7 @@ initDatabaseManager config noCache configPath = do
                 , dmGeographies = geographies
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
+                , dmMethodTablesInflight = methodTablesInflightVar
                 , dmMethodSetTablesCache = methodSetTablesCacheVar
                 , dmMethodIndexCache = methodIndexCacheVar
                 , dmChemSynonyms = chemSyns
@@ -1900,6 +1986,9 @@ loadDatabase manager dbName = fmap flattenLoad (try go)
             Right loaded -> do
                 -- Also auto-load any runtime-discovered dependencies
                 depResults2 <- autoLoadDeps manager (dbDependsOn (ldDatabase loaded))
+                -- Warm the method-table cache off the request path so the first
+                -- score doesn't pay the (regional) build cost on demand.
+                warmMethodTables manager dbName (ldDatabase loaded)
                 return (Right (loaded, depResults1 ++ depResults2))
 
 {- | Stage an uploaded database (parse + cross-DB link, no matrices yet)
