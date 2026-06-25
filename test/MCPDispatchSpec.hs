@@ -34,18 +34,18 @@ requiredOf (Object o) = case KM.lookup "inputSchema" o of
     _ -> []
 requiredOf _ = []
 
--- | The text payload of a tool reply (@result.content[0].text@).
-resultText :: Value -> Text
-resultText (Object o) = case KM.lookup "result" o of
-    Just (Object r) -> case KM.lookup "content" r of
-        Just (Array arr) -> case toList arr of
-            (Object c : _) -> case KM.lookup "text" c of
-                Just (String t) -> t
-                _ -> ""
-            _ -> ""
-        _ -> ""
-    _ -> ""
-resultText _ = ""
+{- | The text payload of a tool reply (@result.content[0].text@), or 'Nothing'
+when the reply doesn't have that shape — so a malformed reply fails a test
+instead of silently passing a @""@ that satisfies any "doesn't contain X".
+-}
+resultText :: Value -> Maybe Text
+resultText v = do
+    Object o <- Just v
+    Object r <- KM.lookup "result" o
+    Array arr <- KM.lookup "content" r
+    Object c <- listToMaybe (toList arr)
+    String t <- KM.lookup "text" c
+    pure t
 
 -- | Whether a tool reply is flagged as an error.
 isError :: Value -> Bool
@@ -68,10 +68,10 @@ spec = describe "MCP database load/unload tools" $ do
     it "are routed by callTool (no 'Unknown tool' gap)" $ do
         loadResp <- call "load_database"
         unloadResp <- call "unload_database"
-        resultText loadResp `shouldNotSatisfy` ("Unknown tool:" `T.isPrefixOf`)
-        resultText unloadResp `shouldNotSatisfy` ("Unknown tool:" `T.isPrefixOf`)
+        resultText loadResp `shouldSatisfy` maybe False (not . T.isPrefixOf "Unknown tool:")
+        resultText unloadResp `shouldSatisfy` maybe False (not . T.isPrefixOf "Unknown tool:")
 
     it "surface the engine error when unloading a database that is not loaded" $ do
         resp <- call "unload_database"
         isError resp `shouldBe` True
-        resultText resp `shouldSatisfy` ("Database not loaded:" `T.isInfixOf`)
+        resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
