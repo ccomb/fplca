@@ -1,13 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {- | MCP (Model Context Protocol) server endpoint.
 Implements Streamable HTTP transport (MCP spec 2025-03-26).
 POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 -}
-module API.MCP (mcpApp, toolDefinitions, selectMethod) where
+module API.MCP (mcpApp, toolDefinitions, callTool, selectMethod) where
 
 import Control.Concurrent.STM (readTVarIO)
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap (KeyMap)
@@ -337,6 +339,8 @@ parseCallParams _ = Nothing
 callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
 callTool dbManager presets mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
+    "load_database" -> callLoadDatabase dbManager rid args
+    "unload_database" -> callUnloadDatabase dbManager rid args
     "list_presets" -> callListPresets presets rid
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows" -> withDb dbManager rid args $ callSearchFlows rid args
@@ -489,6 +493,44 @@ callListDatabases dbManager rid = do
              in object withFmt
         entries = map mkDbEntry (M.elems loaded)
     return $ toolSuccessJson rid $ object ["databases" .= entries]
+
+{- | Load a configured database into the working set. Wraps
+'DM.loadDatabase', which also auto-loads declared dependencies. Any
+dependency that fails to load is surfaced in the 'dependencies' array
+(as a DepLoadFailed entry) rather than swallowed.
+-}
+callLoadDatabase :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callLoadDatabase dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    -- A fresh load parses/reads from disk and can throw, so catch like the
+    -- REST handler does and surface it as a tool error rather than crashing.
+    res <- liftIO $ try (DM.loadDatabase dbManager dbName)
+    (_loaded, deps) <- case res of
+        Left (e :: SomeException) -> throwE ("Load failed: " <> T.pack (show e))
+        Right (Left err) -> throwE err
+        Right (Right ok) -> pure ok
+    pure $
+        toolSuccessJson rid $
+            object
+                [ "status" .= ("loaded" :: Text)
+                , "database" .= dbName
+                , "dependencies" .= deps
+                ]
+
+{- | Unload a database from the working set. Wraps 'DM.unloadDatabase',
+which refuses (returns 'Left') when another loaded database still
+depends on it.
+-}
+callUnloadDatabase :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callUnloadDatabase dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    ExceptT (DM.unloadDatabase dbManager dbName)
+    pure $
+        toolSuccessJson rid $
+            object
+                [ "status" .= ("unloaded" :: Text)
+                , "database" .= dbName
+                ]
 
 callListPresets :: [ClassificationPreset] -> Value -> IO Value
 callListPresets presets rid =
