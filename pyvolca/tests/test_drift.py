@@ -70,10 +70,11 @@ def test_all_resources_have_operationid(live_spec):
     if live_spec is None:
         pytest.skip("No built engine binary found.")
     live_ops = _parse_spec(live_spec)
-    # We expect at least the 19 Resources that have an apiPath entry
-    # (list_geographies / compare_impacts / list_scoring_sets are MCP-only and
-    # correctly have no operationId).
-    assert len(live_ops) >= 19, (
+    # 22 of the 25 Resource constructors carry an apiPath, so each stamps an
+    # operationId; the 3 MCP-only ones (list_geographies / compare_impacts /
+    # list_scoring_sets) correctly have none. A looser bound would silently
+    # tolerate a path-template mismatch dropping an operationId.
+    assert len(live_ops) >= 22, (
         f"Only {len(live_ops)} operations have operationIds in the live spec. "
-        f"Expected ≥19. Check API/OpenApi.hs enrichWithResources."
+        f"Expected ≥22. Check API/OpenApi.hs enrichWithResources."
     )

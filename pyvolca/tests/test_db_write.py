@@ -2,10 +2,10 @@
 
 These endpoints (copy / delete / relink / export / add-/remove-dependency)
 carry no operationId — they bypass the OpenAPI dispatcher and build their
-URLs directly, like ``load_database`` / ``unload_database``. They also do
-not exist in any released engine binary, so these tests never touch a live
-engine: they mock ``Client._session`` and assert on the wire shape
-(URL, JSON body, base64 decoding, format validation, error surfacing).
+URLs directly. They also do not exist in any released engine binary, so these
+tests never touch a live engine: they mock ``Client._session`` and assert on
+the wire shape (URL, JSON body, base64 decoding, format validation, error
+surfacing).
 """
 
 from __future__ import annotations
