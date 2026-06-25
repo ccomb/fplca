@@ -271,6 +271,7 @@ test-suite lca-tests
                      , SimaProWriterSpec
                      , ILCDWriterSpec
                      , MCPSchemaSpec
+                     , MCPDispatchSpec
                      , BatchImpactsSpec
                      , MCPEnrichSpec
                      , MCPColumnarSpec

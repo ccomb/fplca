@@ -638,7 +638,8 @@ to filtering endpoints.
 
 Load a database into memory so it answers queries.
 
-Has no effect if the database is already loaded.
+Declared dependencies are loaded first; has no effect if the
+database is already loaded.
 
 ##### `Client.refresh_stubs()`
 
@@ -718,6 +719,8 @@ Args:
 ##### `Client.unload_database(db_name: str) -> dict`
 
 Unload a database from memory to free RAM. The disk copy is kept.
+
+Refused if another loaded database still depends on it.
 
 ##### `Client.use(db_name: str) -> 'Client'`
 

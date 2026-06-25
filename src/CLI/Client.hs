@@ -82,6 +82,13 @@ executeRemoteCommand mgr rc globalOpts cmd = do
     case cmd of
         Database DbList ->
             apiGet mgr rc "/api/v1/db" >>= output fmt jp
+        Database (DbLoad name) ->
+            -- Load endpoint takes no body; the empty object is ignored server-side.
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack name ++ "/load") (object [])
+                >>= outputLoad fmt jp
+        Database (DbUnload name) ->
+            apiPost mgr rc ("/api/v1/db/" ++ T.unpack name ++ "/unload") (object [])
+                >>= outputStatus fmt jp "unload"
         Database (DbUpload args) ->
             executeUpload mgr rc fmt jp "/api/v1/db/upload" args
         Database (DbDelete name) ->
@@ -382,6 +389,20 @@ outputStatus fmt jp action (Right val) = case parseMaybe parseStatus val of
   where
     parseStatus :: Value -> Parser (Bool, Text)
     parseStatus = withObject "StatusResponse" $ \o -> (,) <$> o .: "success" <*> o .: "message"
+
+{- | @database load@ returns HTTP 200 even on failure, with a bare
+@{"error": …}@ body ('LoadDatabaseResponse'\'s @LoadFailed@) and no @success@
+field for 'outputStatus' to check. Mirror 'outputStatus': fail loudly when that
+key is present, so a failed remote load exits non-zero instead of printing the
+error and returning success.
+-}
+outputLoad :: OutputFormat -> Maybe Text -> Either String Value -> IO ()
+outputLoad _ _ (Left err) = reportError err >> exitFailure
+outputLoad fmt jp (Right val) = case val of
+    Object o
+        | Just (String err) <- KM.lookup "error" o ->
+            reportError ("load failed: " ++ T.unpack err) >> exitFailure
+    _ -> output fmt jp (Right val)
 
 -- | Format and output a result
 output :: OutputFormat -> Maybe Text -> Either String Value -> IO ()

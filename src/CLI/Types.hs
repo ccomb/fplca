@@ -62,6 +62,10 @@ data Command
 -- | Database management actions
 data DatabaseAction
     = DbList
+    | -- | Load a configured database into memory (auto-loads its dependencies)
+      DbLoad Text
+    | -- | Unload a database from memory (refused if a loaded database depends on it)
+      DbUnload Text
     | DbUpload UploadArgs
     | DbDelete Text
     | {- | Delete the activities matched by a filter (the whole matching set,

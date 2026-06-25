@@ -38,13 +38,17 @@ import Network.HTTP.Types.Method (StdMethod (..))
 
 {- | Every operation VoLCA exposes through its user-facing surfaces.
 
-Note: this covers the *queryable* operations. Infrastructure endpoints
-(database load/unload, method-collection management, auth, version) are
-not represented here — they live in Routes.hs only, because they have
-no analyst-facing equivalent across all surfaces.
+This covers the analyst-facing operations. Loading and unloading a database
+belong here too: they change which databases are in the working set, not the
+(read-only) data itself, so they are a legitimate analyst action and are
+exposed on every surface. Genuinely state-mutating or infrastructure endpoints
+(method-collection management, upload/delete/relink/copy, auth, version) stay
+in Routes.hs only — they have no analyst-facing equivalent across all surfaces.
 -}
 data Resource
     = ListDatabases
+    | LoadDatabase
+    | UnloadDatabase
     | ListPresets
     | SearchActivities
     | SearchFlows
@@ -124,6 +128,8 @@ spec. A build-time drift test (ResourcesDriftSpec) asserts that every
 apiPath :: Resource -> Maybe (StdMethod, [Text])
 apiPath r = case r of
     ListDatabases -> Just (GET, ["db"])
+    LoadDatabase -> Just (POST, ["db", "{dbName}", "load"])
+    UnloadDatabase -> Just (POST, ["db", "{dbName}", "unload"])
     ListPresets -> Just (GET, ["classification-presets"])
     SearchActivities -> Just (GET, ["db", "{dbName}", "activities"])
     SearchFlows -> Just (GET, ["db", "{dbName}", "flows"])
@@ -164,6 +170,8 @@ apiPathText r = do
 mcpName :: Resource -> Text
 mcpName r = case r of
     ListDatabases -> "list_databases"
+    LoadDatabase -> "load_database"
+    UnloadDatabase -> "unload_database"
     ListPresets -> "list_presets"
     SearchActivities -> "search_activities"
     SearchFlows -> "search_flows"
@@ -200,6 +208,8 @@ not a top-level command). For those, 'cliName' returns the nested form.
 cliName :: Resource -> Text
 cliName r = case r of
     ListDatabases -> "database list"
+    LoadDatabase -> "database load"
+    UnloadDatabase -> "database unload"
     ListPresets -> "presets"
     SearchActivities -> "activities"
     SearchFlows -> "flows"
@@ -249,6 +259,16 @@ description r = case r of
     ListDatabases ->
         "LCA / ACV — list all loaded LCA databases (Agribalyse, ecoinvent, …). \
         \Call this first to discover which databases are available before searching."
+    LoadDatabase ->
+        "LCA / ACV — load a configured database into memory so it can be queried. \
+        \Its declared dependencies are loaded first (needed for cross-database flow \
+        \linking). A database must be loaded before search/score/impact tools can \
+        \target it; use list_databases to see which are configured. No effect if it \
+        \is already loaded."
+    UnloadDatabase ->
+        "LCA / ACV — unload a database from memory to free RAM. The on-disk data is \
+        \kept and the database can be reloaded later with load_database. Refuses if \
+        \another loaded database still depends on it — unload the dependents first."
     ListPresets ->
         "LCA / ACV — list named classification filter presets configured in this \
         \instance. Each preset bundles multiple (system, value, mode) classification \
@@ -516,6 +536,8 @@ pSummaryOnly =
 params :: Resource -> [Param]
 params r = case r of
     ListDatabases -> []
+    LoadDatabase -> [pDatabase]
+    UnloadDatabase -> [pDatabase]
     ListPresets -> []
     SearchActivities ->
         [ pDatabase
