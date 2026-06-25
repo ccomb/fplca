@@ -21,6 +21,8 @@ from volca.client import Client, _parse_spec
 # and engine-side renames.
 WRAPPER_OPERATIONS = [
     "list_databases",
+    "load_database",
+    "unload_database",
     "list_presets",
     "search_activities",
     "search_flows",
@@ -68,9 +70,10 @@ def test_all_resources_have_operationid(live_spec):
     if live_spec is None:
         pytest.skip("No built engine binary found.")
     live_ops = _parse_spec(live_spec)
-    # We expect at least the 17 Resources that have an apiPath entry
-    # (list_geographies is MCP-only and correctly has no operationId).
-    assert len(live_ops) >= 17, (
+    # We expect at least the 19 Resources that have an apiPath entry
+    # (list_geographies / compare_impacts / list_scoring_sets are MCP-only and
+    # correctly have no operationId).
+    assert len(live_ops) >= 19, (
         f"Only {len(live_ops)} operations have operationIds in the live spec. "
-        f"Expected ≥17. Check API/OpenApi.hs enrichWithResources."
+        f"Expected ≥19. Check API/OpenApi.hs enrichWithResources."
     )

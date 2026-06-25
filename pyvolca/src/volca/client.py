@@ -626,14 +626,17 @@ class Client:
     def load_database(self, db_name: str) -> dict:
         """Load a database into memory so it answers queries.
 
-        Has no effect if the database is already loaded.
+        Declared dependencies are loaded first; has no effect if the
+        database is already loaded.
         """
-        # No operationId (infrastructure endpoint). Direct HTTP.
-        return self._json(self._session.post(f"{self.base_url}/api/v1/db/{db_name}/load"))
+        return self._call("load_database", db_name=db_name)
 
     def unload_database(self, db_name: str) -> dict:
-        """Unload a database from memory to free RAM. The disk copy is kept."""
-        return self._json(self._session.post(f"{self.base_url}/api/v1/db/{db_name}/unload"))
+        """Unload a database from memory to free RAM. The disk copy is kept.
+
+        Refused if another loaded database still depends on it.
+        """
+        return self._call("unload_database", db_name=db_name)
 
     # -- Database write operations --
     #
