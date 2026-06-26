@@ -61,6 +61,12 @@ spec = do
                 Just (_, info) ->
                     ilcdSynonyms info `shouldContain` ["CO2"]
 
+        it "decodes numeric entity refs in synonyms without splitting on the entity's semicolon" $ do
+            case parseFlowXML flowWithEntitySynonyms of
+                Nothing -> expectationFailure "Expected Just result"
+                Just (_, info) ->
+                    ilcdSynonyms info `shouldBe` ["PCB", "(1-methylethyl)-1,1'-biphenyl"]
+
         it "returns Nothing for XML with no UUID" $
             case parseFlowXML xmlNoUUID of
                 Nothing -> return ()
@@ -147,6 +153,26 @@ flowWithSynonyms =
     \<name>\
     \<baseName xml:lang=\"en\">Carbon dioxide, fossil</baseName>\
     \<common:synonyms xml:lang=\"en\">CO2; carbon dioxide</common:synonyms>\
+    \</name>\
+    \</dataSetInformation>\
+    \</flowInformation>\
+    \</flowDataSet>"
+
+-- Synonym text carrying a numeric character reference (@&#039;@ = apostrophe).
+-- The ';' inside the entity must NOT be treated as the synonym separator, and
+-- the entity must decode to a real apostrophe — otherwise the second synonym
+-- splits into the truncated "…1,1&#039" plus a stray "-biphenyl".
+flowWithEntitySynonyms :: ByteString
+flowWithEntitySynonyms =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+    \<flowDataSet xmlns=\"http://lca.jrc.it/ILCD/Flow\" \
+    \xmlns:common=\"http://lca.jrc.it/ILCD/Common\">\
+    \<flowInformation>\
+    \<dataSetInformation>\
+    \<common:UUID>12345678-1234-1234-1234-123456789abc</common:UUID>\
+    \<name>\
+    \<baseName xml:lang=\"en\">Biphenyl derivative</baseName>\
+    \<common:synonyms xml:lang=\"en\">PCB; (1-methylethyl)-1,1&#039;-biphenyl</common:synonyms>\
     \</name>\
     \</dataSetInformation>\
     \</flowInformation>\

@@ -15,6 +15,7 @@ module EcoSpold.Common (
 
 import Amount (readAmount)
 import qualified Data.ByteString as BS
+import Data.Char (chr)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -26,17 +27,20 @@ import Numeric (showFFloat)
 bsToText :: BS.ByteString -> Text
 bsToText = decodeXmlEntities . TE.decodeUtf8
 
-{- | Decode common XML entities that Xeno doesn't decode
-Xeno is a fast SAX parser but doesn't handle entity references.
-We also decode the two numeric character references (line feed and
-carriage return) that frequently appear inside attribute values in
-EcoSpold exports (e.g. `generalComment="text&#10;"`).
--}
+{- | Decode the XML entities Xeno (a fast SAX parser) leaves intact: the five
+named entities plus any numeric character reference via 'decodeNumericRefs'.
+The numeric pass subsumes the line-feed/carriage-return refs in EcoSpold
+attribute values (e.g. @generalComment="text&#10;"@) and the @&#039;@/@&#034;@
+apostrophe/quote refs that otherwise truncate chemical-name synonyms when the
+ILCD synonym text is split on @;@.
 
--- @&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
--- inverse of the writers escaping @&@ FIRST. Resolving it first would turn an
--- escaped literal @"&lt;"@ (written as @"&amp;lt;"@) back into @"<"@ instead of
--- @"&lt;"@ — a silent round-trip corruption for entity-like text.
+@&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
+inverse of the writers escaping @&@ FIRST. Resolving it first would turn an
+escaped literal @"&lt;"@ (written as @"&amp;lt;"@) back into @"<"@ instead of
+@"&lt;"@ — a silent round-trip corruption for entity-like text. Numeric refs run
+first (rightmost) for the same reason: a literal @&#039;@ written @&amp;#039;@
+survives the numeric pass, and only the final @&amp;@ step unescapes it.
+-}
 decodeXmlEntities :: Text -> Text
 decodeXmlEntities =
     T.replace "&amp;" "&"
@@ -44,8 +48,36 @@ decodeXmlEntities =
         . T.replace "&gt;" ">"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
-        . T.replace "&#10;" "\n"
-        . T.replace "&#13;" "\r"
+        . decodeNumericRefs
+
+{- | Decode XML numeric character references — decimal @&#NNN;@ and hex
+@&#xHH;@ — to their characters. A malformed or out-of-range reference is left
+verbatim rather than crashing (no partial 'chr' on bad input); 'Integer' parsing
+avoids overflow on absurdly long digit runs.
+-}
+decodeNumericRefs :: Text -> Text
+decodeNumericRefs t =
+    case T.breakOn "&#" t of
+        (before, rest)
+            | T.null rest -> before
+            | otherwise ->
+                let (body, semi) = T.span (/= ';') (T.drop 2 rest)
+                 in case (refChar body, T.null semi) of
+                        (Just c, False) ->
+                            before <> T.singleton c <> decodeNumericRefs (T.drop 1 semi)
+                        _ ->
+                            before <> "&#" <> decodeNumericRefs (T.drop 2 rest)
+  where
+    refChar :: Text -> Maybe Char
+    refChar body = case T.uncons body of
+        Just (x, hexits)
+            | x == 'x' || x == 'X' -> readRef TR.hexadecimal hexits
+        _ -> readRef TR.decimal body
+    readRef :: TR.Reader Integer -> Text -> Maybe Char
+    readRef reader digits = case reader digits of
+        Right (n, leftover)
+            | T.null leftover, n >= 0, n <= 0x10FFFF -> Just (chr (fromInteger n))
+        _ -> Nothing
 
 -- | ByteString to Double conversion (strict - errors on parse failure)
 bsToDouble :: BS.ByteString -> Double
