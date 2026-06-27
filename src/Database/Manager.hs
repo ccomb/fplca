@@ -182,7 +182,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -3539,8 +3539,17 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
     if alreadyLoaded
         then reportProgress Info $ "  [AUTO] " <> T.unpack slug <> ": already loaded (cached)"
         else do
-            let (keptPairs, excludedSyns) =
-                    excludeOverFrequentSynonyms maxSynonymFlowFrequency pairs
+            let (nonJunkPairs, junkTokens) = excludeJunkSynonyms pairs
+                (keptPairs, excludedSyns) =
+                    excludeOverFrequentSynonyms maxSynonymFlowFrequency nonJunkPairs
+            unless (null junkTokens) $
+                reportProgress Info $
+                    "  [AUTO] "
+                        <> T.unpack slug
+                        <> ": dropped "
+                        <> show (length junkTokens)
+                        <> " placeholder/non-substance synonym tokens: "
+                        <> T.unpack (T.intercalate ", " (take 8 junkTokens))
             unless (null excludedSyns) $
                 reportProgress Info $
                     "  [AUTO] "

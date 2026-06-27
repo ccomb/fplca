@@ -14,6 +14,8 @@ module SynonymDB (
     buildFromCSV,
     buildFromPairs,
     excludeOverFrequentSynonyms,
+    excludeJunkSynonyms,
+    isJunkSynonymName,
     starEdges,
     loadFromCSVFileWithCache,
 
@@ -204,6 +206,51 @@ excludeOverFrequentSynonyms maxFlows pairs = (kept, excluded)
     overFrequent = M.filter (> maxFlows) (M.map S.size flowsPerSynonym)
     kept = [p | (p, _, ns) <- normed, not (ns `M.member` overFrequent)]
     excluded = sortOn (negate . snd) (M.toList overFrequent)
+
+{- | Is this name an obvious non-synonym — a REACH/ILCD dossier placeholder
+(@"not available"@, @"unknown"@, @"active matter"@, an ECHA id stub) rather than a
+substance name? These survive 'excludeOverFrequentSynonyms' (each is carried by
+few flows) yet act as cut-vertices that fuse unrelated substances through long
+chains, so they are dropped by string shape instead of frequency.
+
+Deliberately conservative — it matches only forms that no real substance name
+takes. In particular @"mixture"@ and digit-heavy names are NOT matched: both are
+common in genuine names (@"toluenediisocyanate (mixture)"@, @"pcb-1254"@). The
+@echa-@ check is anchored so it cannot fire on the @echa@ inside a word (e.g.
+French @"huile de chauffage"@).
+-}
+isJunkSynonymName :: Text -> Bool
+isJunkSynonymName name =
+    n `elem` exactStops
+        || any (`T.isInfixOf` n) infixStops
+        || "unknown" `T.isPrefixOf` n
+        || "echa-" `T.isPrefixOf` n
+        || "echa_" `T.isPrefixOf` n
+  where
+    n = normalizeName name
+    exactStops = ["none", "no data", "not applicable", "not assigned", "not specified"]
+    infixStops =
+        [ "available"
+        , "confidential"
+        , "active matter"
+        , "activematter"
+        , "active substance"
+        , "activesubstance"
+        , "active ingredient"
+        , "activeingredient"
+        ]
+
+{- | Drop synonym pairs touching a junk placeholder name ('isJunkSynonymName').
+Returns the kept pairs and the distinct (normalized) junk tokens dropped, so the
+caller can surface them rather than discard them silently.
+-}
+excludeJunkSynonyms :: [(Text, Text)] -> ([(Text, Text)], [Text])
+excludeJunkSynonyms pairs = (kept, excluded)
+  where
+    kept = [p | p@(a, b) <- pairs, not (isJunkSynonymName a), not (isJunkSynonymName b)]
+    excluded =
+        S.toList . S.fromList $
+            [normalizeName x | (a, b) <- pairs, x <- [a, b], isJunkSynonymName x]
 
 {- | Normalize a name for lookup in the synonym database
 
