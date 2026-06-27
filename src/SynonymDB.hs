@@ -13,6 +13,7 @@ module SynonymDB (
     -- * Building
     buildFromCSV,
     buildFromPairs,
+    excludeOverFrequentSynonyms,
     starEdges,
     loadFromCSVFileWithCache,
 
@@ -39,7 +40,9 @@ import Control.Exception (SomeException, catch, evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Csv (HasHeader (..), decode)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Store (decodeEx, encode)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -180,6 +183,27 @@ whatever this returns; an empty result means the closure stayed plausible.
 -}
 oversizedClasses :: Int -> SynonymDB -> [[Text]]
 oversizedClasses maxSize = filter ((> maxSize) . length) . M.elems . synIdToNames
+
+{- | Drop synonym pairs whose synonym (the second element) is carried by more
+than @maxFlows@ distinct base names (the first element). An over-frequent
+"synonym" is a classification label or stop-word — e.g. @"organic"@ (carried by
+thousands of flows), @"inorganic"@, @"petroleum product"@ — not a true synonym,
+which is ~1:1 with a substance and binds a handful of names at most.
+
+Counting is directional and on normalized names, so a real flow that merely HAS
+many synonyms (high out-degree, e.g. @"acetaminophen"@ with its trade names) is
+never touched — only a name that ACTS as a synonym for many distinct flows is.
+Returns the kept pairs and the excluded tokens with their flow counts
+(descending), so the caller can surface the exclusion list, not drop it silently.
+-}
+excludeOverFrequentSynonyms :: Int -> [(Text, Text)] -> ([(Text, Text)], [(Text, Int)])
+excludeOverFrequentSynonyms maxFlows pairs = (kept, excluded)
+  where
+    normed = [(p, normalizeName base, normalizeName syn) | p@(base, syn) <- pairs]
+    flowsPerSynonym = M.fromListWith S.union [(ns, S.singleton nb) | (_, nb, ns) <- normed]
+    overFrequent = M.filter (> maxFlows) (M.map S.size flowsPerSynonym)
+    kept = [p | (p, _, ns) <- normed, not (ns `M.member` overFrequent)]
+    excluded = sortOn (negate . snd) (M.toList overFrequent)
 
 {- | Normalize a name for lookup in the synonym database
 

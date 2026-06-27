@@ -7,7 +7,7 @@ import qualified Data.Set as S
 import Data.Text (Text, pack)
 import Test.Hspec
 
-import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses, uncoveredUnitSuffixes)
+import SynonymDB (buildFromPairs, excludeOverFrequentSynonyms, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses, uncoveredUnitSuffixes)
 
 spec :: Spec
 spec = do
@@ -42,6 +42,30 @@ spec = do
         it "stays silent when every class is within the bound" $
             oversizedClasses 10 (buildFromPairs [("alpha", "beta"), ("beta", "gamma")])
                 `shouldBe` []
+
+    describe "excludeOverFrequentSynonyms" $ do
+        -- "organic" acts as a synonym for 3 distinct flows -> a class label, dropped.
+        -- "acetaminophen" merely HAS 3 synonyms (out-degree) -> a real flow, kept.
+        let pairs =
+                [ ("benzene", "organic")
+                , ("toluene", "organic")
+                , ("phenol", "organic")
+                , ("acetaminophen", "paracetamol")
+                , ("acetaminophen", "tylenol")
+                , ("acetaminophen", "apap")
+                ]
+            (kept, excluded) = excludeOverFrequentSynonyms 2 pairs
+
+        it "drops the over-frequent synonym and surfaces it with its flow count" $ do
+            excluded `shouldBe` [("organic", 3)]
+            ("organic" `elem` map snd kept) `shouldBe` False
+
+        it "keeps a real flow that merely has many synonyms (out-degree, not in-degree)" $
+            kept `shouldMatchList` [("acetaminophen", s) | s <- ["paracetamol", "tylenol", "apap"]]
+
+        it "counts case/punctuation variants of a synonym together (normalized)" $
+            snd (excludeOverFrequentSynonyms 2 [("a", "Organic"), ("b", "organic"), ("c", "ORGANIC")])
+                `shouldBe` [("organic", 3)]
 
     describe "normalizeName" $ do
         it "strips a trailing SimaPro unit suffix (/kg, /m3, /Sm3) so unit variants share a node" $ do
