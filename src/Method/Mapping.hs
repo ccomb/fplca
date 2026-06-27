@@ -72,6 +72,8 @@ module Method.Mapping (
 ) where
 
 import Control.Applicative ((<|>))
+import Control.Concurrent (getNumCapabilities)
+import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
@@ -183,8 +185,25 @@ mapMethodFlows ::
     MapContext ->
     Method ->
     IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodFlows mappers ctx method =
-    mapM (\cf -> fmap (cf,) (mapSingleFlow mappers ctx cf)) (methodFactors method)
+mapMethodFlows mappers ctx method = do
+    caps <- getNumCapabilities
+    let cfs = methodFactors method
+        n = length cfs
+        resolve cf = fmap (cf,) (mapSingleFlow mappers ctx cf)
+    -- Each CF resolves independently (first-matching mapper wins, no cross-CF
+    -- state), so chunk the CFs across capabilities and resolve the chunks
+    -- concurrently. 'mapConcurrently' preserves order and the chunks are
+    -- concatenated in order, so the result list — and every table built from it
+    -- — is identical to the serial 'mapM'; this is a pure speedup, not a
+    -- behaviour change. Chunking (rather than one task per CF) caps the live
+    -- thread count at 'caps' on methods with tens of thousands of CFs.
+    if caps <= 1 || n < parCfThreshold
+        then mapM resolve cfs
+        else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
+  where
+    parCfThreshold = 1000
+    chunksOf _ [] = []
+    chunksOf k xs = let (h, t) = splitAt k xs in h : chunksOf k t
 
 {- | Map a single CF using the mapper handle cascade.
 Each mapper is tried in order; the first match wins.
