@@ -97,7 +97,7 @@ import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
-import Matrix (Inventory, Vector)
+import Matrix (Inventory, Vector, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
@@ -209,8 +209,6 @@ mapMethodFlows mappers ctx0 method = do
         else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
   where
     parCfThreshold = 1000
-    chunksOf _ [] = []
-    chunksOf k xs = let (h, t) = splitAt k xs in h : chunksOf k t
 
 {- | Map a single CF using the mapper handle cascade.
 Each mapper is tried in order; the first match wins.

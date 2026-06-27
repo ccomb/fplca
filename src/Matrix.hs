@@ -60,6 +60,7 @@ module Matrix (
     solveSparseLinearSystemWithFactorizationMulti,
     computeInventoryMatrixBatch,
     clearCachedSolver,
+    chunksOf,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -419,6 +420,9 @@ solveSparseLinearSystemWithFactorizationMulti factorization demandVecs = do
 multiRhsChunkSize :: Int
 multiRhsChunkSize = 64
 
+{- | Split a list into successive chunks of at most @n@ elements (a non-positive
+@n@ yields the whole list as a single chunk).
+-}
 chunksOf :: Int -> [a] -> [[a]]
 chunksOf n xs
     | n <= 0 = [xs]
