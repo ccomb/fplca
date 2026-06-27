@@ -63,6 +63,7 @@ module Method.Mapping (
     findFlowByNameComp,
     findFlowBySynonym,
     findFlowBySynonymComp,
+    findFlowBySynonymMemo,
     findFlowByCAS,
 
     -- * Statistics
@@ -175,6 +176,7 @@ buildMapContext db =
         , mcBioFlowsByCAS = dbFlowsByCAS db
         , mcSynonymDB = fromMaybe emptySynonymDB (dbSynonymDB db)
         , mcActivities = M.empty
+        , mcSynGroupFlows = M.empty
         }
 
 {- | Map all method flows to database flows using mapper handles.
@@ -185,10 +187,15 @@ mapMethodFlows ::
     MapContext ->
     Method ->
     IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodFlows mappers ctx method = do
+mapMethodFlows mappers ctx0 method = do
     caps <- getNumCapabilities
     let cfs = methodFactors method
         n = length cfs
+        -- Precompute the synonym-group → flows memo for the groups this method's
+        -- CFs reference (each group expanded once), then resolve every CF against
+        -- it. Without it the synonym matcher re-expands a shared group — often a
+        -- large closure class — once per CF whose name lands in it.
+        ctx = ctx0{mcSynGroupFlows = buildSynGroupFlows ctx0 cfs}
         resolve cf = fmap (cf,) (mapSingleFlow mappers ctx cf)
     -- Each CF resolves independently (first-matching mapper wins, no cross-CF
     -- state), so chunk the CFs across capabilities and resolve the chunks
@@ -275,6 +282,48 @@ findFlowBySynonymComp synDB flowsByName name mComp =
                 pickByCompartment (concatMap (lookupFlows flowsByName) synonyms) mComp
   where
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
+
+{- | Synonym match that reads a precomputed group → flows memo. When
+'mapMethodFlows' has expanded this CF's group (the common path), the resolution
+is a single map lookup plus the compartment pick; otherwise it falls back to
+'findFlowBySynonymComp'. The memoized flow list is exactly that function's
+inline @concatMap@ (same elements, same order), so the pick — and the flow it
+returns — is identical: a pure speedup.
+-}
+findFlowBySynonymMemo ::
+    SynonymDB ->
+    M.Map Int [BiosphereFlow] ->
+    M.Map Text [BiosphereFlow] ->
+    Text ->
+    Maybe Compartment ->
+    Maybe BiosphereFlow
+findFlowBySynonymMemo synDB memo flowsByName name mComp =
+    case lookupSynonymGroup synDB name of
+        Nothing -> Nothing
+        Just gid -> case M.lookup gid memo of
+            Just flows -> pickByCompartment flows mComp
+            Nothing -> findFlowBySynonymComp synDB flowsByName name mComp
+
+{- | Expand, once per synonym group, the candidate flows reachable from that
+group's names — for exactly the groups the given CFs reference. 'mapMethodFlows'
+runs this before resolving a method's CFs, so the synonym matcher reads a shared
+(often large) group's flows from the memo instead of re-expanding it per CF. The
+per-group value is identical to 'findFlowBySynonymComp''s inline @concatMap@.
+-}
+buildSynGroupFlows :: MapContext -> [MethodCF] -> M.Map Int [BiosphereFlow]
+buildSynGroupFlows ctx cfs =
+    M.fromList
+        [ (gid, maybe [] (concatMap groupFlows) (getSynonyms synDB gid))
+        | gid <- gids
+        ]
+  where
+    synDB = mcSynonymDB ctx
+    flowsByName = mcBioFlowsByName ctx
+    groupFlows syn = M.findWithDefault [] (normalizeName syn) flowsByName
+    gids =
+        S.toList $
+            S.fromList
+                [gid | cf <- cfs, Just gid <- [lookupSynonymGroup synDB (mcfFlowName cf)]]
 
 {- | Pick the best flow match based on compartment preference. The flow's own
 compartment now lives in 'bfCompartment' as a structured 'Types.Compartment'

@@ -149,6 +149,7 @@ mapCtx =
         , mcBioFlowsByCAS = M.fromList [(waterCAS, allFlows)]
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcSynGroupFlows = M.empty
         }
 
 -- Build scoring tables through the real mapper + table build + broadcast fill.
@@ -228,6 +229,7 @@ carbonSynonyms =
         , mcBioFlowsByCAS = M.fromList [(methaneCAS, [methaneNonFossil, methaneFossil])]
         , mcSynonymDB = buildFromPairs [("Methane, biogenic", "Methane, non-fossil")]
         , mcActivities = M.empty
+        , mcSynGroupFlows = M.empty
         }
 
 buildCarbonTables :: IO MethodTables
@@ -340,6 +342,7 @@ fallbackCtx =
         , mcBioFlowsByCAS = M.empty
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcSynGroupFlows = M.empty
         }
 
 buildFallbackTables :: IO MethodTables
@@ -384,6 +387,7 @@ acrCtx =
         , mcBioFlowsByCAS = M.fromList [(acrCAS, [acrFlow])]
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcSynGroupFlows = M.empty
         }
 
 -- Regionalized analogue of 'acrMethod': both CFs carry a location, so they
