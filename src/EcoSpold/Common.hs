@@ -34,21 +34,24 @@ attribute values (e.g. @generalComment="text&#10;"@) and the @&#039;@/@&#034;@
 apostrophe/quote refs that otherwise truncate chemical-name synonyms when the
 ILCD synonym text is split on @;@.
 
-@&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
-inverse of the writers escaping @&@ FIRST. Resolving it first would turn an
-escaped literal @"&lt;"@ (written as @"&amp;lt;"@) back into @"<"@ instead of
-@"&lt;"@ — a silent round-trip corruption for entity-like text. Numeric refs run
-first (rightmost) for the same reason: a literal @&#039;@ written @&amp;#039;@
-survives the numeric pass, and only the final @&amp;@ step unescapes it.
+Order is load-bearing. The named entities resolve before @&amp;@, so an escaped
+literal @"&lt;"@ (written @"&amp;lt;"@) round-trips to @"&lt;"@ rather than @"<"@
+— the inverse of writers escaping @&@ first. Numeric refs resolve LAST, after
+@&amp;@: the ILCD flow data double-encodes apostrophes/quotes as @&amp;#039;@, so
+the @&amp;@ step must first expose the @&#039;@ for the numeric pass to turn it
+into @'@. Run earlier it sees no @&#@, @&amp;@ then leaves a bare @&#039;@, and
+the @;@-split truncates the synonym into junk. The trade: a literal @&#039;@-as-
+text (were it written @&amp;#039;@) decodes instead of surviving — the flow data
+carries no such literals, only double-encoded characters.
 -}
 decodeXmlEntities :: Text -> Text
 decodeXmlEntities =
-    T.replace "&amp;" "&"
+    decodeNumericRefs
+        . T.replace "&amp;" "&"
         . T.replace "&lt;" "<"
         . T.replace "&gt;" ">"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
-        . decodeNumericRefs
 
 {- | Decode XML numeric character references — decimal @&#NNN;@ and hex
 @&#xHH;@ — to their characters. A malformed or out-of-range reference is left

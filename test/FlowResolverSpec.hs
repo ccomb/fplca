@@ -4,6 +4,7 @@ module FlowResolverSpec (spec) where
 
 import Data.ByteString (ByteString)
 import qualified Data.UUID as UUID
+import EcoSpold.Common (decodeXmlEntities)
 import EcoSpold.Parser2 (normalizeCAS)
 import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML)
 import Method.Types (Compartment (..))
@@ -11,6 +12,22 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+    -- -----------------------------------------------------------------------
+    -- decodeXmlEntities (pure, from EcoSpold.Common) — order is load-bearing
+    -- -----------------------------------------------------------------------
+    describe "decodeXmlEntities" $ do
+        it "fully decodes a double-encoded numeric ref (the ILCD data's form)" $
+            decodeXmlEntities "&amp;#039;" `shouldBe` "'"
+
+        it "decodes a single-encoded numeric ref" $
+            decodeXmlEntities "&#039;" `shouldBe` "'"
+
+        it "preserves an escaped-literal named entity (round-trip)" $
+            decodeXmlEntities "&amp;lt;" `shouldBe` "&lt;"
+
+        it "unescapes a lone ampersand" $
+            decodeXmlEntities "&amp;" `shouldBe` "&"
+
     -- -----------------------------------------------------------------------
     -- normalizeCAS (pure, from EcoSpold.Parser2)
     -- -----------------------------------------------------------------------
@@ -61,7 +78,7 @@ spec = do
                 Just (_, info) ->
                     ilcdSynonyms info `shouldContain` ["CO2"]
 
-        it "decodes numeric entity refs in synonyms without splitting on the entity's semicolon" $ do
+        it "decodes double-encoded entity refs in synonyms without splitting on the entity's semicolon" $ do
             case parseFlowXML flowWithEntitySynonyms of
                 Nothing -> expectationFailure "Expected Just result"
                 Just (_, info) ->
@@ -158,10 +175,11 @@ flowWithSynonyms =
     \</flowInformation>\
     \</flowDataSet>"
 
--- Synonym text carrying a numeric character reference (@&#039;@ = apostrophe).
--- The ';' inside the entity must NOT be treated as the synonym separator, and
--- the entity must decode to a real apostrophe — otherwise the second synonym
--- splits into the truncated "…1,1&#039" plus a stray "-biphenyl".
+-- Synonym text carrying a DOUBLE-encoded apostrophe (@&amp;#039;@) — the form
+-- the ILCD flow data actually uses. The @&amp;@ must decode first to expose
+-- @&#039;@, which then decodes to a real apostrophe; otherwise the half-decoded
+-- @&#039;@ reaches the ';'-split and truncates the second synonym into the
+-- "…1,1&#039" fragment plus a stray "-biphenyl".
 flowWithEntitySynonyms :: ByteString
 flowWithEntitySynonyms =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -172,7 +190,7 @@ flowWithEntitySynonyms =
     \<common:UUID>12345678-1234-1234-1234-123456789abc</common:UUID>\
     \<name>\
     \<baseName xml:lang=\"en\">Biphenyl derivative</baseName>\
-    \<common:synonyms xml:lang=\"en\">PCB; (1-methylethyl)-1,1&#039;-biphenyl</common:synonyms>\
+    \<common:synonyms xml:lang=\"en\">PCB; (1-methylethyl)-1,1&amp;#039;-biphenyl</common:synonyms>\
     \</name>\
     \</dataSetInformation>\
     \</flowInformation>\
