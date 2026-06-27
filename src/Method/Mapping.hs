@@ -589,26 +589,28 @@ expandSynonymMappings ::
 expandSynonymMappings synDB flowsByName mappings =
     mappings ++ concatMap expand mappings
   where
-    -- One-shot inverse index: normalized name → set of direct partners
-    -- (union of all groups containing the name, without recursing). Stays
-    -- inside 'SynonymDB''s star-topology semantics — no chained
-    -- inferences across hubs — but does see every direct pair, which
-    -- 'lookupSynonymGroup' alone misses when many pairs converge on the
-    -- same hub name and @M.fromList@ keeps only the last-inserted group.
-    directPeers :: M.Map Text (S.Set Text)
-    directPeers =
-        M.fromListWith
-            S.union
-            [ (normalizeName m, S.fromList (map normalizeName members))
-            | members <- M.elems (synIdToNames synDB)
-            , m <- members
-            ]
+    -- De-fan-out (M): restrict the synonym relation to USED flow names — the
+    -- DB's own flow-name index ∪ this method's CF names — then re-close on that
+    -- induced subgraph. Generic source-synonym tokens that are not flow names
+    -- (e.g. @organic@, listed on tens of thousands of ILCD flows) drop out, so
+    -- they stop fusing unrelated substances into one giant junk-hub class. The
+    -- global closure has already merged such a hub and cannot be re-split, so we
+    -- re-close from 'synEdges' (the original pairs) against the used set here.
+    used :: S.Set Text
+    used =
+        foldr
+            (S.insert . normalizeName . mcfFlowName . fst)
+            (S.fromList (M.keys flowsByName))
+            mappings
+
+    inducedDB :: SynonymDB
+    inducedDB =
+        buildFromPairs [e | e@(a, b) <- synEdges synDB, S.member a used, S.member b used]
 
     expand (cf, _) =
-        let cfName = normalizeName (mcfFlowName cf)
-            peers = M.findWithDefault S.empty cfName directPeers
+        let peers = fromMaybe [] (getSynonyms inducedDB =<< lookupSynonymGroup inducedDB (mcfFlowName cf))
          in [ (cf, Just (flow, BySynonym))
-            | syn <- S.toList peers
+            | syn <- peers
             , flow <- M.findWithDefault [] syn flowsByName
             ]
 

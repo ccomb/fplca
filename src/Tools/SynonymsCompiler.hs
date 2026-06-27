@@ -42,7 +42,7 @@ import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
 import EcoSpold.Parser2 (normalizeCAS)
-import SynonymDB (normalizeName)
+import SynonymDB (normalizeName, starEdges)
 import SynonymDB.Types (SynonymDB (..))
 
 -- | Shared output options
@@ -120,7 +120,7 @@ parseJSONToSynonymDB (A.Object obj) = do
             Right
             (KM.lookup "id_to_synonyms" obj)
     idToNames <- parseIdToSynonyms idToSynValue
-    Right $ SynonymDB{synNameToId = nameToId, synIdToNames = idToNames}
+    Right $ SynonymDB{synNameToId = nameToId, synIdToNames = idToNames, synEdges = starEdges (M.elems idToNames)}
 parseJSONToSynonymDB _ = Left "Expected JSON object at top level"
 
 parseNameToId :: A.Value -> Either String (M.Map T.Text Int)
@@ -326,7 +326,7 @@ buildSynonymDB casGroups namePairs =
         -- Step 3: Build maps, enforcing size cap
         (nameToId, idToNames) = buildMaps allGroups
      in
-        SynonymDB{synNameToId = nameToId, synIdToNames = idToNames}
+        SynonymDB{synNameToId = nameToId, synIdToNames = idToNames, synEdges = starEdges (M.elems idToNames)}
 
 -- | Merge name pairs into existing groups using simple Union-Find on Map
 mergeNamePairs :: [SynonymPair] -> [[T.Text]] -> [[T.Text]]
