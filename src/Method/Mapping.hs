@@ -202,8 +202,12 @@ mapMethodFlows mappers ctx0 method = do
     -- concurrently. 'mapConcurrently' preserves order and the chunks are
     -- concatenated in order, so the result list — and every table built from it
     -- — is identical to the serial 'mapM'; this is a pure speedup, not a
-    -- behaviour change. Chunking (rather than one task per CF) caps the live
-    -- thread count at 'caps' on methods with tens of thousands of CFs.
+    -- behaviour change. Chunking (rather than one task per CF) spawns ~'caps'
+    -- tasks instead of one per CF on methods with tens of thousands of CFs.
+    -- This wins on a cold single-method mapping; the method-set build already
+    -- fans out across methods (see 'Database.Manager.mapMethodSetToTablesCached'),
+    -- which saturates the cores, so there the inner parallelism mostly nests
+    -- under that outer fan-out.
     if caps <= 1 || n < parCfThreshold
         then mapM resolve cfs
         else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
