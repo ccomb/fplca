@@ -596,6 +596,14 @@ expandSynonymMappings synDB flowsByName mappings =
     -- they stop fusing unrelated substances into one giant junk-hub class. The
     -- global closure has already merged such a hub and cannot be re-split, so we
     -- re-close from 'synEdges' (the original pairs) against the used set here.
+    --
+    -- Trade-off: a synonym whose name is neither a flow nor a CF is dropped, so a
+    -- substance bridged ONLY through such an intermediate would be lost. Measured
+    -- on JRC EF-3.1 × BAFU (all 25 categories), the dropped matches are junk-hub
+    -- fan-out (e.g. @arsenic → {butanol, acetone, aluminium, …}@) plus correct
+    -- CO₂/CH₄/land-use subtype discrimination (a @…, land use change@ CF must not
+    -- reach the generic @carbon dioxide@ flow); no genuine same-substance match
+    -- was lost. The restriction is sound in practice.
     used :: S.Set Text
     used =
         foldr
