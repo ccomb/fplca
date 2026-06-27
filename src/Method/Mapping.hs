@@ -102,7 +102,7 @@ import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeUnit)
+import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeToCanonical, normalizeUnit)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -896,23 +896,28 @@ buildMethodTables cmap energyDensities mappings =
         Just (flow, ByProxy) -> bfName flow
         _ -> mcfFlowName cf
 
-{- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
+{- | Convert the inventory @qty@ (in @flowUnit@) to the basis the CF value
+expects, for characterization.
 
-Bypass cases (returns @qty@ unchanged):
-  * Units match by name, or either side has no unit metadata.
-  * Either unit is unknown to the 'UnitConfig' (e.g. LCIA result expressions
-    like "kg CO2 eq"). The CF author already chose values consistent with
-    their declared unit; we trust them rather than penalize.
-
-Hard fail (returns @0@): both units are known to the 'UnitConfig' but
-dimensionally incompatible (e.g. flow in @m@, CF in @kg@). Silently using
-@qty@ here would inject wrong-dimension data into the score; we refuse.
+  * Units match, or the flow carries no unit → @qty@ unchanged.
+  * Both units known to the 'UnitConfig' → ordinary same-dimension conversion;
+    a dimensional mismatch (flow @m@, CF @kg@) hard-fails to @0@ rather than
+    injecting wrong-dimension data into the score.
+  * The CF unit is a result expression unknown to the 'UnitConfig' (e.g.
+    @"kg CO2 eq"@ — the common ILCD/EF case, where 'mcfUnit' carries the impact
+    unit, not the flow's reference unit) → the CF value is defined per the
+    flow's canonical base unit, so we normalize @qty@ to that base unit
+    ('normalizeToCanonical'). A flow already in its base unit (kg) is left as
+    is; a flow in @g@/@mg@ is scaled to kg. Without this, grams would be
+    characterized as if they were kilograms (a ×1000 / ×1e6 over-count).
+  * The flow unit itself is unknown → @qty@ unchanged (no base to normalize to).
 -}
 convertForCharacterization :: UnitConfig -> Text -> Text -> Double -> Double
 convertForCharacterization cfg flowUnit cfUnit qty
     | flowUnit == cfUnit || T.null cfUnit || T.null flowUnit = qty
-    | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
-    | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+    | not (isKnownUnit cfg flowUnit) = qty
+    | isKnownUnit cfg cfUnit = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+    | otherwise = maybe qty snd (normalizeToCanonical cfg flowUnit qty)
 
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the

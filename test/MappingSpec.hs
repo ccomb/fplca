@@ -362,14 +362,17 @@ spec = do
 
     describe "convertForCharacterization" $ do
         -- Each row encodes a (flowUnit, cfUnit, qty) → expected mapping under a
-        -- specific UnitConfig. The semantic groups: pass-through (matching or
-        -- unknown units, trust the CF author), refuse cross-dimension injection
-        -- by returning 0, apply factor when compatible.
+        -- specific UnitConfig. Semantic groups: pass-through (units match, or no
+        -- flow unit), refuse cross-dimension injection (→ 0), apply the factor
+        -- when both units are known, and — when the CF unit is a result
+        -- expression unknown to the UnitConfig — normalize the flow to its
+        -- canonical base unit (a kg flow is unchanged; a g flow scales to kg).
         let cases =
                 [ ("units match by name", defaultUnitConfig, "kg", "kg", 5.0, 5.0)
                 , ("cfUnit empty (method without unit)", defaultUnitConfig, "kg", "", 7.0, 7.0)
                 , ("flowUnit empty (no metadata)", defaultUnitConfig, "", "kg", 9.0, 9.0)
-                , ("cfUnit is an LCIA expression unknown to UnitConfig", defaultUnitConfig, "kg", "kg CO2 eq", 3.0, 3.0)
+                , ("LCIA-expression CF unit, flow already canonical → unchanged", defaultUnitConfig, "kg", "kg CO2 eq", 3.0, 3.0)
+                , ("LCIA-expression CF unit, g flow → normalized to canonical kg", gKgUnitConfig, "g", "kg CO2 eq", 1000.0, 1.0)
                 , ("dimensionally incompatible → 0", defaultUnitConfig, "m", "kg", 100.0, 0.0)
                 , ("compatible units differ → apply factor (1000 g → 1.0 kg)", gKgUnitConfig, "g", "kg", 1000.0, 1.0)
                 ]
