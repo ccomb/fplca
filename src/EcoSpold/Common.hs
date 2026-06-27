@@ -4,6 +4,7 @@
 module EcoSpold.Common (
     bsToText,
     decodeXmlEntities,
+    decodeXmlEntitiesFull,
     bsToDouble,
     bsToInt,
     bsToIntMaybe,
@@ -52,6 +53,19 @@ decodeXmlEntities =
         . T.replace "&gt;" ">"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
+
+{- | Fully decode XML entities, iterating 'decodeXmlEntities' to a fixed point.
+The ILCD flow data double-encodes entities (@&amp;#039;@, @&amp;lt;@), so a single
+pass leaves a half-decoded @&#039;@ / @&lt;@ behind; repeating until stable resolves
+it to the character. Use this only on free text that is afterwards split on @;@
+(ILCD synonyms), where a surviving entity's own @;@ would otherwise be taken for a
+separator. Not for the general read path: it collapses an escaped literal that the
+round-trip-safe 'decodeXmlEntities' deliberately preserves.
+-}
+decodeXmlEntitiesFull :: Text -> Text
+decodeXmlEntitiesFull t =
+    let t' = decodeXmlEntities t
+     in if t' == t then t else decodeXmlEntitiesFull t'
 
 {- | Decode XML numeric character references — decimal @&#NNN;@ and hex
 @&#xHH;@ — to their characters. A malformed or out-of-range reference is left

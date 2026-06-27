@@ -4,9 +4,9 @@ module FlowResolverSpec (spec) where
 
 import Data.ByteString (ByteString)
 import qualified Data.UUID as UUID
-import EcoSpold.Common (decodeXmlEntities)
+import EcoSpold.Common (decodeXmlEntities, decodeXmlEntitiesFull)
 import EcoSpold.Parser2 (normalizeCAS)
-import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML)
+import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML, splitIlcdSynonyms)
 import Method.Types (Compartment (..))
 import Test.Hspec
 
@@ -27,6 +27,19 @@ spec = do
 
         it "unescapes a lone ampersand" $
             decodeXmlEntities "&amp;" `shouldBe` "&"
+
+        it "decodeXmlEntitiesFull collapses the round-trip to the character (&amp;lt; -> <)" $
+            decodeXmlEntitiesFull "&amp;lt;" `shouldBe` "<"
+
+    describe "splitIlcdSynonyms" $ do
+        it "splits an ILCD synonyms blob on ';' separators" $
+            splitIlcdSynonyms "a;b;c" `shouldBe` ["a", "b", "c"]
+
+        it "fully decodes a double-encoded named entity, so no &lt fragment survives the split" $
+            splitIlcdSynonyms "solvent &amp;lt;c9&amp;gt;" `shouldBe` ["solvent <c9>"]
+
+        it "fully decodes a double-encoded numeric entity and does not split on its semicolon" $
+            splitIlcdSynonyms "x&amp;#039;y" `shouldBe` ["x'y"]
 
     -- -----------------------------------------------------------------------
     -- normalizeCAS (pure, from EcoSpold.Parser2)
