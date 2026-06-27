@@ -177,14 +177,17 @@ initialFlowState :: FlowParseState
 initialFlowState = FlowParseState "" "" "" [] [] [] False [] False False "" 0 (-1) Nothing False
 
 {- | Split an ILCD @<synonyms>@ blob into individual names. The EF flow data packs
-several names into one element separated by @;@ and double-encodes entities
-(@&amp;#039;@, @&amp;lt;@). Fully decode first ('decodeXmlEntitiesFull') so an
-entity's own @;@ is not mistaken for a separator, then split on @;@.
+several names into one element separated by @;@, double-encodes entities
+(@&amp;#039;@, @&amp;lt;@), and sometimes glues two names together with the literal
+label @"othernames"@ and no separator. Fully decode first ('decodeXmlEntitiesFull')
+so an entity's own @;@ is not mistaken for a separator, then split on @;@ and on the
+@"othernames"@ pseudo-delimiter.
 -}
 splitIlcdSynonyms :: Text -> [Text]
 splitIlcdSynonyms =
     filter (not . T.null)
         . map T.strip
+        . concatMap (T.splitOn "othernames")
         . T.splitOn ";"
         . decodeXmlEntitiesFull
 

@@ -41,6 +41,9 @@ spec = do
         it "fully decodes a double-encoded numeric entity and does not split on its semicolon" $
             splitIlcdSynonyms "x&amp;#039;y" `shouldBe` ["x'y"]
 
+        it "splits on the 'othernames' pseudo-delimiter the source glues names with" $
+            splitIlcdSynonyms "a;b othernames c" `shouldBe` ["a", "b", "c"]
+
     -- -----------------------------------------------------------------------
     -- normalizeCAS (pure, from EcoSpold.Parser2)
     -- -----------------------------------------------------------------------
