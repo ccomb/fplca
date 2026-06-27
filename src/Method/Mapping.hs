@@ -911,7 +911,11 @@ expects, for characterization.
     flow's canonical base unit, so we normalize @qty@ to that base unit
     ('normalizeToCanonical'). A flow already in its base unit (kg) is left as
     is; a flow in @g@/@mg@ is scaled to kg. Without this, grams would be
-    characterized as if they were kilograms (a ×1000 / ×1e6 over-count).
+    characterized as if they were kilograms (a ×1000 / ×1e6 over-count). If the
+    flow's dimension defines no canonical base (a 'UnitConfig' defect),
+    'normalizeToCanonical' returns 'Nothing' and we hard-fail to @0@ — as in the
+    dimensional-mismatch case — rather than silently scoring the un-normalized
+    amount.
   * The flow unit itself is unknown → @qty@ unchanged (no base to normalize to).
 -}
 convertForCharacterization :: UnitConfig -> Text -> Text -> Double -> Double
@@ -919,7 +923,7 @@ convertForCharacterization cfg flowUnit cfUnit qty
     | flowUnit == cfUnit || T.null cfUnit || T.null flowUnit = qty
     | not (isKnownUnit cfg flowUnit) = qty
     | isKnownUnit cfg cfUnit = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
-    | otherwise = maybe qty snd (normalizeToCanonical cfg flowUnit qty)
+    | otherwise = maybe 0 snd (normalizeToCanonical cfg flowUnit qty)
 
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the

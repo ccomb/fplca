@@ -68,6 +68,17 @@ gKgUnitConfig =
         , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
         }
 
+-- | UnitConfig whose mass dimension has NO canonical base (g only, no kg at
+-- factor 1.0), so 'normalizeToCanonical' fails — exercises the result-expression
+-- branch's hard-fail to 0.
+gOnlyUnitConfig :: UnitConfig
+gOnlyUnitConfig =
+    UnitConfig
+        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        , ucUnits = M.fromList [("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)]
+        , ucOriginalKeys = M.fromList [("g", "g")]
+        }
+
 -- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
@@ -366,13 +377,15 @@ spec = do
         -- flow unit), refuse cross-dimension injection (→ 0), apply the factor
         -- when both units are known, and — when the CF unit is a result
         -- expression unknown to the UnitConfig — normalize the flow to its
-        -- canonical base unit (a kg flow is unchanged; a g flow scales to kg).
+        -- canonical base unit (a kg flow is unchanged; a g flow scales to kg), or
+        -- hard-fail to 0 when that dimension defines no canonical base.
         let cases =
                 [ ("units match by name", defaultUnitConfig, "kg", "kg", 5.0, 5.0)
                 , ("cfUnit empty (method without unit)", defaultUnitConfig, "kg", "", 7.0, 7.0)
                 , ("flowUnit empty (no metadata)", defaultUnitConfig, "", "kg", 9.0, 9.0)
                 , ("LCIA-expression CF unit, flow already canonical → unchanged", defaultUnitConfig, "kg", "kg CO2 eq", 3.0, 3.0)
                 , ("LCIA-expression CF unit, g flow → normalized to canonical kg", gKgUnitConfig, "g", "kg CO2 eq", 1000.0, 1.0)
+                , ("LCIA-expression CF unit, flow dimension has no canonical base → 0", gOnlyUnitConfig, "g", "kg CO2 eq", 1000.0, 0.0)
                 , ("dimensionally incompatible → 0", defaultUnitConfig, "m", "kg", 100.0, 0.0)
                 , ("compatible units differ → apply factor (1000 g → 1.0 kg)", gKgUnitConfig, "g", "kg", 1000.0, 1.0)
                 ]
