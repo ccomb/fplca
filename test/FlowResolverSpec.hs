@@ -13,22 +13,29 @@ import Test.Hspec
 spec :: Spec
 spec = do
     -- -----------------------------------------------------------------------
-    -- decodeXmlEntities (pure, from EcoSpold.Common) — order is load-bearing
+    -- decodeXmlEntities (general read path) vs decodeXmlEntitiesFull (synonyms)
     -- -----------------------------------------------------------------------
     describe "decodeXmlEntities" $ do
-        it "fully decodes a double-encoded numeric ref (the ILCD data's form)" $
-            decodeXmlEntities "&amp;#039;" `shouldBe` "'"
-
-        it "decodes a single-encoded numeric ref" $
-            decodeXmlEntities "&#039;" `shouldBe` "'"
-
         it "preserves an escaped-literal named entity (round-trip)" $
             decodeXmlEntities "&amp;lt;" `shouldBe` "&lt;"
 
         it "unescapes a lone ampersand" $
             decodeXmlEntities "&amp;" `shouldBe` "&"
 
-        it "decodeXmlEntitiesFull collapses the round-trip to the character (&amp;lt; -> <)" $
+        it "decodes the line-feed numeric ref that EcoSpold attributes carry" $
+            decodeXmlEntities "a&#10;b" `shouldBe` "a\nb"
+
+        it "preserves a double-encoded numeric ref on the general read path (no collapse)" $
+            decodeXmlEntities "&amp;#13;" `shouldBe` "&#13;"
+
+    describe "decodeXmlEntitiesFull" $ do
+        it "fully decodes a double-encoded numeric ref (the ILCD data's form)" $
+            decodeXmlEntitiesFull "&amp;#039;" `shouldBe` "'"
+
+        it "decodes a single-encoded numeric ref" $
+            decodeXmlEntitiesFull "&#039;" `shouldBe` "'"
+
+        it "collapses the double-encoded named round-trip to the character (&amp;lt; -> <)" $
             decodeXmlEntitiesFull "&amp;lt;" `shouldBe` "<"
 
     describe "splitIlcdSynonyms" $ do

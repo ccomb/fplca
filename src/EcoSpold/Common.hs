@@ -5,6 +5,7 @@ module EcoSpold.Common (
     bsToText,
     decodeXmlEntities,
     decodeXmlEntitiesFull,
+    numericRefChar,
     bsToDouble,
     bsToInt,
     bsToIntMaybe,
@@ -28,49 +29,51 @@ import Numeric (showFFloat)
 bsToText :: BS.ByteString -> Text
 bsToText = decodeXmlEntities . TE.decodeUtf8
 
-{- | Decode the XML entities Xeno (a fast SAX parser) leaves intact: the five
-named entities plus any numeric character reference via 'decodeNumericRefs'.
-The numeric pass subsumes the line-feed/carriage-return refs in EcoSpold
-attribute values (e.g. @generalComment="text&#10;"@) and the @&#039;@/@&#034;@
-apostrophe/quote refs that otherwise truncate chemical-name synonyms when the
-ILCD synonym text is split on @;@.
+{- | Decode the common XML entities Xeno (a fast SAX parser) leaves intact: the
+five named entities plus the line-feed/carriage-return numeric refs that appear
+inside EcoSpold attribute values (e.g. @generalComment="text&#10;"@).
 
-Order is load-bearing. The named entities resolve before @&amp;@, so an escaped
-literal @"&lt;"@ (written @"&amp;lt;"@) round-trips to @"&lt;"@ rather than @"<"@
-— the inverse of writers escaping @&@ first. Numeric refs resolve LAST, after
-@&amp;@: the ILCD flow data double-encodes apostrophes/quotes as @&amp;#039;@, so
-the @&amp;@ step must first expose the @&#039;@ for the numeric pass to turn it
-into @'@. Run earlier it sees no @&#@, @&amp;@ then leaves a bare @&#039;@, and
-the @;@-split truncates the synonym into junk. The trade: a literal @&#039;@-as-
-text (were it written @&amp;#039;@) decodes instead of surviving — the flow data
-carries no such literals, only double-encoded characters.
+Deliberately limited to those two numeric refs. This runs on the whole 'bsToText'
+read path, so decoding arbitrary @&#NNN;@ here would collapse a double-encoded
+literal @&amp;#NNN;@ to a control character instead of round-tripping it to the
+literal @&#NNN;@. Full numeric decoding lives in 'decodeXmlEntitiesFull', applied
+only where the text is afterwards split on @;@ (ILCD synonyms).
 -}
+
+-- @&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
+-- inverse of the writers escaping @&@ FIRST. Resolving it first would turn an
+-- escaped literal @"&lt;"@ (written as @"&amp;lt;"@) back into @"<"@ instead of
+-- @"&lt;"@ — a silent round-trip corruption for entity-like text.
 decodeXmlEntities :: Text -> Text
 decodeXmlEntities =
-    decodeNumericRefs
-        . T.replace "&amp;" "&"
+    T.replace "&amp;" "&"
         . T.replace "&lt;" "<"
         . T.replace "&gt;" ">"
         . T.replace "&quot;" "\""
         . T.replace "&apos;" "'"
+        . T.replace "&#10;" "\n"
+        . T.replace "&#13;" "\r"
 
-{- | Fully decode XML entities, iterating 'decodeXmlEntities' to a fixed point.
-The ILCD flow data double-encodes entities (@&amp;#039;@, @&amp;lt;@), so a single
-pass leaves a half-decoded @&#039;@ / @&lt;@ behind; repeating until stable resolves
-it to the character. Use this only on free text that is afterwards split on @;@
-(ILCD synonyms), where a surviving entity's own @;@ would otherwise be taken for a
-separator. Not for the general read path: it collapses an escaped literal that the
-round-trip-safe 'decodeXmlEntities' deliberately preserves.
+{- | Fully decode XML entities, including arbitrary numeric character references,
+iterating to a fixed point. The ILCD flow data double-encodes entities
+(@&amp;#039;@, @&amp;lt;@): one 'decodeXmlEntities' pass exposes the inner
+@&#039;@ / @&lt;@, 'decodeNumericRefs' (composed in here, NOT on the general read
+path) resolves @&#039;@ to its character, and repeating until stable finishes the
+named half. Use this only on free text afterwards split on @;@ (ILCD synonyms),
+where a surviving entity's own @;@ would be taken for a separator — not on the
+general read path, where it would collapse an escaped literal that
+'decodeXmlEntities' deliberately preserves.
 -}
 decodeXmlEntitiesFull :: Text -> Text
-decodeXmlEntitiesFull t =
-    let t' = decodeXmlEntities t
-     in if t' == t then t else decodeXmlEntitiesFull t'
+decodeXmlEntitiesFull = go
+  where
+    go t =
+        let t' = decodeNumericRefs (decodeXmlEntities t)
+         in if t' == t then t else go t'
 
-{- | Decode XML numeric character references — decimal @&#NNN;@ and hex
-@&#xHH;@ — to their characters. A malformed or out-of-range reference is left
-verbatim rather than crashing (no partial 'chr' on bad input); 'Integer' parsing
-avoids overflow on absurdly long digit runs.
+{- | Decode every XML numeric character reference in a text — decimal @&#NNN;@
+and hex @&#xHH;@ — to its character, via 'numericRefChar'. A malformed or
+out-of-range reference is left verbatim rather than crashing.
 -}
 decodeNumericRefs :: Text -> Text
 decodeNumericRefs t =
@@ -79,17 +82,24 @@ decodeNumericRefs t =
             | T.null rest -> before
             | otherwise ->
                 let (body, semi) = T.span (/= ';') (T.drop 2 rest)
-                 in case (refChar body, T.null semi) of
+                 in case (numericRefChar body, T.null semi) of
                         (Just c, False) ->
                             before <> T.singleton c <> decodeNumericRefs (T.drop 1 semi)
                         _ ->
                             before <> "&#" <> decodeNumericRefs (T.drop 2 rest)
+
+{- | Decode the body of a single XML numeric character reference — the text
+between @&#@ and @;@ — to its character. Decimal by default, hexadecimal when
+prefixed @x@/@X@. 'Nothing' on a malformed or out-of-range value (no partial
+'chr' on bad input); 'Integer' parsing avoids overflow on absurdly long digit
+runs. Shared with "BrightwayExcel.Parser".
+-}
+numericRefChar :: Text -> Maybe Char
+numericRefChar body = case T.uncons body of
+    Just (x, hexits)
+        | x == 'x' || x == 'X' -> readRef TR.hexadecimal hexits
+    _ -> readRef TR.decimal body
   where
-    refChar :: Text -> Maybe Char
-    refChar body = case T.uncons body of
-        Just (x, hexits)
-            | x == 'x' || x == 'X' -> readRef TR.hexadecimal hexits
-        _ -> readRef TR.decimal body
     readRef :: TR.Reader Integer -> Text -> Maybe Char
     readRef reader digits = case reader digits of
         Right (n, leftover)
