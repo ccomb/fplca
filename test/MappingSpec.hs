@@ -68,9 +68,10 @@ gKgUnitConfig =
         , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
         }
 
--- | UnitConfig whose mass dimension has NO canonical base (g only, no kg at
--- factor 1.0), so 'normalizeToCanonical' fails — exercises the result-expression
--- branch's hard-fail to 0.
+{- | UnitConfig whose mass dimension has NO canonical base (g only, no kg at
+factor 1.0), so 'normalizeToCanonical' fails — exercises the result-expression
+branch's hard-fail to 0.
+-}
 gOnlyUnitConfig :: UnitConfig
 gOnlyUnitConfig =
     UnitConfig
