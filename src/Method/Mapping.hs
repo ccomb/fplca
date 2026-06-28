@@ -384,6 +384,14 @@ data MethodTables = MethodTables
     -- ^ (normalized name, medium, subcompartment) → (CF, unit)
     , mtFallbackCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
     -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
+    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
+    {- ^ (normalized name, medium) → (CF, unit) for entries with the long-term
+    UNSPECIFIED subcompartment ("unspecified (long-term)"). A long-term flow at an
+    uncovered specific subcompartment ("groundwater, long-term") inherits this —
+    the method's long-term default, often a deliberate zero — instead of the
+    immediate-emission 'mtFallbackCF', so JRC scores delayed emissions with the
+    method's own long-term factor rather than the immediate one.
+    -}
     , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
     {- ^ (normalized name, medium) → (CF, unit), but only where the substance's
     factor is the SAME across every subcompartment — i.e. the subcompartment
@@ -819,6 +827,24 @@ buildMethodTables cmap energyDensities mappings =
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)
                     , isUnspecifiedSub normSub
+                    ]
+        , mtLongTermFallbackCF =
+            -- The long-term analogue of 'mtFallbackCF': the method's "unspecified
+            -- (long-term)" catch-all. A long-term flow at an uncovered specific
+            -- subcompartment ("groundwater, long-term") has no exact CF and must
+            -- pick up THIS, not the immediate-emission default, so a delayed
+            -- emission gets the method's own long-term factor (e.g. EF's explicit
+            -- zero) rather than the full immediate CF.
+            stripStrategy $
+                M.fromListWith
+                    preferBetter
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    | (cf, mflow) <- mappings
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , isLongTermUnspecifiedSub normSub
                     ]
         , mtSubBlindCF =
             -- Keep a (name, medium) entry only when every subcompartment's CF
@@ -1441,8 +1467,13 @@ lookupCascadeCF tables flowDB fid =
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
-            -- just the one a CF resolved to at build time.
+            -- just the one a CF resolved to at build time. A long-term (delayed)
+            -- emission first tries the method's long-term default
+            -- ('mtLongTermFallbackCF') so it inherits the long-term factor, not
+            -- the immediate-emission one; if the method has none it still falls
+            -- through to the ordinary fallbacks.
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
+                <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
                 <|> M.lookup (name, baseMed) (mtFallbackCF tables)
                 <|> (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
                 <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
@@ -1511,6 +1542,30 @@ omitted bare @unspecified@). Inputs are expected already lower-cased via
 -}
 isUnspecifiedSub :: Text -> Bool
 isUnspecifiedSub s = T.null s || s == "unspecified" || s == "(unspecified)"
+
+{- | True when a subcompartment marks a long-term (delayed) emission, e.g.
+@"groundwater, long-term"@ or @"unspecified (long-term)"@. EF distinguishes the
+time horizon: a substance often carries a different (frequently zero) CF for its
+long-term emission than for its immediate one.
+-}
+isLongTermSub :: Subcompartment -> Bool
+isLongTermSub (Subcompartment s) = "long-term" `T.isInfixOf` s || "long term" `T.isInfixOf` s
+
+{- | A subcompartment that names the long-term catch-all: @"unspecified
+(long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is
+removed. These hold a method's medium-level default for long-term emissions, so a
+long-term flow at an uncovered specific subcompartment ("groundwater, long-term")
+must inherit THIS, not the immediate-emission unspecified CF.
+-}
+isLongTermUnspecifiedSub :: Text -> Bool
+isLongTermUnspecifiedSub s =
+    isLongTermSub (Subcompartment s) && isUnspecifiedSub (stripLongTerm s)
+  where
+    stripLongTerm =
+        T.strip
+            . T.filter (`notElem` ("()" :: String))
+            . T.replace "long term" ""
+            . T.replace "long-term" ""
 
 {- | The @(normalized medium, subcompartment)@ a database flow resolves to after
 compartment normalization. Shared by the name/CAS read path

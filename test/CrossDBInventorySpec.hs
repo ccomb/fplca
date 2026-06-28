@@ -174,6 +174,7 @@ spec = do
                             ]
                     , mtExactCF = M.empty
                     , mtFallbackCF = M.empty
+                    , mtLongTermFallbackCF = M.empty
                     , mtSubBlindCF = M.empty
                     , mtCasCF = M.empty
                     , mtRegionalCasCF = M.empty
