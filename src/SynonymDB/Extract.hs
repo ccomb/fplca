@@ -55,7 +55,27 @@ extractFromILCDFlows flowInfo =
             | info <- M.elems flowInfo
             , syn <- ilcdSynonyms info
             , syn /= ilcdBaseName info
+            , not (norm syn `S.member` casAmbiguous)
             ]
+  where
+    norm = T.toLower . T.strip
+    -- A name listed by flows of more than one distinct CAS is an ambiguous
+    -- bridge — e.g. "sodium", carried both by the element flow and by hundreds
+    -- of sodium-salt flows. Emitting it as a synonym lets the transitive closure
+    -- fuse those unrelated substances into one junk hub, which then leaks an
+    -- organic compound's characterization factor onto the inorganic element.
+    -- Typed by CAS: drop such names so they cannot bridge across substances.
+    casOfName :: M.Map Text (S.Set Text)
+    casOfName =
+        M.fromListWith
+            S.union
+            [ (norm nm, S.singleton cas)
+            | info <- M.elems flowInfo
+            , Just cas <- [ilcdCAS info]
+            , not (T.null cas)
+            , nm <- ilcdBaseName info : ilcdSynonyms info
+            ]
+    casAmbiguous = M.keysSet (M.filter ((> 1) . S.size) casOfName)
 
 -- | Render synonym pairs as CSV with header.
 synonymPairsToCSV :: [(Text, Text)] -> BL.ByteString
