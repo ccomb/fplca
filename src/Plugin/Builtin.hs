@@ -158,7 +158,7 @@ synonymMapper =
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
                 (\f -> MapResult (bfId f) "synonym" 0.8)
-                    <$> Mapping.findFlowBySynonymComp (mcSynonymDB ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                    <$> Mapping.findFlowBySynonymMemo (mcSynonymDB ctx) (mcSynGroupFlows ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
             _ -> Nothing
         }
 
@@ -182,6 +182,7 @@ lciaAnalyzer =
                         , mcBioFlowsByCAS = dbFlowsByCAS db
                         , mcSynonymDB = fromMaybe emptySynonymDB (dbSynonymDB db)
                         , mcActivities = M.empty
+                        , mcSynGroupFlows = M.empty
                         }
             scores <-
                 mapM

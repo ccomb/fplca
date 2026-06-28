@@ -18,7 +18,7 @@ import Types (Database)
 
 -- | A minimal MapContext for testing
 emptyMapCtx :: MapContext
-emptyMapCtx = MapContext M.empty M.empty M.empty emptySynonymDB M.empty
+emptyMapCtx = MapContext M.empty M.empty M.empty emptySynonymDB M.empty M.empty
 
 -- | A test CF with a known UUID
 testCF :: MethodCF
