@@ -250,6 +250,7 @@ test-suite lca-tests
                      , SharedSolverSpec
                      , CoalescingSolverSpec
                      , FlowResolverSpec
+                     , SynonymExtractSpec
                      , PluginConfigSpec
                      , ConfigSpec
                      , LoaderSpec

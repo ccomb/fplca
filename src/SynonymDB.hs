@@ -13,6 +13,10 @@ module SynonymDB (
     -- * Building
     buildFromCSV,
     buildFromPairs,
+    excludeOverFrequentSynonyms,
+    excludeJunkSynonyms,
+    isJunkSynonymName,
+    starEdges,
     loadFromCSVFileWithCache,
 
     -- * Lookup
@@ -38,7 +42,9 @@ import Control.Exception (SomeException, catch, evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Csv (HasHeader (..), decode)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Store (decodeEx, encode)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -72,12 +78,14 @@ hub that would fuse unrelated substances — surfaces through 'oversizedClasses'
 relations (SOx ⊃ SO₂) belong in the typed-edge layer, not as @SameAs@.
 -}
 buildFromPairs :: [(Text, Text)] -> SynonymDB
-buildFromPairs = fromClasses . equivalenceClasses . normalizePairs
+buildFromPairs raws =
+    let normd = normalizePairs raws
+     in (fromClasses (equivalenceClasses normd)){synEdges = normd}
   where
     normalizePairs :: [(Text, Text)] -> [(Text, Text)]
-    normalizePairs raws =
+    normalizePairs rs =
         [ (n1, n2)
-        | (raw1, raw2) <- raws
+        | (raw1, raw2) <- rs
         , let n1 = normalizeName raw1
         , let n2 = normalizeName raw2
         , not (T.null n1)
@@ -91,7 +99,16 @@ fromClasses classes =
     let numbered = zip [0 ..] classes
         nameToId = M.fromList [(name, gid) | (gid, members) <- numbered, name <- members]
         idToNames = M.fromList numbered
-     in SynonymDB nameToId idToNames
+     in SynonymDB nameToId idToNames (starEdges classes)
+
+{- | Star edges for a set of name classes: connect each class's members to its
+first member. Their transitive closure is exactly the classes — enough to
+re-close the relation. 'buildFromPairs' overrides this with the original pairs,
+for a faithful induced-subgraph restriction: a star centred on a node that the
+restriction later drops would lose links the original topology preserves.
+-}
+starEdges :: [[Text]] -> [(Text, Text)]
+starEdges classes = [(m0, m) | (m0 : ms) <- classes, m <- ms]
 
 {- | Load a SynonymDB from a CSV file, using a binary cache for speed.
   On first load: parse CSV → build SynonymDB → save .cache.zst
@@ -142,18 +159,19 @@ loadFromCSVFileWithCache csvPath = do
             (\(_ :: SomeException) -> return ())
 
 {- | Merge multiple SynonymDBs into one, re-closing across them: if one source
-declares A=B and another B=C, the merged DB groups {A,B,C}. Each group is
-reconnected by a star to its first member (enough to preserve its connectivity),
-then the whole edge set is closed again.
+declares A=B and another B=C, the merged DB groups {A,B,C}. The sources' own
+@synEdges@ are concatenated and the whole edge set is closed again, so the merged
+DB carries the union of the original pairs (not a lossy star reconstruction).
 -}
 mergeSynonymDBs :: [SynonymDB] -> SynonymDB
 mergeSynonymDBs [] = emptySynonymDB
 mergeSynonymDBs [db] = db
-mergeSynonymDBs dbs = fromClasses (equivalenceClasses edges)
+mergeSynonymDBs dbs = (fromClasses (equivalenceClasses edges)){synEdges = edges}
   where
-    edges = concatMap groupEdges (concatMap (M.elems . synIdToNames) dbs)
-    groupEdges [] = []
-    groupEdges (m0 : ms) = [(normalizeName m0, normalizeName m) | m <- ms]
+    -- Re-close from each source's own (already normalized) pairs rather than
+    -- reconstructing stars from its classes, so the merged 'synEdges' keeps the
+    -- faithful topology the induced-subgraph restriction needs.
+    edges = concatMap synEdges dbs
 
 -- | Number of synonym names in the database.
 synonymCount :: SynonymDB -> Int
@@ -167,6 +185,72 @@ whatever this returns; an empty result means the closure stayed plausible.
 -}
 oversizedClasses :: Int -> SynonymDB -> [[Text]]
 oversizedClasses maxSize = filter ((> maxSize) . length) . M.elems . synIdToNames
+
+{- | Drop synonym pairs whose synonym (the second element) is carried by more
+than @maxFlows@ distinct base names (the first element). An over-frequent
+"synonym" is a classification label or stop-word — e.g. @"organic"@ (carried by
+thousands of flows), @"inorganic"@, @"petroleum product"@ — not a true synonym,
+which is ~1:1 with a substance and binds a handful of names at most.
+
+Counting is directional and on normalized names, so a real flow that merely HAS
+many synonyms (high out-degree, e.g. @"acetaminophen"@ with its trade names) is
+never touched — only a name that ACTS as a synonym for many distinct flows is.
+Returns the kept pairs and the excluded tokens with their flow counts
+(descending), so the caller can surface the exclusion list, not drop it silently.
+-}
+excludeOverFrequentSynonyms :: Int -> [(Text, Text)] -> ([(Text, Text)], [(Text, Int)])
+excludeOverFrequentSynonyms maxFlows pairs = (kept, excluded)
+  where
+    normed = [(p, normalizeName base, normalizeName syn) | p@(base, syn) <- pairs]
+    flowsPerSynonym = M.fromListWith S.union [(ns, S.singleton nb) | (_, nb, ns) <- normed]
+    overFrequent = M.filter (> maxFlows) (M.map S.size flowsPerSynonym)
+    kept = [p | (p, _, ns) <- normed, not (ns `M.member` overFrequent)]
+    excluded = sortOn (negate . snd) (M.toList overFrequent)
+
+{- | Is this name an obvious non-synonym — a REACH/ILCD dossier placeholder
+(@"not available"@, @"unknown"@, @"active matter"@, an ECHA id stub) rather than a
+substance name? These survive 'excludeOverFrequentSynonyms' (each is carried by
+few flows) yet act as cut-vertices that fuse unrelated substances through long
+chains, so they are dropped by string shape instead of frequency.
+
+Deliberately conservative — it matches only forms that no real substance name
+takes. In particular @"mixture"@ and digit-heavy names are NOT matched: both are
+common in genuine names (@"toluenediisocyanate (mixture)"@, @"pcb-1254"@). The
+@echa-@ check is anchored so it cannot fire on the @echa@ inside a word (e.g.
+French @"huile de chauffage"@).
+-}
+isJunkSynonymName :: Text -> Bool
+isJunkSynonymName name =
+    n `elem` exactStops
+        || any (`T.isInfixOf` n) infixStops
+        || "unknown" `T.isPrefixOf` n
+        || "echa-" `T.isPrefixOf` n
+        || "echa_" `T.isPrefixOf` n
+  where
+    n = normalizeName name
+    exactStops = ["none", "no data", "not applicable", "not assigned", "not specified"]
+    infixStops =
+        [ "available"
+        , "confidential"
+        , "active matter"
+        , "activematter"
+        , "active substance"
+        , "activesubstance"
+        , "active ingredient"
+        , "activeingredient"
+        ]
+
+{- | Drop synonym pairs touching a junk placeholder name ('isJunkSynonymName').
+Returns the kept pairs and the distinct (normalized) junk tokens dropped, so the
+caller can surface them rather than discard them silently.
+-}
+excludeJunkSynonyms :: [(Text, Text)] -> ([(Text, Text)], [Text])
+excludeJunkSynonyms pairs = (kept, excluded)
+  where
+    kept = [p | p@(a, b) <- pairs, not (isJunkSynonymName a), not (isJunkSynonymName b)]
+    excluded =
+        S.toList . S.fromList $
+            [normalizeName x | (a, b) <- pairs, x <- [a, b], isJunkSynonymName x]
 
 {- | Normalize a name for lookup in the synonym database
 

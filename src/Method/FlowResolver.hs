@@ -22,6 +22,7 @@ module Method.FlowResolver (
 
     -- * Pure helpers (exported for testing)
     parseCompartment,
+    splitIlcdSynonyms,
 ) where
 
 import qualified Codec.Compression.Zstd as Zstd
@@ -43,7 +44,7 @@ import System.Directory (doesDirectoryExist, doesFileExist, getModificationTime,
 import System.FilePath (takeExtension, (</>))
 import qualified Xeno.SAX as X
 
-import EcoSpold.Common (bsToText, distributeFiles, isElement)
+import EcoSpold.Common (bsToText, decodeXmlEntitiesFull, distributeFiles, isElement)
 import EcoSpold.Parser2 (normalizeCAS)
 import Method.Types (Compartment (..))
 import Progress (ProgressLevel (..), reportProgress)
@@ -175,6 +176,22 @@ data FlowParseState = FlowParseState
 initialFlowState :: FlowParseState
 initialFlowState = FlowParseState "" "" "" [] [] [] False [] False False "" 0 (-1) Nothing False
 
+{- | Split an ILCD @<synonyms>@ blob into individual names. The EF flow data packs
+several names into one element separated by @;@, double-encodes entities
+(@&amp;#039;@, @&amp;lt;@), and sometimes glues two names with the spaced literal
+label @" othernames "@ in place of a @;@. Fully decode first
+('decodeXmlEntitiesFull') so an entity's own @;@ is not mistaken for a separator,
+then split on @;@ and on the word-bounded @" othernames "@ pseudo-delimiter — the
+surrounding spaces keep a name that merely contains the substring intact.
+-}
+splitIlcdSynonyms :: Text -> [Text]
+splitIlcdSynonyms =
+    filter (not . T.null)
+        . map T.strip
+        . concatMap (T.splitOn " othernames ")
+        . T.splitOn ";"
+        . decodeXmlEntitiesFull
+
 -- | Parse a single ILCD flow XML from bytes
 parseFlowXML :: BS.ByteString -> Maybe (UUID, ILCDFlowInfo)
 parseFlowXML bytes =
@@ -246,7 +263,7 @@ parseFlowXML bytes =
         | isElement tag "synonyms" =
             let !syns =
                     if fpsLangIsEn s
-                        then filter (not . T.null) $ map T.strip $ T.splitOn ";" (accum s)
+                        then splitIlcdSynonyms (accum s)
                         else []
              in s
                     { fpsPath = dropPath s

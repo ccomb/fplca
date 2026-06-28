@@ -4,6 +4,8 @@
 module EcoSpold.Common (
     bsToText,
     decodeXmlEntities,
+    decodeXmlEntitiesFull,
+    numericRefChar,
     bsToDouble,
     bsToInt,
     bsToIntMaybe,
@@ -15,6 +17,7 @@ module EcoSpold.Common (
 
 import Amount (readAmount)
 import qualified Data.ByteString as BS
+import Data.Char (chr)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -26,11 +29,15 @@ import Numeric (showFFloat)
 bsToText :: BS.ByteString -> Text
 bsToText = decodeXmlEntities . TE.decodeUtf8
 
-{- | Decode common XML entities that Xeno doesn't decode
-Xeno is a fast SAX parser but doesn't handle entity references.
-We also decode the two numeric character references (line feed and
-carriage return) that frequently appear inside attribute values in
-EcoSpold exports (e.g. `generalComment="text&#10;"`).
+{- | Decode the common XML entities Xeno (a fast SAX parser) leaves intact: the
+five named entities plus the line-feed/carriage-return numeric refs that appear
+inside EcoSpold attribute values (e.g. @generalComment="text&#10;"@).
+
+Deliberately limited to those two numeric refs. This runs on the whole 'bsToText'
+read path, so decoding arbitrary @&#NNN;@ here would collapse a double-encoded
+literal @&amp;#NNN;@ to a control character instead of round-tripping it to the
+literal @&#NNN;@. Full numeric decoding lives in 'decodeXmlEntitiesFull', applied
+only where the text is afterwards split on @;@ (ILCD synonyms).
 -}
 
 -- @&amp;@ is resolved LAST (leftmost in the composition runs last), the exact
@@ -46,6 +53,58 @@ decodeXmlEntities =
         . T.replace "&apos;" "'"
         . T.replace "&#10;" "\n"
         . T.replace "&#13;" "\r"
+
+{- | Fully decode XML entities, including arbitrary numeric character references,
+iterating to a fixed point. The ILCD flow data double-encodes entities
+(@&amp;#039;@, @&amp;lt;@): one 'decodeXmlEntities' pass exposes the inner
+@&#039;@ / @&lt;@, 'decodeNumericRefs' (composed in here, NOT on the general read
+path) resolves @&#039;@ to its character, and repeating until stable finishes the
+named half. Use this only on free text afterwards split on @;@ (ILCD synonyms),
+where a surviving entity's own @;@ would be taken for a separator — not on the
+general read path, where it would collapse an escaped literal that
+'decodeXmlEntities' deliberately preserves.
+-}
+decodeXmlEntitiesFull :: Text -> Text
+decodeXmlEntitiesFull = go
+  where
+    go t =
+        let t' = decodeNumericRefs (decodeXmlEntities t)
+         in if t' == t then t else go t'
+
+{- | Decode every XML numeric character reference in a text — decimal @&#NNN;@
+and hex @&#xHH;@ — to its character, via 'numericRefChar'. A malformed or
+out-of-range reference is left verbatim rather than crashing.
+-}
+decodeNumericRefs :: Text -> Text
+decodeNumericRefs t =
+    case T.breakOn "&#" t of
+        (before, rest)
+            | T.null rest -> before
+            | otherwise ->
+                let (body, semi) = T.span (/= ';') (T.drop 2 rest)
+                 in case (numericRefChar body, T.null semi) of
+                        (Just c, False) ->
+                            before <> T.singleton c <> decodeNumericRefs (T.drop 1 semi)
+                        _ ->
+                            before <> "&#" <> decodeNumericRefs (T.drop 2 rest)
+
+{- | Decode the body of a single XML numeric character reference — the text
+between @&#@ and @;@ — to its character. Decimal by default, hexadecimal when
+prefixed @x@/@X@. 'Nothing' on a malformed or out-of-range value (no partial
+'chr' on bad input); 'Integer' parsing avoids overflow on absurdly long digit
+runs. Shared with "BrightwayExcel.Parser".
+-}
+numericRefChar :: Text -> Maybe Char
+numericRefChar body = case T.uncons body of
+    Just (x, hexits)
+        | x == 'x' || x == 'X' -> readRef TR.hexadecimal hexits
+    _ -> readRef TR.decimal body
+  where
+    readRef :: TR.Reader Integer -> Text -> Maybe Char
+    readRef reader digits = case reader digits of
+        Right (n, leftover)
+            | T.null leftover, n >= 0, n <= 0x10FFFF -> Just (chr (fromInteger n))
+        _ -> Nothing
 
 -- | ByteString to Double conversion (strict - errors on parse failure)
 bsToDouble :: BS.ByteString -> Double

@@ -7,7 +7,7 @@ import qualified Data.Set as S
 import Data.Text (Text, pack)
 import Test.Hspec
 
-import SynonymDB (buildFromPairs, getSynonyms, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses, uncoveredUnitSuffixes)
+import SynonymDB (buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses, uncoveredUnitSuffixes)
 
 spec :: Spec
 spec = do
@@ -42,6 +42,63 @@ spec = do
         it "stays silent when every class is within the bound" $
             oversizedClasses 10 (buildFromPairs [("alpha", "beta"), ("beta", "gamma")])
                 `shouldBe` []
+
+    describe "excludeOverFrequentSynonyms" $ do
+        -- "organic" acts as a synonym for 3 distinct flows -> a class label, dropped.
+        -- "acetaminophen" merely HAS 3 synonyms (out-degree) -> a real flow, kept.
+        let pairs =
+                [ ("benzene", "organic")
+                , ("toluene", "organic")
+                , ("phenol", "organic")
+                , ("acetaminophen", "paracetamol")
+                , ("acetaminophen", "tylenol")
+                , ("acetaminophen", "apap")
+                ]
+            (kept, excluded) = excludeOverFrequentSynonyms 2 pairs
+
+        it "drops the over-frequent synonym and surfaces it with its flow count" $ do
+            excluded `shouldBe` [("organic", 3)]
+            ("organic" `elem` map snd kept) `shouldBe` False
+
+        it "keeps a real flow that merely has many synonyms (out-degree, not in-degree)" $
+            kept `shouldMatchList` [("acetaminophen", s) | s <- ["paracetamol", "tylenol", "apap"]]
+
+        it "counts case/punctuation variants of a synonym together (normalized)" $
+            snd (excludeOverFrequentSynonyms 2 [("a", "Organic"), ("b", "organic"), ("c", "ORGANIC")])
+                `shouldBe` [("organic", 3)]
+
+    describe "excludeJunkSynonyms" $ do
+        -- Dossier placeholders / id stubs are dropped; real substances survive,
+        -- including names that contain "(mixture)" or are digit-heavy.
+        let pairs =
+                [ ("arsenic", "not available")
+                , ("benzene", "unknown")
+                , ("sodium hydroxide", "98%activematter")
+                , ("n-butane", "echa-8600dbe1-6174-49ec-b025-9cd03d318e49")
+                , ("toluene diisocyanate", "2,4/2,6-toluenediisocyanate (mixture)")
+                , ("hexachlorocyclohexane", "pcb-1254")
+                ]
+            (kept, dropped) = excludeJunkSynonyms pairs
+
+        it "drops pairs touching a placeholder/id-stub token, keeps real ones" $
+            kept
+                `shouldMatchList` [ ("toluene diisocyanate", "2,4/2,6-toluenediisocyanate (mixture)")
+                                  , ("hexachlorocyclohexane", "pcb-1254")
+                                  ]
+
+        it "surfaces the distinct dropped tokens" $
+            length dropped `shouldBe` 4
+
+        it "flags dossier prose and ECHA id stubs" $ do
+            isJunkSynonymName "not available" `shouldBe` True
+            isJunkSynonymName "unknown atom or ion" `shouldBe` True
+            isJunkSynonymName "100%activematter" `shouldBe` True
+            isJunkSynonymName "echa-8600dbe1-6174-49ec-b025-9cd03d318e49" `shouldBe` True
+
+        it "spares real names with 'mixture', digits, or an inner 'echa'" $ do
+            isJunkSynonymName "2,4/2,6-toluenediisocyanate (mixture)" `shouldBe` False
+            isJunkSynonymName "pcb-1254" `shouldBe` False
+            isJunkSynonymName "huile de chauffage" `shouldBe` False
 
     describe "normalizeName" $ do
         it "strips a trailing SimaPro unit suffix (/kg, /m3, /Sm3) so unit variants share a node" $ do

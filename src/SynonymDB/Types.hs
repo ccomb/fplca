@@ -19,13 +19,18 @@ import GHC.Generics (Generic)
 
 - @synNameToId@: Maps normalized flow names to synonym group IDs
 - @synIdToNames@: Maps group IDs back to all names in that group
+- @synEdges@: the normalized @SameAs@ pairs the classes were closed from, kept
+  so the relation can be re-closed on a restricted node set (an induced
+  subgraph on the used flow names) at fan-out time — a closed class cannot be
+  re-split once its internal edges are gone.
 -}
 data SynonymDB = SynonymDB
     { synNameToId :: !(Map Text Int)
     , synIdToNames :: !(Map Int [Text])
+    , synEdges :: ![(Text, Text)]
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
 -- | Empty synonym database
 emptySynonymDB :: SynonymDB
-emptySynonymDB = SynonymDB M.empty M.empty
+emptySynonymDB = SynonymDB M.empty M.empty []

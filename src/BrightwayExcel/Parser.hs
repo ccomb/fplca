@@ -57,7 +57,7 @@ import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (chr, isAsciiUpper, ord, toUpper)
+import Data.Char (isAsciiUpper, ord, toUpper)
 import Data.List (find, findIndex, partition)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
@@ -68,6 +68,7 @@ import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import EcoSpold.Common (numericRefChar)
 import Progress (ProgressLevel (..), reportProgress)
 import SimaPro.Parser (
     generateFlowUUID,
@@ -643,10 +644,5 @@ decodeEntities t
         | e == "amp" = Just "&"
         | e == "quot" = Just "\""
         | e == "apos" = Just "'"
-        | Just hex <- T.stripPrefix "#x" e = charFrom TR.hexadecimal hex
-        | Just hex <- T.stripPrefix "#X" e = charFrom TR.hexadecimal hex
-        | Just dec <- T.stripPrefix "#" e = charFrom TR.decimal dec
+        | Just numBody <- T.stripPrefix "#" e = T.singleton <$> numericRefChar numBody
         | otherwise = Nothing
-    charFrom reader s = case reader s of
-        Right (n, rest) | T.null rest && n >= 0 && n <= 0x10FFFF -> Just (T.singleton (chr n))
-        _ -> Nothing

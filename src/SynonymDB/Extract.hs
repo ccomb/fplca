@@ -38,42 +38,23 @@ extractFromEcoSpold2 bioFlowDB =
             , syn /= bfName f
             ]
 
-{- | Extract synonym pairs from ILCD flow definitions.
-Two sources:
-1. Direct: baseName ↔ each synonym from <common:synonyms>
-2. CAS grouping: flows sharing a CAS are chained as synonyms
+{- | Extract synonym pairs from ILCD flow definitions: the direct
+@<common:synonyms>@ of each flow (baseName ↔ each synonym).
+
+CAS-based equivalence is deliberately NOT emitted as synonym pairs. Flows
+sharing a CAS are already matched by the CAS cascade (@mtCasCF@) at lookup time,
+so chaining same-CAS names here adds no new match — it only injects transitive
+bridges that fuse unrelated substances into oversized closure classes (one
+shared or blank CAS can connect hundreds of names through a single chain).
 -}
 extractFromILCDFlows :: M.Map UUID ILCDFlowInfo -> [(Text, Text)]
 extractFromILCDFlows flowInfo =
-    S.toList (S.union directSet casSet)
-  where
-    infos = M.elems flowInfo
-
-    -- 1. Direct synonyms from <common:synonyms>
-    directSet =
+    S.toList $
         S.fromList
             [ (ilcdBaseName info, syn)
-            | info <- infos
+            | info <- M.elems flowInfo
             , syn <- ilcdSynonyms info
             , syn /= ilcdBaseName info
-            ]
-
-    -- 2. CAS grouping: chain distinct baseNames sharing the same CAS
-    -- Use Set to collect unique names per CAS, then chain (not all-pairs)
-    casSet =
-        S.fromList
-            [ (n1, n2)
-            | names <- M.elems casByName
-            , let unique = S.toAscList names
-            , (n1, n2) <- zip unique (drop 1 unique)
-            ]
-    casByName =
-        M.fromListWith
-            S.union
-            [ (cas, S.singleton (ilcdBaseName info))
-            | info <- infos
-            , Just cas <- [ilcdCAS info]
-            , not (T.null cas)
             ]
 
 -- | Render synonym pairs as CSV with header.

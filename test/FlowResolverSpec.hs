@@ -4,13 +4,53 @@ module FlowResolverSpec (spec) where
 
 import Data.ByteString (ByteString)
 import qualified Data.UUID as UUID
+import EcoSpold.Common (decodeXmlEntities, decodeXmlEntitiesFull)
 import EcoSpold.Parser2 (normalizeCAS)
-import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML)
+import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML, splitIlcdSynonyms)
 import Method.Types (Compartment (..))
 import Test.Hspec
 
 spec :: Spec
 spec = do
+    -- -----------------------------------------------------------------------
+    -- decodeXmlEntities (general read path) vs decodeXmlEntitiesFull (synonyms)
+    -- -----------------------------------------------------------------------
+    describe "decodeXmlEntities" $ do
+        it "preserves an escaped-literal named entity (round-trip)" $
+            decodeXmlEntities "&amp;lt;" `shouldBe` "&lt;"
+
+        it "unescapes a lone ampersand" $
+            decodeXmlEntities "&amp;" `shouldBe` "&"
+
+        it "decodes the line-feed numeric ref that EcoSpold attributes carry" $
+            decodeXmlEntities "a&#10;b" `shouldBe` "a\nb"
+
+        it "preserves a double-encoded numeric ref on the general read path (no collapse)" $
+            decodeXmlEntities "&amp;#13;" `shouldBe` "&#13;"
+
+    describe "decodeXmlEntitiesFull" $ do
+        it "fully decodes a double-encoded numeric ref (the ILCD data's form)" $
+            decodeXmlEntitiesFull "&amp;#039;" `shouldBe` "'"
+
+        it "decodes a single-encoded numeric ref" $
+            decodeXmlEntitiesFull "&#039;" `shouldBe` "'"
+
+        it "collapses the double-encoded named round-trip to the character (&amp;lt; -> <)" $
+            decodeXmlEntitiesFull "&amp;lt;" `shouldBe` "<"
+
+    describe "splitIlcdSynonyms" $ do
+        it "splits an ILCD synonyms blob on ';' separators" $
+            splitIlcdSynonyms "a;b;c" `shouldBe` ["a", "b", "c"]
+
+        it "fully decodes a double-encoded named entity, so no &lt fragment survives the split" $
+            splitIlcdSynonyms "solvent &amp;lt;c9&amp;gt;" `shouldBe` ["solvent <c9>"]
+
+        it "fully decodes a double-encoded numeric entity and does not split on its semicolon" $
+            splitIlcdSynonyms "x&amp;#039;y" `shouldBe` ["x'y"]
+
+        it "splits on the 'othernames' pseudo-delimiter the source glues names with" $
+            splitIlcdSynonyms "a;b othernames c" `shouldBe` ["a", "b", "c"]
+
     -- -----------------------------------------------------------------------
     -- normalizeCAS (pure, from EcoSpold.Parser2)
     -- -----------------------------------------------------------------------
@@ -60,6 +100,12 @@ spec = do
                 Nothing -> expectationFailure "Expected Just result"
                 Just (_, info) ->
                     ilcdSynonyms info `shouldContain` ["CO2"]
+
+        it "decodes double-encoded entity refs in synonyms without splitting on the entity's semicolon" $ do
+            case parseFlowXML flowWithEntitySynonyms of
+                Nothing -> expectationFailure "Expected Just result"
+                Just (_, info) ->
+                    ilcdSynonyms info `shouldBe` ["PCB", "(1-methylethyl)-1,1'-biphenyl"]
 
         it "returns Nothing for XML with no UUID" $
             case parseFlowXML xmlNoUUID of
@@ -147,6 +193,27 @@ flowWithSynonyms =
     \<name>\
     \<baseName xml:lang=\"en\">Carbon dioxide, fossil</baseName>\
     \<common:synonyms xml:lang=\"en\">CO2; carbon dioxide</common:synonyms>\
+    \</name>\
+    \</dataSetInformation>\
+    \</flowInformation>\
+    \</flowDataSet>"
+
+-- Synonym text carrying a DOUBLE-encoded apostrophe (@&amp;#039;@) — the form
+-- the ILCD flow data actually uses. The @&amp;@ must decode first to expose
+-- @&#039;@, which then decodes to a real apostrophe; otherwise the half-decoded
+-- @&#039;@ reaches the ';'-split and truncates the second synonym into the
+-- "…1,1&#039" fragment plus a stray "-biphenyl".
+flowWithEntitySynonyms :: ByteString
+flowWithEntitySynonyms =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+    \<flowDataSet xmlns=\"http://lca.jrc.it/ILCD/Flow\" \
+    \xmlns:common=\"http://lca.jrc.it/ILCD/Common\">\
+    \<flowInformation>\
+    \<dataSetInformation>\
+    \<common:UUID>12345678-1234-1234-1234-123456789abc</common:UUID>\
+    \<name>\
+    \<baseName xml:lang=\"en\">Biphenyl derivative</baseName>\
+    \<common:synonyms xml:lang=\"en\">PCB; (1-methylethyl)-1,1&amp;#039;-biphenyl</common:synonyms>\
     \</name>\
     \</dataSetInformation>\
     \</flowInformation>\

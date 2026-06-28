@@ -102,7 +102,7 @@ import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeUnit)
+import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeToCanonical, normalizeUnit)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -589,26 +589,36 @@ expandSynonymMappings ::
 expandSynonymMappings synDB flowsByName mappings =
     mappings ++ concatMap expand mappings
   where
-    -- One-shot inverse index: normalized name → set of direct partners
-    -- (union of all groups containing the name, without recursing). Stays
-    -- inside 'SynonymDB''s star-topology semantics — no chained
-    -- inferences across hubs — but does see every direct pair, which
-    -- 'lookupSynonymGroup' alone misses when many pairs converge on the
-    -- same hub name and @M.fromList@ keeps only the last-inserted group.
-    directPeers :: M.Map Text (S.Set Text)
-    directPeers =
-        M.fromListWith
-            S.union
-            [ (normalizeName m, S.fromList (map normalizeName members))
-            | members <- M.elems (synIdToNames synDB)
-            , m <- members
-            ]
+    -- De-fan-out (M): restrict the synonym relation to USED flow names — the
+    -- DB's own flow-name index ∪ this method's CF names — then re-close on that
+    -- induced subgraph. Generic source-synonym tokens that are not flow names
+    -- (e.g. @organic@, listed on tens of thousands of ILCD flows) drop out, so
+    -- they stop fusing unrelated substances into one giant junk-hub class. The
+    -- global closure has already merged such a hub and cannot be re-split, so we
+    -- re-close from 'synEdges' (the original pairs) against the used set here.
+    --
+    -- Trade-off: a synonym whose name is neither a flow nor a CF is dropped, so a
+    -- substance bridged ONLY through such an intermediate would be lost. Measured
+    -- on JRC EF-3.1 × BAFU (all 25 categories), the dropped matches are junk-hub
+    -- fan-out (e.g. @arsenic → {butanol, acetone, aluminium, …}@) plus correct
+    -- CO₂/CH₄/land-use subtype discrimination (a @…, land use change@ CF must not
+    -- reach the generic @carbon dioxide@ flow); no genuine same-substance match
+    -- was lost. The restriction is sound in practice.
+    used :: S.Set Text
+    used =
+        foldr
+            (S.insert . normalizeName . mcfFlowName . fst)
+            (S.fromList (M.keys flowsByName))
+            mappings
+
+    inducedDB :: SynonymDB
+    inducedDB =
+        buildFromPairs [e | e@(a, b) <- synEdges synDB, S.member a used, S.member b used]
 
     expand (cf, _) =
-        let cfName = normalizeName (mcfFlowName cf)
-            peers = M.findWithDefault S.empty cfName directPeers
+        let peers = fromMaybe [] (getSynonyms inducedDB =<< lookupSynonymGroup inducedDB (mcfFlowName cf))
          in [ (cf, Just (flow, BySynonym))
-            | syn <- S.toList peers
+            | syn <- peers
             , flow <- M.findWithDefault [] syn flowsByName
             ]
 
@@ -896,23 +906,32 @@ buildMethodTables cmap energyDensities mappings =
         Just (flow, ByProxy) -> bfName flow
         _ -> mcfFlowName cf
 
-{- | Convert @qty@ from @flowUnit@ to @cfUnit@ for characterization.
+{- | Convert the inventory @qty@ (in @flowUnit@) to the basis the CF value
+expects, for characterization.
 
-Bypass cases (returns @qty@ unchanged):
-  * Units match by name, or either side has no unit metadata.
-  * Either unit is unknown to the 'UnitConfig' (e.g. LCIA result expressions
-    like "kg CO2 eq"). The CF author already chose values consistent with
-    their declared unit; we trust them rather than penalize.
-
-Hard fail (returns @0@): both units are known to the 'UnitConfig' but
-dimensionally incompatible (e.g. flow in @m@, CF in @kg@). Silently using
-@qty@ here would inject wrong-dimension data into the score; we refuse.
+  * Units match, or the flow carries no unit → @qty@ unchanged.
+  * Both units known to the 'UnitConfig' → ordinary same-dimension conversion;
+    a dimensional mismatch (flow @m@, CF @kg@) hard-fails to @0@ rather than
+    injecting wrong-dimension data into the score.
+  * The CF unit is a result expression unknown to the 'UnitConfig' (e.g.
+    @"kg CO2 eq"@ — the common ILCD/EF case, where 'mcfUnit' carries the impact
+    unit, not the flow's reference unit) → the CF value is defined per the
+    flow's canonical base unit, so we normalize @qty@ to that base unit
+    ('normalizeToCanonical'). A flow already in its base unit (kg) is left as
+    is; a flow in @g@/@mg@ is scaled to kg. Without this, grams would be
+    characterized as if they were kilograms (a ×1000 / ×1e6 over-count). If the
+    flow's dimension defines no canonical base (a 'UnitConfig' defect),
+    'normalizeToCanonical' returns 'Nothing' and we hard-fail to @0@ — as in the
+    dimensional-mismatch case — rather than silently scoring the un-normalized
+    amount.
+  * The flow unit itself is unknown → @qty@ unchanged (no base to normalize to).
 -}
 convertForCharacterization :: UnitConfig -> Text -> Text -> Double -> Double
 convertForCharacterization cfg flowUnit cfUnit qty
     | flowUnit == cfUnit || T.null cfUnit || T.null flowUnit = qty
-    | not (isKnownUnit cfg flowUnit) || not (isKnownUnit cfg cfUnit) = qty
-    | otherwise = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+    | not (isKnownUnit cfg flowUnit) = qty
+    | isKnownUnit cfg cfUnit = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+    | otherwise = maybe 0 snd (normalizeToCanonical cfg flowUnit qty)
 
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the

@@ -182,7 +182,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
+import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -3518,6 +3518,14 @@ removeUploadedRefData baseDir name = do
             Right () ->
                 reportProgress Info $ "Deleted: " <> uploadDir
 
+{- | A synonym carried by more distinct flows than this is a classification label
+or stop-word (e.g. @"organic"@), not a true synonym — 'excludeOverFrequentSynonyms'
+drops it. The bound sits in the gap between the class-label hubs (≥187 flows in
+EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
+-}
+maxSynonymFlowFrequency :: Int
+maxSynonymFlowFrequency = 25
+
 {- | Auto-create flow synonyms from extracted pairs.
 Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv,
 registers and auto-loads the synonym set.
@@ -3531,10 +3539,32 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
     if alreadyLoaded
         then reportProgress Info $ "  [AUTO] " <> T.unpack slug <> ": already loaded (cached)"
         else do
+            let (nonJunkPairs, junkTokens) = excludeJunkSynonyms pairs
+                (keptPairs, excludedSyns) =
+                    excludeOverFrequentSynonyms maxSynonymFlowFrequency nonJunkPairs
+            unless (null junkTokens) $
+                reportProgress Info $
+                    "  [AUTO] "
+                        <> T.unpack slug
+                        <> ": dropped "
+                        <> show (length junkTokens)
+                        <> " placeholder/non-substance synonym tokens: "
+                        <> T.unpack (T.intercalate ", " (take 8 junkTokens))
+            unless (null excludedSyns) $
+                reportProgress Info $
+                    "  [AUTO] "
+                        <> T.unpack slug
+                        <> ": excluded "
+                        <> show (length excludedSyns)
+                        <> " over-frequent synonym tokens (class labels/stop-words): "
+                        <> T.unpack
+                            ( T.intercalate ", " $
+                                map (\(tok, n) -> tok <> "(" <> T.pack (show n) <> ")") (take 8 excludedSyns)
+                            )
             let dir = "uploads/flow-synonyms" </> T.unpack slug
                 path = dir </> "data.csv"
             createDirectoryIfMissing True dir
-            BL.writeFile path (synonymPairsToCSV pairs)
+            BL.writeFile path (synonymPairsToCSV keptPairs)
             let rd =
                     RefDataConfig
                         { rdName = slug
@@ -3546,7 +3576,7 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
                         }
             addFlowSynonyms manager rd
             -- Build SynonymDB directly from pairs (skip CSV round-trip)
-            let !synDB = buildFromPairs pairs
+            let !synDB = buildFromPairs keptPairs
             atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
             -- Transitive closure has no degree cap, so a junk hub that fused
             -- unrelated substances would silently pollute the fan-out. Surface
@@ -3564,5 +3594,5 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
                 "  [AUTO] "
                     <> T.unpack slug
                     <> ": "
-                    <> show (length pairs)
+                    <> show (length keptPairs)
                     <> " synonym pairs"
