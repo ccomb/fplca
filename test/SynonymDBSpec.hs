@@ -98,7 +98,23 @@ spec = do
         it "spares real names with 'mixture', digits, or an inner 'echa'" $ do
             isJunkSynonymName "2,4/2,6-toluenediisocyanate (mixture)" `shouldBe` False
             isJunkSynonymName "pcb-1254" `shouldBe` False
+            isJunkSynonymName "carbon 14" `shouldBe` False
             isJunkSynonymName "huile de chauffage" `shouldBe` False
+
+        it "drops bare numeric ids and registry numbers (ENT, CIPAC)" $ do
+            isJunkSynonymName "ENT 27164" `shouldBe` True
+            isJunkSynonymName "ENT 27,164" `shouldBe` True
+            isJunkSynonymName "27164" `shouldBe` True
+            isJunkSynonymName "CIPAC 12" `shouldBe` True
+
+        -- The ozd leak: carbon tetrachloride's ODP factor reached carbofuran
+        -- because both carry the USDA number "ENT 27164" / "ENT 27,164", which
+        -- normalize to the same token. Dropping the id breaks the bridge.
+        it "drops a registry-id bridge so it cannot fuse unrelated substances" $ do
+            let raw = [("carbon tetrachloride", "ENT 27164"), ("carbofuran", "ENT 27,164")]
+                (kept, dropped) = excludeJunkSynonyms raw
+            kept `shouldBe` []
+            dropped `shouldBe` ["ent 27164"]
 
     describe "normalizeName" $ do
         it "strips a trailing SimaPro unit suffix (/kg, /m3, /Sm3) so unit variants share a node" $ do
