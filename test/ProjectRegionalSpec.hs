@@ -75,9 +75,44 @@ spec = describe "projectRegionalResourceFlows" $ do
             (projectRegionalResourceFlows synDB (M.fromList [(bfId frFlow, frFlow)]) [(cfGlobal, Just (baseFlow, BySynonym))])
             `shouldNotContain` [frProjection]
 
-    it "does not project an emission flow (medium guard; the release side stays global)" $ do
-        let emisRiver =
-                (mkResourceFlow 13 "Water, river, FR")
+    it "projects a release CF onto a region-tagged water emission flow by its own name" $ do
+        let releaseCF =
+                (mkLocatedCF "Water" (-42.0) (Just "FR"))
+                    { mcfCompartment = Just (Compartment "water" "" "")
+                    }
+            waterFR =
+                (mkResourceFlow 20 "Water, FR")
                     { bfCompartment = Just (VT.Compartment "water" Nothing)
                     }
-        runWith [emisRiver] `shouldNotContain` [frProjection]
+            bareWater =
+                (mkResourceFlow 21 "Water")
+                    { bfCompartment = Just (VT.Compartment "water" Nothing)
+                    }
+        projected
+            ( projectRegionalResourceFlows
+                synDB
+                (M.fromList [(bfId waterFR, waterFR), (bfId bareWater, bareWater)])
+                [(releaseCF, Just (bareWater, ByName))]
+            )
+            `shouldContain` [("Water, FR", Nothing, -42.0)]
+
+    it "does not project an air emission flow, so air-regionalized methods stay global" $ do
+        let airCF =
+                (mkLocatedCF "Sulfur dioxide" 1.5 (Just "FR"))
+                    { mcfCompartment = Just (Compartment "air" "" "")
+                    }
+            so2FR =
+                (mkResourceFlow 22 "Sulfur dioxide, FR")
+                    { bfCompartment = Just (VT.Compartment "air" Nothing)
+                    }
+            bareSo2 =
+                (mkResourceFlow 23 "Sulfur dioxide")
+                    { bfCompartment = Just (VT.Compartment "air" Nothing)
+                    }
+        projected
+            ( projectRegionalResourceFlows
+                synDB
+                (M.fromList [(bfId so2FR, so2FR), (bfId bareSo2, bareSo2)])
+                [(airCF, Just (bareSo2, ByName))]
+            )
+            `shouldNotContain` [("Sulfur dioxide, FR", Nothing, 1.5)]

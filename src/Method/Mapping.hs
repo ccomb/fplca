@@ -729,25 +729,45 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     mappings ++ projected
   where
     flowMedium = normalizeMedium . T.toLower . VT.bfCompartmentName
-    -- Located CFs indexed by (matched flow's synonym group, medium, region).
-    located :: M.Map (Int, Text, Text) MethodCF
-    located =
+    cfMedium cf = case mcfCompartment cf of
+        Just (Compartment m _ _) -> normalizeMedium (T.toLower m)
+        Nothing -> ""
+    -- Located CFs reached two ways: by the matched flow's synonym GROUP — a CF
+    -- whose name is bridged to the flow (withdrawal @"river water"@ → @"Water,
+    -- river"@) — and by the CF's own NAME — a CF whose name equals the flow's
+    -- region-stripped base (the bare @"Water"@ release CF → @"Water, FR"@).
+    byGroup :: M.Map (Int, Text, Text) MethodCF
+    byGroup =
         M.fromList
             [ ((grp, flowMedium flow, loc), cf)
             | (cf, Just (flow, _)) <- mappings
             , Just loc <- [mcfConsumerLocation cf]
             , Just grp <- [lookupSynonymGroup synDB (bfName flow)]
             ]
-    -- Most methods carry no located CF; skip the biosphere-flow walk for them.
+    byName :: M.Map (Text, Text, Text) MethodCF
+    byName =
+        M.fromList
+            [ ((normalizeName (mcfFlowName cf), cfMedium cf, loc), cf)
+            | (cf, _) <- mappings
+            , Just loc <- [mcfConsumerLocation cf]
+            ]
+    -- Scope to the water dimensions only: the resource (withdrawal/input) and
+    -- water (release/output) media. Excludes air/soil — acidification and PM
+    -- carry located CFs too, but they must stay GLOBAL to match an unregionalized
+    -- reference, so projecting their region-tagged flows would wrongly regionalize
+    -- them. Most methods carry no located CF; skip the flow walk for them.
     projected
-        | M.null located = []
+        | M.null byName = []
         | otherwise =
             [ (cf{mcfConsumerLocation = Nothing}, Just (flow, BySynonym))
             | flow <- M.elems bioFlows
-            , flowMedium flow == "resource"
+            , let med = flowMedium flow
+            , med == "resource" || med == "water"
             , (base, Just loc) <- [extractLocationSuffix (bfName flow)]
-            , Just grp <- [lookupSynonymGroup synDB base]
-            , Just cf <- [M.lookup (grp, "resource", loc) located]
+            , Just cf <-
+                [ M.lookup (normalizeName base, med, loc) byName
+                    <|> (lookupSynonymGroup synDB base >>= \grp -> M.lookup (grp, med, loc) byGroup)
+                ]
             ]
 
 -- No compartment filter here on purpose: 'buildMethodTables' keys
