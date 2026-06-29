@@ -116,6 +116,19 @@ spec = do
                 Just v -> v `shouldSatisfy` (\x -> abs (x - 3.6) < 0.001)
                 Nothing -> expectationFailure "conversion failed"
 
+        it "converts 1 kBq to 1000 Bq" $ do
+            cfg <- loadFullUnitConfig
+            convertUnit cfg "kBq" "Bq" 1.0 `shouldBe` Just 1000.0
+
+        -- Radioactivity's reference unit is kBq, not the SI Bq: EF/ILCD
+        -- ionising-radiation CFs are authored per kBq, and a result-expression
+        -- CF unit ("kBq U235 equivalents") is unknown to the config, so a Bq
+        -- inventory flow must normalize to kBq (÷1000) before the CF applies.
+        -- Guards data/units.csv against reverting to a Bq-canonical /time.
+        it "normalizes Bq to canonical kBq (ionising-radiation CFs are per kBq)" $ do
+            cfg <- loadFullUnitConfig
+            normalizeToCanonical cfg "Bq" 1000.0 `shouldBe` Just ("kbq", 1.0)
+
         it "returns Nothing for incompatible units" $ do
             cfg <- loadFullUnitConfig
             convertUnit cfg "kg" "m" 1.0 `shouldBe` Nothing

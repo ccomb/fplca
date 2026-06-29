@@ -116,9 +116,14 @@ convertUnit cfg fromUnit toUnit amount = do
         then Just (amount * factorFrom / factorTo)
         else Nothing
 
-{- | Canonical (base) unit name for the dimension of a given unit.
-The base unit is the one whose factor to SI is 1.0. Returns 'Nothing' if the
-input unit is unknown or if no base unit is defined for its dimension.
+{- | Canonical (reference) unit name for the dimension of a given unit.
+The reference unit is the one whose factor is 1.0 in @units.csv@ — normally the
+SI base, but a dimension may instead pick the unit its characterization factors
+are authored in. Radioactivity uses @kBq@ (not the SI @Bq@) because EF/ILCD
+ionising-radiation CFs are defined per kBq, and 'convertForCharacterization'
+normalizes a flow to this reference before applying a result-expression CF.
+Returns 'Nothing' if the input unit is unknown or its dimension defines no
+reference unit.
 -}
 canonicalUnitFor :: UnitConfig -> Text -> Maybe Text
 canonicalUnitFor cfg unitText = do
