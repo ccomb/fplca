@@ -3575,13 +3575,13 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
                         , rdDescription = Just description
                         }
             addFlowSynonyms manager rd
-            -- Build SynonymDB directly from pairs (skip CSV round-trip)
+            -- Build SynonymDB directly from pairs (skip CSV round-trip). The pairs
+            -- are CAS-typed at extraction ('extractFromILCDFlows'): a name carried
+            -- by flows of more than one distinct CAS is an ambiguous bridge and is
+            -- dropped, so the transitive closure can no longer fuse unrelated
+            -- substances into a junk hub. Any residual oversized class is surfaced.
             let !synDB = buildFromPairs keptPairs
             atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
-            -- Transitive closure has no degree cap, so a junk hub that fused
-            -- unrelated substances would silently pollute the fan-out. Surface
-            -- any implausibly large class (threshold 100, matching the offline
-            -- synonyms compiler) instead of dropping it silently.
             forM_ (oversizedClasses 100 synDB) $ \cls ->
                 reportProgress Warning $
                     "  [AUTO] "

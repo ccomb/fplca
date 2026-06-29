@@ -11,6 +11,7 @@ module SynonymDB.Extract (
     synonymPairsToCSV,
 ) where
 
+import Control.Monad (mfilter)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.Map.Strict as M
@@ -21,6 +22,7 @@ import qualified Data.Text.Encoding as T
 import Data.UUID (UUID)
 
 import Method.FlowResolver (ILCDFlowInfo (..))
+import SynonymDB (normalizeName)
 import Types (BioFlowDB, BiosphereFlow (..))
 
 {- | Extract synonym pairs from EcoSpold2 biosphere flows.
@@ -51,11 +53,38 @@ extractFromILCDFlows :: M.Map UUID ILCDFlowInfo -> [(Text, Text)]
 extractFromILCDFlows flowInfo =
     S.toList $
         S.fromList
-            [ (ilcdBaseName info, syn)
+            [ (base, syn)
             | info <- M.elems flowInfo
+            , let base = ilcdBaseName info
             , syn <- ilcdSynonyms info
-            , syn /= ilcdBaseName info
+            , syn /= base
+            , not (ambiguous base || ambiguous syn)
             ]
+  where
+    -- Test a name with the SAME normalization the closure keys by
+    -- ('SynonymDB.buildFromPairs' → 'normalizeName'): the name the closure would
+    -- fuse into one node is exactly the name whose ambiguity we check. A weaker
+    -- local normalizer (lower+strip only) leaves punctuation/whitespace/unit
+    -- variants under distinct keys, so a junk hub slips past the filter.
+    ambiguous nm = normalizeName nm `S.member` casAmbiguous
+    -- A name is an ambiguous bridge when the flows carrying it span more than one
+    -- substance identity. Identity is the flow's CAS, or 'Nothing' when it has
+    -- none: an un-annotated flow cannot be proven to be the same substance, so a
+    -- name shared by a CAS-less flow and a CAS-bearing one still counts as a
+    -- bridge. Dropping it stops the transitive closure from fusing unrelated
+    -- substances into one junk hub (which then leaks a characterization factor
+    -- across them); same-CAS flows lose nothing, as the CAS cascade ('mtCasCF')
+    -- already matches them at lookup time. Both endpoints of every pair are
+    -- checked, so an ambiguous baseName is dropped too, not just a synonym.
+    identityOfName :: M.Map Text (S.Set (Maybe Text))
+    identityOfName =
+        M.fromListWith
+            S.union
+            [ (normalizeName nm, S.singleton (mfilter (not . T.null) (ilcdCAS info)))
+            | info <- M.elems flowInfo
+            , nm <- ilcdBaseName info : ilcdSynonyms info
+            ]
+    casAmbiguous = M.keysSet (M.filter ((> 1) . S.size) identityOfName)
 
 -- | Render synonym pairs as CSV with header.
 synonymPairsToCSV :: [(Text, Text)] -> BL.ByteString
