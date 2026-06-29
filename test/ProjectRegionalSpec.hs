@@ -68,6 +68,13 @@ spec = describe "projectRegionalResourceFlows" $ do
         runWith [baseFlow, mkResourceFlow 12 "Water, river, ZZ"]
             `shouldNotContain` [("Water, river, ZZ", Nothing, 6.98)]
 
+    it "derives the medium across a 'medium/sub' category, so a slash-encoded resource flow still projects" $ do
+        let frFlowSlashed =
+                (mkResourceFlow 13 "Water, river, FR")
+                    { bfCompartment = Just (VT.Compartment "natural resource/in water" Nothing)
+                    }
+        runWith [baseFlow, frFlowSlashed] `shouldContain` [frProjection]
+
     it "leaves an unlocated method untouched (the SimaPro name-regionalized convention)" $ do
         let cfGlobal = mkLocatedCF "river water" 6.98 Nothing
             frFlow = mkResourceFlow 11 "Water, river, FR"

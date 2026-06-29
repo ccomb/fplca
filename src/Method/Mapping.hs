@@ -714,11 +714,12 @@ medium carries that exact region, emit a GLOBAL mapping (location nulled) so the
 flow resolves to its region's factor in 'mtExactCF'/'mtFallbackCF' — exactly as a
 name-regionalized @"Water, river, FR"@ CF (the SimaPro convention) does today.
 
-Restricted to the resource medium so it only fills the withdrawal (input) side;
-the emission (release) side is already covered globally by 'regionBaseFallback',
-and projecting it would double-count. Only located CFs are indexed, so a method
-whose CFs are unlocated (e.g. the name-regionalized SimaPro one) is untouched; the
-region must match exactly, so no region's factor is broadcast onto another.
+Restricted to the water dimensions — the resource (withdrawal/input) and water
+(release/output) media; air and soil stay global so a method compared against an
+unregionalized reference is left untouched there. Only located CFs are indexed,
+so a method whose CFs are unlocated (e.g. the name-regionalized SimaPro one) is
+left alone; the region must match exactly, so no region's factor is broadcast
+onto another.
 -}
 projectRegionalResourceFlows ::
     SynonymDB ->
@@ -728,7 +729,12 @@ projectRegionalResourceFlows ::
 projectRegionalResourceFlows synDB bioFlows mappings =
     mappings ++ projected
   where
-    flowMedium = normalizeMedium . T.toLower . VT.bfCompartmentName
+    -- Strip a @"medium/sub"@ category tail before normalizing, exactly as
+    -- 'flowMediumSub' and 'findSimilarCFs' do: a resource encoded as
+    -- @"natural resource/in water"@ must still resolve to medium @"resource"@,
+    -- or the scope guard below misses it and the region-tagged flow is silently
+    -- not projected (the very withdrawal credit this function exists to recover).
+    flowMedium = normalizeMedium . T.takeWhile (/= '/') . T.toLower . VT.bfCompartmentName
     cfMedium cf = case mcfCompartment cf of
         Just (Compartment m _ _) -> normalizeMedium (T.toLower m)
         Nothing -> ""
