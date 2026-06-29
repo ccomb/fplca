@@ -126,6 +126,17 @@ data MethodConfig = MethodConfig
     , mcDescription :: !(Maybe Text) -- Optional description
     , mcFormat :: !(Maybe Text) -- Detected format ("SimaPro CSV", "ILCD", etc.)
     , mcScoringSets :: ![ScoringSetConfig] -- Formula-based scoring sets
+    , mcGlobalMethods :: ![Text]
+    {- ^ Method names within this collection to score WITHOUT regionalization: a
+    listed method's location-specific CFs are dropped, so each flow falls back to
+    the method's own unlocated (global-default) CF instead of its per-region one.
+    Use when the reference distribution a collection is compared against is itself
+    unregionalized (e.g. a SimaPro EF distribution that flattened the spatial
+    Land-use / AWARE factors to one global value); the per-country detail is lost.
+    Requires the method to carry an unlocated default for those flows — one whose
+    CFs are *all* region-tagged would be left with none. Empty = keep every
+    method's native regionalization.
+    -}
     }
     deriving (Show, Eq, Generic)
 
@@ -243,6 +254,7 @@ instance DecodeTOML MethodConfig where
         mcDescription <- getFieldOpt "description"
         let mcFormat = Nothing -- Detected later from file content
         mcScoringSets <- fromMaybe [] <$> getFieldOpt "scoring"
+        mcGlobalMethods <- fromMaybe [] <$> getFieldOpt "global-methods"
         pure MethodConfig{..}
 
 instance DecodeTOML ScoringSetConfig where

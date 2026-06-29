@@ -41,6 +41,7 @@ import Control.DeepSeq (force)
 import Control.Exception (SomeException, catch, evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (isDigit)
 import Data.Csv (HasHeader (..), decode)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
@@ -208,14 +209,18 @@ excludeOverFrequentSynonyms maxFlows pairs = (kept, excluded)
     excluded = sortOn (negate . snd) (M.toList overFrequent)
 
 {- | Is this name an obvious non-synonym — a REACH/ILCD dossier placeholder
-(@"not available"@, @"unknown"@, @"active matter"@, an ECHA id stub) rather than a
-substance name? These survive 'excludeOverFrequentSynonyms' (each is carried by
-few flows) yet act as cut-vertices that fuse unrelated substances through long
-chains, so they are dropped by string shape instead of frequency.
+(@"not available"@, @"unknown"@, @"active matter"@, an ECHA id stub), or a bare
+database identifier (a PubChem CID, an @"ENT 27164"@ registry number) — rather
+than a substance name? These survive 'excludeOverFrequentSynonyms' (each is
+carried by few flows) yet act as cut-vertices that fuse unrelated substances
+through long chains, so they are dropped by string shape instead of frequency.
+(@"ENT 27164"@ and @"ENT 27,164"@ both normalize to @"ent 27164"@, fusing carbon
+tetrachloride and carbofuran through one shared dossier number.)
 
 Deliberately conservative — it matches only forms that no real substance name
-takes. In particular @"mixture"@ and digit-heavy names are NOT matched: both are
-common in genuine names (@"toluenediisocyanate (mixture)"@, @"pcb-1254"@). The
+takes. A name carrying letters survives, so @"mixture"@ and digit-heavy names are
+kept (@"toluenediisocyanate (mixture)"@, @"pcb-1254"@, @"carbon 14"@); only an
+all-digit token or a known registry prefix followed by digits is dropped. The
 @echa-@ check is anchored so it cannot fire on the @echa@ inside a word (e.g.
 French @"huile de chauffage"@).
 -}
@@ -226,6 +231,7 @@ isJunkSynonymName name =
         || "unknown" `T.isPrefixOf` n
         || "echa-" `T.isPrefixOf` n
         || "echa_" `T.isPrefixOf` n
+        || isRegistryId n
   where
     n = normalizeName name
     exactStops = ["none", "no data", "not applicable", "not assigned", "not specified"]
@@ -239,6 +245,16 @@ isJunkSynonymName name =
         , "active ingredient"
         , "activeingredient"
         ]
+    -- A bare numeric identifier (a PubChem CID) or a known registry prefix
+    -- followed by digits (USDA @"ent 27164"@, @"cipac 12"@) is a database id, not
+    -- a name. A token carrying letters is never matched, so @"pcb-1254"@ and
+    -- @"carbon 14"@ survive.
+    isRegistryId t =
+        (not (T.null t) && T.all isDigit t)
+            || case T.words t of
+                [pfx, num] -> pfx `elem` registryPrefixes && not (T.null num) && T.all isDigit num
+                _ -> False
+    registryPrefixes = ["ent", "cipac"]
 
 {- | Drop synonym pairs touching a junk placeholder name ('isJunkSynonymName').
 Returns the kept pairs and the distinct (normalized) junk tokens dropped, so the

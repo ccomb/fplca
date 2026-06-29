@@ -4,11 +4,13 @@ module ConfigSpec (spec) where
 
 import Config (
     Config (..),
+    MethodConfig (..),
     RefDataConfig (..),
     applyDataDir,
     defaultConfig,
     redirectIntoDataDir,
  )
+import qualified TOML
 import Test.Hspec
 
 mkRef :: FilePath -> RefDataConfig
@@ -24,6 +26,17 @@ mkRef p =
 
 spec :: Spec
 spec = do
+    describe "MethodConfig global-methods" $ do
+        let decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
+        it "parses the global-methods list" $
+            case decodeMethod "name = \"EF\"\npath = \"x.zip\"\nglobal-methods = [\"Land use\"]\n" of
+                Right mc -> mcGlobalMethods mc `shouldBe` ["Land use"]
+                Left e -> expectationFailure (show e)
+        it "defaults global-methods to empty when the key is absent" $
+            case decodeMethod "name = \"EF\"\npath = \"x.zip\"\n" of
+                Right mc -> mcGlobalMethods mc `shouldBe` []
+                Left e -> expectationFailure (show e)
+
     describe "redirectIntoDataDir" $ do
         it "leaves paths unchanged when VOLCA_DATA_DIR is unset" $
             redirectIntoDataDir Nothing "data/flows.csv" `shouldBe` "data/flows.csv"

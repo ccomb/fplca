@@ -316,6 +316,7 @@ test-suite lca-tests
                      , time
                      , aeson
                      , stm
+                     , toml-reader
                      , http-client
                      , http-types
                      , process

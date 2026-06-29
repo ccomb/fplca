@@ -162,6 +162,8 @@ import Method.Mapping (
     fillRegionalActivityWeights,
     mapMethodToFlows,
     mtRegionalActivityWeights,
+    mtRegionalizedCF,
+    projectRegionalResourceFlows,
  )
 import Method.Types (
     CompartmentMap,
@@ -600,7 +602,8 @@ effectiveMethodMappings manager dbName collection db method = do
         proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
     pure $
         expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-            expandSynonymMappings synDB (dbFlowsByName db) mappings
+            projectRegionalResourceFlows synDB (dbBioFlows db) $
+                expandSynonymMappings synDB (dbFlowsByName db) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
@@ -648,7 +651,19 @@ buildMethodTablesFor manager dbName collection db hier method = do
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager
-    let !raw = buildMethodTables cmap energyDensities expanded
+    -- A method listed in its collection's 'global-methods' is scored without
+    -- regionalization: drop its located CFs so the broadcast (global) path — the
+    -- method's own unlocated default CF — is the single answer, matching a
+    -- reference distribution that flattened the spatial factors to a global value.
+    -- This assumes the method carries such an unlocated default for the flows in
+    -- question; a method whose CFs are all region-tagged would be left with none.
+    -- The config loader warns when a 'global-methods' name matches no method.
+    globalMethods <- maybe [] mcGlobalMethods . M.lookup collection <$> readTVarIO (dmAvailableMethods manager)
+    let !raw0 = buildMethodTables cmap energyDensities expanded
+        !raw =
+            if methodName method `elem` globalMethods
+                then raw0{mtRegionalizedCF = M.empty}
+                else raw0
         !withBroadcast = fillBroadcastVector unitConfig mUnits mFlows raw
         -- Precompute per-activity weights for regionalized methods so subsequent
         -- scoring is a dot product instead of one biosphere-triple walk per pid.
@@ -1011,6 +1026,19 @@ initDatabaseManager config noCache configPath = do
                         <> " ("
                         <> show (length (mcMethods collection))
                         <> " impact categories)"
+                -- Surface a 'global-methods' entry that matches no loaded method:
+                -- the de-regionalization is keyed by method name, so a typo or a
+                -- renamed method would otherwise be ignored in silence and the
+                -- method would stay regionalized, diverging from the reference.
+                let knownMethodNames = S.fromList (map methodName (mcMethods collection))
+                    unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
+                unless (null unknownGlobals) $
+                    reportProgress Warning $
+                        "  [global-methods] collection "
+                            <> T.unpack (mcName mc)
+                            <> ": no method named "
+                            <> T.unpack (T.intercalate ", " unknownGlobals)
+                            <> " — these stay regionalized; check for a typo."
                 let !pairs = extractFromILCDFlows flowInfo
                 autoCreateFlowSynonyms
                     manager
@@ -1193,6 +1221,7 @@ discoverUploadedMethodConfigs = do
                 , mcDescription = UploadedDB.umDescription meta
                 , mcFormat = Just $ methodFormatText (UploadedDB.umFormat meta)
                 , mcScoringSets = []
+                , mcGlobalMethods = []
                 }
 
 -- | Get a database by name
