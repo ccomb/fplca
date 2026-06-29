@@ -115,6 +115,7 @@ spec = do
                             , mcDescription = Nothing
                             , mcFormat = Just "openlca-jsonld"
                             , mcScoringSets = []
+                            , mcGlobalMethods = []
                             }
                 loaded <- loadMethodCollectionFromConfig mc
                 case loaded of

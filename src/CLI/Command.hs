@@ -462,6 +462,7 @@ executeMcUpload registry fmt manager args = do
                         , mcDescription = uaDescription args
                         , mcFormat = Nothing
                         , mcScoringSets = []
+                        , mcGlobalMethods = []
                         }
             addMethodCollection manager mc
             reportProgress Info $ "Method uploaded: " ++ T.unpack slug
