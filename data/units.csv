@@ -147,10 +147,10 @@ km/h,length/time,0.27778
 kph,length/time,0.27778
 mph,length/time,0.44704
 mile/h,length/time,0.44704
-kbq,/time,1000.0
-kilobecquerel,/time,1000.0
-bq,/time,1.0
-becquerel,/time,1.0
+kbq,/time,1.0
+kilobecquerel,/time,1.0
+bq,/time,0.001
+becquerel,/time,0.001
 m2*year,area*time,1.0
 m²*year,area*time,1.0
 m2.year,area*time,1.0
