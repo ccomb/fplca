@@ -162,6 +162,7 @@ import Method.Mapping (
     fillRegionalActivityWeights,
     mapMethodToFlows,
     mtRegionalActivityWeights,
+    projectRegionalResourceFlows,
  )
 import Method.Types (
     CompartmentMap,
@@ -600,7 +601,8 @@ effectiveMethodMappings manager dbName collection db method = do
         proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
     pure $
         expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-            expandSynonymMappings synDB (dbFlowsByName db) mappings
+            projectRegionalResourceFlows synDB (dbBioFlows db) $
+                expandSynonymMappings synDB (dbFlowsByName db) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables

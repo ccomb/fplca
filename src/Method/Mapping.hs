@@ -45,6 +45,7 @@ module Method.Mapping (
     lookupCFForFlow,
     convertForCharacterization,
     expandSynonymMappings,
+    projectRegionalResourceFlows,
     ProxyTargets (..),
     expandProxyEdges,
 
@@ -698,6 +699,55 @@ expandSynonymMappings synDB flowsByName mappings =
          in [ (cf, Just (flow, BySynonym))
             | syn <- peers
             , flow <- M.findWithDefault [] syn flowsByName
+            ]
+
+{- | Project a region-tagged resource (withdrawal) flow onto its region's located
+CF, in the GLOBAL name tables. An ILCD method whose CFs carry a consumer location
+keeps them out of the broadcast tables — they reach 'mtRegionalizedCF', keyed by
+the ACTIVITY location. But a resource flow that encodes its region in the NAME
+(@"Water, river, FR"@) never reaches that table: the region survives
+'normalizeName', so the synonym match to the unregioned base fails, and the
+regional path keys by activity location, not the flow's own origin region.
+
+For each such flow, if a located CF of the same substance (synonym group) and
+medium carries that exact region, emit a GLOBAL mapping (location nulled) so the
+flow resolves to its region's factor in 'mtExactCF'/'mtFallbackCF' — exactly as a
+name-regionalized @"Water, river, FR"@ CF (the SimaPro convention) does today.
+
+Restricted to the resource medium so it only fills the withdrawal (input) side;
+the emission (release) side is already covered globally by 'regionBaseFallback',
+and projecting it would double-count. Only located CFs are indexed, so a method
+whose CFs are unlocated (e.g. the name-regionalized SimaPro one) is untouched; the
+region must match exactly, so no region's factor is broadcast onto another.
+-}
+projectRegionalResourceFlows ::
+    SynonymDB ->
+    M.Map UUID BiosphereFlow ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+projectRegionalResourceFlows synDB bioFlows mappings =
+    mappings ++ projected
+  where
+    flowMedium = normalizeMedium . T.toLower . VT.bfCompartmentName
+    -- Located CFs indexed by (matched flow's synonym group, medium, region).
+    located :: M.Map (Int, Text, Text) MethodCF
+    located =
+        M.fromList
+            [ ((grp, flowMedium flow, loc), cf)
+            | (cf, Just (flow, _)) <- mappings
+            , Just loc <- [mcfConsumerLocation cf]
+            , Just grp <- [lookupSynonymGroup synDB (bfName flow)]
+            ]
+    -- Most methods carry no located CF; skip the biosphere-flow walk for them.
+    projected
+        | M.null located = []
+        | otherwise =
+            [ (cf{mcfConsumerLocation = Nothing}, Just (flow, BySynonym))
+            | flow <- M.elems bioFlows
+            , flowMedium flow == "resource"
+            , (base, Just loc) <- [extractLocationSuffix (bfName flow)]
+            , Just grp <- [lookupSynonymGroup synDB base]
+            , Just cf <- [M.lookup (grp, "resource", loc) located]
             ]
 
 -- No compartment filter here on purpose: 'buildMethodTables' keys
