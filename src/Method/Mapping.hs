@@ -626,11 +626,7 @@ buildMethodIndex method =
     cfMedium :: MethodCF -> Text
     cfMedium cf = case mcfCompartment cf of
         Nothing -> ""
-        Just (Compartment med _ _) -> normalizeMediumIdx (T.toLower med)
-
-    normalizeMediumIdx m
-        | m == "natural resource" = "resource"
-        | otherwise = m
+        Just (Compartment med _ _) -> normalizeMedium (T.toLower med)
 
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
 
