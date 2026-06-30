@@ -734,13 +734,20 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     cfMedium cf = case mcfCompartment cf of
         Just (Compartment m _ _) -> normalizeMedium (T.toLower m)
         Nothing -> ""
+    -- A projection key (group/name, medium, region) drops the subcompartment, so
+    -- two located CFs of the same substance can land on one key. 'M.fromList' would
+    -- then keep whichever came last in 'mappings' — order-dependent and silent.
+    -- Keep the larger (more conservative, never-undercounting) factor instead, the
+    -- same value preference 'buildMethodTables' applies through 'preferBetter'.
+    preferHigherCF a b = if mcfValue a >= mcfValue b then a else b
     -- Located CFs reached two ways: by the matched flow's synonym GROUP — a CF
     -- whose name is bridged to the flow (withdrawal @"river water"@ → @"Water,
     -- river"@) — and by the CF's own NAME — a CF whose name equals the flow's
     -- region-stripped base (the bare @"Water"@ release CF → @"Water, FR"@).
     byGroup :: M.Map (Int, Text, Text) MethodCF
     byGroup =
-        M.fromList
+        M.fromListWith
+            preferHigherCF
             [ ((grp, flowMedium flow, loc), cf)
             | (cf, Just (flow, _)) <- mappings
             , Just loc <- [mcfConsumerLocation cf]
@@ -748,7 +755,8 @@ projectRegionalResourceFlows synDB bioFlows mappings =
             ]
     byName :: M.Map (Text, Text, Text) MethodCF
     byName =
-        M.fromList
+        M.fromListWith
+            preferHigherCF
             [ ((normalizeName (mcfFlowName cf), cfMedium cf, loc), cf)
             | (cf, _) <- mappings
             , Just loc <- [mcfConsumerLocation cf]
