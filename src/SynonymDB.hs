@@ -14,6 +14,7 @@ module SynonymDB (
     buildFromPairs,
     buildFromEdges,
     buildFromNormalizedEdges,
+    fromClassMaps,
     excludeOverFrequentSynonyms,
     excludeJunkSynonyms,
     isJunkSynonymName,
@@ -199,6 +200,20 @@ buildTables edges =
         nameToId = M.fromList [(name, gid) | (gid, members) <- numbered, name <- members]
         idToNames = M.fromList numbered
      in SynonymDB nameToId idToNames edges AllBoth
+
+{- | Wrap externally-numbered class tables (the synonyms-compiler's JSON import
+and capped group builder) into a SynonymDB, reconstructing untyped star edges so
+the relation stays re-closable. The one place those construction sites share, so
+a new 'SynonymDB' field lands here instead of in every tool.
+-}
+fromClassMaps :: M.Map Text Int -> M.Map Int [Text] -> SynonymDB
+fromClassMaps nameToId idToNames =
+    SynonymDB
+        { synNameToId = nameToId
+        , synIdToNames = idToNames
+        , synEdges = [SynEdge a b BridgeBoth | (a, b) <- starEdges (M.elems idToNames)]
+        , synViews = AllBoth
+        }
 
 {- | Star edges for a set of name classes: connect each class's members to its
 first member. Their transitive closure is exactly the classes — enough to
