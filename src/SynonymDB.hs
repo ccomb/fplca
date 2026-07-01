@@ -27,6 +27,7 @@ module SynonymDB (
     mergeSynonymDBs,
     synonymCount,
     oversizedClasses,
+    reopenedBridges,
 
     -- * Directional views
     inputView,
@@ -174,9 +175,11 @@ normalizePairs rs =
     ]
 
 {- | Drop the 'BridgeBoth' copy of an unordered pair that also has a directional
-edge. Without this, an untyped duplicate (e.g. a merged auto-extracted
-@freshwater = water…@ pair) would silently reopen a curated input-only bridge in
-the output view — the direction constraint would quietly stop working.
+edge, so an untyped duplicate of that exact pair (e.g. a merged auto-extracted
+@freshwater = water…@ row) cannot silently reopen a curated one-way bridge in
+the other view. The guard is pair-local only: an untyped transitive chain
+between the same endpoints (@a=x@, @x=b@) still re-links them in the closed
+view — 'reopenedBridges' detects that residue so the loader can surface it.
 -}
 demoteDuplicates :: [SynEdge] -> [SynEdge]
 demoteDuplicates es =
@@ -308,6 +311,29 @@ returns; an empty result means the closure stayed plausible.
 -}
 oversizedClasses :: Int -> [(Text, Text)] -> [[Text]]
 oversizedClasses maxSize = filter ((> maxSize) . length) . equivalenceClasses . normalizePairs
+
+{- | Directed edges whose one-way constraint is void: their endpoints are also
+connected in the OPPOSITE direction's view. 'demoteDuplicates' removes only the
+exact untyped duplicate of a directed pair; an untyped transitive chain
+(@a=x@, @x=b@) or a contradictory opposite-direction row re-links the endpoints
+anyway, silently widening the bridge back to both directions. That may be
+intended (two one-way assertions do compose) but is more likely curation drift
+in a merged source, so the loader surfaces whatever this returns rather than
+letting a direction restriction quietly stop working.
+-}
+reopenedBridges :: SynonymDB -> [SynEdge]
+reopenedBridges db = filter voided (synEdges db)
+  where
+    voided e = case seDir e of
+        BridgeBoth -> False
+        BridgeInput -> linkedIn (outputView db) e
+        BridgeOutput -> linkedIn (inputView db) e
+    -- Endpoints are already normalized ('normalizeEdges'), so probe the tables
+    -- directly — 'lookupSynonymGroup' would re-normalize, and 'normalizeName'
+    -- is not idempotent.
+    linkedIn v e =
+        ((==) <$> M.lookup (seA e) (synNameToId v) <*> M.lookup (seB e) (synNameToId v))
+            == Just True
 
 {- | Drop synonym pairs whose synonym (the second element) is carried by more
 than @maxFlows@ distinct base names (the first element). An over-frequent

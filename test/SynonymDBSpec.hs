@@ -8,7 +8,7 @@ import qualified Data.Set as S
 import Data.Text (Text, pack)
 import Test.Hspec
 
-import SynonymDB (BridgeDirection (..), SynEdge (..), SynViews (..), buildFromCSV, buildFromEdges, buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, inputView, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, mergeSynonymDBs, normalizeName, outputView, oversizedClasses, synEdges, synViews, uncoveredUnitSuffixes)
+import SynonymDB (BridgeDirection (..), SynEdge (..), SynViews (..), buildFromCSV, buildFromEdges, buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, inputView, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, mergeSynonymDBs, normalizeName, outputView, oversizedClasses, reopenedBridges, synEdges, synViews, uncoveredUnitSuffixes)
 
 spec :: Spec
 spec = do
@@ -95,7 +95,8 @@ spec = do
         it "loads the shipped data/flows.csv and keeps its water bridges input-only" $ do
             -- Guards the real curated registry: it must parse (3-column direction
             -- schema), and the water withdrawal bridges must reach their resource
-            -- flow only in the input view, never the output view.
+            -- flow only in the input view, never the output view — and no untyped
+            -- row may void a one-way constraint ('reopenedBridges').
             loaded <- loadFromCSVFileWithCache "data/flows.csv"
             case loaded of
                 Left e -> expectationFailure e
@@ -103,6 +104,28 @@ spec = do
                     lookupSynonymGroup (inputView db) "freshwater" `shouldSatisfy` (/= Nothing)
                     lookupSynonymGroup (outputView db) "freshwater" `shouldBe` Nothing
                     lookupSynonymGroup (outputView db) "river water" `shouldBe` Nothing
+                    reopenedBridges db `shouldBe` []
+
+    describe "reopenedBridges" $ do
+        it "flags a one-way bridge reopened by an untyped transitive chain" $ do
+            -- 'demoteDuplicates' removes only the exact duplicate pair; a chain of
+            -- untyped edges through an intermediate re-links the endpoints in the
+            -- view the direction was meant to close. That must be surfaced.
+            let db =
+                    buildFromEdges
+                        [ SynEdge "freshwater" "Water unspecified" BridgeInput
+                        , SynEdge "freshwater" "surface water" BridgeBoth
+                        , SynEdge "surface water" "Water unspecified" BridgeBoth
+                        ]
+            reopenedBridges db `shouldBe` [SynEdge "freshwater" "water unspecified" BridgeInput]
+
+        it "flags a pair typed both input and output (contradictory curation widens to both)" $ do
+            let db = buildFromEdges [SynEdge "a" "b" BridgeInput, SynEdge "a" "b" BridgeOutput]
+            length (reopenedBridges db) `shouldBe` 2
+
+        it "stays silent on consistent data" $ do
+            let db = buildFromEdges [SynEdge "river water" "Water river" BridgeInput, SynEdge "x" "y" BridgeBoth]
+            reopenedBridges db `shouldBe` []
 
     describe "oversizedClasses" $ do
         -- A junk hub fuses everything it touches into one transitive class.
