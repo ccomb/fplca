@@ -143,11 +143,17 @@ buildFromNormalizedEdges es =
             | all ((== BridgeBoth) . seDir) normd = AllBoth
             | otherwise =
                 DirectedViews
-                    (buildTables (edgesFor BridgeInput normd))
-                    (buildTables (edgesFor BridgeOutput normd))
+                    (viewTables (edgesFor BridgeInput normd))
+                    (viewTables (edgesFor BridgeOutput normd))
      in base{synViews = views}
   where
     edgesFor dir = filter (\e -> seDir e == BridgeBoth || seDir e == dir)
+    -- Views are terminal: nothing re-closes them (merge and the induced
+    -- restriction read the TOP-level 'synEdges'), so a view's own edge list is
+    -- dead weight in memory and in the serialized cache — store the lookup
+    -- tables only.
+    viewTables = clearEdges . buildTables
+    clearEdges t = t{synEdges = []}
 
 {- | Normalize an edge's endpoints, dropping empty/self edges (as
 'buildFromPairs' did). Direction is preserved.

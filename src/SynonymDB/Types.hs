@@ -46,7 +46,8 @@ for large untyped sets). 'DirectedViews' holds the closure of @both ∪ input@ a
 of @both ∪ output@ separately, because a direction restriction can SPLIT a group
 (@a-b [input]@, @b-c [both]@ ⇒ input {a,b,c} but output {b,c}) — a split that the
 union tables cannot recover at lookup time. Views are terminal: their own
-'synViews' is 'AllBoth'.
+'synViews' is 'AllBoth' and their 'synEdges' is empty — nothing re-closes a
+view, so only its lookup tables are materialized (and serialized).
 -}
 data SynViews
     = AllBoth
