@@ -125,11 +125,17 @@ mkMethod methodology catName impactName unit colIdx rows delim =
 csvMethodNamespace :: UUID
 csvMethodNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "volca:csv-method")
 
--- | Direction: "resources" → Input, everything else → Output.
+{- | Direction: a resource compartment → Input, everything else → Output. Reads
+the same spellings as the SimaPro parser (@Resources@, @Raw@, @Raw materials@,
+@Resources from ground@…): a resource CF mis-defaulted to Output would resolve
+against the output synonym view and silently lose input-only bridges.
+-}
 directionFromCompartment :: Text -> FlowDirection
 directionFromCompartment comp
-    | T.toCaseFold comp == "resources" = Input
+    | lc == "resources" || "raw" `T.isPrefixOf` lc || "resources " `T.isPrefixOf` lc = Input
     | otherwise = Output
+  where
+    lc = T.toCaseFold comp
 
 {- | Parse compartment from CSV compartment column.
 Format: "Emissions to air", "Emissions to fresh water", "Resources", etc.

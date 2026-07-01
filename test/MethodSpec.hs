@@ -657,6 +657,27 @@ spec = do
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right methods -> length methods `shouldBe` 4
 
+        it "reads raw-materials compartment spellings as Input direction" $ do
+            -- A resource CF mis-read as Output resolves against the output
+            -- synonym view and silently loses input-only bridges, so every
+            -- resource compartment spelling must map to Input.
+            let csv =
+                    BC.unlines
+                        [ ";;Method A"
+                        , ";;kg eq"
+                        , "substance;compartment;"
+                        , "Crude oil;Raw materials;1.0"
+                        , "freshwater;Resources from ground;2.0"
+                        , "CO2;air;3.0"
+                        ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods -> do
+                    let dirs = [(mcfFlowName cf, mcfDirection cf) | m <- methods, cf <- methodFactors m]
+                    lookup "Crude oil" dirs `shouldBe` Just Input
+                    lookup "freshwater" dirs `shouldBe` Just Input
+                    lookup "CO2" dirs `shouldBe` Just Output
+
         it "returns Left when fewer than 3 header rows" $ do
             let csv =
                     BC.unlines
